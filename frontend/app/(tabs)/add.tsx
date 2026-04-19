@@ -949,7 +949,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  tagPillText: { color: colors.text, fontSize: font.size.sm, fontWeight: '600' },
+  tagPillText: { color: colors.text, fontSize: 13, fontWeight: '600' },
   tagPillClose: {
     width: 18,
     height: 18,

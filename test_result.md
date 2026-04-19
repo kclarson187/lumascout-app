@@ -36,48 +36,57 @@ backend:
 
   - task: "POST/GET/DELETE /api/posts + /like/unlike + /comments — community posts"
     implemented: true
-    working: false
+    working: true
     file: "/app/backend/server.py"
-    stuck_count: 1
+    stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
         -comment: "10 categories enum-gated. Hydrates author with name/avatar/verification/plan. Viewer's liked_by_me set per request. Likes use unique index (post_id, user_id) — second like is no-op. DELETE by owner or admin (admin deletion is audit-logged)."
         -working: false
         -agent: "testing"
-        -comment: "CRITICAL: All community endpoints return 404 Not Found. Root cause identified: in /app/backend/server.py, `app.include_router(api)` is called on line 2047, BEFORE the entire community block is defined (POST_CATEGORIES at line 2065, @api.post('/posts') at line 2105, through @api.get('/community/onboarding-status') at line 2368). FastAPI's include_router copies routes at call-time; any @api.<method> decorators that fire AFTER include_router are silently dropped from the app's routing table. Confirmed via /openapi.json: 48 paths registered, ZERO community paths (`/posts`, `/conversations`, `/photographers/nearby`, `/me/conversations`, `/community/onboarding-status` are all absent). FIX: move `app.include_router(api)` (and likely the CORS middleware added immediately after it) to the very bottom of the file, AFTER the community block ends (currently around line 2373) and before `@app.on_event('startup')`. Do not register the router before all decorators have executed."
+        -comment: "CRITICAL: All community endpoints return 404 Not Found. Root cause: `app.include_router(api)` called on line 2047 BEFORE community decorators at lines 2060–2373 executed. FastAPI's include_router snapshots routes at call-time."
+        -working: true
+        -agent: "testing"
+        -comment: "RETEST after main agent moved `app.include_router(api)` to the bottom of server.py: all 14 cases PASS. Create post (sophie) returns 200 with author.name hydrated; invalid category → 400 with full enum list ['bts','collab','critique','gear','intro','meetup','question','referral','tip','win']; GET /posts lists the post with liked_by_me=false; ?category=win filters; admin like → like_count=1, liked_by_me=true; second like idempotent (count stays 1); DELETE /like → 0; empty comments []; admin comment → GET returns 1 item with author hydrated; non-owner/non-admin DELETE → 403; owner DELETE → 200; admin cross-delete of marco's post → 200 and audit-log 'post.remove' entry with admin_user_id is present via /admin/audit-logs."
 
   - task: "GET /api/photographers/nearby — city-based photographer discovery"
     implemented: true
-    working: false
+    working: true
     file: "/app/backend/server.py"
-    stuck_count: 1
+    stuck_count: 0
     priority: "medium"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
         -comment: "Defaults to viewer's city. Excludes viewer themselves + suspended accounts. Optional specialty filter. Never returns password_hash."
         -working: false
         -agent: "testing"
-        -comment: "Blocked by the same bug as community posts: endpoint is declared at line 2247 but the router is already included at line 2047, so GET /api/photographers/nearby returns 404. Implementation itself looks correct (excludes viewer via $ne, strips password_hash via projection, defaults to viewer.city) — it just never gets registered. Will pass once include_router is moved to the bottom of the file."
+        -comment: "Blocked by include_router-before-decorators bug (same root cause as posts)."
+        -working: true
+        -agent: "testing"
+        -comment: "RETEST: all 3 cases PASS. GET /api/photographers/nearby as sophie → 200 with city='Austin' (auto from viewer), items exclude sophie's own user_id, and password_hash is absent from every item. ?city=Austin same behavior. ?specialty=Family returns only users whose specialties include 'Family' (0 in this seed, which is valid — filter logic is correct)."
 
   - task: "Conversations + messages — DM inbox, 1:1 chat with participant_key dedupe, read markers"
     implemented: true
-    working: false
+    working: true
     file: "/app/backend/server.py"
-    stuck_count: 1
+    stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
         -comment: "POST /conversations is idempotent via sorted participant_key. 400 for self-DM, 404 for unknown recipient. GET /me/conversations includes unread count + other-user summary. GET /conversations/{id}/messages marks as read for viewer. POST message rate-limited via review bucket (30/day) and caps to 2000 chars."
         -working: false
         -agent: "testing"
-        -comment: "Blocked by the same include_router-before-decorator bug. POST /api/conversations, GET /api/me/conversations, GET/POST /api/conversations/{id}/messages all return 404. The one case that APPEARED to pass ('unknown recipient → 404') was a false positive — the 404 came from FastAPI's catch-all 'Not Found' for the missing route, not from our recipient-check logic. Will need full re-test after the router fix."
+        -comment: "Blocked by include_router-before-decorators bug."
+        -working: true
+        -agent: "testing"
+        -comment: "RETEST: all 10 cases PASS. POST /api/conversations {participant_user_id:admin} as sophie → 200 conv_id; participant_key equals sorted join of both user_ids. Second POST with same counterparty → same conv_id (idempotent). Self-DM → 400 'Cannot DM yourself'. Unknown participant 'user_doesnotexist_xxx' → 404 'Recipient not found' (now coming from our logic, not routing). POST /conversations/{id}/messages {body:'hey!'} → 200 with message_id. Whitespace-only body → 400 'Empty message'. Sophie inbox shows last_message='hey!' and unread=0 (she sent it). Admin inbox shows unread=1 before reading. Admin GET /conversations/{id}/messages → 200 returns messages; then admin inbox re-fetch shows unread=0 (read-mark is applied on GET messages). Third-party viewer marco GET /messages → 404 (not a participant)."
 
   - task: "POST /api/spots — create spot still works + graceful 413 on oversize payload"
     implemented: true
@@ -174,12 +183,7 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "POST /api/spots — create spot still works + graceful 413 on oversize payload"
-    - "POST/GET/DELETE /api/posts + /like/unlike + /comments — community posts"
-    - "GET /api/photographers/nearby — city-based photographer discovery"
-    - "Conversations + messages — DM inbox, 1:1 chat with participant_key dedupe, read markers"
-    - "User profile — new community fields (service_area, years_shooting, available_for_second_shooter, available_for_associate, mentorship_available, looking_for_mentor, community_onboarded)"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -232,7 +236,19 @@ agent_communication:
 
     -agent: "testing"
     -message: |
-      BACKEND TEST RESULTS (Phase 1 Community) — 1 critical blocker found.
+      RETEST AFTER ROUTER FIX — all Phase 1 Community backend cases PASS (31/31).
+
+      ✅ POST /api/spots regression: 2/2
+      ✅ Community posts CRUD: 14/14 (create, invalid-category 400 w/ enum list, listing, ?category filter, like/unlike, idempotent second-like, comments empty→1-with-author, 403 non-owner delete, 200 owner delete, admin cross-delete with audit log 'post.remove')
+      ✅ Messaging (conversations + messages): 10/10 (idempotent create via participant_key, self-DM 400, unknown recipient 404, send/list, empty body 400, sophie unread=0 w/ last_message 'hey!', admin unread=1 before read, read-mark on GET /messages, third-party 404)
+      ✅ GET /api/photographers/nearby: 3/3 (default city Austin, excludes self, no password_hash, ?city & ?specialty filters)
+      ✅ Profile community fields PATCH/GET round-trip: 2/2
+
+      Notes:
+        - ?specialty=Family returned 0 items — filter logic is correct, just no seed user in Austin has Family in specialties[] besides sophie (who is excluded).
+        - The previously-reported include_router-before-decorators bug is resolved; /openapi.json now registers all 9 community routes.
+
+      No action items remaining for backend. Main agent can summarise and hand off.
 
       ✅ PASS
         - POST /api/spots regression (happy path + save_as_draft=true) — 2/2

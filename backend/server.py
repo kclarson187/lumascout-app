@@ -2044,8 +2044,6 @@ async def root():
     return {"app": "PhotoScout", "status": "ok"}
 
 
-app.include_router(api)
-
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -2371,6 +2369,12 @@ async def community_onboarding_status(user: dict = Depends(get_current_user)):
 
 
 # --------------- End community block -----------------------------------------
+
+
+# Register the api router AFTER every @api.<method> decorator above has run.
+# FastAPI's include_router() snapshots routes at call-time, so this must be the
+# very last route-registration step before startup.
+app.include_router(api)
 
 
 @app.on_event("startup")
