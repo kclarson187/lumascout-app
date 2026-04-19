@@ -33,6 +33,7 @@ import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 import { Button } from '../../src/components/Button';
+import { EmptyState } from '../../src/components/ui';
 import SpotCard from '../../src/components/SpotCard';
 
 type TabKey = 'posts' | 'spots' | 'photos' | 'reviews' | 'about';
@@ -314,7 +315,7 @@ export default function UserProfile() {
         <View style={{ paddingHorizontal: space.xl, gap: space.md, marginTop: space.md }}>
           {activeTab === 'posts' && (
             posts.length === 0
-              ? <EmptyState text="No community posts yet." />
+              ? <EmptyState title="No community posts yet" subtitle={`${profile.name} hasn't posted in Community yet.`} icon={<MessageCircle size={26} color={colors.textSecondary} />} />
               : posts.map((p: any) => (
                   <TouchableOpacity key={p.post_id} style={styles.postCard} onPress={() => router.push(`/community/post/${p.post_id}`)}>
                     <Text style={styles.postCategory}>{(p.category || 'post').toUpperCase()}</Text>
@@ -327,13 +328,13 @@ export default function UserProfile() {
 
           {activeTab === 'spots' && (
             spots.length === 0
-              ? <EmptyState text={`${profile.name} hasn't shared any public spots yet.`} />
+              ? <EmptyState title="No public spots yet" subtitle={`${profile.name} hasn't shared any spots yet.`} icon={<MapPin size={26} color={colors.textSecondary} />} />
               : spots.slice(0, 30).map((s) => <SpotCard key={s.spot_id} spot={s} width={undefined as any} />)
           )}
 
           {activeTab === 'photos' && (
             photos.length === 0
-              ? <EmptyState text="No photos yet." />
+              ? <EmptyState title="No photos yet" subtitle="Photos this photographer uploads to their spots will show up here." icon={<ShieldCheck size={26} color={colors.textSecondary} />} />
               : (
                 <View style={styles.photoGrid}>
                   {photos.slice(0, 30).map((p, idx) => (
@@ -346,7 +347,11 @@ export default function UserProfile() {
           )}
 
           {activeTab === 'reviews' && (
-            <EmptyState text={`${stats.reviews_received ?? 0} reviews received. Full review list coming soon.`} />
+            <EmptyState
+              title={`${stats.reviews_received ?? 0} review${stats.reviews_received === 1 ? '' : 's'} received`}
+              subtitle="Full review feed coming soon."
+              icon={<ShieldCheck size={26} color={colors.textSecondary} />}
+            />
           )}
 
           {activeTab === 'about' && (
@@ -372,10 +377,6 @@ function StatCell({ label, value }: { label: string; value: number }) {
       <Text style={styles.statLbl}>{label}</Text>
     </View>
   );
-}
-
-function EmptyState({ text }: { text: string }) {
-  return <Text style={styles.empty}>{text}</Text>;
 }
 
 function AboutRow({ label, value }: { label: string; value: string }) {

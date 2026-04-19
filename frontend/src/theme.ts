@@ -50,14 +50,23 @@ export const font = {
   bodyBold: 'Manrope_700Bold',
 };
 
+import { Platform } from 'react-native';
+
+// Cross-platform shadow: uses native shadow* props on iOS/Android and the
+// modern boxShadow string on web (to silence deprecation warnings).
 export const shadow = {
-  card: {
-    shadowColor: '#000',
-    shadowOpacity: 0.45,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 6,
-  },
+  card: Platform.select({
+    web: {
+      boxShadow: '0 8px 16px rgba(0,0,0,0.45)',
+    },
+    default: {
+      shadowColor: '#000',
+      shadowOpacity: 0.45,
+      shadowRadius: 16,
+      shadowOffset: { width: 0, height: 8 },
+      elevation: 6,
+    },
+  }) as any,
 };
 
 export const SHOOT_TYPES = [
