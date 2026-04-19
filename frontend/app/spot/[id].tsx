@@ -181,6 +181,19 @@ export default function SpotDetail() {
 
           {spot.description ? <Text style={styles.desc}>{spot.description}</Text> : null}
 
+          {spot.location_display_mode === 'approximate' && (
+            <View style={styles.privacyNote}>
+              <MapPin size={14} color={colors.info} />
+              <Text style={styles.privacyNoteTxt}>Approximate location shown — exact coordinates protected.</Text>
+            </View>
+          )}
+          {spot.location_display_mode === 'hidden' && (
+            <View style={styles.privacyNote}>
+              <MapPin size={14} color={colors.info} />
+              <Text style={styles.privacyNoteTxt}>Map pin hidden by owner. Contact contributor for details.</Text>
+            </View>
+          )}
+
           {/* Scores */}
           <Text style={styles.sectionH}>Shoot Intelligence</Text>
           <View style={styles.scoreGrid}>
@@ -333,6 +346,12 @@ const styles = StyleSheet.create({
   },
   ownerAvatar: { width: 40, height: 40, borderRadius: 20 },
   desc: { color: colors.textSecondary, fontFamily: font.body, fontSize: 15, lineHeight: 22, marginTop: space.lg },
+  privacyNote: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: space.md,
+    padding: space.md, backgroundColor: 'rgba(96,165,250,0.1)',
+    borderColor: 'rgba(96,165,250,0.3)', borderWidth: 1, borderRadius: radii.md,
+  },
+  privacyNoteTxt: { color: colors.info, fontFamily: font.bodyMedium, fontSize: 12, flex: 1, lineHeight: 16 },
   sectionH: { color: colors.text, fontFamily: font.display, fontSize: 20, marginTop: space.xl, letterSpacing: -0.2 },
   scoreGrid: {
     flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: space.md,

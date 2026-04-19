@@ -15,7 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii, SHOOT_TYPES, BEST_TIMES, PRIVACY_MODES } from '../../src/theme';
@@ -239,10 +239,24 @@ export default function AddSpot() {
                 testID="add-coords"
               />
               {draft.locationLabel && (
-                <View style={styles.coordsCard}>
-                  <MapPin size={16} color={colors.primary} />
-                  <Text style={{ color: colors.text, fontFamily: font.bodyMedium }}>{draft.locationLabel}</Text>
-                </View>
+                <>
+                  <View style={styles.coordsCard}>
+                    <MapPin size={16} color={colors.primary} />
+                    <Text style={{ color: colors.text, fontFamily: font.bodyMedium }}>{draft.locationLabel}</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.quickSave}
+                    onPress={() => { setDraft({ ...draft, privacy_mode: 'private', location_display_mode: 'exact' }); setStep(1); }}
+                    testID="add-quick-save"
+                  >
+                    <Zap size={16} color={colors.primary} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.quickSaveTitle}>Quick save private</Text>
+                      <Text style={styles.quickSaveSub}>Skip the details — log this spot for yourself now, fill in notes later.</Text>
+                    </View>
+                    <ChevronRight size={16} color={colors.textSecondary} />
+                  </TouchableOpacity>
+                </>
               )}
             </View>
           )}
@@ -486,6 +500,13 @@ const styles = StyleSheet.create({
     padding: space.md, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
     borderRadius: radii.md,
   },
+  quickSave: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    padding: space.md, borderWidth: 1, borderColor: colors.primary,
+    backgroundColor: 'rgba(245,166,35,0.08)', borderRadius: radii.md,
+  },
+  quickSaveTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
+  quickSaveSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2, lineHeight: 16 },
   uploadCard: {
     alignItems: 'center', justifyContent: 'center', gap: 6,
     paddingVertical: space.xxxl, paddingHorizontal: space.xl,

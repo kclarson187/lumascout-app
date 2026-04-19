@@ -47,6 +47,10 @@ export default function Admin() {
           <ChevronLeft size={22} color={colors.text} />
         </TouchableOpacity>
         <Text style={styles.title}>Moderation</Text>
+        <View style={{ flex: 1 }} />
+        <TouchableOpacity onPress={() => router.push('/admin/reports')} style={styles.reportsBtn} testID="admin-go-reports">
+          <Text style={styles.reportsBtnTxt}>Reports</Text>
+        </TouchableOpacity>
       </View>
       {loading ? (
         <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
@@ -79,6 +83,11 @@ const styles = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: space.xl, paddingVertical: space.md, gap: 8 },
   backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   title: { color: colors.text, fontFamily: font.display, fontSize: 24 },
+  reportsBtn: {
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: radii.pill,
+    backgroundColor: colors.primary,
+  },
+  reportsBtnTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 12 },
   card: { gap: space.md },
   actBtn: {
     flex: 1, flexDirection: 'row', gap: 6, alignItems: 'center', justifyContent: 'center',

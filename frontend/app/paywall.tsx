@@ -1,10 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { ChevronLeft, Check, Crown } from 'lucide-react-native';
 import { colors, font, space, radii } from '../src/theme';
 import { Button } from '../src/components/Button';
+import { api, formatApiError } from '../src/api';
+import { useAuth } from '../src/auth';
 
 const PLANS = [
   {
@@ -57,6 +59,23 @@ const PLANS = [
 ];
 
 export default function Paywall() {
+  const { user, refresh } = useAuth();
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const tryPlan = async (plan: string) => {
+    if (plan === 'free' || plan === user?.plan) return;
+    setBusy(plan);
+    try {
+      await api.post('/me/upgrade', { plan });
+      await refresh();
+      Alert.alert('You\'re on ' + plan.toUpperCase(), 'Preview unlock active. Real billing will move to Stripe at launch.');
+    } catch (e) {
+      Alert.alert('Could not upgrade', formatApiError(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
       <View style={styles.head}>
@@ -67,14 +86,25 @@ export default function Paywall() {
       <ScrollView contentContainerStyle={{ padding: space.xl, paddingBottom: 60 }}>
         <View style={styles.crown}><Crown size={28} color={colors.primary} /></View>
         <Text style={styles.title}>Scout smarter.{'\n'}Shoot better.</Text>
-        <Text style={styles.sub}>Upgrade for unlimited saves, advanced filters, and creator tools.</Text>
+        <Text style={styles.sub}>
+          {user?.plan && user.plan !== 'free'
+            ? `You're on ${user.plan.toUpperCase()}. Thank you for supporting PhotoScout.`
+            : 'Upgrade for unlimited saves, advanced filters, and creator tools.'}
+        </Text>
 
         <View style={{ gap: space.md, marginTop: space.xl }}>
-          {PLANS.map((p) => (
-            <View key={p.key} style={[styles.planCard, p.popular && styles.planPopular]}>
-              {p.popular && (
+          {PLANS.map((p) => {
+            const onPlan = user?.plan === p.key;
+            return (
+            <View key={p.key} style={[styles.planCard, p.popular && styles.planPopular, onPlan && { borderColor: colors.success }]}>
+              {p.popular && !onPlan && (
                 <View style={styles.popBadge}>
                   <Text style={styles.popBadgeTxt}>MOST POPULAR</Text>
+                </View>
+              )}
+              {onPlan && (
+                <View style={[styles.popBadge, { backgroundColor: colors.success }]}>
+                  <Text style={styles.popBadgeTxt}>YOUR PLAN</Text>
                 </View>
               )}
               <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4 }}>
@@ -94,21 +124,21 @@ export default function Paywall() {
               </View>
 
               <Button
-                title={p.cta}
-                variant={p.popular ? 'primary' : 'secondary'}
-                onPress={() => {
-                  if (p.key === 'free') return;
-                  Alert.alert('Coming soon', 'Billing via Stripe is coming next release. For now, all features are free to preview.');
-                }}
+                title={onPlan ? 'Current plan' : p.cta}
+                variant={p.popular && !onPlan ? 'primary' : 'secondary'}
+                loading={busy === p.key}
+                disabled={onPlan || p.key === 'free'}
+                onPress={() => tryPlan(p.key)}
                 style={{ marginTop: space.md }}
                 testID={`paywall-${p.key}`}
               />
             </View>
-          ))}
+            );
+          })}
         </View>
 
         <Text style={styles.fine}>
-          Cancel anytime. Taxes may apply. Billing launches next release — you're trying the preview.
+          Preview unlock is free during beta. Stripe billing ships at launch — your plan will migrate automatically.
         </Text>
       </ScrollView>
     </SafeAreaView>

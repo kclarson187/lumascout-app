@@ -1,0 +1,177 @@
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Image, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { router } from 'expo-router';
+import { ChevronLeft, Check, X, AlertTriangle } from 'lucide-react-native';
+import { api, formatApiError } from '../../src/api';
+import { useAuth } from '../../src/auth';
+import { colors, font, space, radii } from '../../src/theme';
+import { EmptyState } from '../../src/components/ui';
+
+export default function AdminReports() {
+  const { user } = useAuth();
+  const [reports, setReports] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<'pending' | 'resolved'>('pending');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await api.get('/admin/reports', { status: filter });
+      setReports(r);
+    } catch (e) {
+      Alert.alert('Error', formatApiError(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [filter]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (!user || user.role !== 'admin') {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' }}>
+        <Text style={{ color: colors.text, fontFamily: font.display, fontSize: 24 }}>Admin only</Text>
+      </SafeAreaView>
+    );
+  }
+
+  const resolve = async (id: string, action: 'dismissed' | 'removed' | 'warned') => {
+    try {
+      await api.post(`/admin/reports/${id}/resolve`, { action });
+      load();
+    } catch (e) {
+      Alert.alert('Error', formatApiError(e));
+    }
+  };
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
+      <View style={styles.head}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} testID="admin-reports-back">
+          <ChevronLeft size={22} color={colors.text} />
+        </TouchableOpacity>
+        <Text style={styles.title}>Reports</Text>
+      </View>
+
+      <View style={styles.tabs}>
+        {[
+          { k: 'pending', l: 'Pending' },
+          { k: 'resolved', l: 'Resolved' },
+        ].map((t) => (
+          <TouchableOpacity
+            key={t.k}
+            style={[styles.tab, filter === t.k && styles.tabActive]}
+            onPress={() => setFilter(t.k as any)}
+            testID={`report-tab-${t.k}`}
+          >
+            <Text style={[styles.tabTxt, filter === t.k && { color: colors.textInverse }]}>{t.l}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {loading ? (
+        <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
+      ) : reports.length === 0 ? (
+        <EmptyState
+          title={filter === 'pending' ? 'No pending reports' : 'No resolved reports'}
+          subtitle={filter === 'pending' ? "You're all caught up on moderation." : 'Past decisions will appear here.'}
+        />
+      ) : (
+        <ScrollView contentContainerStyle={{ padding: space.xl, gap: space.md, paddingBottom: 100 }}>
+          {reports.map((r) => (
+            <View key={r.report_id} style={styles.card}>
+              <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
+                <View style={styles.warningIcon}>
+                  <AlertTriangle size={18} color={colors.warning} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.reason}>{r.reason}</Text>
+                  <Text style={styles.meta}>
+                    {r.target_type} · reported by {r.reporter?.name || 'user'}
+                  </Text>
+                </View>
+              </View>
+              {r.details ? <Text style={styles.details}>{r.details}</Text> : null}
+              {r.target && r.target_type === 'spot' && (
+                <TouchableOpacity
+                  style={styles.targetCard}
+                  onPress={() => router.push(`/spot/${r.target.spot_id}`)}
+                  testID={`report-target-${r.target.spot_id}`}
+                >
+                  {r.target.images?.[0]?.image_url && (
+                    <Image source={{ uri: r.target.images[0].image_url }} style={styles.targetImg} />
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.targetTitle}>{r.target.title}</Text>
+                    <Text style={styles.targetCity}>{r.target.city}, {r.target.state}</Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+              {r.status === 'resolved' ? (
+                <View style={styles.resolvedRow}>
+                  <Check size={14} color={colors.success} />
+                  <Text style={styles.resolvedTxt}>Resolved · {r.resolution}</Text>
+                </View>
+              ) : (
+                <View style={styles.actions}>
+                  <TouchableOpacity style={[styles.actBtn, { backgroundColor: colors.surface2 }]} onPress={() => resolve(r.report_id, 'dismissed')} testID={`report-dismiss-${r.report_id}`}>
+                    <Text style={styles.actTxt}>Dismiss</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.actBtn, { backgroundColor: colors.warning }]} onPress={() => resolve(r.report_id, 'warned')} testID={`report-warn-${r.report_id}`}>
+                    <Text style={[styles.actTxt, { color: colors.textInverse }]}>Warn</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.actBtn, { backgroundColor: colors.secondary }]} onPress={() => resolve(r.report_id, 'removed')} testID={`report-remove-${r.report_id}`}>
+                    <X size={14} color="#fff" />
+                    <Text style={[styles.actTxt, { color: '#fff' }]}>Remove</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          ))}
+        </ScrollView>
+      )}
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  head: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: space.xl, paddingVertical: space.md, gap: 8 },
+  backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  title: { color: colors.text, fontFamily: font.display, fontSize: 26 },
+  tabs: { flexDirection: 'row', gap: 8, paddingHorizontal: space.xl, marginBottom: space.md },
+  tab: {
+    paddingHorizontal: 14, paddingVertical: 7, borderRadius: radii.pill,
+    backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
+  },
+  tabActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  tabTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },
+  card: {
+    padding: space.lg, backgroundColor: colors.surface1,
+    borderColor: colors.border, borderWidth: 1, borderRadius: radii.lg, gap: space.md,
+  },
+  warningIcon: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: 'rgba(251,191,36,0.15)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  reason: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14, textTransform: 'capitalize' },
+  meta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, marginTop: 2 },
+  details: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 16 },
+  targetCard: {
+    flexDirection: 'row', gap: 10, alignItems: 'center',
+    padding: space.md, backgroundColor: colors.surface2,
+    borderRadius: radii.md,
+  },
+  targetImg: { width: 48, height: 48, borderRadius: radii.sm },
+  targetTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
+  targetCity: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, marginTop: 2 },
+  actions: { flexDirection: 'row', gap: 8 },
+  actBtn: {
+    flex: 1, flexDirection: 'row', gap: 6, alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 10, borderRadius: radii.md,
+  },
+  actTxt: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 12 },
+  resolvedRow: { flexDirection: 'row', gap: 6, alignItems: 'center' },
+  resolvedTxt: { color: colors.success, fontFamily: font.bodyMedium, fontSize: 12 },
+});

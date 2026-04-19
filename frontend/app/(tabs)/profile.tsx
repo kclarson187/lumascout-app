@@ -166,7 +166,7 @@ export default function Profile() {
           </TouchableOpacity>
           <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/paywall')} testID="profile-paywall">
             <Crown size={18} color={colors.primary} />
-            <Text style={styles.actionTxt}>Upgrade{'\n'}to Pro</Text>
+            <Text style={styles.actionTxt}>{user.plan && user.plan !== 'free' ? `On ${user.plan}` : 'Upgrade'}{'\n'}{user.plan === 'elite' ? 'Creator' : 'to Pro'}</Text>
           </TouchableOpacity>
           {user.role === 'admin' && (
             <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/admin')} testID="profile-admin">

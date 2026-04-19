@@ -34,6 +34,21 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 JWT_ALGO = "HS256"
 ACCESS_TOKEN_DAYS = 30
 
+# Plan feature gating
+PLAN_LIMITS = {
+    "free": {"saves": 20, "private_spots": 3, "collections": 3, "advanced_filters": False, "sell_packs": False},
+    "pro": {"saves": 10_000, "private_spots": 10_000, "collections": 500, "advanced_filters": True, "sell_packs": False},
+    "elite": {"saves": 10_000, "private_spots": 10_000, "collections": 10_000, "advanced_filters": True, "sell_packs": True},
+}
+
+
+def plan_of(user: dict) -> str:
+    return (user or {}).get("plan") or "free"
+
+
+def limits_for(user: dict) -> dict:
+    return PLAN_LIMITS.get(plan_of(user), PLAN_LIMITS["free"])
+
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
 
@@ -295,6 +310,7 @@ async def register(body: RegisterIn):
         "role": "user",
         "verification_status": "unverified",
         "auth_provider": "email",
+        "plan": "free",
         "created_at": utcnow(),
         "updated_at": utcnow(),
     }
@@ -317,7 +333,31 @@ async def login(body: LoginIn):
 
 @api.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
+    user["plan"] = plan_of(user)
+    user["limits"] = limits_for(user)
+    # live counts
+    user["usage"] = {
+        "saves": await db.spot_saves.count_documents({"user_id": user["user_id"]}),
+        "private_spots": await db.spots.count_documents({
+            "owner_user_id": user["user_id"],
+            "privacy_mode": {"$in": ["private", "followers", "invite_only"]},
+        }),
+        "collections": await db.collections.count_documents({"owner_user_id": user["user_id"]}),
+    }
     return user
+
+
+class UpgradeIn(BaseModel):
+    plan: str  # free | pro | elite
+
+
+@api.post("/me/upgrade")
+async def upgrade_plan(body: UpgradeIn, user: dict = Depends(get_current_user)):
+    if body.plan not in PLAN_LIMITS:
+        raise HTTPException(status_code=400, detail="Unknown plan")
+    # NOTE: billing is not wired yet; this is a preview toggle until Stripe ships.
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"plan": body.plan, "updated_at": utcnow()}})
+    return {"ok": True, "plan": body.plan, "limits": PLAN_LIMITS[body.plan]}
 
 
 @api.patch("/auth/me")
@@ -366,6 +406,7 @@ async def google_session(body: GoogleSessionIn):
             "role": "user",
             "verification_status": "unverified",
             "auth_provider": "google",
+            "plan": "free",
             "created_at": utcnow(),
             "updated_at": utcnow(),
         }
@@ -424,6 +465,24 @@ async def follow_user(user_id: str, user: dict = Depends(get_current_user)):
 # ============================================================================
 @api.post("/spots")
 async def create_spot(body: SpotCreateIn, user: dict = Depends(get_current_user)):
+    # Feature gating: free plan can only create 3 private/followers/invite_only spots
+    if body.privacy_mode in ("private", "followers", "invite_only"):
+        limits = limits_for(user)
+        current = await db.spots.count_documents({
+            "owner_user_id": user["user_id"],
+            "privacy_mode": {"$in": ["private", "followers", "invite_only"]},
+        })
+        if current >= limits["private_spots"]:
+            raise HTTPException(
+                status_code=402,
+                detail=f"Free plan limit reached ({limits['private_spots']} private spots). Upgrade to Pro for unlimited.",
+            )
+    # Elite-only: premium (sellable) spots
+    if body.privacy_mode == "premium" and not limits_for(user)["sell_packs"]:
+        raise HTTPException(
+            status_code=402,
+            detail="Premium spots require the Elite plan. Upgrade to publish sellable locations.",
+        )
     spot_id = f"spot_{uuid.uuid4().hex[:12]}"
     images = []
     for i, img in enumerate(body.images):
@@ -689,6 +748,14 @@ async def toggle_save(spot_id: str, user: dict = Depends(get_current_user)):
     if existing:
         await db.spot_saves.delete_one({"user_id": user["user_id"], "spot_id": spot_id})
         return {"saved": False}
+    # Feature gating: free plan save cap
+    limits = limits_for(user)
+    current = await db.spot_saves.count_documents({"user_id": user["user_id"]})
+    if current >= limits["saves"]:
+        raise HTTPException(
+            status_code=402,
+            detail=f"Free plan allows {limits['saves']} saves. Upgrade to Pro for unlimited saves.",
+        )
     await db.spot_saves.insert_one({
         "save_id": f"save_{uuid.uuid4().hex[:12]}",
         "user_id": user["user_id"],
@@ -718,6 +785,13 @@ async def my_spots(user: dict = Depends(get_current_user)):
 # ============================================================================
 @api.post("/collections")
 async def create_collection(body: CollectionIn, user: dict = Depends(get_current_user)):
+    limits = limits_for(user)
+    current = await db.collections.count_documents({"owner_user_id": user["user_id"]})
+    if current >= limits["collections"]:
+        raise HTTPException(
+            status_code=402,
+            detail=f"Free plan allows {limits['collections']} collections. Upgrade to Pro for unlimited.",
+        )
     cid = f"col_{uuid.uuid4().hex[:12]}"
     doc = {
         "collection_id": cid,
@@ -885,6 +959,94 @@ async def admin_reject(spot_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Forbidden")
     await db.spots.update_one({"spot_id": spot_id}, {"$set": {"visibility_status": "rejected"}})
     return {"ok": True}
+
+
+@api.get("/admin/reports")
+async def admin_reports(status: Optional[str] = None, user: dict = Depends(get_current_user)):
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    q: dict = {}
+    if status:
+        q["status"] = status
+    reports = await db.reports.find(q, {"_id": 0}).sort("created_at", -1).to_list(200)
+    # attach target context
+    for r in reports:
+        if r["target_type"] == "spot":
+            s = await db.spots.find_one({"spot_id": r["target_id"]}, {"_id": 0, "title": 1, "city": 1, "state": 1, "images": 1, "spot_id": 1})
+            r["target"] = s
+        reporter = await db.users.find_one({"user_id": r["reporter_user_id"]}, {"_id": 0, "name": 1, "username": 1, "avatar_url": 1})
+        r["reporter"] = reporter
+    return reports
+
+
+class ReportResolveIn(BaseModel):
+    action: str  # dismissed | removed | warned
+
+
+@api.post("/admin/reports/{report_id}/resolve")
+async def admin_resolve_report(report_id: str, body: ReportResolveIn, user: dict = Depends(get_current_user)):
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if body.action not in ("dismissed", "removed", "warned"):
+        raise HTTPException(status_code=400, detail="Invalid action")
+    rep = await db.reports.find_one({"report_id": report_id})
+    if not rep:
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.reports.update_one(
+        {"report_id": report_id},
+        {"$set": {"status": "resolved", "resolution": body.action, "resolved_at": utcnow(), "resolved_by": user["user_id"]}},
+    )
+    if body.action == "removed" and rep["target_type"] == "spot":
+        await db.spots.update_one({"spot_id": rep["target_id"]}, {"$set": {"visibility_status": "rejected"}})
+    return {"ok": True}
+
+
+# ============================================================================
+# Spot Packs (future creator monetization — Elite plan)
+# ============================================================================
+class SpotPackIn(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    cover_image_url: Optional[str] = None
+    price_cents: int = 0  # 0 = free / preview
+    spot_ids: List[str] = []
+    published: bool = False
+
+
+@api.post("/packs")
+async def create_pack(body: SpotPackIn, user: dict = Depends(get_current_user)):
+    if not limits_for(user)["sell_packs"]:
+        raise HTTPException(status_code=402, detail="Creating spot packs requires the Elite plan.")
+    pid = f"pack_{uuid.uuid4().hex[:12]}"
+    doc = {
+        "pack_id": pid,
+        "creator_user_id": user["user_id"],
+        "name": body.name,
+        "description": body.description,
+        "cover_image_url": body.cover_image_url,
+        "price_cents": body.price_cents,
+        "currency": "USD",
+        "spot_ids": body.spot_ids,
+        "published": body.published,
+        "sales_count": 0,
+        "created_at": utcnow(),
+        "updated_at": utcnow(),
+    }
+    await db.spot_packs.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.get("/packs")
+async def list_packs(published: Optional[bool] = True):
+    q = {"published": True} if published else {}
+    packs = await db.spot_packs.find(q, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return packs
+
+
+@api.get("/me/packs")
+async def my_packs(user: dict = Depends(get_current_user)):
+    return await db.spot_packs.find({"creator_user_id": user["user_id"]}, {"_id": 0}).sort("created_at", -1).to_list(100)
 
 
 # ============================================================================
