@@ -247,10 +247,41 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Frontend — Phase A+B rebuild end-to-end smoke test"
+    - "Phase C — Post moderation: GET /api/admin/posts + DELETE + restore"
+    - "Phase C — Analytics: top_cities + top_contributors added to /api/admin/analytics"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+  - task: "Phase C — Post moderation: GET /api/admin/posts + DELETE /api/admin/posts/{id} + POST /restore"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "New moderator-gated endpoints. GET /admin/posts supports ?status=active|flagged|removed|all and returns {items, count} with hydrated author + open_reports count per post. DELETE /admin/posts/{id}?reason=... soft-deletes (sets status=removed, removed_by, removed_at) and auto-resolves any pending reports on the post. POST /admin/posts/{id}/restore (admin+ only) flips status back to active. Both write audit_log 'post.remove' / 'post.restore'. Verify as admin: list→pick any active post; DELETE it→200, list again with ?status=removed shows it; POST restore→200, status=active; audit log has both entries. Verify as moderator: DELETE works, restore returns 403 (admin-gated)."
+        -working: true
+        -agent: "testing"
+        -comment: "ALL 14 Phase C post-moderation cases PASS (backend_test_phase_c.py). (1) sophie POST /api/posts {category:'tip', title, body} → 200 with post_id=pst_e18b7fbe4e12. (2) admin GET /api/admin/posts → 200 with {items, count} shape; our test post is present, has hydrated author (user_id, username='sophiereyes', name='Sophie Reyes', avatar_url, city='Austin', state='TX', verification_status='verified', plan='free'), and open_reports=0. (3) GET /api/admin/posts?status=active → only status=='active' items returned. (4) admin DELETE /api/admin/posts/{id}?reason=test%20removal → 200 {ok:true, post_id, status:'removed'}. (5) GET /api/admin/posts?status=removed → test post present with status=='removed'. (6) admin POST /api/admin/posts/{id}/restore → 200 {ok:true, post_id, status:'active'}. (7) GET /api/admin/audit-logs?action=post.remove&target_id={post_id} returns entry; same for post.restore → both present. (8) sophie (regular user) POST /api/admin/posts/{id}/restore → 403 Forbidden (admin-only gate working). (9) marco (regular user) DELETE /api/admin/posts/{id} → 403 Forbidden (moderator-gate working)."
+
+  - task: "Phase C — Analytics top_cities + top_contributors"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "GET /api/admin/analytics response now includes top_cities (aggregated from approved spots — top 10 by count, each row has city/state/country_code/count) and top_contributors (top 10 users by approved spot count, each row has user_id/name/username/avatar_url/verification_status/plan/city/state/spot_count). Verify: as admin, GET /admin/analytics?days=30 returns both arrays, at least 5 entries each for our seeded data, no user has password_hash leaked."
+        -working: true
+        -agent: "testing"
+        -comment: "ALL analytics cases PASS (backend_test_phase_c.py). GET /api/admin/analytics?days=30 as admin → 200. top_cities: 10 entries, each with {city, state, country_code, count}, counts all positive ints, sorted descending (counts=[35,2,2,2,2,2,2,2,1,1]). top_contributors: 10 entries, each with {user_id, name, username, avatar_url, city, state, verification_status, plan, spot_count}; spot_count positive ints, sorted descending (counts=[28,4,4,4,4,3,3,3,2,2]); NO entry contains password_hash. Existing fields unchanged — series/totals/most_saved all still present in response."
 
 frontend:
   - task: "Phase A + B — end-to-end UI smoke test after major rebuild"
@@ -465,3 +496,34 @@ agent_communication:
 
       No critical UI regressions found. All priority features properly implemented for mobile experience.
       App ready for production mobile testing with real user interactions.
+
+    -agent: "testing"
+    -message: |
+      Phase C backend: 28/28 assertions PASS (backend_test_phase_c.py).
+
+      ✅ Post moderation (14/14)
+        - sophie POST /api/posts {category:"tip",...} → 200 pst_e18b7fbe4e12
+        - admin GET /api/admin/posts → 200 {items, count}; our post is present,
+          has hydrated author ({user_id, username, name, avatar_url, city, state,
+          verification_status:'verified', plan}), and open_reports:0
+        - ?status=active → filters correctly
+        - admin DELETE /api/admin/posts/{id}?reason=test%20removal → 200
+          {ok:true, post_id, status:"removed"}
+        - ?status=removed → our post present w/ status=="removed"
+        - admin POST /api/admin/posts/{id}/restore → 200 {ok, status:"active"}
+        - /admin/audit-logs contains both "post.remove" and "post.restore"
+          entries with target_id == test post
+        - sophie (regular user) POST restore → 403 Forbidden (admin-gated)
+        - marco (regular user) DELETE → 403 Forbidden (moderator-gated)
+
+      ✅ Analytics top_cities + top_contributors
+        - top_cities (10 entries, 5+ required): each has {city, state,
+          country_code, count}; counts positive ints; sorted descending
+          (e.g. [35,2,2,2,2,2,2,2,1,1])
+        - top_contributors (10 entries, 5+ required): each has
+          {user_id, name, username, spot_count, avatar_url, verification_status,
+          plan, city, state}; NO password_hash leaks; spot_count positive ints;
+          sorted descending ([28,4,4,4,4,3,3,3,2,2])
+        - series / totals / most_saved fields still present and unchanged
+
+      No follow-up items. Main agent can summarise and hand off.

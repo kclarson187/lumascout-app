@@ -1666,6 +1666,87 @@ async def admin_pending(user: dict = Depends(require_role("moderator"))):
     return [public_spot_view(s, user) for s in pending]
 
 
+@api.get("/admin/posts")
+async def admin_list_posts(
+    status: Optional[str] = None,
+    limit: int = 50,
+    me: dict = Depends(require_role("moderator")),
+):
+    """Community post moderation list. Supports ?status=flagged|active|removed.
+
+    Also returns report count per post (aggregated from the reports collection)
+    so moderators can triage by community signal.
+    """
+    q: dict = {}
+    if status and status != "all":
+        q["status"] = status
+    limit = max(1, min(200, limit))
+    posts = await db.community_posts.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    # Attach report counts per post
+    post_ids = [p["post_id"] for p in posts]
+    if post_ids:
+        reports_agg = await db.reports.aggregate([
+            {"$match": {"target_type": "post", "target_id": {"$in": post_ids}, "status": "pending"}},
+            {"$group": {"_id": "$target_id", "count": {"$sum": 1}}},
+        ]).to_list(500)
+        report_map = {r["_id"]: r["count"] for r in reports_agg}
+    else:
+        report_map = {}
+    posts = await _hydrate_posts(posts, me)
+    for p in posts:
+        p["open_reports"] = report_map.get(p["post_id"], 0)
+    return {"items": posts, "count": len(posts)}
+
+
+@api.delete("/admin/posts/{post_id}")
+async def admin_delete_post(
+    post_id: str,
+    reason: Optional[str] = None,
+    me: dict = Depends(require_role("moderator")),
+):
+    post = await db.community_posts.find_one({"post_id": post_id}, {"_id": 0})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    await db.community_posts.update_one(
+        {"post_id": post_id},
+        {"$set": {
+            "status": "removed",
+            "removed_by": me["user_id"],
+            "removed_at": utcnow(),
+            "removal_reason": reason or "admin removal",
+        }},
+    )
+    # Auto-resolve any pending reports that referenced this post.
+    await db.reports.update_many(
+        {"target_type": "post", "target_id": post_id, "status": "pending"},
+        {"$set": {"status": "resolved", "resolved_by": me["user_id"], "resolved_at": utcnow(), "resolution_note": "post removed"}},
+    )
+    await audit_log(
+        me, "post.remove", "post", post_id,
+        before={"status": post.get("status", "active"), "title": post.get("title")},
+        after={"status": "removed", "removal_reason": reason or "admin removal"},
+        notes=reason or "admin removal",
+    )
+    return {"ok": True, "post_id": post_id, "status": "removed"}
+
+
+@api.post("/admin/posts/{post_id}/restore")
+async def admin_restore_post(
+    post_id: str,
+    me: dict = Depends(require_role("admin")),
+):
+    post = await db.community_posts.find_one({"post_id": post_id}, {"_id": 0})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    await db.community_posts.update_one(
+        {"post_id": post_id},
+        {"$set": {"status": "active", "restored_by": me["user_id"], "restored_at": utcnow()}},
+    )
+    await audit_log(me, "post.restore", "post", post_id,
+                    before={"status": post.get("status")}, after={"status": "active"})
+    return {"ok": True, "post_id": post_id, "status": "active"}
+
+
 @api.post("/admin/spots/{spot_id}/approve")
 async def admin_approve(spot_id: str, user: dict = Depends(require_role("moderator"))):
     before = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "visibility_status": 1})
@@ -2141,6 +2222,54 @@ async def admin_analytics(days: int = 30, me: dict = Depends(require_role("moder
             s["save_count"] = row["count"]
             most_saved.append(s)
 
+    # Top cities (by approved spot count, all-time — gives a geographic heatmap)
+    cities_agg = await db.spots.aggregate([
+        {"$match": {"visibility_status": "approved"}},
+        {"$group": {
+            "_id": {
+                "city": "$city",
+                "state": "$state",
+                "country_code": "$country_code",
+            },
+            "count": {"$sum": 1},
+        }},
+        {"$sort": {"count": -1}},
+        {"$limit": 10},
+    ]).to_list(10)
+    top_cities = [
+        {
+            "city": (row["_id"].get("city") or "Unknown"),
+            "state": row["_id"].get("state") or "",
+            "country_code": row["_id"].get("country_code") or "US",
+            "count": row["count"],
+        }
+        for row in cities_agg
+        if row["_id"].get("city")
+    ]
+
+    # Top contributors (by approved spot count, all-time)
+    contrib_agg = await db.spots.aggregate([
+        {"$match": {"visibility_status": "approved"}},
+        {"$group": {"_id": "$owner_user_id", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 10},
+    ]).to_list(10)
+    contrib_uids = [r["_id"] for r in contrib_agg if r.get("_id")]
+    contrib_users = {
+        u["user_id"]: u
+        for u in await db.users.find(
+            {"user_id": {"$in": contrib_uids}},
+            {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
+             "verification_status": 1, "plan": 1, "city": 1, "state": 1},
+        ).to_list(20)
+    }
+    top_contributors = []
+    for r in contrib_agg:
+        u = contrib_users.get(r["_id"]) if r.get("_id") else None
+        if u:
+            u["spot_count"] = r["count"]
+            top_contributors.append(u)
+
     return {
         "days": days,
         "series": series,
@@ -2151,6 +2280,8 @@ async def admin_analytics(days: int = 30, me: dict = Depends(require_role("moder
             "rejections": sum(s["rejections"] for s in series),
         },
         "most_saved": most_saved,
+        "top_cities": top_cities,
+        "top_contributors": top_contributors,
     }
 
 

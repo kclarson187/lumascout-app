@@ -8,17 +8,17 @@ import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 
-const CATEGORIES = [
-  { k: 'win',       label: 'Win' },
-  { k: 'question',  label: 'Question' },
-  { k: 'tip',       label: 'Tip' },
-  { k: 'gear',      label: 'Gear' },
-  { k: 'critique',  label: 'Critique' },
-  { k: 'bts',       label: 'BTS' },
-  { k: 'referral',  label: 'Referral' },
-  { k: 'collab',    label: 'Collab' },
-  { k: 'meetup',    label: 'Meetup' },
-  { k: 'intro',     label: 'Intro' },
+const CATEGORIES: { k: string; label: string; hint: string; placeholder: string }[] = [
+  { k: 'win',      label: 'Win',      hint: '🎉 Celebrate a recent shoot, booking, or milestone',        placeholder: 'What made this week a win for you?' },
+  { k: 'question', label: 'Question', hint: '❓ Ask the community — gear, pricing, editing, clients',    placeholder: 'What would you like the community to help with?' },
+  { k: 'tip',      label: 'Tip',      hint: '💡 Share a technique, location hack, or workflow tip',      placeholder: 'Drop your photography tip here…' },
+  { k: 'gear',     label: 'Gear',     hint: '📷 Gear reviews, questions, buy/sell/trade',                 placeholder: 'What gear are we talking about?' },
+  { k: 'critique', label: 'Critique', hint: '🖼 Ask for feedback on a recent image (attach the photo)',  placeholder: 'Context: lighting, edits, story behind the shot…' },
+  { k: 'bts',      label: 'BTS',      hint: '🎬 Behind-the-scenes moments from a recent shoot',           placeholder: 'What was the BTS story?' },
+  { k: 'referral', label: 'Referral', hint: '🤝 Offer or request a client referral (booked session, overflow)', placeholder: 'Date, city, session type, budget, client requirements…' },
+  { k: 'collab',   label: 'Collab',   hint: '🎨 Team up on a creative project, portfolio swap, or styled shoot', placeholder: 'What collab are you proposing?' },
+  { k: 'meetup',   label: 'Meetup',   hint: '📅 Organize or join a photo walk / coffee meetup',            placeholder: 'Date, time, city, what to bring, how many can join…' },
+  { k: 'intro',    label: 'Intro',    hint: '👋 New here? Introduce yourself to the community',           placeholder: 'Your name, location, style, what you are looking for here…' },
 ];
 
 export default function Compose() {
@@ -91,6 +91,11 @@ export default function Compose() {
               </TouchableOpacity>
             ))}
           </View>
+          {!!CATEGORIES.find((c) => c.k === category) && (
+            <View style={styles.catHintCard}>
+              <Text style={styles.catHint}>{CATEGORIES.find((c) => c.k === category)!.hint}</Text>
+            </View>
+          )}
 
           <Text style={styles.label}>Title</Text>
           <TextInput
@@ -107,7 +112,7 @@ export default function Compose() {
           <TextInput
             value={body}
             onChangeText={setBody}
-            placeholder="Context, photos, prices, dates…"
+            placeholder={CATEGORIES.find((c) => c.k === category)?.placeholder || 'Context, photos, prices, dates…'}
             placeholderTextColor={colors.textTertiary}
             multiline
             style={[styles.input, { minHeight: 120, textAlignVertical: 'top' }]}
@@ -146,6 +151,11 @@ const styles = StyleSheet.create({
   catGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   catChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
   catChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  catHintCard: {
+    padding: space.md, borderRadius: radii.md,
+    backgroundColor: colors.surface2, borderColor: colors.border, borderWidth: 1, marginTop: -4,
+  },
+  catHint: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 13, lineHeight: 19 },
   catTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
   catTxtActive: { color: colors.textInverse, fontFamily: font.bodySemibold },
   input: { backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, borderRadius: radii.md, paddingHorizontal: space.md, paddingVertical: 12, color: colors.text, fontFamily: font.body, fontSize: 15 },

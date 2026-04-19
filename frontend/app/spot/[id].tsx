@@ -9,6 +9,8 @@ import {
   Dimensions,
   Alert,
   Share,
+  Linking,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -16,7 +18,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import {
   ChevronLeft, Bookmark, Share2, Flag, MapPin, Sun, Sunrise, Sunset, Cloud,
   Camera, Car, Accessibility, Users, Shield, DogIcon, BabyIcon, TicketIcon, ClockIcon, CheckCircle,
-  FolderPlus, MessageSquarePlus,
+  FolderPlus, MessageSquarePlus, Navigation,
 } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
@@ -223,6 +225,43 @@ export default function SpotDetail() {
             </View>
           )}
 
+          {/* Get directions — shown whenever an exact pin is available */}
+          {spot.location_display_mode !== 'hidden' && spot.latitude != null && spot.longitude != null && (
+            <TouchableOpacity
+              style={styles.directionsBtn}
+              onPress={() => {
+                const lat = spot.latitude;
+                const lng = spot.longitude;
+                const label = encodeURIComponent(spot.title || 'PhotoScout spot');
+                const iosUrl = `maps://?daddr=${lat},${lng}&q=${label}`;
+                const iosFallback = `http://maps.apple.com/?daddr=${lat},${lng}&q=${label}`;
+                const androidUrl = `geo:${lat},${lng}?q=${lat},${lng}(${label})`;
+                const webUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+                const openBest = async () => {
+                  if (Platform.OS === 'ios') {
+                    const canOpen = await Linking.canOpenURL(iosUrl).catch(() => false);
+                    return Linking.openURL(canOpen ? iosUrl : iosFallback);
+                  }
+                  if (Platform.OS === 'android') {
+                    const canOpen = await Linking.canOpenURL(androidUrl).catch(() => false);
+                    return Linking.openURL(canOpen ? androidUrl : webUrl);
+                  }
+                  return Linking.openURL(webUrl);
+                };
+                openBest().catch(() => Alert.alert('Could not open maps', 'Please try again.'));
+              }}
+              testID="spot-get-directions"
+            >
+              <Navigation size={16} color={colors.textInverse} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.directionsBtnTitle}>Get directions</Text>
+                <Text style={styles.directionsBtnSub} numberOfLines={1}>
+                  {spot.latitude.toFixed(5)}, {spot.longitude.toFixed(5)} · opens in {Platform.OS === 'ios' ? 'Apple Maps' : Platform.OS === 'android' ? 'Google Maps' : 'your browser'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
           {/* Scores */}
           <Text style={styles.sectionH}>Shoot Intelligence</Text>
           <View style={styles.scoreGrid}>
@@ -411,6 +450,13 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(96,165,250,0.3)', borderWidth: 1, borderRadius: radii.md,
   },
   privacyNoteTxt: { color: colors.info, fontFamily: font.bodyMedium, fontSize: 12, flex: 1, lineHeight: 16 },
+  directionsBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    marginTop: space.md, paddingHorizontal: space.md, paddingVertical: 12,
+    backgroundColor: colors.primary, borderRadius: radii.md,
+  },
+  directionsBtnTitle: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 },
+  directionsBtnSub: { color: 'rgba(255,255,255,0.82)', fontFamily: font.bodyMedium, fontSize: 11, marginTop: 2 },
   sectionH: { color: colors.text, fontFamily: font.display, fontSize: 20, marginTop: space.xl, letterSpacing: -0.2 },
   scoreGrid: {
     flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: space.md,
