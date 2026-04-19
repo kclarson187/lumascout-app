@@ -13,12 +13,14 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { Search } from 'lucide-react-native';
+import { Search, TrendingUp } from 'lucide-react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { api } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii, QUICK_FILTERS } from '../../src/theme';
 import SpotCard from '../../src/components/SpotCard';
 import { SectionHeader, Chip, EmptyState } from '../../src/components/ui';
+import { SectionSkeleton, SkeletonBox } from '../../src/components/Skeleton';
 
 type Feed = Record<string, any[]>;
 
@@ -75,10 +77,21 @@ export default function Home() {
   if (loading) {
     return (
       <SafeAreaView style={styles.root} edges={['top']}>
-        <ActivityIndicator color={colors.primary} style={{ marginTop: 60 }} />
+        <View style={styles.header}>
+          <View style={{ gap: 6 }}>
+            <SkeletonBox style={{ height: 12, width: 100 }} />
+            <SkeletonBox style={{ height: 32, width: 180 }} />
+          </View>
+          <SkeletonBox style={{ width: 44, height: 44, borderRadius: 22 }} />
+        </View>
+        <SkeletonBox style={{ marginHorizontal: space.xl, marginTop: space.md, height: 48, borderRadius: radii.md }} />
+        <SectionSkeleton />
+        <SectionSkeleton />
       </SafeAreaView>
     );
   }
+
+  const hero = (feed.trending || [])[0];
 
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
@@ -214,4 +227,22 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
   },
   searchPlaceholder: { color: colors.textSecondary, fontFamily: font.body, fontSize: 14 },
+  heroCard: {
+    marginHorizontal: space.xl, marginTop: space.xl,
+    borderRadius: radii.lg, overflow: 'hidden',
+    backgroundColor: colors.surface2,
+    aspectRatio: 4 / 3,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  heroImg: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%' },
+  heroGrad: { position: 'absolute', bottom: 0, left: 0, right: 0, height: '70%' },
+  heroTop: { position: 'absolute', top: space.md, left: space.md, flexDirection: 'row', gap: 6 },
+  heroTag: {
+    flexDirection: 'row', gap: 4, alignItems: 'center',
+    backgroundColor: colors.primary, paddingHorizontal: 10, paddingVertical: 5, borderRadius: radii.pill,
+  },
+  heroTagTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.6 },
+  heroBottom: { position: 'absolute', bottom: space.lg, left: space.lg, right: space.lg },
+  heroTitle: { color: colors.text, fontFamily: font.display, fontSize: 26, letterSpacing: -0.3, lineHeight: 30 },
+  heroMeta: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12, marginTop: 4 },
 });

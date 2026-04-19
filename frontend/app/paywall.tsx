@@ -140,6 +140,32 @@ export default function Paywall() {
         <Text style={styles.fine}>
           Preview unlock is free during beta. Stripe billing ships at launch — your plan will migrate automatically.
         </Text>
+
+        <Text style={[styles.compareHead]}>Compare plans</Text>
+        <View style={styles.compare}>
+          {[
+            ['Saved spots', '20', 'Unlimited', 'Unlimited'],
+            ['Private spots', '3', 'Unlimited', 'Unlimited'],
+            ['Collections', '3', 'Unlimited', 'Unlimited'],
+            ['Advanced filters', '—', '✓', '✓'],
+            ['Creator analytics', '—', '—', '✓'],
+            ['Sell spot packs', '—', '—', '✓'],
+            ['Enhanced profile', '—', '—', '✓'],
+          ].map((row, i) => (
+            <View key={i} style={[styles.cmpRow, i % 2 === 1 && { backgroundColor: colors.surface1 }]}>
+              <Text style={[styles.cmpCell, { flex: 1.6, textAlign: 'left' }]}>{row[0]}</Text>
+              <Text style={styles.cmpCell}>{row[1]}</Text>
+              <Text style={[styles.cmpCell, { color: colors.primary }]}>{row[2]}</Text>
+              <Text style={[styles.cmpCell, { color: colors.primary }]}>{row[3]}</Text>
+            </View>
+          ))}
+          <View style={[styles.cmpRow, styles.cmpHead]}>
+            <Text style={[styles.cmpCell, { flex: 1.6, textAlign: 'left', color: colors.textSecondary }]}></Text>
+            <Text style={[styles.cmpCell, styles.cmpHeadTxt]}>Free</Text>
+            <Text style={[styles.cmpCell, styles.cmpHeadTxt]}>Pro</Text>
+            <Text style={[styles.cmpCell, styles.cmpHeadTxt]}>Elite</Text>
+          </View>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -173,4 +199,10 @@ const styles = StyleSheet.create({
   planPeriod: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13 },
   planTag: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2 },
   fine: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, textAlign: 'center', marginTop: space.xl, lineHeight: 16 },
+  compareHead: { color: colors.text, fontFamily: font.display, fontSize: 22, marginTop: space.xxl, marginBottom: space.md },
+  compare: { borderRadius: radii.md, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' },
+  cmpRow: { flexDirection: 'row', paddingVertical: 12, paddingHorizontal: space.md, alignItems: 'center' },
+  cmpHead: { backgroundColor: colors.surface2, borderBottomWidth: 1, borderBottomColor: colors.border, flexDirection: 'row-reverse' },
+  cmpHeadTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase' },
+  cmpCell: { flex: 1, color: colors.text, fontFamily: font.bodyMedium, fontSize: 12, textAlign: 'center' },
 });

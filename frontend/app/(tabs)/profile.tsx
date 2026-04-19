@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
 import { LogOut, Settings, BarChart3, Crown, Check, Edit3 } from 'lucide-react-native';
 import { useAuth } from '../../src/auth';
 import { api, formatApiError } from '../../src/api';
@@ -193,6 +194,7 @@ export default function Profile() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
+  bannerWrap: { height: 140, backgroundColor: colors.surface1, position: 'relative', overflow: 'hidden' },
   topBar: {
     flexDirection: 'row', justifyContent: 'flex-end', gap: 8,
     paddingHorizontal: space.xl, paddingTop: space.sm,
