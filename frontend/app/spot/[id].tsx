@@ -267,6 +267,23 @@ export default function SpotDetail() {
             </TouchableOpacity>
           )}
 
+          {/* AI Shot list */}
+          {!!spot.spot_id && (
+            <TouchableOpacity
+              style={styles.aiBtn}
+              onPress={() => setShotListOpen(true)}
+              testID="spot-shot-list"
+            >
+              <Wand2 size={16} color={colors.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.aiBtnTitle}>AI shot list</Text>
+                <Text style={styles.aiBtnSub} numberOfLines={1}>
+                  6–8 composition ideas for {spot.title}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
           {/* Scores */}
           <Text style={styles.sectionH}>Shoot Intelligence</Text>
           <View style={styles.scoreGrid}>

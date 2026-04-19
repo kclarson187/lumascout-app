@@ -47,6 +47,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       const me = await api.get('/auth/me');
       setUser(me);
+      // Kick off push-token registration the first time we authenticate each
+      // launch. Runs on native only; silent on web + simulators.
+      try {
+        const { registerPushToken } = await import('./push');
+        registerPushToken();
+      } catch {}
     } catch {
       setUser(null);
     }

@@ -12,6 +12,7 @@ import bcrypt
 import jwt
 import httpx
 from datetime import datetime, timezone, timedelta
+import math
 from typing import List, Optional, Any
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query
@@ -1022,7 +1023,11 @@ async def nearby(
 
 
 @api.get("/feed/home")
-async def home_feed(viewer: Optional[dict] = Depends(get_optional_user)):
+async def home_feed(
+    lat: Optional[float] = None,
+    lng: Optional[float] = None,
+    viewer: Optional[dict] = Depends(get_optional_user),
+):
     base_query = {"privacy_mode": {"$in": ["public", "premium"]}, "visibility_status": "approved"}
     all_spots = await db.spots.find(base_query, {"_id": 0}).to_list(500)
     scored = []
@@ -1035,18 +1040,33 @@ async def home_feed(viewer: Optional[dict] = Depends(get_optional_user)):
     # referenced in multiple sorted slices below.
     await attach_owners(scored)
 
-    # Nearby (if we don't have user location, pick random by default — use Austin TX center)
+    # Nearby sorting — prefers device GPS, then viewer's home city, then Austin.
     center_lat, center_lng = 30.2672, -97.7431
-    if viewer and viewer.get("city"):
+    center_source = "default"
+    if lat is not None and lng is not None:
+        center_lat, center_lng = float(lat), float(lng)
+        center_source = "device_gps"
+    elif viewer and viewer.get("city"):
         # try to find a spot in their city first
         for s in scored:
             if s["city"].lower() == (viewer.get("city") or "").lower():
                 center_lat, center_lng = s["latitude"], s["longitude"]
+                center_source = "profile_city"
                 break
+
+    # Decorate each spot with a distance in km/mi so the client can render a chip.
+    for s in scored:
+        try:
+            d_km = haversine_km(center_lat, center_lng, s["latitude"], s["longitude"])
+            s["distance_km"] = round(d_km, 2)
+            s["distance_mi"] = round(d_km * 0.621371, 2)
+        except Exception:
+            s["distance_km"] = None
+            s["distance_mi"] = None
 
     nearby_list = sorted(
         scored,
-        key=lambda s: haversine_km(center_lat, center_lng, s["latitude"], s["longitude"]),
+        key=lambda s: s.get("distance_km") if s.get("distance_km") is not None else 1e9,
     )[:10]
 
     trending = sorted(scored, key=lambda s: s["shoot_score"] + len(s.get("images", [])) * 2, reverse=True)[:10]
@@ -1119,6 +1139,18 @@ async def toggle_save(spot_id: str, user: dict = Depends(get_current_user)):
         "spot_id": spot_id,
         "created_at": utcnow(),
     })
+    # Notify the spot owner (fire-and-forget, never blocks).
+    try:
+        spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "owner_user_id": 1, "title": 1})
+        if spot and spot.get("owner_user_id") and spot["owner_user_id"] != user["user_id"]:
+            await send_push(
+                [spot["owner_user_id"]],
+                "New save",
+                f"{user.get('name') or 'Someone'} saved “{(spot.get('title') or 'your spot')[:60]}”",
+                {"type": "spot.save", "spot_id": spot_id},
+            )
+    except Exception:
+        pass
     return {"saved": True}
 
 
@@ -1384,6 +1416,17 @@ async def create_review(spot_id: str, body: ReviewIn, user: dict = Depends(get_c
     }
     await db.spot_reviews.insert_one(doc)
     doc.pop("_id", None)
+    # Notify the spot owner
+    try:
+        if spot.get("owner_user_id") and spot["owner_user_id"] != user["user_id"]:
+            await send_push(
+                [spot["owner_user_id"]],
+                "New review",
+                f"{user.get('name') or 'Someone'} reviewed “{(spot.get('title') or 'your spot')[:60]}”",
+                {"type": "spot.review", "spot_id": spot_id, "review_id": doc["review_id"]},
+            )
+    except Exception:
+        pass
     return doc
 
 
@@ -2612,6 +2655,17 @@ async def create_comment(post_id: str, body: CommentIn, user: dict = Depends(get
     await db.post_comments.insert_one(doc)
     await db.community_posts.update_one({"post_id": post_id}, {"$inc": {"comment_count": 1}})
     doc.pop("_id", None)
+    # Notify the post author
+    try:
+        if p.get("author_id") and p["author_id"] != user["user_id"]:
+            await send_push(
+                [p["author_id"]],
+                "New comment",
+                f"{user.get('name') or 'Someone'} replied to “{(p.get('title') or 'your post')[:60]}”",
+                {"type": "post.comment", "post_id": post_id, "comment_id": doc["comment_id"]},
+            )
+    except Exception:
+        pass
     return doc
 
 
@@ -2743,6 +2797,263 @@ async def community_onboarding_status(user: dict = Depends(get_current_user)):
 
 
 # --------------- End community block -----------------------------------------
+
+
+# =============================================================================
+# Phase D — Astronomy (golden hour), Push notifications, AI shot list, GPS feed
+# =============================================================================
+
+def _compute_astronomy(lat: float, lng: float, date: Optional[datetime] = None) -> dict:
+    """Return sunrise, sunset, and golden-hour windows for a lat/lng on a date.
+    Pure-math port of common SunCalc formulas — no network required.
+    Times are returned as ISO-8601 UTC strings so the client renders them in
+    the device's local timezone.
+    """
+    d = date or datetime.now(timezone.utc)
+    # Round to the noon of the date so the math is symmetric and stable.
+    d = datetime(d.year, d.month, d.day, 12, 0, 0, tzinfo=timezone.utc)
+    # Julian date
+    jd = d.timestamp() / 86400.0 + 2440587.5
+    n = jd - 2451545.0 + 0.0008
+    J_star = n - (lng / 360.0)
+    M = math.radians((357.5291 + 0.98560028 * J_star) % 360)
+    C = 1.9148 * math.sin(M) + 0.0200 * math.sin(2 * M) + 0.0003 * math.sin(3 * M)
+    lam = math.radians((math.degrees(M) + C + 180.0 + 102.9372) % 360)
+    J_transit = 2451545.0 + J_star + 0.0053 * math.sin(M) - 0.0069 * math.sin(2 * lam)
+    sin_dec = math.sin(lam) * math.sin(math.radians(23.44))
+    dec = math.asin(sin_dec)
+    lat_r = math.radians(lat)
+
+    def _event(altitude_deg: float) -> Optional[datetime]:
+        try:
+            cos_h = (
+                math.sin(math.radians(altitude_deg)) - math.sin(lat_r) * math.sin(dec)
+            ) / (math.cos(lat_r) * math.cos(dec))
+            if cos_h < -1 or cos_h > 1:
+                return None
+            H = math.degrees(math.acos(cos_h))
+            J_event = J_transit + (H / 360.0)
+            ts = (J_event - 2440587.5) * 86400.0
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+        except Exception:
+            return None
+
+    def _event_rise(altitude_deg: float) -> Optional[datetime]:
+        try:
+            cos_h = (
+                math.sin(math.radians(altitude_deg)) - math.sin(lat_r) * math.sin(dec)
+            ) / (math.cos(lat_r) * math.cos(dec))
+            if cos_h < -1 or cos_h > 1:
+                return None
+            H = math.degrees(math.acos(cos_h))
+            J_event = J_transit - (H / 360.0)
+            ts = (J_event - 2440587.5) * 86400.0
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+        except Exception:
+            return None
+
+    # Altitudes (degrees): official sunrise/sunset at -0.833°,
+    # golden hour typically 6° above → -4° below horizon.
+    sunrise = _event_rise(-0.833)
+    sunset = _event(-0.833)
+    golden_morning_end = _event_rise(6)       # end of morning golden hour
+    golden_evening_start = _event(6)          # start of evening golden hour
+    blue_hour_evening = _event(-4)            # end of evening blue-ish light
+
+    def _iso(x: Optional[datetime]) -> Optional[str]:
+        return x.isoformat() if x else None
+
+    return {
+        "date": d.date().isoformat(),
+        "sunrise": _iso(sunrise),
+        "sunset": _iso(sunset),
+        "morning_golden_hour": {
+            "start": _iso(sunrise),
+            "end": _iso(golden_morning_end),
+        },
+        "evening_golden_hour": {
+            "start": _iso(golden_evening_start),
+            "end": _iso(sunset),
+        },
+        "blue_hour_evening_end": _iso(blue_hour_evening),
+    }
+
+
+@api.get("/astronomy")
+async def astronomy(lat: float, lng: float, date: Optional[str] = None):
+    """Light public endpoint — any client (even unauthenticated) can query
+    golden-hour times for an arbitrary lat/lng."""
+    d: Optional[datetime] = None
+    if date:
+        try:
+            d = datetime.fromisoformat(date).replace(tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(status_code=400, detail="date must be ISO YYYY-MM-DD")
+    return _compute_astronomy(lat, lng, d)
+
+
+@api.get("/spots/{spot_id}/astronomy")
+async def spot_astronomy(spot_id: str, date: Optional[str] = None):
+    spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "latitude": 1, "longitude": 1})
+    if not spot or spot.get("latitude") is None or spot.get("longitude") is None:
+        raise HTTPException(status_code=404, detail="Spot or coordinates not found")
+    d: Optional[datetime] = None
+    if date:
+        try:
+            d = datetime.fromisoformat(date).replace(tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(status_code=400, detail="date must be ISO YYYY-MM-DD")
+    return _compute_astronomy(spot["latitude"], spot["longitude"], d)
+
+
+# ----------------------------------------------------------------------------
+# Push notifications — Expo push tokens + sender helper
+# ----------------------------------------------------------------------------
+
+class PushTokenIn(BaseModel):
+    token: str
+    platform: Optional[str] = None   # "ios" | "android" | "web"
+    device_id: Optional[str] = None
+
+
+@api.post("/me/push-token")
+async def register_push_token(body: PushTokenIn, user: dict = Depends(get_current_user)):
+    if not body.token or not body.token.startswith("ExponentPushToken"):
+        raise HTTPException(status_code=400, detail="Not a valid Expo push token")
+    doc = {
+        "user_id": user["user_id"],
+        "token": body.token,
+        "platform": body.platform or "unknown",
+        "device_id": body.device_id,
+        "updated_at": utcnow(),
+        "created_at": utcnow(),
+    }
+    # Upsert by (user_id, token) so reinstalls don't duplicate
+    await db.push_tokens.update_one(
+        {"user_id": user["user_id"], "token": body.token},
+        {"$set": doc, "$setOnInsert": {"created_at": utcnow()}},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+@api.delete("/me/push-token")
+async def unregister_push_token(token: str, user: dict = Depends(get_current_user)):
+    await db.push_tokens.delete_one({"user_id": user["user_id"], "token": token})
+    return {"ok": True}
+
+
+async def send_push(user_ids: List[str], title: str, body: str, data: Optional[dict] = None):
+    """Fire-and-forget push delivery via Expo's push API. Never raises."""
+    if not user_ids:
+        return
+    try:
+        import httpx
+        tokens = await db.push_tokens.find(
+            {"user_id": {"$in": list(set(user_ids))}},
+            {"_id": 0, "token": 1},
+        ).to_list(500)
+        if not tokens:
+            return
+        messages = [
+            {
+                "to": t["token"],
+                "sound": "default",
+                "title": title[:120],
+                "body": body[:240],
+                "data": data or {},
+                "priority": "high",
+            }
+            for t in tokens
+        ]
+        async with httpx.AsyncClient(timeout=8.0) as client_h:
+            # Expo accepts up to 100 messages per call.
+            for i in range(0, len(messages), 100):
+                await client_h.post(
+                    "https://exp.host/--/api/v2/push/send",
+                    json=messages[i:i + 100],
+                    headers={"Accept": "application/json", "Content-Type": "application/json"},
+                )
+    except Exception as e:
+        # Push delivery is best-effort — never block the caller.
+        logger.warning("Push delivery failed: %s", e)
+
+
+# ----------------------------------------------------------------------------
+# AI shot list — emergentintegrations / GPT (cached per spot for 7 days)
+# ----------------------------------------------------------------------------
+
+async def _generate_shot_list(spot: dict) -> List[str]:
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    key = os.environ.get("EMERGENT_LLM_KEY")
+    if not key:
+        raise HTTPException(status_code=500, detail="AI service is not configured")
+    style = ", ".join(spot.get("style_tags") or []) or "general"
+    shoots = ", ".join(spot.get("shoot_types") or []) or "portrait"
+    best = spot.get("best_time_of_day") or "golden_hour"
+    loc = f"{spot.get('city') or ''}, {spot.get('state') or ''}".strip(", ") or "this location"
+    chat = LlmChat(
+        api_key=key,
+        session_id=f"shotlist:{spot.get('spot_id')}",
+        system_message=(
+            "You are a professional location scout and photography coach. "
+            "Return a JSON array of 6-8 concise shot-list bullets (max 18 words each). "
+            "Each bullet names a composition, a subject pose or action, and the ideal camera/light cue. "
+            "No numbering, no preamble, no explanation — only the JSON array."
+        ),
+    ).with_model("openai", "gpt-5.2")
+    user_msg = UserMessage(
+        text=(
+            f'Location: "{spot.get("title")}" in {loc}. '
+            f'Best for: {shoots}. Style tags: {style}. Best time of day: {best}. '
+            'Generate the shot list JSON.'
+        ),
+    )
+    resp = await chat.send_message(user_msg)
+    raw = (resp or "").strip()
+    # Parse JSON array; strip possible code fences
+    import json as _json
+    if raw.startswith("```"):
+        raw = raw.strip("`")
+        if raw.lower().startswith("json"):
+            raw = raw[4:].strip()
+    try:
+        items = _json.loads(raw)
+        if not isinstance(items, list):
+            raise ValueError()
+        out = [str(x).strip() for x in items if str(x).strip()]
+        if not out:
+            raise ValueError()
+        return out[:10]
+    except Exception:
+        # Graceful fallback: split by newlines/bullets.
+        lines = [ln.strip(" -•*\t\u2022") for ln in raw.splitlines() if ln.strip()]
+        return [ln for ln in lines if ln][:10] or ["Wide establishing shot at golden hour."]
+
+
+@api.post("/spots/{spot_id}/shot-list")
+async def spot_shot_list(spot_id: str, refresh: bool = False, user: dict = Depends(get_current_user)):
+    spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0})
+    if not spot:
+        raise HTTPException(status_code=404, detail="Spot not found")
+    cache_key = f"shotlist:{spot_id}"
+    if not refresh:
+        cached = await db.ai_cache.find_one({"_id": cache_key})
+        if cached and cached.get("expires_at") and cached["expires_at"] > datetime.now(timezone.utc):
+            return {"items": cached["items"], "cached": True, "cached_at": cached.get("created_at")}
+    items = await _generate_shot_list(spot)
+    now = datetime.now(timezone.utc)
+    await db.ai_cache.update_one(
+        {"_id": cache_key},
+        {"$set": {
+            "items": items,
+            "created_at": now,
+            "expires_at": now + timedelta(days=7),
+            "spot_id": spot_id,
+        }},
+        upsert=True,
+    )
+    return {"items": items, "cached": False, "cached_at": now.isoformat()}
 
 
 # Register the api router AFTER every @api.<method> decorator above has run.
