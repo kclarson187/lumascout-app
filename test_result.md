@@ -7,278 +7,151 @@
 
 # Communication Protocol:
 # If the `testing_agent` is available, main agent should delegate all testing tasks to it.
-#
-# You have access to a file called `test_result.md`. This file contains the complete testing state
-# and history, and is the primary means of communication between main and the testing agent.
-#
-# Main and testing agents must follow this exact format to maintain testing data. 
-# The testing data must be entered in yaml format Below is the data structure:
-# 
-## user_problem_statement: {problem_statement}
-## backend:
-##   - task: "Task name"
-##     implemented: true
-##     working: true  # or false or "NA"
-##     file: "file_path.py"
-##     stuck_count: 0
-##     priority: "high"  # or "medium" or "low"
-##     needs_retesting: false
-##     status_history:
-##         -working: true  # or false or "NA"
-##         -agent: "main"  # or "testing" or "user"
-##         -comment: "Detailed comment about status"
-##
-## frontend:
-##   - task: "Task name"
-##     implemented: true
-##     working: true  # or false or "NA"
-##     file: "file_path.js"
-##     stuck_count: 0
-##     priority: "high"  # or "medium" or "low"
-##     needs_retesting: false
-##     status_history:
-##         -working: true  # or false or "NA"
-##         -agent: "main"  # or "testing" or "user"
-##         -comment: "Detailed comment about status"
-##
-## metadata:
-##   created_by: "main_agent"
-##   version: "1.0"
-##   test_sequence: 0
-##   run_ui: false
-##
-## test_plan:
-##   current_focus:
-##     - "Task name 1"
-##     - "Task name 2"
-##   stuck_tasks:
-##     - "Task name with persistent issues"
-##   test_all: false
-##   test_priority: "high_first"  # or "sequential" or "stuck_first"
-##
-## agent_communication:
-##     -agent: "main"  # or "testing" or "user"
-##     -message: "Communication message between agents"
-
-# Protocol Guidelines for Main agent
-#
-# 1. Update Test Result File Before Testing:
-#    - Main agent must always update the `test_result.md` file before calling the testing agent
-#    - Add implementation details to the status_history
-#    - Set `needs_retesting` to true for tasks that need testing
-#    - Update the `test_plan` section to guide testing priorities
-#    - Add a message to `agent_communication` explaining what you've done
-#
-# 2. Incorporate User Feedback:
-#    - When a user provides feedback that something is or isn't working, add this information to the relevant task's status_history
-#    - Update the working status based on user feedback
-#    - If a user reports an issue with a task that was marked as working, increment the stuck_count
-#    - Whenever user reports issue in the app, if we have testing agent and task_result.md file so find the appropriate task for that and append in status_history of that task to contain the user concern and problem as well 
-#
-# 3. Track Stuck Tasks:
-#    - Monitor which tasks have high stuck_count values or where you are fixing same issue again and again, analyze that when you read task_result.md
-#    - For persistent issues, use websearch tool to find solutions
-#    - Pay special attention to tasks in the stuck_tasks list
-#    - When you fix an issue with a stuck task, don't reset the stuck_count until the testing agent confirms it's working
-#
-# 4. Provide Context to Testing Agent:
-#    - When calling the testing agent, provide clear instructions about:
-#      - Which tasks need testing (reference the test_plan)
-#      - Any authentication details or configuration needed
-#      - Specific test scenarios to focus on
-#      - Any known issues or edge cases to verify
-#
-# 5. Call the testing agent with specific instructions referring to test_result.md
-#
-# IMPORTANT: Main agent must ALWAYS update test_result.md BEFORE calling the testing agent, as it relies on this file to understand what to test next.
 
 #====================================================================================================
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
-
-
-#====================================================================================================
-# Testing Data - Main Agent and testing sub agent both should log testing data below this section
-#====================================================================================================
-
 user_problem_statement: |
-  PhotoScout — Flexible Location Entry for Portfolio Imports
-  Replace rigid GPS-only location entry with 4 methods (Current GPS / Search a
-  place / Drop pin on map / Enter manually), add recent-location quick-pick
-  for bulk portfolio imports, and add Save-as-Draft. Photographers must be able
-  to create spots from past shoots without standing at the location.
+  PhotoScout — Community Foundation (Phase 1 of 3)
+  Posts, comments, likes, direct messaging, nearby photographers, extended
+  profile fields. Home gains a community tab strip; new /community feed,
+  /community/compose, /community/post/[id], /messages inbox and thread.
 
 backend:
-  - task: "Spot model — new location-provenance fields (source_type, original_search_query, geocode_confidence, imported_from_bulk_mode, address_line1, postal_code, landmark_notes, save_as_draft)"
+  - task: "User profile — new community fields (service_area, years_shooting, available_for_second_shooter, available_for_associate, mentorship_available, looking_for_mentor, community_onboarded)"
     implemented: true
-    working: true
+    working: "NA"
     file: "/app/backend/server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: false
+    needs_retesting: true
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "SpotCreateIn gained 8 optional fields. source_type enum (frontend-side): gps|searched_place|dropped_pin|manual_entry|metadata_detected. save_as_draft is NOT persisted — it's stripped from doc and used only to force visibility_status='draft'."
-        -working: true
-        -agent: "testing"
-        -comment: "Verified via POST /api/spots as sophie: source_type='manual_entry' and original_search_query='McAllister' round-trip in the response. save_as_draft is popped (not present on response). All provenance fields persist."
+        -comment: "UserUpdateIn extended. Round-trips via PATCH /auth/me."
 
-  - task: "POST /api/spots — save_as_draft=true forces visibility_status='draft' (owner-only, no moderation)"
+  - task: "POST/GET/DELETE /api/posts + /like/unlike + /comments — community posts"
     implemented: true
-    working: true
+    working: "NA"
     file: "/app/backend/server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: false
+    needs_retesting: true
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Drafts bypass moderation regardless of privacy_mode. doc does NOT include save_as_draft (popped). Response includes visibility_status='draft'. Regression: non-draft public posts still enter pending_review (or approved for verified contributors)."
-        -working: true
-        -agent: "testing"
-        -comment: "1A public+draft → visibility_status='draft' ✅. 1B private+draft → 'draft' ✅. 1C public+non-draft (sophie verified pro) → 'approved' ✅. Response has no save_as_draft field."
+        -comment: "10 categories enum-gated. Hydrates author with name/avatar/verification/plan. Viewer's liked_by_me set per request. Likes use unique index (post_id, user_id) — second like is no-op. DELETE by owner or admin (admin deletion is audit-logged)."
 
-  - task: "GET /api/geocode/search?q=&limit=&country= — OSM Nominatim autocomplete proxy (keyless)"
+  - task: "GET /api/photographers/nearby — city-based photographer discovery"
     implemented: true
-    working: true
-    file: "/app/backend/server.py"
-    stuck_count: 0
-    priority: "high"
-    needs_retesting: false
-    status_history:
-        -working: "NA"
-        -agent: "main"
-        -comment: "q<2 chars returns empty. Clamps limit 1..15. Shapes response as {query, results: [{place_id, display_name, latitude, longitude, name, city, state, country, postcode, type, confidence}]}. Falls back gracefully on Nominatim errors (returns empty with error field, never 5xx)."
-        -working: true
-        -agent: "testing"
-        -comment: "q='' and q='a' → results:[] ✅. q='McAllister Park' → returns first result with lat/lng/city/state/confidence(0..1)/place_id/display_name all populated ✅. limit=20 clamped to <=15 (returned 7) ✅."
-
-  - task: "GET /api/geocode/reverse?lat=&lng= — OSM reverse geocode for dropped pins"
-    implemented: true
-    working: true
+    working: "NA"
     file: "/app/backend/server.py"
     stuck_count: 0
     priority: "medium"
-    needs_retesting: false
+    needs_retesting: true
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Returns same shape as search item. Used post-pin-drop to label coordinates with nearest city/state."
-        -working: true
-        -agent: "testing"
-        -comment: "reverse(30.2672,-97.7431) → city='Austin', state='Texas', display_name='Downtown, Austin, Travis County, Texas, 78701, United States' ✅."
+        -comment: "Defaults to viewer's city. Excludes viewer themselves + suspended accounts. Optional specialty filter. Never returns password_hash."
 
-  - task: "GET /api/me/recent-locations?limit= — distinct recent locations for one-tap reuse"
+  - task: "Conversations + messages — DM inbox, 1:1 chat with participant_key dedupe, read markers"
     implemented: true
-    working: true
+    working: "NA"
     file: "/app/backend/server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: false
+    needs_retesting: true
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Dedupes by (round(lat,3), round(lng,3), city.lower()). Clamps limit 1..30. Sort: most recent first. Returns {count, items:[{title, city, state, latitude, longitude, source_type, last_used_at}]}."
-        -working: true
-        -agent: "testing"
-        -comment: "Default returns {count, items[]} with title/city/state/latitude/longitude ✅. limit=50 clamped to 30 ✅. Dedup verified: two distinct spots created at lat=30.27,lng=-97.74,city=Austin dedupe to a single items entry (matched=1) ✅."
-
-  - task: "GET /api/me/drafts — owner's draft spots"
-    implemented: true
-    working: true
-    file: "/app/backend/server.py"
-    stuck_count: 0
-    priority: "medium"
-    needs_retesting: false
-    status_history:
-        -working: "NA"
-        -agent: "main"
-        -comment: "Returns visibility_status='draft' spots for the caller. Uses public_spot_view so owner sees exact coords."
-        -working: true
-        -agent: "testing"
-        -comment: "Sophie's /me/drafts includes her 1A draft; all returned entries have visibility_status='draft'. Admin's /me/drafts does NOT include sophie's draft (scoped to caller) ✅."
-
-  - task: "POST /api/spots/{id}/publish-draft — promote draft to pending_review or approved"
-    implemented: true
-    working: true
-    file: "/app/backend/server.py"
-    stuck_count: 0
-    priority: "medium"
-    needs_retesting: false
-    status_history:
-        -working: "NA"
-        -agent: "main"
-        -comment: "403 if not owner, 404 if not found, 400 if already not-draft. Public/premium → pending_review (or approved for verified contributors). Private → approved."
-        -working: true
-        -agent: "testing"
-        -comment: "Owner publish returned {ok:true, visibility_status:'approved'} (sophie verified) ✅. Re-publish same → 400 'Not a draft' ✅. Admin on sophie's draft → 403 'Not your draft' ✅. nonexistent_id → 404 'Not found' ✅."
+        -comment: "POST /conversations is idempotent via sorted participant_key. 400 for self-DM, 404 for unknown recipient. GET /me/conversations includes unread count + other-user summary. GET /conversations/{id}/messages marks as read for viewer. POST message rate-limited via review bucket (30/day) and caps to 2000 chars."
 
 frontend:
-  - task: "LocationSearchSheet — autocomplete place search with manual-entry fallback"
+  - task: "Home — community tab strip + Messages icon"
     implemented: true
     working: "NA"
-    file: "/app/frontend/src/components/LocationSearchSheet.tsx"
+    file: "/app/frontend/app/(tabs)/index.tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Page-sheet modal, debounced 350ms hit to /geocode/search. Empty-state with 'Create custom location manually' CTA. FlatList of results with display_name preview."
+        -comment: "Horizontal strip: For You (current home) · Community · Local · Opportunities (cat=referral) · Learn (cat=tip). Messages icon in top bar routes to /messages."
 
-  - task: "MapPickerSheet — drop pin with draggable marker + reverse geocode + center-on-me"
+  - task: "Community feed screen — 10-category filter chips, post cards with like/comment, Message CTA"
     implemented: true
     working: "NA"
-    file: "/app/frontend/src/components/MapPickerSheet.tsx"
+    file: "/app/frontend/app/community.tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Uses react-native-maps (lazy-required so web doesn't choke). Tap-to-drop, drag-to-adjust. Reverse geocodes on each update. Web fallback screen. 'My location' crosshair button (graceful if permission denied)."
+        -comment: "Compose button in top bar. Each post card shows author avatar + verified badge, category pill, body preview, optimistic like toggle, and per-card 'Message' CTA that deep-links to /messages/new?user=<authorId>."
 
-  - task: "ManualLocationSheet — typed entry with optional coordinates"
+  - task: "Post composer — category picker + title + body + optional image"
     implemented: true
     working: "NA"
-    file: "/app/frontend/src/components/ManualLocationSheet.tsx"
+    file: "/app/frontend/app/community/compose.tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Required: title, city, state (2-char). Optional: address_line1, postal_code, country, lat, lng, landmark_notes. Pure typed entry — no API calls — so it works without GPS or connectivity."
+        -comment: "10 category chips, 140-char title, 2000-char body, base64 image upload, tip banner."
 
-  - task: "Add Spot flow — steps reordered (Photos first, Location second) with 4-method picker, recent-locations reuse, save-as-draft"
+  - task: "Post detail + comments — inline composer, like, message author"
     implemented: true
     working: "NA"
-    file: "/app/frontend/app/(tabs)/add.tsx"
+    file: "/app/frontend/app/community/post/[id].tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "New STEPS order: Photos → Location → Details → Notes → Privacy → Review. Location step is a 4-card picker (Current GPS / Search / Drop pin / Manual) with a horizontal Recent Locations strip above. Review step now has both Save-draft (outline button) and Publish spot (primary). Removed forced GPS; permission denial is handled gracefully. Duplicate check still runs after location is set."
+        -comment: "Pull-to-refresh. Inline comment composer. Like toggle with optimistic UI. Message-author chip (hidden for the author)."
+
+  - task: "Messages inbox — last-message preview, unread badges"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/messages.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Empty state routes to community. Unread count badge per row."
+
+  - task: "Messages thread — 5s polling, chat bubbles, send"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/messages/[id].tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "If id === 'new' with ?user=X, lazily POST /conversations then load the resulting conversation. Auto-scrolls to bottom on new messages. Polls /messages every 5s."
 
 metadata:
   created_by: "main_agent"
-  version: "1.4"
-  test_sequence: 4
+  version: "1.5"
+  test_sequence: 5
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Spot model — new location-provenance fields (source_type, original_search_query, geocode_confidence, imported_from_bulk_mode, address_line1, postal_code, landmark_notes, save_as_draft)"
-    - "POST /api/spots — save_as_draft=true forces visibility_status='draft' (owner-only, no moderation)"
-    - "GET /api/geocode/search?q=&limit=&country= — OSM Nominatim autocomplete proxy (keyless)"
-    - "GET /api/geocode/reverse?lat=&lng= — OSM reverse geocode for dropped pins"
-    - "GET /api/me/recent-locations?limit= — distinct recent locations for one-tap reuse"
-    - "GET /api/me/drafts — owner's draft spots"
-    - "POST /api/spots/{id}/publish-draft — promote draft to pending_review or approved"
+    - "POST/GET/DELETE /api/posts + /like/unlike + /comments — community posts"
+    - "GET /api/photographers/nearby — city-based photographer discovery"
+    - "Conversations + messages — DM inbox, 1:1 chat with participant_key dedupe, read markers"
+    - "User profile — new community fields (service_area, years_shooting, available_for_second_shooter, available_for_associate, mentorship_available, looking_for_mentor, community_onboarded)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -286,49 +159,45 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      Flexible location entry backend is live. Please validate these in order:
+      Community Phase 1 backend is live. Please validate:
       
-      Creds: sophie@photoscout.app / demo123 (verified pro user) and admin@photoscout.app / admin123 (super_admin).
+      Creds: sophie@photoscout.app / demo123 (verified pro user, lives in Austin), admin@photoscout.app / admin123 (super_admin).
       
-      1) POST /api/spots with save_as_draft=true:
-         - privacy_mode="public" + save_as_draft=true → visibility_status MUST be "draft" (NOT pending_review)
-         - privacy_mode="private" + save_as_draft=true → visibility_status MUST be "draft"
-         - Regression: save_as_draft=false + privacy_mode="public" → visibility_status ∈ {"pending_review", "approved"} (approved if verified)
-         - Confirm the persisted doc does NOT contain a "save_as_draft" field (only visibility_status)
-         - Confirm source_type/original_search_query/geocode_confidence/address_line1/postal_code/landmark_notes are persisted when provided
+      1) Posts CRUD:
+         - POST /api/posts {category:"win", title:"Booked 4 sessions this month!", body:"So grateful.", city:"Austin", state:"TX"} as sophie → 200 with post_id; response.author.name matches sophie
+         - Invalid category → 400 with enum list
+         - GET /api/posts → {total, items[]}; recent post appears first with liked_by_me=false
+         - GET /api/posts?category=win → filters correctly
+         - POST /api/posts/{id}/like as admin → 200; GET as admin shows liked_by_me=true, like_count=1
+         - Second like from same user → no count increase (idempotent)
+         - DELETE /api/posts/{id}/like as admin → like_count=0
+         - GET /api/posts/{id}/comments empty → []
+         - POST /api/posts/{id}/comments {body:"congrats!"} as admin → 200; then GET comments has 1 item with author info
+         - DELETE /api/posts/{id} as the author → 200
+         - DELETE /api/posts/{id} as other user (not admin) → 403
+         - DELETE /api/posts/{id} as admin → 200, audit log entry "post.remove" exists
       
-      2) GET /api/geocode/search:
-         - q="" → {results: []}
-         - q="a" (1 char) → {results: []}
-         - q="McAllister Park" → results.length ≥ 1; first result has latitude/longitude (non-null), city, state, confidence (0..1), place_id
-         - limit=20 → clamped to 15
-         - Nominatim may be slow; timeout is 8s, on error returns 200 with empty results + error field (not 5xx)
+      2) Photographers discovery:
+         - GET /api/photographers/nearby as sophie (city=Austin auto) → 200 {city, count, items[]}
+         - Items do NOT include sophie herself
+         - Items do NOT include password_hash
+         - ?city=Austin → same result
+         - ?specialty=Family → items restricted to those with 'Family' in specialties[] (may be 0 which is fine)
       
-      3) GET /api/geocode/reverse?lat=30.2672&lng=-97.7431:
-         - Returns object with city (should contain "Austin"), state ("Texas"), country, display_name
+      3) Messaging:
+         - As sophie: POST /api/conversations {participant_user_id: <admin_user_id>} → 200 with conversation_id
+         - Repeat same call → returns SAME conversation_id (idempotent via sorted participant_key)
+         - POST /api/conversations with participant_user_id=<sophie's own> → 400
+         - POST /api/conversations with unknown participant → 404
+         - POST /api/conversations/{id}/messages {body:"hey!"} as sophie → 200 with message_id
+         - GET /api/me/conversations as sophie → 1 conversation with last_message:"hey!", unread:0 (she sent it)
+         - GET /api/me/conversations as admin → 1 conversation with unread:1
+         - GET /api/conversations/{id}/messages as admin → 200 with msgs; then re-GET /me/conversations as admin → unread:0 (marked read)
+         - GET /api/conversations/{id}/messages as a third user (create a fresh user or use a different login) → 404
+         - Empty body POST message → 400
       
-      4) GET /api/me/recent-locations (auth required, sophie):
-         - Returns {count, items[]} ordered newest first
-         - Dedupes: if sophie has 2 spots at the exact same lat/lng/city, items has only 1 entry
-         - limit=50 clamps to 30
+      4) Profile fields via PATCH /api/auth/me as sophie:
+         - Body: {specialties:["Family","Pets"], service_area:"Austin & San Antonio", years_shooting:5, website:"https://petographytx.com", instagram:"@petographytx", available_for_second_shooter:true, mentorship_available:true, community_onboarded:true}
+         - Then GET /api/auth/me → fields persisted exactly
       
-      5) GET /api/me/drafts:
-         - Create a draft via step 1 then confirm it appears in /me/drafts
-         - Other users' drafts do NOT appear
-      
-      6) POST /api/spots/{draft_id}/publish-draft:
-         - Owner: 200 {ok:true, visibility_status:"pending_review"} for public draft (or "approved" if sophie is verified)
-         - Non-owner: 403
-         - Non-existent id: 404
-         - Re-publishing same draft: 400 "Not a draft"
-      
-      Do NOT run frontend UI tests. Main agent will ask user before invoking UI testing agent.
-
-    -agent: "testing"
-    -message: |
-      Backend validation complete — 29/29 checks PASS across all 7 Flexible Location Entry tasks.
-      Sophie's login confirms verification_status='verified' and plan='pro', so 1C and 6A returned 'approved'
-      (within the allowed set {pending_review, approved}). Nominatim upstream responded within 2s; no
-      graceful-degradation path exercised but error-field handling is wired in. All created spots were
-      cleaned up via DELETE /api/spots/{id}. No critical or minor issues found. Recommend main agent
-      finalize and move on — do not re-test unless new changes land.
+      Do NOT run frontend UI tests. Main agent will ask user first.

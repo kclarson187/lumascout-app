@@ -287,6 +287,14 @@ class UserUpdateIn(BaseModel):
     website: Optional[str] = None
     instagram: Optional[str] = None
     avatar_url: Optional[str] = None
+    # --- Community fields ----------------------------------------------------
+    service_area: Optional[str] = None
+    years_shooting: Optional[int] = None
+    available_for_second_shooter: Optional[bool] = None
+    available_for_associate: Optional[bool] = None
+    mentorship_available: Optional[bool] = None
+    looking_for_mentor: Optional[bool] = None
+    community_onboarded: Optional[bool] = None
 
 
 class SpotImageIn(BaseModel):
@@ -2043,6 +2051,321 @@ app.add_middleware(
 # ============================================================================
 # Startup: indexes, admin seed, demo content
 # ============================================================================
+# =============================================================================
+# Community — posts, comments, likes, direct messaging, discovery
+# =============================================================================
+
+POST_CATEGORIES = {
+    "win", "question", "tip", "gear", "critique", "bts",
+    "referral", "collab", "meetup", "intro",
+}
+
+
+class CommunityPostIn(BaseModel):
+    category: str
+    title: str
+    body: Optional[str] = ""
+    image_url: Optional[str] = None  # single base64 data URL for MVP
+    city: Optional[str] = None
+    state: Optional[str] = None
+
+
+async def _hydrate_posts(posts: List[dict], viewer: Optional[dict]) -> List[dict]:
+    """Attach author (name, avatar, verification, plan) + viewer's liked flag."""
+    if not posts:
+        return posts
+    uids = list({p.get("author_user_id") for p in posts})
+    users = await db.users.find(
+        {"user_id": {"$in": uids}},
+        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
+         "verification_status": 1, "plan": 1, "city": 1, "state": 1},
+    ).to_list(200)
+    umap = {u["user_id"]: u for u in users}
+    liked_ids: set = set()
+    if viewer:
+        pids = [p["post_id"] for p in posts]
+        liked = await db.post_likes.find(
+            {"user_id": viewer["user_id"], "post_id": {"$in": pids}},
+            {"_id": 0, "post_id": 1},
+        ).to_list(500)
+        liked_ids = {lk["post_id"] for lk in liked}
+    for p in posts:
+        p["author"] = umap.get(p.get("author_user_id"))
+        p["liked_by_me"] = p["post_id"] in liked_ids
+    return posts
+
+
+@api.post("/posts")
+async def create_post(body: CommunityPostIn, user: dict = Depends(get_current_user)):
+    check_rate_limit("review_create", user["user_id"])  # reuse 30/day limiter
+    if body.category not in POST_CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Invalid category. Expected one of {sorted(POST_CATEGORIES)}")
+    if not body.title.strip():
+        raise HTTPException(status_code=400, detail="Title required")
+    doc = {
+        "post_id": f"pst_{uuid.uuid4().hex[:12]}",
+        "author_user_id": user["user_id"],
+        "category": body.category,
+        "title": body.title.strip()[:140],
+        "body": (body.body or "").strip()[:2000],
+        "image_url": body.image_url,
+        "city": body.city or user.get("city"),
+        "state": body.state or user.get("state"),
+        "like_count": 0,
+        "comment_count": 0,
+        "status": "active",
+        "created_at": utcnow(),
+        "updated_at": utcnow(),
+    }
+    await db.community_posts.insert_one(doc)
+    doc.pop("_id", None)
+    out = await _hydrate_posts([doc], user)
+    return out[0]
+
+
+@api.get("/posts")
+async def list_posts(
+    category: Optional[str] = None,
+    city: Optional[str] = None,
+    author_user_id: Optional[str] = None,
+    page: int = 1,
+    limit: int = 25,
+    viewer: Optional[dict] = Depends(get_optional_user),
+):
+    limit = max(1, min(50, limit))
+    page = max(1, page)
+    q: dict = {"status": "active"}
+    if category and category != "all":
+        q["category"] = category
+    if city:
+        q["city"] = {"$regex": f"^{city}$", "$options": "i"}
+    if author_user_id:
+        q["author_user_id"] = author_user_id
+    total = await db.community_posts.count_documents(q)
+    skip = (page - 1) * limit
+    posts = await db.community_posts.find(q, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    posts = await _hydrate_posts(posts, viewer)
+    return {"total": total, "page": page, "limit": limit, "pages": (total + limit - 1) // limit, "items": posts}
+
+
+@api.get("/posts/{post_id}")
+async def get_post(post_id: str, viewer: Optional[dict] = Depends(get_optional_user)):
+    p = await db.community_posts.find_one({"post_id": post_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Not found")
+    out = await _hydrate_posts([p], viewer)
+    return out[0]
+
+
+@api.delete("/posts/{post_id}")
+async def delete_post(post_id: str, user: dict = Depends(get_current_user)):
+    p = await db.community_posts.find_one({"post_id": post_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Not found")
+    is_admin = user.get("role") in ADMIN_ROLES
+    if p["author_user_id"] != user["user_id"] and not is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    await db.community_posts.update_one({"post_id": post_id}, {"$set": {"status": "removed"}})
+    if is_admin and p["author_user_id"] != user["user_id"]:
+        await audit_log(user, "post.remove", "post", post_id, notes=f"by admin; author={p['author_user_id']}")
+    return {"ok": True}
+
+
+@api.post("/posts/{post_id}/like")
+async def like_post(post_id: str, user: dict = Depends(get_current_user)):
+    p = await db.community_posts.find_one({"post_id": post_id})
+    if not p:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        await db.post_likes.insert_one({
+            "post_id": post_id, "user_id": user["user_id"], "created_at": utcnow(),
+        })
+        await db.community_posts.update_one({"post_id": post_id}, {"$inc": {"like_count": 1}})
+    except Exception:
+        # Already liked (unique index) — no-op
+        pass
+    return {"ok": True}
+
+
+@api.delete("/posts/{post_id}/like")
+async def unlike_post(post_id: str, user: dict = Depends(get_current_user)):
+    r = await db.post_likes.delete_one({"post_id": post_id, "user_id": user["user_id"]})
+    if r.deleted_count:
+        await db.community_posts.update_one({"post_id": post_id}, {"$inc": {"like_count": -1}})
+    return {"ok": True}
+
+
+class CommentIn(BaseModel):
+    body: str
+
+
+@api.get("/posts/{post_id}/comments")
+async def list_comments(post_id: str):
+    comments = await db.post_comments.find({"post_id": post_id}, {"_id": 0}).sort("created_at", 1).to_list(200)
+    if not comments:
+        return []
+    uids = list({c["author_user_id"] for c in comments})
+    users = await db.users.find(
+        {"user_id": {"$in": uids}},
+        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1},
+    ).to_list(200)
+    umap = {u["user_id"]: u for u in users}
+    for c in comments:
+        c["author"] = umap.get(c["author_user_id"])
+    return comments
+
+
+@api.post("/posts/{post_id}/comments")
+async def create_comment(post_id: str, body: CommentIn, user: dict = Depends(get_current_user)):
+    check_rate_limit("review_create", user["user_id"])
+    if not body.body.strip():
+        raise HTTPException(status_code=400, detail="Comment body required")
+    p = await db.community_posts.find_one({"post_id": post_id})
+    if not p:
+        raise HTTPException(status_code=404, detail="Not found")
+    doc = {
+        "comment_id": f"cmt_{uuid.uuid4().hex[:12]}",
+        "post_id": post_id,
+        "author_user_id": user["user_id"],
+        "body": body.body.strip()[:1000],
+        "created_at": utcnow(),
+    }
+    await db.post_comments.insert_one(doc)
+    await db.community_posts.update_one({"post_id": post_id}, {"$inc": {"comment_count": 1}})
+    doc.pop("_id", None)
+    return doc
+
+
+# ----- Discovery -------------------------------------------------------------
+@api.get("/photographers/nearby")
+async def photographers_nearby(
+    city: Optional[str] = None,
+    specialty: Optional[str] = None,
+    limit: int = 20,
+    viewer: dict = Depends(get_current_user),
+):
+    """List photographers in a city (defaults to viewer's city)."""
+    limit = max(1, min(50, limit))
+    target_city = (city or viewer.get("city") or "").strip()
+    q: dict = {"user_id": {"$ne": viewer["user_id"]}, "status": {"$ne": "suspended"}}
+    if target_city:
+        q["city"] = {"$regex": f"^{target_city}$", "$options": "i"}
+    if specialty:
+        q["specialties"] = {"$in": [specialty]}
+    users = await db.users.find(
+        q,
+        {"_id": 0, "password_hash": 0},
+    ).limit(limit).to_list(limit)
+    return {"city": target_city, "count": len(users), "items": users}
+
+
+# ----- Direct Messaging ------------------------------------------------------
+class ConversationCreateIn(BaseModel):
+    participant_user_id: str
+
+
+@api.post("/conversations")
+async def create_or_get_conversation(body: ConversationCreateIn, user: dict = Depends(get_current_user)):
+    """Idempotent — returns existing 1:1 conversation if already created."""
+    if body.participant_user_id == user["user_id"]:
+        raise HTTPException(status_code=400, detail="Cannot DM yourself")
+    target = await db.users.find_one({"user_id": body.participant_user_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="Recipient not found")
+    ids = sorted([user["user_id"], body.participant_user_id])
+    convo = await db.conversations.find_one({"participant_key": "|".join(ids)}, {"_id": 0})
+    if convo:
+        return convo
+    convo = {
+        "conversation_id": f"conv_{uuid.uuid4().hex[:12]}",
+        "participant_user_ids": ids,
+        "participant_key": "|".join(ids),
+        "last_message": None,
+        "last_message_at": utcnow(),
+        "created_at": utcnow(),
+    }
+    await db.conversations.insert_one(convo)
+    convo.pop("_id", None)
+    return convo
+
+
+@api.get("/me/conversations")
+async def list_my_conversations(user: dict = Depends(get_current_user)):
+    convos = await db.conversations.find(
+        {"participant_user_ids": user["user_id"]}, {"_id": 0},
+    ).sort("last_message_at", -1).to_list(100)
+    # Attach other participant summary + unread count
+    other_ids = []
+    for c in convos:
+        other = next((p for p in c["participant_user_ids"] if p != user["user_id"]), None)
+        c["other_user_id"] = other
+        other_ids.append(other)
+    others = await db.users.find(
+        {"user_id": {"$in": [o for o in other_ids if o]}},
+        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1},
+    ).to_list(200)
+    umap = {u["user_id"]: u for u in others}
+    for c in convos:
+        c["other"] = umap.get(c["other_user_id"])
+        c["unread"] = await db.messages.count_documents({
+            "conversation_id": c["conversation_id"],
+            "sender_user_id": {"$ne": user["user_id"]},
+            "read_by": {"$ne": user["user_id"]},
+        })
+    return convos
+
+
+@api.get("/conversations/{conversation_id}/messages")
+async def list_messages(conversation_id: str, user: dict = Depends(get_current_user)):
+    convo = await db.conversations.find_one({"conversation_id": conversation_id})
+    if not convo or user["user_id"] not in convo["participant_user_ids"]:
+        raise HTTPException(status_code=404, detail="Not found")
+    msgs = await db.messages.find({"conversation_id": conversation_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
+    # Mark all read by this viewer in one shot
+    await db.messages.update_many(
+        {"conversation_id": conversation_id, "sender_user_id": {"$ne": user["user_id"]}, "read_by": {"$ne": user["user_id"]}},
+        {"$addToSet": {"read_by": user["user_id"]}},
+    )
+    return msgs
+
+
+class MessageIn(BaseModel):
+    body: str
+
+
+@api.post("/conversations/{conversation_id}/messages")
+async def send_message(conversation_id: str, body: MessageIn, user: dict = Depends(get_current_user)):
+    check_rate_limit("review_create", user["user_id"])
+    convo = await db.conversations.find_one({"conversation_id": conversation_id})
+    if not convo or user["user_id"] not in convo["participant_user_ids"]:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not body.body.strip():
+        raise HTTPException(status_code=400, detail="Empty message")
+    doc = {
+        "message_id": f"msg_{uuid.uuid4().hex[:12]}",
+        "conversation_id": conversation_id,
+        "sender_user_id": user["user_id"],
+        "body": body.body.strip()[:2000],
+        "read_by": [user["user_id"]],
+        "created_at": utcnow(),
+    }
+    await db.messages.insert_one(doc)
+    await db.conversations.update_one(
+        {"conversation_id": conversation_id},
+        {"$set": {"last_message": doc["body"][:120], "last_message_at": doc["created_at"]}},
+    )
+    doc.pop("_id", None)
+    return doc
+
+
+@api.get("/community/onboarding-status")
+async def community_onboarding_status(user: dict = Depends(get_current_user)):
+    return {"community_onboarded": bool(user.get("community_onboarded"))}
+
+
+# --------------- End community block -----------------------------------------
+
+
 @app.on_event("startup")
 async def on_startup():
     await db.users.create_index("email", unique=True)
@@ -2055,6 +2378,14 @@ async def on_startup():
     await db.audit_logs.create_index("admin_user_id")
     await db.audit_logs.create_index("target_id")
     await db.admin_notes.create_index("subject_user_id")
+    await db.community_posts.create_index("post_id", unique=True)
+    await db.community_posts.create_index([("created_at", -1)])
+    await db.community_posts.create_index("city")
+    await db.post_likes.create_index([("post_id", 1), ("user_id", 1)], unique=True)
+    await db.post_comments.create_index("post_id")
+    await db.conversations.create_index("participant_key", unique=True)
+    await db.conversations.create_index("participant_user_ids")
+    await db.messages.create_index([("conversation_id", 1), ("created_at", 1)])
     await seed_admin()
     # Promote the seeded admin to super_admin for Phase 1 — creates a usable
     # platform owner. Idempotent: skipped if already super_admin.
