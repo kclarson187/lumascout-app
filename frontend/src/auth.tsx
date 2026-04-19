@@ -74,7 +74,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const googleExchange = async (session_id: string) => {
     const data = await api.post('/auth/google/session', { session_id });
     await api.setToken(data.token);
-    setUser(data.user);
+    await refresh();
   };
 
   const logout = async () => {
