@@ -1196,8 +1196,103 @@ async def creator_dashboard(user: dict = Depends(get_current_user)):
 
 
 # ============================================================================
-# Admin
+# Admin — role system, audit trail, platform management
 # ============================================================================
+# Role hierarchy (higher level = more power). Used by require_role() to gate
+# endpoints. Treat 'admin' on existing accounts as level 3 for BC.
+ROLE_LEVELS = {
+    "user": 0,
+    "moderator": 1,
+    "support": 1,        # read-heavy staff role
+    "admin": 3,
+    "super_admin": 4,
+}
+
+ADMIN_ROLES = ("moderator", "support", "admin", "super_admin")
+
+
+def role_level(u: dict) -> int:
+    return ROLE_LEVELS.get(u.get("role") or "user", 0)
+
+
+def require_role(*allowed: str):
+    """Dependency factory. allowed can be specific roles (e.g. 'admin') OR
+    the lowest role string ('moderator') — if a single role is given we admit
+    anyone with an equal or higher level. Always admits super_admin.
+    """
+    allowed_set = set(allowed)
+
+    async def _dep(user: dict = Depends(get_current_user)):
+        if user.get("role") == "super_admin":
+            return user
+        if user.get("role") in allowed_set:
+            return user
+        # Level-based admission when a single min role is given
+        if len(allowed) == 1:
+            min_lv = ROLE_LEVELS.get(allowed[0], 99)
+            if role_level(user) >= min_lv:
+                return user
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    return _dep
+
+
+async def audit_log(
+    admin_user: dict,
+    action: str,
+    target_type: Optional[str] = None,
+    target_id: Optional[str] = None,
+    before: Optional[dict] = None,
+    after: Optional[dict] = None,
+    notes: Optional[str] = None,
+):
+    """Write one audit entry for an admin action. Keep this dirt-simple and
+    deterministic — the dashboard depends on consistent shape.
+    """
+    await db.audit_logs.insert_one({
+        "audit_id": f"aud_{uuid.uuid4().hex[:12]}",
+        "admin_user_id": admin_user.get("user_id"),
+        "admin_email": admin_user.get("email"),
+        "admin_role": admin_user.get("role"),
+        "action": action,
+        "target_type": target_type,
+        "target_id": target_id,
+        "before": before,
+        "after": after,
+        "notes": notes,
+        "created_at": utcnow(),
+    })
+
+
+SETTINGS_SINGLETON_ID = "platform_v1"
+
+DEFAULT_SETTINGS = {
+    "settings_id": SETTINGS_SINGLETON_ID,
+    "app_name": "PhotoScout",
+    "support_email": "support@photoscout.app",
+    "maintenance_mode": False,
+    "public_registration": True,
+    "auto_approve_verified": True,
+    "require_moderation_spots": True,
+    "require_moderation_photos": False,
+    "duplicate_radius_m": 200,
+    "default_privacy_mode": "public",
+    "approximate_radius_km": 1.0,
+    "updated_at": None,
+    "updated_by": None,
+}
+
+
+async def get_platform_settings() -> dict:
+    doc = await db.platform_settings.find_one({"settings_id": SETTINGS_SINGLETON_ID}, {"_id": 0})
+    if not doc:
+        doc = {**DEFAULT_SETTINGS}
+        await db.platform_settings.insert_one(doc)
+        doc.pop("_id", None)
+    return doc
+
+
+# --------------- Legacy simple admin endpoints (kept for compatibility) ------
 @api.get("/admin/pending")
 async def admin_pending(user: dict = Depends(get_current_user)):
     if user.get("role") != "admin":
@@ -1207,18 +1302,40 @@ async def admin_pending(user: dict = Depends(get_current_user)):
 
 
 @api.post("/admin/spots/{spot_id}/approve")
-async def admin_approve(spot_id: str, user: dict = Depends(get_current_user)):
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Forbidden")
-    await db.spots.update_one({"spot_id": spot_id}, {"$set": {"visibility_status": "approved"}})
+async def admin_approve(spot_id: str, user: dict = Depends(require_role("moderator"))):
+    before = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "visibility_status": 1})
+    await db.spots.update_one(
+        {"spot_id": spot_id},
+        {"$set": {
+            "visibility_status": "approved",
+            "moderated_by": user["user_id"],
+            "moderated_at": utcnow(),
+        }},
+    )
+    await audit_log(
+        user, "spot.approve", "spot", spot_id,
+        before={"visibility_status": (before or {}).get("visibility_status")},
+        after={"visibility_status": "approved"},
+    )
     return {"ok": True}
 
 
 @api.post("/admin/spots/{spot_id}/reject")
-async def admin_reject(spot_id: str, user: dict = Depends(get_current_user)):
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Forbidden")
-    await db.spots.update_one({"spot_id": spot_id}, {"$set": {"visibility_status": "rejected"}})
+async def admin_reject(spot_id: str, user: dict = Depends(require_role("moderator"))):
+    before = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "visibility_status": 1})
+    await db.spots.update_one(
+        {"spot_id": spot_id},
+        {"$set": {
+            "visibility_status": "rejected",
+            "moderated_by": user["user_id"],
+            "moderated_at": utcnow(),
+        }},
+    )
+    await audit_log(
+        user, "spot.reject", "spot", spot_id,
+        before={"visibility_status": (before or {}).get("visibility_status")},
+        after={"visibility_status": "rejected"},
+    )
     return {"ok": True}
 
 
@@ -1245,9 +1362,7 @@ class ReportResolveIn(BaseModel):
 
 
 @api.post("/admin/reports/{report_id}/resolve")
-async def admin_resolve_report(report_id: str, body: ReportResolveIn, user: dict = Depends(get_current_user)):
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Forbidden")
+async def admin_resolve_report(report_id: str, body: ReportResolveIn, user: dict = Depends(require_role("moderator"))):
     if body.action not in ("dismissed", "removed", "warned"):
         raise HTTPException(status_code=400, detail="Invalid action")
     rep = await db.reports.find_one({"report_id": report_id})
@@ -1259,7 +1374,412 @@ async def admin_resolve_report(report_id: str, body: ReportResolveIn, user: dict
     )
     if body.action == "removed" and rep["target_type"] == "spot":
         await db.spots.update_one({"spot_id": rep["target_id"]}, {"$set": {"visibility_status": "rejected"}})
+    await audit_log(
+        user, f"report.resolve.{body.action}", rep["target_type"], rep["target_id"],
+        notes=f"report_id={report_id}",
+    )
     return {"ok": True}
+
+
+# =============================================================================
+# Admin Dashboard — overview, users, audit, analytics, settings, notes
+# =============================================================================
+
+@api.get("/admin/overview")
+async def admin_overview(user: dict = Depends(require_role("moderator"))):
+    """Top-level metrics for the admin dashboard home."""
+    now = utcnow()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = now - timedelta(days=7)
+    month_start = now - timedelta(days=30)
+
+    total_users = await db.users.count_documents({})
+    new_today = await db.users.count_documents({"created_at": {"$gte": today_start}})
+    new_7d = await db.users.count_documents({"created_at": {"$gte": week_start}})
+    plan_counts = {
+        "free": await db.users.count_documents({"plan": {"$in": [None, "free"]}}),
+        "pro": await db.users.count_documents({"plan": "pro"}),
+        "elite": await db.users.count_documents({"plan": "elite"}),
+    }
+    suspended = await db.users.count_documents({"status": "suspended"})
+    pending_spots = await db.spots.count_documents({"visibility_status": "pending_review"})
+    reports_pending = await db.reports.count_documents({"status": "pending"})
+
+    # Top contributors this month (saves received on own spots)
+    recent_spots = await db.spots.find(
+        {"created_at": {"$gte": month_start}},
+        {"_id": 0, "owner_user_id": 1},
+    ).to_list(1000)
+    contrib_counts: dict = {}
+    for s in recent_spots:
+        contrib_counts[s["owner_user_id"]] = contrib_counts.get(s["owner_user_id"], 0) + 1
+    top_ids = sorted(contrib_counts.items(), key=lambda x: -x[1])[:5]
+    top_users = []
+    if top_ids:
+        users = await db.users.find(
+            {"user_id": {"$in": [u for u, _ in top_ids]}},
+            {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1},
+        ).to_list(20)
+        umap = {u["user_id"]: u for u in users}
+        for uid, count in top_ids:
+            u = umap.get(uid)
+            if u:
+                u["spots_this_month"] = count
+                top_users.append(u)
+
+    # Trending cities (by spot count, last 30 days)
+    city_counts: dict = {}
+    for s in await db.spots.find(
+        {"created_at": {"$gte": month_start}}, {"_id": 0, "city": 1, "state": 1}
+    ).to_list(1000):
+        key = f"{s.get('city', '—')}, {s.get('state', '')}".strip(", ")
+        city_counts[key] = city_counts.get(key, 0) + 1
+    top_cities = [{"city": k, "count": v} for k, v in sorted(city_counts.items(), key=lambda x: -x[1])[:5]]
+
+    return {
+        "users": {
+            "total": total_users,
+            "new_today": new_today,
+            "active_7d": new_7d,  # proxy: we don't track DAU — treat as new-in-7d
+            "suspended": suspended,
+            "by_plan": plan_counts,
+        },
+        "moderation": {
+            "pending_spots": pending_spots,
+            "pending_reports": reports_pending,
+            "pending_photos": 0,  # photo moderation queue comes in Phase 2
+        },
+        "top_contributors": top_users,
+        "top_cities": top_cities,
+        "revenue": {
+            "monthly_estimate_usd": plan_counts["pro"] * 9 + plan_counts["elite"] * 19,
+            "note": "Mock — Stripe not wired yet",
+        },
+        "generated_at": now.isoformat(),
+    }
+
+
+@api.get("/admin/users")
+async def admin_users(
+    q: Optional[str] = None,
+    role: Optional[str] = None,
+    plan: Optional[str] = None,
+    status: Optional[str] = None,
+    page: int = 1,
+    limit: int = 25,
+    user: dict = Depends(require_role("support")),
+):
+    """Paginated + filterable user search for the admin users table."""
+    limit = max(1, min(100, limit))
+    page = max(1, page)
+    query: dict = {}
+    if q:
+        # Case-insensitive partial match across multiple identifying fields
+        rgx = {"$regex": q, "$options": "i"}
+        query["$or"] = [
+            {"email": rgx}, {"name": rgx}, {"username": rgx}, {"user_id": q},
+        ]
+    if role:
+        query["role"] = role
+    if plan:
+        query["plan"] = plan
+    if status:
+        query["status"] = status
+
+    total = await db.users.count_documents(query)
+    skip = (page - 1) * limit
+    users = await db.users.find(
+        query,
+        {"_id": 0, "password_hash": 0},
+    ).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+
+    # Enrich with spot + report counts (cheap — small batches)
+    uids = [u["user_id"] for u in users]
+    spot_counts_agg = await db.spots.aggregate([
+        {"$match": {"owner_user_id": {"$in": uids}}},
+        {"$group": {"_id": "$owner_user_id", "count": {"$sum": 1}}},
+    ]).to_list(500)
+    spot_map = {x["_id"]: x["count"] for x in spot_counts_agg}
+    report_counts_agg = await db.reports.aggregate([
+        {"$match": {"target_type": "user", "target_id": {"$in": uids}, "status": "pending"}},
+        {"$group": {"_id": "$target_id", "count": {"$sum": 1}}},
+    ]).to_list(500)
+    rep_map = {x["_id"]: x["count"] for x in report_counts_agg}
+
+    for u in users:
+        u["spot_count"] = spot_map.get(u["user_id"], 0)
+        u["open_reports"] = rep_map.get(u["user_id"], 0)
+        u["role"] = u.get("role") or "user"
+        u["plan"] = u.get("plan") or "free"
+        u["status"] = u.get("status") or "active"
+
+    return {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": (total + limit - 1) // limit,
+        "items": users,
+    }
+
+
+@api.get("/admin/users/{user_id}")
+async def admin_user_detail(user_id: str, me: dict = Depends(require_role("support"))):
+    target = await db.users.find_one({"user_id": user_id}, {"_id": 0, "password_hash": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    target["role"] = target.get("role") or "user"
+    target["plan"] = target.get("plan") or "free"
+    target["status"] = target.get("status") or "active"
+    target["spot_count"] = await db.spots.count_documents({"owner_user_id": user_id})
+    target["save_count"] = await db.spot_saves.count_documents({"user_id": user_id})
+    target["open_reports"] = await db.reports.count_documents(
+        {"target_type": "user", "target_id": user_id, "status": "pending"}
+    )
+    target["recent_spots"] = await db.spots.find(
+        {"owner_user_id": user_id}, {"_id": 0}
+    ).sort("created_at", -1).limit(5).to_list(5)
+    target["notes"] = await db.admin_notes.find(
+        {"subject_user_id": user_id}, {"_id": 0}
+    ).sort("created_at", -1).limit(20).to_list(20)
+    target["recent_audit"] = await db.audit_logs.find(
+        {"target_type": "user", "target_id": user_id}, {"_id": 0}
+    ).sort("created_at", -1).limit(20).to_list(20)
+    return target
+
+
+class AdminUserPatch(BaseModel):
+    plan: Optional[str] = None  # free | pro | elite | comp_pro | comp_elite | trial_pro | trial_elite
+    role: Optional[str] = None  # user | moderator | support | admin | super_admin
+    status: Optional[str] = None  # active | suspended
+    verification_status: Optional[str] = None  # verified | none
+    suspension_reason: Optional[str] = None
+    comp_expiration: Optional[str] = None  # ISO date string or None to clear
+    reason: Optional[str] = None  # audit-log note
+
+
+VALID_PLANS = {"free", "pro", "elite", "comp_pro", "comp_elite", "trial_pro", "trial_elite", "suspended"}
+VALID_ROLES = {"user", "moderator", "support", "admin", "super_admin"}
+VALID_STATUSES = {"active", "suspended"}
+
+
+@api.patch("/admin/users/{user_id}")
+async def admin_update_user(
+    user_id: str,
+    body: AdminUserPatch,
+    me: dict = Depends(require_role("admin")),
+):
+    """Update plan / role / status / verification / comp expiration in one call.
+    - Role promotions to admin/super_admin require super_admin.
+    - Admins cannot demote a super_admin.
+    - Every change is audit-logged with before/after deltas and an optional reason.
+    """
+    target = await db.users.find_one({"user_id": user_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Authorization rules for sensitive fields
+    if body.role is not None:
+        if body.role not in VALID_ROLES:
+            raise HTTPException(status_code=400, detail=f"Invalid role. Expected one of {sorted(VALID_ROLES)}")
+        if body.role in ("admin", "super_admin") and me.get("role") != "super_admin":
+            raise HTTPException(status_code=403, detail="Only super_admin can grant admin/super_admin")
+        if target.get("role") == "super_admin" and me.get("role") != "super_admin":
+            raise HTTPException(status_code=403, detail="Cannot modify a super_admin")
+        if target.get("user_id") == me.get("user_id") and body.role != me.get("role"):
+            raise HTTPException(status_code=400, detail="Admins cannot change their own role")
+
+    if body.plan is not None and body.plan not in VALID_PLANS:
+        raise HTTPException(status_code=400, detail=f"Invalid plan. Expected one of {sorted(VALID_PLANS)}")
+    if body.status is not None and body.status not in VALID_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Expected one of {sorted(VALID_STATUSES)}")
+
+    # Build the $set patch with a before/after diff for audit
+    updates: dict = {}
+    before: dict = {}
+    after: dict = {}
+    for field in ("plan", "role", "status", "verification_status", "suspension_reason"):
+        val = getattr(body, field)
+        if val is not None and target.get(field) != val:
+            updates[field] = val
+            before[field] = target.get(field)
+            after[field] = val
+    if body.comp_expiration is not None:
+        # Accept empty string as "clear"
+        if body.comp_expiration == "":
+            updates["comp_expiration"] = None
+            before["comp_expiration"] = target.get("comp_expiration")
+            after["comp_expiration"] = None
+        else:
+            try:
+                parsed = datetime.fromisoformat(body.comp_expiration.replace("Z", "+00:00"))
+                updates["comp_expiration"] = parsed
+                before["comp_expiration"] = target.get("comp_expiration")
+                after["comp_expiration"] = parsed.isoformat()
+            except Exception:
+                raise HTTPException(status_code=400, detail="comp_expiration must be ISO-8601")
+
+    if not updates:
+        return {"ok": True, "no_changes": True}
+
+    updates["updated_at"] = utcnow()
+    updates["updated_by"] = me["user_id"]
+    await db.users.update_one({"user_id": user_id}, {"$set": updates})
+    await audit_log(
+        me, "user.update", "user", user_id,
+        before=before, after=after, notes=body.reason,
+    )
+    # Return the fresh user view (no password)
+    fresh = await db.users.find_one({"user_id": user_id}, {"_id": 0, "password_hash": 0})
+    return {"ok": True, "user": fresh}
+
+
+class AdminNoteIn(BaseModel):
+    body: str
+    pinned: bool = False
+
+
+@api.post("/admin/users/{user_id}/notes")
+async def admin_add_note(user_id: str, body: AdminNoteIn, me: dict = Depends(require_role("support"))):
+    if not (body.body or "").strip():
+        raise HTTPException(status_code=400, detail="Note body required")
+    doc = {
+        "note_id": f"nte_{uuid.uuid4().hex[:12]}",
+        "subject_user_id": user_id,
+        "author_user_id": me["user_id"],
+        "author_email": me.get("email"),
+        "body": body.body.strip()[:2000],
+        "pinned": bool(body.pinned),
+        "created_at": utcnow(),
+    }
+    await db.admin_notes.insert_one(doc)
+    await audit_log(me, "user.note.add", "user", user_id, notes=doc["body"][:100])
+    doc.pop("_id", None)
+    return doc
+
+
+@api.get("/admin/audit-logs")
+async def admin_audit_logs(
+    page: int = 1,
+    limit: int = 50,
+    action: Optional[str] = None,
+    admin_user_id: Optional[str] = None,
+    target_id: Optional[str] = None,
+    me: dict = Depends(require_role("admin")),
+):
+    limit = max(1, min(200, limit))
+    page = max(1, page)
+    query: dict = {}
+    if action:
+        query["action"] = {"$regex": f"^{action}", "$options": "i"}
+    if admin_user_id:
+        query["admin_user_id"] = admin_user_id
+    if target_id:
+        query["target_id"] = target_id
+    total = await db.audit_logs.count_documents(query)
+    skip = (page - 1) * limit
+    items = await db.audit_logs.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    return {"total": total, "page": page, "limit": limit, "items": items}
+
+
+@api.get("/admin/analytics")
+async def admin_analytics(days: int = 30, me: dict = Depends(require_role("moderator"))):
+    days = max(1, min(90, days))
+    now = utcnow()
+    start = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def _norm(dt):
+        if not dt:
+            return None
+        if getattr(dt, "tzinfo", None) is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    users = await db.users.find({"created_at": {"$gte": start}}, {"_id": 0, "created_at": 1}).to_list(5000)
+    spots = await db.spots.find(
+        {"created_at": {"$gte": start}},
+        {"_id": 0, "created_at": 1, "visibility_status": 1, "city": 1, "state": 1},
+    ).to_list(5000)
+    approvals = [s for s in spots if s.get("visibility_status") == "approved"]
+    rejections = [s for s in spots if s.get("visibility_status") == "rejected"]
+
+    series = []
+    for i in range(days):
+        d_start = start + timedelta(days=i)
+        d_end = d_start + timedelta(days=1)
+        series.append({
+            "date": d_start.strftime("%Y-%m-%d"),
+            "label": d_start.strftime("%a"),
+            "signups": sum(1 for u in users if _norm(u.get("created_at")) and d_start <= _norm(u["created_at"]) < d_end),
+            "spots": sum(1 for s in spots if _norm(s.get("created_at")) and d_start <= _norm(s["created_at"]) < d_end),
+            "approvals": sum(1 for s in approvals if _norm(s.get("created_at")) and d_start <= _norm(s["created_at"]) < d_end),
+            "rejections": sum(1 for s in rejections if _norm(s.get("created_at")) and d_start <= _norm(s["created_at"]) < d_end),
+        })
+
+    # Saved spots leaderboard (all time)
+    saves_agg = await db.spot_saves.aggregate([
+        {"$group": {"_id": "$spot_id", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 5},
+    ]).to_list(5)
+    most_saved = []
+    for row in saves_agg:
+        s = await db.spots.find_one({"spot_id": row["_id"]}, {"_id": 0, "spot_id": 1, "title": 1, "city": 1, "state": 1})
+        if s:
+            s["save_count"] = row["count"]
+            most_saved.append(s)
+
+    return {
+        "days": days,
+        "series": series,
+        "totals": {
+            "signups": sum(s["signups"] for s in series),
+            "spots": sum(s["spots"] for s in series),
+            "approvals": sum(s["approvals"] for s in series),
+            "rejections": sum(s["rejections"] for s in series),
+        },
+        "most_saved": most_saved,
+    }
+
+
+@api.get("/admin/settings")
+async def admin_get_settings(me: dict = Depends(require_role("admin"))):
+    return await get_platform_settings()
+
+
+class PlatformSettingsPatch(BaseModel):
+    app_name: Optional[str] = None
+    support_email: Optional[str] = None
+    maintenance_mode: Optional[bool] = None
+    public_registration: Optional[bool] = None
+    auto_approve_verified: Optional[bool] = None
+    require_moderation_spots: Optional[bool] = None
+    require_moderation_photos: Optional[bool] = None
+    duplicate_radius_m: Optional[float] = None
+    default_privacy_mode: Optional[str] = None
+    approximate_radius_km: Optional[float] = None
+
+
+@api.patch("/admin/settings")
+async def admin_patch_settings(body: PlatformSettingsPatch, me: dict = Depends(require_role("super_admin"))):
+    current = await get_platform_settings()
+    updates = {k: v for k, v in body.dict().items() if v is not None}
+    if not updates:
+        return {"ok": True, "settings": current}
+    updates["updated_at"] = utcnow()
+    updates["updated_by"] = me["user_id"]
+    await db.platform_settings.update_one(
+        {"settings_id": SETTINGS_SINGLETON_ID}, {"$set": updates}, upsert=True
+    )
+    await audit_log(
+        me, "settings.update", "settings", SETTINGS_SINGLETON_ID,
+        before={k: current.get(k) for k in updates.keys()},
+        after=updates,
+    )
+    new = await get_platform_settings()
+    return {"ok": True, "settings": new}
+
+
+# --------------- End admin dashboard block ----------------------------------
 
 
 # ============================================================================
@@ -1376,7 +1896,17 @@ async def on_startup():
     await db.spots.create_index("owner_user_id")
     await db.spot_saves.create_index([("user_id", 1), ("spot_id", 1)], unique=True)
     await db.follows.create_index([("follower_user_id", 1), ("followed_user_id", 1)], unique=True)
+    await db.audit_logs.create_index("created_at")
+    await db.audit_logs.create_index("admin_user_id")
+    await db.audit_logs.create_index("target_id")
+    await db.admin_notes.create_index("subject_user_id")
     await seed_admin()
+    # Promote the seeded admin to super_admin for Phase 1 — creates a usable
+    # platform owner. Idempotent: skipped if already super_admin.
+    await db.users.update_one(
+        {"email": ADMIN_EMAIL, "role": {"$ne": "super_admin"}},
+        {"$set": {"role": "super_admin"}},
+    )
     await seed_demo_content()
     await backfill_freshness()
 
