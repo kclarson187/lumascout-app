@@ -20,6 +20,7 @@ import { useAuth } from '../../src/auth';
 import { useGps } from '../../src/hooks/useGps';
 import { colors, font, space, radii, QUICK_FILTERS } from '../../src/theme';
 import SpotCard from '../../src/components/SpotCard';
+import SpotCardCompact from '../../src/components/SpotCardCompact';
 import { SectionHeader, Chip, EmptyState } from '../../src/components/ui';
 import { SectionSkeleton, SkeletonBox } from '../../src/components/Skeleton';
 
@@ -261,19 +262,45 @@ export default function Home() {
             {sections.map((sec) => {
               const items = feed[sec.key] || [];
               if (items.length === 0) return null;
+              // Section-specific visual treatment:
+              //  - Carousel style for inspirational sections (hero-like cards)
+              //  - Compact vertical list for skimmable utility sections
+              // Also drive per-section metadata emphasis inside the cards.
+              const useCompact = sec.key === 'recent' || sec.key === 'seasonal';
+              const emphasis: any =
+                sec.key === 'nearby' ? 'distance' :
+                sec.key === 'golden_hour' ? 'golden' :
+                sec.key === 'trending' ? 'score' :
+                sec.key === 'seasonal' ? 'seasonal' :
+                sec.key === 'recent' ? 'fresh' :
+                sec.key === 'best_for_you' ? 'score' :
+                'fresh';
               return (
                 <View key={sec.key}>
                   <SectionHeader title={sec.title} />
-                  <FlatList
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    data={items}
-                    keyExtractor={(it) => it.spot_id}
-                    contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.md }}
-                    renderItem={({ item }) => (
-                      <SpotCard spot={item} width={260} testID={`spot-${item.spot_id}`} onToggleSave={load} />
-                    )}
-                  />
+                  {useCompact ? (
+                    <View style={{ paddingHorizontal: space.xl, gap: 8 }}>
+                      {items.slice(0, 6).map((item: any) => (
+                        <SpotCardCompact
+                          key={item.spot_id}
+                          spot={item}
+                          emphasis={emphasis}
+                          testID={`spot-${item.spot_id}`}
+                        />
+                      ))}
+                    </View>
+                  ) : (
+                    <FlatList
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      data={items}
+                      keyExtractor={(it) => it.spot_id}
+                      contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.md }}
+                      renderItem={({ item }) => (
+                        <SpotCard spot={item} width={260} testID={`spot-${item.spot_id}`} onToggleSave={load} />
+                      )}
+                    />
+                  )}
                 </View>
               );
             })}

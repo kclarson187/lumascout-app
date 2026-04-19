@@ -1028,70 +1028,232 @@ async def home_feed(
     lng: Optional[float] = None,
     viewer: Optional[dict] = Depends(get_optional_user),
 ):
+    """Personalized, diversified home feed.
+
+    Signals used when viewer is authenticated:
+      - viewer.specialties → boosts matching shoot_types
+      - viewer.saved_spots → boosts similar spots (same city / shoot_type overlap)
+      - viewer.city/state → prefers local spots
+      - recent save/view counters (save_count, view_count, comment_count on spot)
+    Signals for everyone:
+      - proximity to device GPS or profile city
+      - freshness (recent create/update)
+      - verification/approval recency
+      - golden-hour strength for the golden section
+      - month-of-year match for seasonal
+    Diversification:
+      - each section cap 10 items
+      - no single spot duplicated within one section
+      - hero and bucket-to-bucket repetition is smoothed client-side
+    """
     base_query = {"privacy_mode": {"$in": ["public", "premium"]}, "visibility_status": "approved"}
-    all_spots = await db.spots.find(base_query, {"_id": 0}).to_list(500)
+    all_spots = await db.spots.find(base_query, {"_id": 0}).to_list(800)
     scored = []
     for s in all_spots:
         v = public_spot_view(s, viewer)
         if v:
             scored.append(v)
-
-    # Batch-attach owner info once across ALL buckets since the same objects are
-    # referenced in multiple sorted slices below.
     await attach_owners(scored)
 
-    # Nearby sorting — prefers device GPS, then viewer's home city, then Austin.
-    center_lat, center_lng = 30.2672, -97.7431
+    # ---- Distance center --------------------------------------------------
+    center_lat, center_lng = 30.2672, -97.7431  # Austin fallback
     center_source = "default"
     if lat is not None and lng is not None:
         center_lat, center_lng = float(lat), float(lng)
         center_source = "device_gps"
     elif viewer and viewer.get("city"):
-        # try to find a spot in their city first
         for s in scored:
-            if s["city"].lower() == (viewer.get("city") or "").lower():
+            if (s.get("city") or "").lower() == (viewer.get("city") or "").lower():
                 center_lat, center_lng = s["latitude"], s["longitude"]
                 center_source = "profile_city"
                 break
-
-    # Decorate each spot with a distance in km/mi so the client can render a chip.
     for s in scored:
         try:
             d_km = haversine_km(center_lat, center_lng, s["latitude"], s["longitude"])
             s["distance_km"] = round(d_km, 2)
             s["distance_mi"] = round(d_km * 0.621371, 2)
         except Exception:
-            s["distance_km"] = None
-            s["distance_mi"] = None
+            s["distance_km"], s["distance_mi"] = None, None
 
+    # ---- Personalization inputs -------------------------------------------
+    viewer_specialties: set = set(viewer.get("specialties") or []) if viewer else set()
+    viewer_city = (viewer.get("city") or "").lower() if viewer else ""
+    saved_shoot_types: set = set()
+    saved_cities: set = set()
+    recent_saved_ids: set = set()
+    if viewer:
+        my_saves = await db.spot_saves.find(
+            {"user_id": viewer["user_id"]}, {"_id": 0, "spot_id": 1}
+        ).sort("created_at", -1).limit(50).to_list(50)
+        saved_ids = [sv["spot_id"] for sv in my_saves]
+        recent_saved_ids = set(saved_ids[:20])
+        if saved_ids:
+            sspots = await db.spots.find(
+                {"spot_id": {"$in": saved_ids}},
+                {"_id": 0, "shoot_types": 1, "city": 1},
+            ).to_list(200)
+            for sp in sspots:
+                for st in (sp.get("shoot_types") or []):
+                    saved_shoot_types.add(st)
+                if sp.get("city"):
+                    saved_cities.add(sp["city"].lower())
+
+    # ---- Scoring helpers --------------------------------------------------
+    now = utcnow()
+    def _freshness(s):
+        created = s.get("created_at") or s.get("updated_at")
+        if not created: return 0
+        if isinstance(created, str):
+            try:
+                created = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            except Exception:
+                return 0
+        if isinstance(created, datetime) and created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        age_days = max(0, (now - created).total_seconds() / 86400)
+        # Linear decay — full credit at 0 days, zero at 30 days, small negative after.
+        return max(0.0, 1.0 - (age_days / 30.0))
+
+    def _proximity_boost(s):
+        if s.get("distance_km") is None: return 0
+        if s["distance_km"] < 25: return 1.0
+        if s["distance_km"] < 100: return 0.5
+        if s["distance_km"] < 400: return 0.2
+        return 0.0
+
+    def _personal_boost(s):
+        score = 0.0
+        st = set(s.get("shoot_types") or [])
+        if viewer_specialties and (st & viewer_specialties):
+            score += 0.8
+        if saved_shoot_types and (st & saved_shoot_types):
+            score += 0.6
+        if viewer_city and (s.get("city") or "").lower() == viewer_city:
+            score += 0.5
+        if saved_cities and (s.get("city") or "").lower() in saved_cities:
+            score += 0.3
+        return score
+
+    def _engagement(s):
+        # Mild signal from accumulated saves/views/comments.
+        return min(
+            2.0,
+            0.05 * (s.get("save_count") or 0)
+            + 0.02 * (s.get("view_count") or 0)
+            + 0.05 * (s.get("comment_count") or 0)
+        )
+
+    def _golden_strength(s):
+        mh = s.get("morning_golden_hour_rating") or 0
+        eh = s.get("evening_golden_hour_rating") or 0
+        sr = s.get("sunrise_quality") or s.get("sunrise_rating") or 0
+        ss = s.get("sunset_quality") or s.get("sunset_rating") or 0
+        return mh + eh + (sr + ss) * 0.5
+
+    # Exclude spots the viewer already saved from "Best for your shoots" so it
+    # always shows fresh suggestions, not reminders of spots they know.
+    def _exclude_saved(arr):
+        if not recent_saved_ids: return arr
+        return [s for s in arr if s["spot_id"] not in recent_saved_ids]
+
+    # ---- Section builders -------------------------------------------------
     nearby_list = sorted(
-        scored,
-        key=lambda s: s.get("distance_km") if s.get("distance_km") is not None else 1e9,
+        [s for s in scored if s.get("distance_km") is not None],
+        key=lambda s: s["distance_km"],
+    )[:12]
+
+    # "Trending this week" — recent engagement weighted, capped radius
+    week_ago = now - timedelta(days=7)
+    def _recent_weight(s):
+        # Boost spots updated or approved in last 7 days
+        upd = s.get("updated_at") or s.get("created_at")
+        if isinstance(upd, str):
+            try: upd = datetime.fromisoformat(upd.replace("Z", "+00:00"))
+            except Exception: upd = None
+        if isinstance(upd, datetime) and upd.tzinfo is None:
+            upd = upd.replace(tzinfo=timezone.utc)
+        fresh = 1.0 if (isinstance(upd, datetime) and upd > week_ago) else 0.0
+        return (
+            _engagement(s) * 2.0
+            + s["shoot_score"] * 0.5
+            + fresh * 1.2
+            + _proximity_boost(s) * 0.6
+        )
+    trending = sorted(scored, key=_recent_weight, reverse=True)[:10]
+
+    # "Golden hour favorites" — strong light + recently confirmed + proximity
+    def _golden_weight(s):
+        return (
+            _golden_strength(s) * 1.2
+            + _freshness(s) * 0.8
+            + _proximity_boost(s) * 0.5
+            + (1.0 if s.get("verification_status") == "verified" else 0.0)
+        )
+    golden = sorted(
+        [s for s in scored if _golden_strength(s) > 0],
+        key=_golden_weight, reverse=True,
     )[:10]
 
-    trending = sorted(scored, key=lambda s: s["shoot_score"] + len(s.get("images", [])) * 2, reverse=True)[:10]
-    golden = sorted(scored, key=lambda s: (s.get("morning_golden_hour_rating", 0) + s.get("evening_golden_hour_rating", 0)), reverse=True)[:10]
-    recent = sorted(scored, key=lambda s: s.get("created_at") or utcnow(), reverse=True)[:10]
+    # "Recently added" — strict by created_at, with fallback, exclude viewer's own spots
+    def _created_ts(s):
+        v = s.get("created_at")
+        if isinstance(v, datetime): return v
+        if isinstance(v, str):
+            try: return datetime.fromisoformat(v.replace("Z", "+00:00"))
+            except Exception: return datetime.min.replace(tzinfo=timezone.utc)
+        return datetime.min.replace(tzinfo=timezone.utc)
+    recent_pool = [s for s in scored if not viewer or s.get("owner_user_id") != viewer["user_id"]]
+    recent = sorted(recent_pool, key=_created_ts, reverse=True)[:10]
 
+    # "Best for your shoots" — only populated when we know specialties or saves.
     best_for_you = []
-    if viewer and viewer.get("specialties"):
-        specs = set(viewer["specialties"])
-        best_for_you = [s for s in scored if set(s.get("shoot_types", [])) & specs][:10]
+    if viewer and (viewer_specialties or saved_shoot_types):
+        matches = [s for s in scored if _personal_boost(s) > 0]
+        matches = _exclude_saved(matches)
+        best_for_you = sorted(
+            matches,
+            key=lambda s: _personal_boost(s) * 2 + s["shoot_score"] * 0.3 + _freshness(s) * 0.4,
+            reverse=True,
+        )[:10]
 
+    # "From photographers you follow"
     following_feed = []
     if viewer:
-        follow_rows = await db.follows.find({"follower_user_id": viewer["user_id"]}, {"_id": 0}).to_list(200)
+        follow_rows = await db.follows.find(
+            {"follower_user_id": viewer["user_id"]}, {"_id": 0}
+        ).to_list(300)
         followed_ids = [r["followed_user_id"] for r in follow_rows]
         if followed_ids:
-            following_feed = [s for s in scored if s["owner_user_id"] in followed_ids][:10]
+            following_feed = sorted(
+                [s for s in scored if s["owner_user_id"] in followed_ids],
+                key=lambda s: _freshness(s) * 2 + s["shoot_score"] * 0.2, reverse=True,
+            )[:10]
 
-    # Seasonal (highest shade / best recent)
+    # "Seasonal highlights" — month match + variety + verification recency
     current_month = datetime.now().strftime("%B")
-    seasonal = [s for s in scored if current_month in s.get("best_months", [])][:10]
-    if not seasonal:
-        seasonal = sorted(scored, key=lambda s: s.get("variety_rating", 0), reverse=True)[:10]
+    def _seasonal_weight(s):
+        month_match = 1.0 if current_month in (s.get("best_months") or []) else 0.0
+        return (
+            month_match * 2.0
+            + (s.get("variety_rating") or 0) * 0.2
+            + _freshness(s) * 0.7
+            + _proximity_boost(s) * 0.4
+        )
+    seasonal = sorted(scored, key=_seasonal_weight, reverse=True)[:10]
+    # Drop zero-weight items if we have any with month match; otherwise keep variety fallback
+    if any(current_month in (s.get("best_months") or []) for s in seasonal):
+        seasonal = [s for s in seasonal if current_month in (s.get("best_months") or [])][:10]
+
+    # Hero pick — highest shoot_score with recency and image count as tiebreakers.
+    hero_pool = sorted(
+        scored,
+        key=lambda s: s["shoot_score"] + _freshness(s) * 3 + min(3, len(s.get("images") or [])) * 0.5,
+        reverse=True,
+    )
+    hero = hero_pool[0] if hero_pool else None
 
     return {
+        "hero": hero,
         "nearby": nearby_list,
         "trending": trending,
         "golden_hour": golden,
