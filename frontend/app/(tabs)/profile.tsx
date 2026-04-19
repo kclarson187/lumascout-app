@@ -413,11 +413,11 @@ export default function Profile() {
               <Store size={18} color={colors.primary} />
               <Text style={styles.actionTxt}>Pack{'\n'}Marketplace</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/paywall')} testID="profile-paywall">
+            <TouchableOpacity style={styles.actionCard} onPress={() => router.push(plan !== 'free' ? '/billing' : '/paywall')} testID="profile-paywall">
               <Crown size={18} color={colors.primary} />
               <Text style={styles.actionTxt}>
-                {plan !== 'free' ? `On ${planLabel}` : 'Upgrade'}{'\n'}
-                {isComp ? 'Complimentary' : plan === 'elite' ? 'Creator' : plan === 'pro' ? 'Active' : 'to Pro'}
+                {plan !== 'free' ? `${planLabel}` : 'Upgrade'}{'\n'}
+                {plan !== 'free' ? 'Manage billing' : 'to Pro'}
               </Text>
             </TouchableOpacity>
             {isStaff && (

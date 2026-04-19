@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Pressable } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Pressable, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ChevronLeft, Check, Crown, Sparkles } from 'lucide-react-native';
+import * as WebBrowser from 'expo-web-browser';
+import * as Linking from 'expo-linking';
 import { colors, font, space, radii } from '../src/theme';
 import { Button } from '../src/components/Button';
 import { api, formatApiError } from '../src/api';
@@ -44,17 +46,44 @@ export default function Paywall() {
   }, []);
 
   const tryPlan = async (plan: string) => {
-    if (plan === 'free' || plan === user?.plan) return;
+    if (plan === user?.plan) return;
+    // Free = downgrade → route to billing portal (Stripe handles cancel at period end).
+    if (plan === 'free') {
+      if (!user?.plan || user.plan === 'free') return;
+      setBusy(plan);
+      try {
+        const r = await api.post('/billing/portal', {});
+        if (r?.url) {
+          await WebBrowser.openBrowserAsync(r.url);
+        }
+      } catch (e) {
+        Alert.alert('Could not open billing portal', formatApiError(e));
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
+    // Upgrade → Stripe Checkout in an in-app browser.
     setBusy(plan);
     try {
-      await api.post('/me/upgrade', { plan, cycle });
+      // Build origin URL from current page (web) or a canonical deep link (native).
+      let origin: string | undefined;
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        origin = window.location.origin;
+      } else {
+        // On native, let backend auto-detect from Host header (works on preview).
+        origin = undefined;
+      }
+      const r = await api.post('/billing/checkout', { plan, origin_url: origin });
+      if (!r?.url) throw new Error('No checkout URL');
+      const result = await WebBrowser.openAuthSessionAsync(r.url, Linking.createURL('/billing'));
+      // Any dismiss/return → refresh the server view of current plan.
       await refresh();
-      Alert.alert(
-        "You're on " + plan.toUpperCase(),
-        `Preview unlock active (${cycle}). Real billing will move to Stripe at launch.`,
-      );
+      if (result.type === 'success' || result.type === 'dismiss') {
+        router.replace('/billing');
+      }
     } catch (e) {
-      Alert.alert('Could not upgrade', formatApiError(e));
+      Alert.alert('Could not start checkout', formatApiError(e));
     } finally {
       setBusy(null);
     }
@@ -180,8 +209,7 @@ export default function Paywall() {
         </View>
 
         <Text style={styles.fine}>
-          Preview unlock is free during beta. Stripe billing ships at launch — your plan will migrate
-          automatically. Cancel anytime.
+          Secure billing by Stripe. Cancel anytime from Billing & Subscription. Monthly plans only.
         </Text>
 
         <Text style={styles.compareHead}>Compare plans</Text>
