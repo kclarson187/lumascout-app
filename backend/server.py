@@ -13,7 +13,7 @@ import jwt
 import httpx
 from datetime import datetime, timezone, timedelta
 import math
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -3064,6 +3064,368 @@ async def spot_shot_list(spot_id: str, refresh: bool = False, user: dict = Depen
     return {"items": items, "cached": False, "cached_at": now.isoformat()}
 
 
+# ============================================================================
+# STRIPE BILLING — Real subscription flow (Checkout + Customer Portal + Webhooks)
+# ----------------------------------------------------------------------------
+# Uses the official `stripe` Python SDK with STRIPE_API_KEY from .env. Products
+# and Prices are upserted on startup keyed on lookup_key so price IDs are stable
+# across deploys without hardcoding values.
+# ============================================================================
+import stripe as _stripe  # type: ignore
+
+_STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "").strip()
+_STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
+_stripe.api_key = _STRIPE_API_KEY or None
+
+# Cache populated by bootstrap_stripe_products() on startup:
+#   {"pro": "price_xxx_monthly", "elite": "price_yyy_monthly"}
+_STRIPE_PRICE_IDS: Dict[str, str] = {}
+
+# Mapping Stripe price → plan tier (populated alongside _STRIPE_PRICE_IDS).
+_STRIPE_PRICE_TO_PLAN: Dict[str, str] = {}
+
+
+def _stripe_ready() -> bool:
+    return bool(_STRIPE_API_KEY)
+
+
+async def bootstrap_stripe_products():
+    """Idempotently ensure Pro & Elite Products + monthly Prices exist in Stripe.
+
+    Safe to call on every startup — uses Stripe's `lookup_key` to dedupe.
+    Prices for PhotoScout: Pro $9.99/mo · Elite $19.99/mo.
+    """
+    if not _stripe_ready():
+        print("[stripe] STRIPE_API_KEY not set — billing routes are disabled.")
+        return
+    plan_catalog = [
+        {"key": "pro",   "name": "PhotoScout Pro",   "amount": 999,  "lookup": "pro_monthly"},
+        {"key": "elite", "name": "PhotoScout Elite", "amount": 1999, "lookup": "elite_monthly"},
+    ]
+    try:
+        for entry in plan_catalog:
+            # 1) Find or create Price by lookup_key.
+            existing = _stripe.Price.list(lookup_keys=[entry["lookup"]], active=True, limit=1)
+            if existing and existing.data:
+                price = existing.data[0]
+            else:
+                # Find or create Product by name — filter by name to stay idempotent.
+                prod_list = _stripe.Product.list(active=True, limit=100)
+                prod = next((p for p in prod_list.data if p.name == entry["name"]), None)
+                if not prod:
+                    prod = _stripe.Product.create(
+                        name=entry["name"],
+                        description=f'Monthly subscription to {entry["name"]}.',
+                    )
+                price = _stripe.Price.create(
+                    unit_amount=entry["amount"],
+                    currency="usd",
+                    recurring={"interval": "month"},
+                    product=prod.id,
+                    lookup_key=entry["lookup"],
+                    nickname=entry["lookup"],
+                )
+            _STRIPE_PRICE_IDS[entry["key"]] = price.id
+            _STRIPE_PRICE_TO_PLAN[price.id] = entry["key"]
+        print(f"[stripe] price map ready: {_STRIPE_PRICE_IDS}")
+    except Exception as e:  # noqa: BLE001
+        # Never block startup on Stripe errors — billing routes will just 503.
+        print(f"[stripe] bootstrap failed (billing disabled): {e}")
+
+
+async def _ensure_stripe_customer(user: dict) -> str:
+    """Return the Stripe customer_id for a user, creating it lazily."""
+    cid = user.get("stripe_customer_id")
+    if cid:
+        return cid
+    customer = _stripe.Customer.create(
+        email=user["email"],
+        name=user.get("name") or None,
+        metadata={"user_id": user["user_id"]},
+    )
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"stripe_customer_id": customer.id, "updated_at": utcnow()}},
+    )
+    return customer.id
+
+
+class BillingCheckoutIn(BaseModel):
+    plan: str  # 'pro' | 'elite'
+    origin_url: Optional[str] = None  # e.g. https://example.emergent.host
+
+
+@api.post("/billing/checkout")
+async def billing_checkout(body: BillingCheckoutIn, user: dict = Depends(get_current_user)):
+    """Create a Stripe Checkout Session (mode=subscription) and return the URL."""
+    if not _stripe_ready():
+        raise HTTPException(status_code=503, detail="Billing is not configured")
+    plan = (body.plan or "").lower()
+    if plan not in ("pro", "elite"):
+        raise HTTPException(status_code=400, detail="plan must be 'pro' or 'elite'")
+    price_id = _STRIPE_PRICE_IDS.get(plan)
+    if not price_id:
+        # Retry bootstrap once in case startup missed it.
+        await bootstrap_stripe_products()
+        price_id = _STRIPE_PRICE_IDS.get(plan)
+    if not price_id:
+        raise HTTPException(status_code=503, detail="Stripe price not available")
+
+    origin = (body.origin_url or "").rstrip("/")
+    if not origin or not origin.startswith(("http://", "https://")):
+        # Fallback: path-only — frontend will be fine; Stripe requires absolute.
+        origin = "https://photoscout.app"
+
+    customer_id = await _ensure_stripe_customer(user)
+
+    success_url = f"{origin}/billing?session_id={{CHECKOUT_SESSION_ID}}&status=success"
+    cancel_url = f"{origin}/paywall?status=cancelled"
+
+    try:
+        session = _stripe.checkout.Session.create(
+            mode="subscription",
+            customer=customer_id,
+            line_items=[{"price": price_id, "quantity": 1}],
+            success_url=success_url,
+            cancel_url=cancel_url,
+            allow_promotion_codes=True,
+            metadata={
+                "user_id": user["user_id"],
+                "plan": plan,
+            },
+            subscription_data={
+                "metadata": {"user_id": user["user_id"], "plan": plan},
+            },
+        )
+    except _stripe.error.StripeError as e:  # type: ignore
+        raise HTTPException(status_code=400, detail=f"Stripe error: {e.user_message or str(e)}")
+
+    # Track the session in payment_transactions for traceability.
+    await db.payment_transactions.insert_one({
+        "session_id": session.id,
+        "user_id": user["user_id"],
+        "plan_target": plan,
+        "amount_cents": PLAN_PRICING[plan]["monthly_cents"],
+        "currency": "usd",
+        "status": "initiated",
+        "payment_status": "unpaid",
+        "created_at": utcnow(),
+    })
+    return {"url": session.url, "session_id": session.id}
+
+
+@api.post("/billing/portal")
+async def billing_portal(user: dict = Depends(get_current_user)):
+    """Create a Stripe Customer Portal session. Handles change-plan, cancel,
+    payment method, invoice history. Users without a customer record get a
+    customer created on the fly (they'll see no subscriptions)."""
+    if not _stripe_ready():
+        raise HTTPException(status_code=503, detail="Billing is not configured")
+    customer_id = await _ensure_stripe_customer(user)
+    try:
+        session = _stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url="https://photoscout.app/billing",
+        )
+    except _stripe.error.StripeError as e:  # type: ignore
+        raise HTTPException(status_code=400, detail=f"Stripe error: {e.user_message or str(e)}")
+    return {"url": session.url}
+
+
+@api.get("/billing/status")
+async def billing_status(user: dict = Depends(get_current_user)):
+    """Return the viewer's current subscription status, renewal date, payment
+    method, and last 10 invoices. Safe for users without a customer yet."""
+    effective_plan = plan_of(user)
+    out = {
+        "plan": effective_plan,
+        "billing_status": user.get("billing_status") or ("active" if effective_plan != "free" else None),
+        "stripe_customer_id": user.get("stripe_customer_id"),
+        "stripe_subscription_id": user.get("stripe_subscription_id"),
+        "renewal_date": (user.get("renewal_date").isoformat() if isinstance(user.get("renewal_date"), datetime) else user.get("renewal_date")),
+        "canceled_at": (user.get("canceled_at").isoformat() if isinstance(user.get("canceled_at"), datetime) else user.get("canceled_at")),
+        "payment_failed_at": (user.get("payment_failed_at").isoformat() if isinstance(user.get("payment_failed_at"), datetime) else user.get("payment_failed_at")),
+        "cancel_at_period_end": bool(user.get("cancel_at_period_end") or False),
+        "payment_method": None,
+        "invoices": [],
+    }
+    # Comp plans surface as "comp" for the UI.
+    if (user.get("plan") or "").startswith("comp_"):
+        out["billing_status"] = "comp"
+    if not _stripe_ready() or not user.get("stripe_customer_id"):
+        return out
+
+    try:
+        # Payment method (the customer's default invoice source)
+        cust = _stripe.Customer.retrieve(user["stripe_customer_id"], expand=["invoice_settings.default_payment_method"])
+        pm = getattr(cust.invoice_settings, "default_payment_method", None) if cust.invoice_settings else None
+        if pm and getattr(pm, "card", None):
+            out["payment_method"] = {"brand": pm.card.brand, "last4": pm.card.last4, "exp_month": pm.card.exp_month, "exp_year": pm.card.exp_year}
+        # Invoices — last 10
+        inv_list = _stripe.Invoice.list(customer=user["stripe_customer_id"], limit=10)
+        out["invoices"] = [
+            {
+                "id": inv.id,
+                "number": inv.number,
+                "status": inv.status,
+                "amount_paid": inv.amount_paid,
+                "amount_due": inv.amount_due,
+                "currency": inv.currency,
+                "created": inv.created,
+                "hosted_invoice_url": inv.hosted_invoice_url,
+                "invoice_pdf": inv.invoice_pdf,
+                "period_end": inv.period_end,
+            }
+            for inv in inv_list.auto_paging_iter()
+        ][:10]
+    except Exception as e:  # noqa: BLE001
+        # Never 500 the status endpoint on a Stripe transient failure.
+        print(f"[stripe] billing_status soft-fail: {e}")
+    return out
+
+
+async def _apply_subscription_to_user(sub: dict):
+    """Given a Stripe Subscription object, update the associated user doc.
+    Idempotent — safe to call from any webhook event that carries a Subscription."""
+    customer_id = sub.get("customer")
+    if not customer_id:
+        return
+    user = await db.users.find_one({"stripe_customer_id": customer_id})
+    if not user:
+        # Fall back to metadata.user_id if we haven't linked yet.
+        md_uid = (sub.get("metadata") or {}).get("user_id")
+        if md_uid:
+            user = await db.users.find_one({"user_id": md_uid})
+    if not user:
+        return
+
+    # Pull plan from the first subscription item's price.
+    plan_key = None
+    try:
+        items = sub.get("items", {}).get("data", [])
+        if items:
+            pid = items[0].get("price", {}).get("id")
+            plan_key = _STRIPE_PRICE_TO_PLAN.get(pid)
+    except Exception:
+        pass
+
+    status = sub.get("status")  # active, trialing, past_due, canceled, incomplete, unpaid
+    cancel_at_period_end = bool(sub.get("cancel_at_period_end"))
+    current_period_end = sub.get("current_period_end")
+    canceled_at = sub.get("canceled_at")
+
+    updates: Dict[str, Any] = {
+        "stripe_customer_id": customer_id,
+        "stripe_subscription_id": sub.get("id"),
+        "billing_status": status,
+        "cancel_at_period_end": cancel_at_period_end,
+        "updated_at": utcnow(),
+    }
+    if plan_key:
+        updates["plan"] = plan_key
+        updates["billing_cycle"] = "monthly"
+        updates["comp_expiration"] = None  # real paid plan wipes comp window
+    if current_period_end:
+        updates["renewal_date"] = datetime.fromtimestamp(current_period_end, tz=timezone.utc)
+    if canceled_at:
+        updates["canceled_at"] = datetime.fromtimestamp(canceled_at, tz=timezone.utc)
+    else:
+        updates["canceled_at"] = None
+
+    # Terminal cancel → downgrade to free. Stripe fires `subscription.deleted`
+    # at the end of the billing period when a user had set cancel_at_period_end.
+    if status in ("canceled", "incomplete_expired", "unpaid"):
+        updates["plan"] = "free"
+        updates["billing_cycle"] = None
+
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": updates})
+
+
+@app.post("/api/webhook/stripe")
+async def stripe_webhook(request: Request):
+    """Stripe webhook receiver. Mounted on the raw app (not the /api router)
+    because the body must NOT be touched before signature verification.
+
+    Handles: checkout.session.completed, customer.subscription.created/updated/
+    deleted, invoice.payment_failed, invoice.paid.
+    """
+    if not _stripe_ready():
+        raise HTTPException(status_code=503, detail="Billing is not configured")
+    payload = await request.body()
+    sig = request.headers.get("Stripe-Signature")
+
+    try:
+        if _STRIPE_WEBHOOK_SECRET:
+            event = _stripe.Webhook.construct_event(payload, sig, _STRIPE_WEBHOOK_SECRET)
+        else:
+            # Test-mode convenience: accept the body as JSON without verification.
+            # Production MUST set STRIPE_WEBHOOK_SECRET.
+            import json as _json
+            event = _json.loads(payload)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Invalid webhook: {e}")
+
+    etype = event.get("type") if isinstance(event, dict) else event["type"]
+    obj = (event.get("data") or {}).get("object") if isinstance(event, dict) else event["data"]["object"]
+    # Record for audit/debug (fire-and-forget)
+    try:
+        await db.stripe_events.insert_one({
+            "event_id": event.get("id") if isinstance(event, dict) else event["id"],
+            "type": etype,
+            "received_at": utcnow(),
+            "livemode": event.get("livemode") if isinstance(event, dict) else event.get("livemode"),
+        })
+    except Exception:
+        pass
+
+    try:
+        if etype == "checkout.session.completed":
+            # Link customer to user if missing, mark payment_transactions paid.
+            session_id = obj.get("id")
+            uid = (obj.get("metadata") or {}).get("user_id")
+            customer = obj.get("customer")
+            if uid and customer:
+                await db.users.update_one(
+                    {"user_id": uid, "stripe_customer_id": {"$in": [None, ""]}},
+                    {"$set": {"stripe_customer_id": customer, "updated_at": utcnow()}},
+                )
+            await db.payment_transactions.update_one(
+                {"session_id": session_id},
+                {"$set": {"status": "completed", "payment_status": "paid", "completed_at": utcnow()}},
+            )
+            # The subscription.created event that follows will set plan/dates.
+
+        elif etype in ("customer.subscription.created", "customer.subscription.updated"):
+            await _apply_subscription_to_user(obj)
+
+        elif etype == "customer.subscription.deleted":
+            # Force downgrade.
+            obj["status"] = "canceled"
+            await _apply_subscription_to_user(obj)
+
+        elif etype == "invoice.payment_failed":
+            cust = obj.get("customer")
+            if cust:
+                await db.users.update_one(
+                    {"stripe_customer_id": cust},
+                    {"$set": {"payment_failed_at": utcnow(), "billing_status": "past_due", "updated_at": utcnow()}},
+                )
+
+        elif etype == "invoice.paid":
+            cust = obj.get("customer")
+            if cust:
+                await db.users.update_one(
+                    {"stripe_customer_id": cust},
+                    {"$set": {"payment_failed_at": None, "updated_at": utcnow()}},
+                )
+    except Exception as e:  # noqa: BLE001
+        # Stripe retries non-2xx. We swallow handler errors after logging so
+        # we don't loop on malformed payloads — but you can tune this.
+        print(f"[stripe] webhook handler error for {etype}: {e}")
+
+    return {"received": True, "type": etype}
+
+
 # Register the api router AFTER every @api.<method> decorator above has run.
 # FastAPI's include_router() snapshots routes at call-time, so this must be the
 # very last route-registration step before startup.
@@ -3101,6 +3463,8 @@ async def on_startup():
     await backfill_freshness()
     await backfill_country_fields()
     await seed_na_content()
+    # Stripe products/prices (idempotent).
+    await bootstrap_stripe_products()
 
 
 async def backfill_freshness():
