@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -15,19 +15,28 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown, AlertTriangle } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown, AlertTriangle, Search, Map as MapIcon, Edit3, FileText } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii, SHOOT_TYPES, BEST_TIMES, PRIVACY_MODES } from '../../src/theme';
 import { Button } from '../../src/components/Button';
+import LocationSearchSheet, { PlaceResult } from '../../src/components/LocationSearchSheet';
+import MapPickerSheet from '../../src/components/MapPickerSheet';
+import ManualLocationSheet, { ManualLocation } from '../../src/components/ManualLocationSheet';
 import { Input, Chip } from '../../src/components/ui';
 
-const STEPS = ['Location', 'Photos', 'Details', 'Notes', 'Privacy', 'Review'];
+const STEPS = ['Photos', 'Location', 'Details', 'Notes', 'Privacy', 'Review'];
 
 type Draft = {
   latitude?: number;
   longitude?: number;
   locationLabel?: string;
+  locationSource?: 'gps' | 'searched_place' | 'dropped_pin' | 'manual_entry';
+  originalSearchQuery?: string;
+  geocodeConfidence?: number;
+  addressLine1?: string;
+  postalCode?: string;
+  landmarkNotes?: string;
   images: { image_url: string; caption?: string; is_cover: boolean }[];
   title: string;
   city: string;
@@ -101,6 +110,103 @@ export default function AddSpot() {
   const [submitting, setSubmitting] = useState(false);
   const [dupCandidates, setDupCandidates] = useState<DupCandidate[]>([]);
   const [dupChecking, setDupChecking] = useState(false);
+  // Location-method sheet state + recent locations for one-tap reuse
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [mapOpen, setMapOpen] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [recent, setRecent] = useState<any[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await api.get('/me/recent-locations', { limit: 8 });
+        setRecent(r?.items || []);
+      } catch {}
+    })();
+  }, []);
+
+  // Handlers for each location method — each one populates the draft and
+  // records the `locationSource` so the backend knows where the coord came from.
+  const applyGps = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Location permission denied',
+          "That's okay — you can search, drop a pin, or enter the location by hand instead.",
+        );
+        return;
+      }
+      const loc = await Location.getCurrentPositionAsync({});
+      setDraft({
+        ...draft,
+        latitude: loc.coords.latitude,
+        longitude: loc.coords.longitude,
+        locationLabel: `Current location · ${loc.coords.latitude.toFixed(4)}, ${loc.coords.longitude.toFixed(4)}`,
+        locationSource: 'gps',
+        originalSearchQuery: undefined,
+        geocodeConfidence: undefined,
+      });
+    } catch (e) {
+      Alert.alert('Could not read location', String(e));
+    }
+  };
+
+  const applySearchedPlace = (p: PlaceResult) => {
+    if (p.latitude == null || p.longitude == null) return;
+    setDraft({
+      ...draft,
+      latitude: p.latitude,
+      longitude: p.longitude,
+      locationLabel: p.display_name,
+      locationSource: 'searched_place',
+      originalSearchQuery: p.name || p.display_name,
+      geocodeConfidence: p.confidence,
+      city: p.city || draft.city,
+      state: (p.state || draft.state || '').slice(0, 2).toUpperCase() || draft.state,
+      title: draft.title || p.name || '',
+    });
+  };
+
+  const applyDroppedPin = (pin: { latitude: number; longitude: number; label: string; city: string; state: string; country: string }) => {
+    setDraft({
+      ...draft,
+      latitude: pin.latitude,
+      longitude: pin.longitude,
+      locationLabel: pin.label,
+      locationSource: 'dropped_pin',
+      city: pin.city || draft.city,
+      state: (pin.state || draft.state || '').slice(0, 2).toUpperCase() || draft.state,
+    });
+  };
+
+  const applyManualEntry = (loc: ManualLocation) => {
+    setDraft({
+      ...draft,
+      latitude: loc.latitude,
+      longitude: loc.longitude,
+      locationLabel: [loc.address_line1, `${loc.city}, ${loc.state}`].filter(Boolean).join(' · '),
+      locationSource: 'manual_entry',
+      addressLine1: loc.address_line1,
+      postalCode: loc.postal_code,
+      landmarkNotes: loc.landmark_notes,
+      title: draft.title || loc.title,
+      city: loc.city,
+      state: (loc.state || '').slice(0, 2).toUpperCase(),
+    });
+  };
+
+  const applyRecentLocation = (r: any) => {
+    setDraft({
+      ...draft,
+      latitude: r.latitude,
+      longitude: r.longitude,
+      locationLabel: `${r.title} (reused)`,
+      locationSource: 'manual_entry',
+      city: r.city || draft.city,
+      state: (r.state || draft.state || '').slice(0, 2).toUpperCase() || draft.state,
+    });
+  };
 
   // Debounced duplicate check whenever lat/lng/title changes
   React.useEffect(() => {
@@ -138,16 +244,6 @@ export default function AddSpot() {
 
   const next = () => setStep((s) => Math.min(STEPS.length - 1, s + 1));
   const prev = () => (step === 0 ? router.replace('/(tabs)') : setStep((s) => s - 1));
-
-  const useMyLocation = async () => {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Location permission denied');
-      return;
-    }
-    const loc = await Location.getCurrentPositionAsync({});
-    setDraft({ ...draft, latitude: loc.coords.latitude, longitude: loc.coords.longitude, locationLabel: `${loc.coords.latitude.toFixed(4)}, ${loc.coords.longitude.toFixed(4)}` });
-  };
 
   const pickImages = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -187,55 +283,88 @@ export default function AddSpot() {
     arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v];
 
   const canProceed = () => {
-    if (step === 0) return draft.latitude != null;
-    if (step === 1) return draft.privacy_mode !== 'public' || draft.images.length >= 1;
+    // New step order: 0=Photos, 1=Location, 2=Details, 3=Notes, 4=Privacy, 5=Review
+    if (step === 0) return draft.privacy_mode !== 'public' || draft.images.length >= 1;
+    if (step === 1) return !!(draft.city && draft.state && (draft.latitude != null || draft.locationSource === 'manual_entry'));
     if (step === 2) return draft.title.trim() && draft.city.trim();
     return true;
   };
 
+  const buildPayload = (asDraft: boolean) => ({
+    title: draft.title,
+    description: draft.description,
+    latitude: draft.latitude || 0,
+    longitude: draft.longitude || 0,
+    city: draft.city,
+    state: draft.state,
+    privacy_mode: draft.privacy_mode,
+    location_display_mode: draft.location_display_mode,
+    shoot_types: draft.shoot_types,
+    style_tags: draft.style_tags,
+    best_time_of_day: draft.best_time_of_day,
+    sunrise_rating: draft.sunrise_rating,
+    sunset_rating: draft.sunset_rating,
+    morning_golden_hour_rating: draft.morning_golden_hour_rating,
+    evening_golden_hour_rating: draft.evening_golden_hour_rating,
+    shade_rating: draft.shade_rating,
+    variety_rating: draft.variety_rating,
+    crowd_level: draft.crowd_level,
+    safety_rating: draft.safety_rating,
+    dog_friendly: draft.dog_friendly,
+    kid_friendly: draft.kid_friendly,
+    accessible: draft.accessible,
+    indoor: draft.indoor,
+    permit_required: draft.permit_required,
+    fee_required: draft.fee_required,
+    parking_notes: draft.parking_notes,
+    lens_recommendations: draft.lens_recommendations,
+    best_months: [],
+    images: draft.images,
+    // Location provenance (new)
+    source_type: draft.locationSource,
+    original_search_query: draft.originalSearchQuery,
+    geocode_confidence: draft.geocodeConfidence,
+    address_line1: draft.addressLine1,
+    postal_code: draft.postalCode,
+    landmark_notes: draft.landmarkNotes,
+    save_as_draft: asDraft,
+  });
+
   const submit = async () => {
-    if (!draft.latitude || !draft.longitude || !draft.title || !draft.city) {
-      Alert.alert('Missing fields', 'Please fill location, title, and city.');
+    if (!draft.title || !draft.city) {
+      Alert.alert('Missing fields', 'Please add a title and city before publishing.');
+      return;
+    }
+    if (draft.latitude == null && draft.locationSource !== 'manual_entry') {
+      Alert.alert('Location required', 'Use Current Location, Search, Drop a Pin, or Enter Manually.');
       return;
     }
     setSubmitting(true);
     try {
-      await api.post('/spots', {
-        title: draft.title,
-        description: draft.description,
-        latitude: draft.latitude,
-        longitude: draft.longitude,
-        city: draft.city,
-        state: draft.state,
-        privacy_mode: draft.privacy_mode,
-        location_display_mode: draft.location_display_mode,
-        shoot_types: draft.shoot_types,
-        style_tags: draft.style_tags,
-        best_time_of_day: draft.best_time_of_day,
-        sunrise_rating: draft.sunrise_rating,
-        sunset_rating: draft.sunset_rating,
-        morning_golden_hour_rating: draft.morning_golden_hour_rating,
-        evening_golden_hour_rating: draft.evening_golden_hour_rating,
-        shade_rating: draft.shade_rating,
-        variety_rating: draft.variety_rating,
-        crowd_level: draft.crowd_level,
-        safety_rating: draft.safety_rating,
-        dog_friendly: draft.dog_friendly,
-        kid_friendly: draft.kid_friendly,
-        accessible: draft.accessible,
-        indoor: draft.indoor,
-        permit_required: draft.permit_required,
-        fee_required: draft.fee_required,
-        parking_notes: draft.parking_notes,
-        lens_recommendations: draft.lens_recommendations,
-        best_months: [],
-        images: draft.images,
-      });
+      await api.post('/spots', buildPayload(false));
       Alert.alert('Spot submitted', draft.privacy_mode === 'public' ? 'Your public spot is in review.' : 'Saved!', [
         { text: 'OK', onPress: () => { setDraft(initialDraft); setStep(0); router.replace('/(tabs)'); } },
       ]);
     } catch (e) {
       Alert.alert('Could not submit', formatApiError(e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const saveAsDraft = async () => {
+    if (!draft.title.trim() || !draft.city.trim()) {
+      Alert.alert('A few basics first', 'Please add at least a title and city before saving as draft.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await api.post('/spots', buildPayload(true));
+      Alert.alert('Draft saved', 'You can finish this spot later from your Profile.', [
+        { text: 'OK', onPress: () => { setDraft(initialDraft); setStep(0); router.replace('/(tabs)/profile'); } },
+      ]);
+    } catch (e) {
+      Alert.alert('Could not save draft', formatApiError(e));
     } finally {
       setSubmitting(false);
     }
@@ -259,26 +388,120 @@ export default function AddSpot() {
         <ScrollView contentContainerStyle={{ padding: space.xl, paddingBottom: 120 }} keyboardShouldPersistTaps="handled">
           {step === 0 && (
             <View style={{ gap: space.lg }}>
-              <Text style={styles.heading}>Where did you shoot?</Text>
-              <Text style={styles.sub}>Drop a pin or use your current location.</Text>
-              <Button title="Use my current location" icon={<MapPin size={18} color={colors.textInverse} />} onPress={useMyLocation} testID="add-use-location" />
-              <Input
-                label="Or enter coordinates manually (lat, lng)"
-                placeholder="30.2672, -97.7431"
-                onChangeText={(txt) => {
-                  const [lat, lng] = txt.split(',').map((s) => parseFloat(s.trim()));
-                  if (!isNaN(lat) && !isNaN(lng)) {
-                    setDraft({ ...draft, latitude: lat, longitude: lng, locationLabel: `${lat}, ${lng}` });
-                  }
-                }}
-                testID="add-coords"
-              />
+              <Text style={styles.heading}>Add photos</Text>
+              <Text style={styles.sub}>Start with your shots. You'll assign a location next. Public spots need at least one photo — tap an image to make it the cover.</Text>
+              <TouchableOpacity style={styles.uploadCard} onPress={pickImages} testID="add-pick-images">
+                <ImageIcon size={28} color={colors.primary} />
+                <Text style={styles.uploadText}>Choose photos</Text>
+                <Text style={styles.uploadHint}>Up to 8 images</Text>
+              </TouchableOpacity>
+              <View style={styles.imgGrid}>
+                {draft.images.map((img, i) => (
+                  <TouchableOpacity key={i} style={styles.imgWrap} onPress={() => setCover(i)}>
+                    <Image source={{ uri: img.image_url }} style={styles.imgThumb} />
+                    {img.is_cover && <View style={styles.coverBadge}><Text style={styles.coverTxt}>COVER</Text></View>}
+                    <TouchableOpacity style={styles.imgRemove} onPress={() => removeImg(i)}>
+                      <X size={14} color="#fff" />
+                    </TouchableOpacity>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
+
+          {step === 1 && (
+            <View style={{ gap: space.lg }}>
+              <Text style={styles.heading}>Where was this shot?</Text>
+              <Text style={styles.sub}>
+                You don't need to be there. Search a place, drop a pin, or type the details by hand — perfect for past sessions.
+              </Text>
+
+              {/* Currently selected */}
+              {draft.locationLabel ? (
+                <View style={styles.selectedCard}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <MapPin size={16} color={colors.primary} />
+                    <Text style={styles.selectedKicker}>
+                      {draft.locationSource === 'gps' ? 'Current location' :
+                       draft.locationSource === 'searched_place' ? 'Searched place' :
+                       draft.locationSource === 'dropped_pin' ? 'Dropped pin' :
+                       draft.locationSource === 'manual_entry' ? 'Manual entry' : 'Location'}
+                    </Text>
+                  </View>
+                  <Text style={styles.selectedLabel} numberOfLines={2}>{draft.locationLabel}</Text>
+                  {draft.latitude != null && draft.longitude != null && (
+                    <Text style={styles.selectedCoords}>{draft.latitude.toFixed(5)}, {draft.longitude.toFixed(5)}</Text>
+                  )}
+                  <TouchableOpacity
+                    onPress={() => setDraft({ ...draft, latitude: undefined, longitude: undefined, locationLabel: undefined, locationSource: undefined })}
+                    style={styles.changeBtn}
+                    testID="add-change-location"
+                  >
+                    <Text style={styles.changeBtnTxt}>Change</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <>
+                  {/* Recent locations — one-tap reuse for portfolio imports */}
+                  {recent.length > 0 && (
+                    <View style={styles.recentWrap}>
+                      <Text style={styles.recentLabel}>Reuse a recent location</Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 2 }}>
+                        {recent.map((r, i) => (
+                          <TouchableOpacity
+                            key={i}
+                            style={styles.recentChip}
+                            onPress={() => applyRecentLocation(r)}
+                            testID={`recent-loc-${i}`}
+                          >
+                            <MapPin size={12} color={colors.primary} />
+                            <View>
+                              <Text style={styles.recentChipName} numberOfLines={1}>{r.title || 'Untitled'}</Text>
+                              <Text style={styles.recentChipSub} numberOfLines={1}>{r.city}, {r.state}</Text>
+                            </View>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    </View>
+                  )}
+
+                  {/* 4 methods */}
+                  <View style={{ gap: 10 }}>
+                    <MethodCard
+                      icon={<MapPin size={20} color={colors.primary} />}
+                      title="Use current location"
+                      body="Good for live scouting or if you're on-site right now."
+                      onPress={applyGps}
+                      testID="method-gps"
+                    />
+                    <MethodCard
+                      icon={<Search size={20} color={colors.primary} />}
+                      title="Search a place"
+                      body="Park, landmark, business, or address. Autocomplete-powered."
+                      onPress={() => setSearchOpen(true)}
+                      testID="method-search"
+                    />
+                    <MethodCard
+                      icon={<MapIcon size={20} color={colors.primary} />}
+                      title="Drop a pin on the map"
+                      body="Perfect for trails, hidden fields, or custom spots."
+                      onPress={() => setMapOpen(true)}
+                      testID="method-pin"
+                    />
+                    <MethodCard
+                      icon={<Edit3 size={20} color={colors.primary} />}
+                      title="Enter location manually"
+                      body="No GPS needed. Great for adding historical portfolio shoots."
+                      onPress={() => setManualOpen(true)}
+                      testID="method-manual"
+                    />
+                  </View>
+                </>
+              )}
+
+              {/* Duplicate check output */}
               {draft.locationLabel && (
                 <>
-                  <View style={styles.coordsCard}>
-                    <MapPin size={16} color={colors.primary} />
-                    <Text style={{ color: colors.text, fontFamily: font.bodyMedium }}>{draft.locationLabel}</Text>
-                  </View>
                   {dupChecking && (
                     <Text style={{ color: colors.textTertiary, fontFamily: font.body, fontSize: 12 }}>
                       Checking for nearby spots…
@@ -322,41 +545,18 @@ export default function AddSpot() {
                   )}
                   <TouchableOpacity
                     style={styles.quickSave}
-                    onPress={() => { setDraft({ ...draft, privacy_mode: 'private', location_display_mode: 'exact' }); setStep(1); }}
+                    onPress={() => { setDraft({ ...draft, privacy_mode: 'private', location_display_mode: 'exact' }); setStep(5); }}
                     testID="add-quick-save"
                   >
                     <Zap size={16} color={colors.primary} />
                     <View style={{ flex: 1 }}>
                       <Text style={styles.quickSaveTitle}>Quick save private</Text>
-                      <Text style={styles.quickSaveSub}>Skip the details — log this spot for yourself now, fill in notes later.</Text>
+                      <Text style={styles.quickSaveSub}>Skip details — log this spot for yourself now, fill in notes later.</Text>
                     </View>
                     <ChevronRight size={16} color={colors.textSecondary} />
                   </TouchableOpacity>
                 </>
               )}
-            </View>
-          )}
-
-          {step === 1 && (
-            <View style={{ gap: space.lg }}>
-              <Text style={styles.heading}>Add photos</Text>
-              <Text style={styles.sub}>Public submissions need at least one photo. Tap an image to make it the cover.</Text>
-              <TouchableOpacity style={styles.uploadCard} onPress={pickImages} testID="add-pick-images">
-                <ImageIcon size={28} color={colors.primary} />
-                <Text style={styles.uploadText}>Choose photos</Text>
-                <Text style={styles.uploadHint}>Up to 8 images</Text>
-              </TouchableOpacity>
-              <View style={styles.imgGrid}>
-                {draft.images.map((img, i) => (
-                  <TouchableOpacity key={i} style={styles.imgWrap} onPress={() => setCover(i)}>
-                    <Image source={{ uri: img.image_url }} style={styles.imgThumb} />
-                    {img.is_cover && <View style={styles.coverBadge}><Text style={styles.coverTxt}>COVER</Text></View>}
-                    <TouchableOpacity style={styles.imgRemove} onPress={() => removeImg(i)}>
-                      <X size={14} color="#fff" />
-                    </TouchableOpacity>
-                  </TouchableOpacity>
-                ))}
-              </View>
             </View>
           )}
 
@@ -555,11 +755,69 @@ export default function AddSpot() {
               testID="add-next"
             />
           ) : (
-            <Button title="Submit spot" onPress={submit} loading={submitting} testID="add-submit" />
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TouchableOpacity
+                onPress={saveAsDraft}
+                disabled={submitting}
+                style={styles.draftBtn}
+                testID="add-save-draft"
+              >
+                <FileText size={16} color={colors.text} />
+                <Text style={styles.draftBtnTxt}>Save draft</Text>
+              </TouchableOpacity>
+              <View style={{ flex: 1.4 }}>
+                <Button title="Publish spot" onPress={submit} loading={submitting} testID="add-submit" />
+              </View>
+            </View>
           )}
         </View>
       </KeyboardAvoidingView>
+
+      <LocationSearchSheet
+        visible={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        onPick={applySearchedPlace}
+        onManualEntry={() => setManualOpen(true)}
+      />
+      <MapPickerSheet
+        visible={mapOpen}
+        onClose={() => setMapOpen(false)}
+        onConfirm={applyDroppedPin}
+        initial={draft.latitude != null && draft.longitude != null ? { latitude: draft.latitude, longitude: draft.longitude } : null}
+      />
+      <ManualLocationSheet
+        visible={manualOpen}
+        onClose={() => setManualOpen(false)}
+        onConfirm={applyManualEntry}
+        initial={{
+          title: draft.title,
+          city: draft.city,
+          state: draft.state,
+          address_line1: draft.addressLine1,
+          postal_code: draft.postalCode,
+          landmark_notes: draft.landmarkNotes,
+          latitude: draft.latitude,
+          longitude: draft.longitude,
+        }}
+      />
     </SafeAreaView>
+  );
+}
+
+function MethodCard({
+  icon, title, body, onPress, testID,
+}: {
+  icon: React.ReactNode; title: string; body: string; onPress: () => void; testID?: string;
+}) {
+  return (
+    <TouchableOpacity style={styles.methodCard} onPress={onPress} testID={testID}>
+      <View style={styles.methodIcon}>{icon}</View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.methodTitle}>{title}</Text>
+        <Text style={styles.methodBody}>{body}</Text>
+      </View>
+      <ChevronRight size={18} color={colors.textSecondary} />
+    </TouchableOpacity>
   );
 }
 
@@ -630,6 +888,42 @@ const styles = StyleSheet.create({
     borderColor: colors.border, borderWidth: 1,
   },
   dupThumb: { width: 44, height: 44, borderRadius: radii.sm },
+  methodCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    padding: space.md, borderRadius: radii.md,
+    backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
+  },
+  methodIcon: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(245,166,35,0.12)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  methodTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 15 },
+  methodBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2, lineHeight: 16 },
+  selectedCard: {
+    backgroundColor: 'rgba(245,166,35,0.06)', borderColor: colors.primary, borderWidth: 1,
+    padding: space.md, borderRadius: radii.md, gap: 4, position: 'relative',
+  },
+  selectedKicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase' },
+  selectedLabel: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14, lineHeight: 19, marginTop: 4 },
+  selectedCoords: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 2 },
+  changeBtn: { position: 'absolute', top: space.md, right: space.md, paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.pill, backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border },
+  changeBtnTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
+  recentWrap: { gap: 6 },
+  recentLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.5, textTransform: 'uppercase' },
+  recentChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 10, paddingVertical: 6, borderRadius: radii.md,
+    backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, maxWidth: 180,
+  },
+  recentChipName: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 12 },
+  recentChipSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 10 },
+  draftBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 14, borderRadius: radii.md,
+    backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
+  },
+  draftBtnTxt: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
   quickSave: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     padding: space.md, borderWidth: 1, borderColor: colors.primary,
