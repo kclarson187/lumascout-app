@@ -234,7 +234,7 @@ export default function Home() {
                     keyExtractor={(it) => it.spot_id}
                     contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.md }}
                     renderItem={({ item }) => (
-                      <SpotCard spot={item} testID={`spot-${item.spot_id}`} onToggleSave={load} />
+                      <SpotCard spot={item} width={260} testID={`spot-${item.spot_id}`} onToggleSave={load} />
                     )}
                   />
                 </View>

@@ -2868,7 +2868,7 @@ DEMO_SPOTS = [
     {
         "title": "Bluebonnet Fields at Muleshoe Bend",
         "description": "A sprawling sea of bluebonnets every spring, backed by Lake Travis and twisted live oaks. Best at first or last light.",
-        "city": "Spicewood", "state": "TX", "latitude": 30.5225, "longitude": -98.0017,
+        "city": "Spicewood", "state": "TX", "latitude": 30.5378, "longitude": -98.0242,
         "shoot_types": ["Family", "Portrait", "Wedding"], "style_tags": ["Sunset", "Nature", "Wildflowers"],
         "best_time_of_day": "sunset", "sunrise_rating": 4, "sunset_rating": 5,
         "morning_golden_hour_rating": 4, "evening_golden_hour_rating": 5,

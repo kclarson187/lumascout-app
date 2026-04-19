@@ -232,11 +232,16 @@ export default function SpotDetail() {
               onPress={() => {
                 const lat = spot.latitude;
                 const lng = spot.longitude;
-                const label = encodeURIComponent(spot.title || 'PhotoScout spot');
-                const iosUrl = `maps://?daddr=${lat},${lng}&q=${label}`;
-                const iosFallback = `http://maps.apple.com/?daddr=${lat},${lng}&q=${label}`;
+                const cityPart = [spot.city, spot.state].filter(Boolean).join(', ');
+                // Give Apple/Google Maps a human-friendly destination label so
+                // the dropped pin doesn't reverse-geocode to a random ZIP.
+                const labelRaw = cityPart ? `${spot.title} · ${cityPart}` : spot.title;
+                const label = encodeURIComponent(labelRaw || 'PhotoScout spot');
+                const iosUrl = `maps://?q=${label}&ll=${lat},${lng}&daddr=${lat},${lng}&dirflg=d`;
+                const iosFallback = `http://maps.apple.com/?q=${label}&ll=${lat},${lng}&daddr=${lat},${lng}&dirflg=d`;
+                // Android: geo: scheme with labeled pin
                 const androidUrl = `geo:${lat},${lng}?q=${lat},${lng}(${label})`;
-                const webUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+                const webUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
                 const openBest = async () => {
                   if (Platform.OS === 'ios') {
                     const canOpen = await Linking.canOpenURL(iosUrl).catch(() => false);
@@ -256,7 +261,7 @@ export default function SpotDetail() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.directionsBtnTitle}>Get directions</Text>
                 <Text style={styles.directionsBtnSub} numberOfLines={1}>
-                  {spot.latitude.toFixed(5)}, {spot.longitude.toFixed(5)} · opens in {Platform.OS === 'ios' ? 'Apple Maps' : Platform.OS === 'android' ? 'Google Maps' : 'your browser'}
+                  {spot.title}{spot.city ? ` · ${spot.city}` : ''}{spot.state ? `, ${spot.state}` : ''}
                 </Text>
               </View>
             </TouchableOpacity>
@@ -338,7 +343,7 @@ export default function SpotDetail() {
               <Text style={[styles.sectionH, { marginTop: space.xl }]}>Similar nearby</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: space.md, marginHorizontal: -space.xl }} contentContainerStyle={{ paddingHorizontal: space.xl, gap: 12 }}>
                 {spot.similar_spots.map((s: any) => (
-                  <SpotCard key={s.spot_id} spot={s} />
+                  <SpotCard key={s.spot_id} spot={s} width={240} />
                 ))}
               </ScrollView>
             </>
