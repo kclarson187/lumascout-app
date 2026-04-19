@@ -13,7 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { LogOut, Settings, BarChart3, Crown, Check, Edit3 } from 'lucide-react-native';
+import { LogOut, Settings, BarChart3, Crown, Check, Edit3, Store } from 'lucide-react-native';
 import { useAuth } from '../../src/auth';
 import { api, formatApiError } from '../../src/api';
 import { colors, font, space, radii, SHOOT_TYPES } from '../../src/theme';
@@ -98,6 +98,9 @@ export default function Profile() {
           />
         </View>
         <View style={[styles.topBar, { marginTop: -60 }]}>
+          <TouchableOpacity onPress={() => router.push('/settings')} style={styles.iconBtn} testID="profile-settings">
+            <Settings size={18} color={colors.text} />
+          </TouchableOpacity>
           <TouchableOpacity onPress={() => setEditMode(!editMode)} style={styles.iconBtn} testID="profile-edit">
             <Edit3 size={18} color={colors.text} />
           </TouchableOpacity>
@@ -173,6 +176,10 @@ export default function Profile() {
             <BarChart3 size={18} color={colors.primary} />
             <Text style={styles.actionTxt}>Creator{'\n'}Dashboard</Text>
           </TouchableOpacity>
+          <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/marketplace')} testID="profile-marketplace">
+            <Store size={18} color={colors.primary} />
+            <Text style={styles.actionTxt}>Pack{'\n'}Marketplace</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/paywall')} testID="profile-paywall">
             <Crown size={18} color={colors.primary} />
             <Text style={styles.actionTxt}>{user.plan && user.plan !== 'free' ? `On ${user.plan}` : 'Upgrade'}{'\n'}{user.plan === 'elite' ? 'Creator' : 'to Pro'}</Text>
@@ -238,11 +245,11 @@ const styles = StyleSheet.create({
     margin: space.xl,
   },
   actionsRow: {
-    flexDirection: 'row', gap: 8, paddingHorizontal: space.xl, marginTop: space.xl,
+    flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: space.xl, marginTop: space.xl,
   },
   actionCard: {
-    flex: 1, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
-    padding: space.md, borderRadius: radii.md, gap: 6,
+    flexBasis: '48%', flexGrow: 1, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
+    padding: space.md, borderRadius: radii.md, gap: 6, minHeight: 80,
   },
   actionTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12, lineHeight: 16 },
   sectionTitle: { color: colors.text, fontFamily: font.display, fontSize: 22, letterSpacing: -0.3 },

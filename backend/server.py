@@ -912,6 +912,81 @@ async def create_report(body: ReportIn, user: dict = Depends(get_current_user)):
 # ============================================================================
 # Creator dashboard
 # ============================================================================
+@api.get("/me/billing")
+async def me_billing(user: dict = Depends(get_current_user)):
+    """Billing overview — usage, limits, invoices.
+    Note: Stripe is NOT wired yet. This endpoint returns a live snapshot of
+    usage + plan limits so the Billing screen can render honestly today.
+    """
+    plan = plan_of(user)
+    limits = limits_for(user)
+    # Live usage counts
+    saves = await db.spot_saves.count_documents({"user_id": user["user_id"]})
+    private_spots = await db.spots.count_documents({
+        "owner_user_id": user["user_id"],
+        "privacy_mode": {"$in": ["private", "followers", "invite_only"]},
+    })
+    collections = await db.collections.count_documents({"owner_user_id": user["user_id"]})
+    return {
+        "plan": plan,
+        "plan_status": "active" if plan != "free" else "free",
+        "renews_at": None,  # wired with Stripe
+        "payment_method": None,  # wired with Stripe
+        "invoices": [],
+        "usage": {
+            "saves": saves,
+            "private_spots": private_spots,
+            "collections": collections,
+        },
+        "limits": limits,
+    }
+
+
+@api.get("/me/trends")
+async def me_trends(days: int = 7, user: dict = Depends(get_current_user)):
+    """Activity trends — last N days of spots created + saves received on own spots."""
+    days = max(1, min(30, days))
+    now = utcnow()
+    start = now - timedelta(days=days - 1)
+    # Normalize start to midnight UTC
+    start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    own_spots = await db.spots.find(
+        {"owner_user_id": user["user_id"]}, {"_id": 0, "spot_id": 1, "created_at": 1}
+    ).to_list(2000)
+    own_spot_ids = [s["spot_id"] for s in own_spots]
+    saves = await db.spot_saves.find(
+        {"spot_id": {"$in": own_spot_ids}, "created_at": {"$gte": start}},
+        {"_id": 0, "created_at": 1},
+    ).to_list(5000) if own_spot_ids else []
+    # Bucket by day
+    buckets = []
+    for i in range(days):
+        day_start = start + datetime.timedelta(days=i)
+        day_end = day_start + datetime.timedelta(days=1)
+        spots_count = sum(
+            1 for s in own_spots
+            if s.get("created_at") and day_start <= s["created_at"] < day_end
+        )
+        saves_count = sum(
+            1 for s in saves
+            if s.get("created_at") and day_start <= s["created_at"] < day_end
+        )
+        buckets.append({
+            "date": day_start.strftime("%Y-%m-%d"),
+            "label": day_start.strftime("%a"),
+            "spots": spots_count,
+            "saves": saves_count,
+        })
+    return {
+        "days": days,
+        "series": buckets,
+        "totals": {
+            "spots": sum(b["spots"] for b in buckets),
+            "saves": sum(b["saves"] for b in buckets),
+        },
+    }
+
+
 @api.get("/me/dashboard")
 async def creator_dashboard(user: dict = Depends(get_current_user)):
     spots = await db.spots.find({"owner_user_id": user["user_id"]}, {"_id": 0}).to_list(500)
@@ -1047,6 +1122,42 @@ async def list_packs(published: Optional[bool] = True):
 @api.get("/me/packs")
 async def my_packs(user: dict = Depends(get_current_user)):
     return await db.spot_packs.find({"creator_user_id": user["user_id"]}, {"_id": 0}).sort("created_at", -1).to_list(100)
+
+
+@api.post("/packs/{pack_id}/purchase")
+async def purchase_pack(pack_id: str, user: dict = Depends(get_current_user)):
+    # Marketplace scaffolding — logs intent and returns a clear "coming soon" response.
+    pack = await db.spot_packs.find_one({"pack_id": pack_id}, {"_id": 0})
+    if not pack:
+        raise HTTPException(status_code=404, detail="Pack not found")
+    await db.pack_interest.insert_one({
+        "interest_id": f"intent_{uuid.uuid4().hex[:12]}",
+        "pack_id": pack_id,
+        "user_id": user["user_id"],
+        "status": "waitlist",
+        "created_at": utcnow(),
+    })
+    return {
+        "status": "waitlist",
+        "message": "Marketplace launches with Stripe next release. You're on the waitlist for this pack — we'll notify you the moment checkout opens.",
+        "pack_id": pack_id,
+    }
+
+
+@api.get("/packs/{pack_id}")
+async def get_pack(pack_id: str, viewer: Optional[dict] = Depends(get_optional_user)):
+    pack = await db.spot_packs.find_one({"pack_id": pack_id}, {"_id": 0})
+    if not pack:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not pack.get("published") and (not viewer or viewer["user_id"] != pack["creator_user_id"]):
+        raise HTTPException(status_code=403, detail="Pack not published")
+    creator = await db.users.find_one({"user_id": pack["creator_user_id"]}, {"_id": 0, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1})
+    pack["creator"] = creator
+    spots = await db.spots.find({"spot_id": {"$in": pack.get("spot_ids") or []}}, {"_id": 0}).to_list(500)
+    pack["spot_count"] = len(spots)
+    # Teaser preview only — full spot list locked until purchase when marketplace launches
+    pack["preview_spots"] = [public_spot_view(s, viewer) for s in spots[:3] if public_spot_view(s, viewer)]
+    return pack
 
 
 # ============================================================================

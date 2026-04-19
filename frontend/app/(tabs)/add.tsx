@@ -15,7 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii, SHOOT_TYPES, BEST_TIMES, PRIVACY_MODES } from '../../src/theme';
@@ -384,20 +384,59 @@ export default function AddSpot() {
             <View style={{ gap: space.lg }}>
               <Text style={styles.heading}>Privacy & sharing</Text>
               <Text style={styles.sub}>Control who can see this spot.</Text>
-              {PRIVACY_MODES.map((p) => (
-                <TouchableOpacity
-                  key={p.key}
-                  onPress={() => setDraft({ ...draft, privacy_mode: p.key })}
-                  style={[styles.privCard, draft.privacy_mode === p.key && styles.privCardActive]}
-                  testID={`privacy-${p.key}`}
-                >
+              {PRIVACY_MODES.map((p) => {
+                const isPremiumOption = p.key === 'premium';
+                const canPickPremium = user?.plan === 'elite';
+                const locked = isPremiumOption && !canPickPremium;
+                const active = draft.privacy_mode === p.key;
+                return (
+                  <TouchableOpacity
+                    key={p.key}
+                    onPress={() => {
+                      if (locked) {
+                        Alert.alert(
+                          'Elite plan required',
+                          'Premium spots are only available to Elite creators. Upgrade to list paid or subscription-only spots.',
+                          [
+                            { text: 'Not now', style: 'cancel' },
+                            { text: 'See plans', onPress: () => router.push('/paywall') },
+                          ]
+                        );
+                        return;
+                      }
+                      setDraft({ ...draft, privacy_mode: p.key });
+                    }}
+                    style={[styles.privCard, active && styles.privCardActive, locked && { opacity: 0.6 }]}
+                    testID={`privacy-${p.key}`}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Text style={{ color: colors.text, fontFamily: font.bodySemibold, fontSize: 15 }}>{p.label}</Text>
+                        {isPremiumOption && (
+                          <View style={styles.elitePill}>
+                            <Text style={styles.elitePillTxt}>ELITE</Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 4 }}>{p.help}</Text>
+                    </View>
+                    {active && <Check size={20} color={colors.primary} />}
+                  </TouchableOpacity>
+                );
+              })}
+
+              {draft.privacy_mode === 'premium' && user?.plan !== 'elite' && (
+                <View style={styles.upgradeInline}>
+                  <Crown size={18} color={colors.primary} />
                   <View style={{ flex: 1 }}>
-                    <Text style={{ color: colors.text, fontFamily: font.bodySemibold, fontSize: 15 }}>{p.label}</Text>
-                    <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 4 }}>{p.help}</Text>
+                    <Text style={styles.upgradeInlineTitle}>Unlock Premium spots</Text>
+                    <Text style={styles.upgradeInlineBody}>Sell access or require subscribers. Available on the Elite plan.</Text>
                   </View>
-                  {draft.privacy_mode === p.key && <Check size={20} color={colors.primary} />}
-                </TouchableOpacity>
-              ))}
+                  <TouchableOpacity style={styles.upgradeBtn} onPress={() => router.push('/paywall')}>
+                    <Text style={styles.upgradeBtnTxt}>Upgrade</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
 
               <Text style={styles.subSectionLabel}>Coordinate display</Text>
               <View style={styles.chipRow}>
@@ -535,6 +574,23 @@ const styles = StyleSheet.create({
     gap: space.md,
   },
   privCardActive: { borderColor: colors.primary, backgroundColor: 'rgba(245,166,35,0.08)' },
+  elitePill: {
+    backgroundColor: colors.primary, paddingHorizontal: 6, paddingVertical: 2,
+    borderRadius: radii.sm,
+  },
+  elitePillTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.5 },
+  upgradeInline: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    padding: space.md, borderRadius: radii.md,
+    borderColor: colors.primary, borderWidth: 1, backgroundColor: 'rgba(245,166,35,0.06)',
+  },
+  upgradeInlineTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
+  upgradeInlineBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2 },
+  upgradeBtn: {
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: radii.pill,
+    backgroundColor: colors.primary,
+  },
+  upgradeBtnTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 12 },
   ratingDot: {
     width: 44, height: 44, borderRadius: 22,
     backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,

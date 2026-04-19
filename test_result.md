@@ -101,3 +101,149 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: |
+  PhotoScout — Creator Economy & Monetization wiring.
+  Hook newly created Settings/Billing/Creator Packs/Marketplace screens into the app
+  navigation; add a 7-day activity trend chart and "Earnings (coming soon)" tile to the
+  Creator Dashboard; gate the Premium privacy mode behind the Elite plan in the Add Spot flow.
+
+backend:
+  - task: "GET /api/me/billing — billing overview with plan, usage, limits"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Returns plan, plan_status, invoices=[], usage (saves/private_spots/collections), and full limits dict. Stripe-ready shape. Requires authenticated user."
+        -working: true
+        -agent: "testing"
+        -comment: "PASS. Auth required (401 without bearer). For sophie (free) returned plan='free', plan_status='free', invoices=[], renews_at=null, payment_method=null, limits.saves=20, limits.private_spots=3, limits.collections=3, limits.advanced_filters=false, limits.sell_packs=false, and integer usage fields. NOTE: sophie's plan in DB had been mutated to 'pro' by an earlier test session; testing agent reset it back to 'free' via POST /api/me/upgrade {plan:'free'} so the spec assertions hold. The endpoint itself behaved correctly under both states."
+
+  - task: "GET /api/me/trends?days=7 — daily spots/saves series for Creator Dashboard"
+    implemented: true
+    working: false
+    file: "/app/backend/server.py"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Buckets own spots + saves received by UTC day. Clamps days 1..30, defaults 7. Returns series[{date,label,spots,saves}] plus totals."
+        -working: false
+        -agent: "testing"
+        -comment: "FAIL — 500 Internal Server Error on every authenticated call (days=7, days=0, days=100). Backend log: AttributeError: type object 'datetime.datetime' has no attribute 'timedelta' at server.py line 964. The imports at the top of server.py are `from datetime import datetime, timezone, timedelta` — `timedelta` is already imported as a top-level name, so `datetime.timedelta(days=i)` is invalid. Fix: replace both occurrences in me_trends() with bare `timedelta(days=i)` (lines 964 and 965). Auth-required check (401 without bearer) DOES pass — failure is purely the bucket-loop bug."
+
+  - task: "Existing: /api/me/dashboard, /api/packs, /api/me/packs, /api/packs/{id}/purchase — regression"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "No signature changes in this iteration; re-verify they still return 200 for auth'd users. /packs/{id}/purchase should enqueue pack_interest and return waitlist message."
+        -working: true
+        -agent: "testing"
+        -comment: "PASS. /api/me/dashboard returns total_spots, public_spots, private_spots, saves_received, reviews_received, followers, top_spots[]. /api/me/spots returns 200 list. /api/packs?published=true returns 200 array (3 published packs in DB). /api/me/packs returns 200 list. /api/packs/{valid_id}/purchase returns status='waitlist' with the expected coming-soon message. /api/packs/{bogus}/purchase correctly returns 404."
+
+frontend:
+  - task: "Profile tab — Settings + Marketplace navigation entry points"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(tabs)/profile.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Added Settings gear in top bar → /settings. Added Marketplace action card → /marketplace. Actions row now wraps (flexWrap) for admin + 3 core cards."
+
+  - task: "Creator Dashboard — 7-day trend chart + earnings tile + pack entry"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/creator-dashboard.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "New inline SVG line chart (react-native-svg) showing 7-day saves + spot creations. 'Earnings $0 — COMING SOON' tile. CTA row with 'Manage spot packs' → /creator/packs."
+
+  - task: "Add Spot — Elite gating on Premium privacy mode"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(tabs)/add.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Premium option tagged with ELITE pill, locked for non-elite users with alert → paywall. Inline upgrade prompt if plan < elite while premium is selected."
+
+metadata:
+  created_by: "main_agent"
+  version: "1.1"
+  test_sequence: 1
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "GET /api/me/billing — billing overview with plan, usage, limits"
+    - "GET /api/me/trends?days=7 — daily spots/saves series for Creator Dashboard"
+    - "Existing: /api/me/dashboard, /api/packs, /api/me/packs, /api/packs/{id}/purchase — regression"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Added two new backend endpoints for the Creator Economy wiring:
+      1) GET /api/me/billing — returns plan/plan_status/invoices/usage/limits. No Stripe wired; invoices is always []
+         and renews_at/payment_method are null until Stripe ships.
+      2) GET /api/me/trends?days=7 — returns a per-day series of {spots_created, saves_received_on_own_spots}
+         plus totals. Clamped 1..30.
+
+      Please validate:
+      - Both endpoints require auth (401 when missing bearer token).
+      - /me/billing returns plan="free" with limits.saves=20 for a fresh user.
+      - /me/trends returns exactly 7 buckets with ISO dates (YYYY-MM-DD) and short day labels.
+      - Regression: /me/dashboard, /me/spots, /packs (published), /me/packs, /packs/{id}/purchase still return 200.
+
+      Credentials: see /app/memory/test_credentials.md.
+      Use sophie@photoscout.app / demo123 for a standard user and admin@photoscout.app / admin123 for admin.
+
+    -agent: "testing"
+    -message: |
+      Backend test pass: 10/13 checks pass. Two findings:
+
+      1) CRITICAL BUG in GET /api/me/trends — returns 500 on every call.
+         Root cause: server.py lines 964–965 use `datetime.timedelta(days=i)` and `day_start + datetime.timedelta(days=1)`,
+         but `datetime` is the *class* (imported via `from datetime import datetime, timezone, timedelta`),
+         not the module. AttributeError: type object 'datetime.datetime' has no attribute 'timedelta'.
+         Fix: use bare `timedelta(days=i)` and `timedelta(days=1)` — `timedelta` is already imported at the top.
+         Auth-required guard works (401 when no bearer); only the bucket loop is broken.
+
+      2) MINOR / data-state: sophie@photoscout.app's plan was "pro" in DB (not "free" as documented).
+         Likely mutated by a prior test run via /api/me/upgrade. I reset her back to "free" via
+         POST /api/me/upgrade {"plan":"free"} and re-verified /api/me/billing returns the spec-exact
+         shape: plan="free", plan_status="free", invoices=[], renews_at=null, payment_method=null,
+         limits {saves:20, private_spots:3, collections:3, advanced_filters:false, sell_packs:false},
+         usage with integer fields. Endpoint behavior was correct in both states; just flagging the
+         seed-vs-state mismatch in case main_agent wants seed_demo_content to enforce free on each boot.
+
+      Regressions all green: /api/me/dashboard, /api/me/spots, /api/packs?published=true,
+      /api/me/packs, /api/packs/{id}/purchase (waitlist + 404 for bogus id).
+
+      ACTION: fix the two `datetime.timedelta` references in me_trends() and re-run the trends portion.
