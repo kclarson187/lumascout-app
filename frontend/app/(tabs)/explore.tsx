@@ -22,18 +22,10 @@ import SpotCard from '../../src/components/SpotCard';
 import { Chip, EmptyState } from '../../src/components/ui';
 import { Button } from '../../src/components/Button';
 
-// Native-only map. The require() argument is computed so Metro's static
-// analyzer can't trace the package into the web bundle (react-native-maps
-// pulls in native-only codegen helpers that crash web bundling).
-let MapView: any, Marker: any;
-if (Platform.OS !== 'web') {
-  try {
-    const _load: any = require;
-    const maps = _load(['react-native', 'maps'].join('-'));
-    MapView = maps.default;
-    Marker = maps.Marker;
-  } catch {}
-}
+// Native-only map. The actual react-native-maps module is isolated in a tiny
+// wrapper that has a web stub so Metro never pulls native-only deps into the
+// web bundle (otherwise codegenNativeCommands crashes the web build).
+import { MapView, Marker } from '../../src/components/maps-module';
 
 type Filters = {
   shoot_type?: string;
