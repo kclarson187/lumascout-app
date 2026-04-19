@@ -31,10 +31,14 @@ export default function MapPickerSheet({
   const mapRef = useRef<any>(null);
 
   // Lazy-load maps the first time the sheet becomes visible.
+  // The require() path is obfuscated via a variable so Metro's static analyzer
+  // won't trace react-native-maps on the web bundle (it has native-only deps).
   useEffect(() => {
     if (!visible || mapsMod || mapsFailed || Platform.OS === 'web') return;
     try {
-      const mod = require('react-native-maps');
+      const pkgName = ['react-native', 'maps'].join('-');
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const mod = require(pkgName);
       setMapsMod({ MapView: mod.default, Marker: mod.Marker });
     } catch {
       setMapsFailed(true);

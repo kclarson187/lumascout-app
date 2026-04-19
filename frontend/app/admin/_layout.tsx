@@ -88,6 +88,7 @@ export default function AdminLayout() {
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        style={styles.tabsStripScroll}
         contentContainerStyle={styles.tabsStrip}
       >
         {visibleTabs.map((t) => {
@@ -128,12 +129,13 @@ const styles = StyleSheet.create({
     borderColor: colors.primary, borderWidth: 1, backgroundColor: 'rgba(245,166,35,0.12)',
   },
   roleBadgeTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.5 },
+  tabsStripScroll: { flexGrow: 0, flexShrink: 0, maxHeight: 44 },
   tabsStrip: {
-    paddingHorizontal: space.xl, paddingBottom: space.sm, gap: 8,
+    paddingHorizontal: space.xl, paddingBottom: space.sm, gap: 8, alignItems: 'center',
   },
   tab: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 12, paddingVertical: 7, borderRadius: radii.pill,
+    height: 30, paddingHorizontal: 12, borderRadius: radii.pill,
     backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
   },
   tabActive: { backgroundColor: colors.primary, borderColor: colors.primary },
