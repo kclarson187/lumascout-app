@@ -19,6 +19,66 @@ user_problem_statement: |
   /community/compose, /community/post/[id], /messages inbox and thread.
 
 backend:
+  - task: "POST /api/billing/checkout — Stripe Checkout Session (subscription mode) for Pro/Elite"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Uses raw stripe SDK with STRIPE_API_KEY. Products+Prices are bootstrapped on startup via lookup_keys ('pro_monthly', 'elite_monthly'). Creates Stripe Customer lazily, stores stripe_customer_id on user doc. Returns {url, session_id}. Also inserts a payment_transactions record with status='initiated'. success_url includes {CHECKOUT_SESSION_ID} placeholder. Rejects invalid plan with 400; requires auth (401)."
+        -working: true
+        -agent: "testing"
+        -comment: "ALL 6 checkout cases PASS (backend_test_phase_e.py). (1) POST /api/billing/checkout {plan:'pro'} as sophie → 200 with url=https://checkout.stripe.com/c/pay/cs_test_b1MMWFL45f3L02Lcsa... and session_id starting cs_test_. (2) {plan:'elite'} → 200 with a DIFFERENT session_id (cs_test_b1v7TI...). (3) {plan:'gold'} → 400 {detail:\"plan must be 'pro' or 'elite'\"}. (4) No auth → 401. (5) Sophie's user doc now has stripe_customer_id='cus_UMm5D2DXAbStB2' (starts cus_). (6) payment_transactions collection has a row for the pro session with status='initiated', user_id=sophie, currency='usd'. Endpoint is fully working against real sk_test_ key; price IDs price_1TO2RiAxyoRaRJ7bM7HSUvXq (pro) and price_1TO2RjAxyoRaRJ7b48OzdcoK (elite) bootstrapped successfully on startup."
+
+  - task: "POST /api/billing/portal — Stripe Customer Portal session (manage/cancel/invoices)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Returns {url} for a Customer Portal session. Creates customer lazily if missing (so first-time users can still open portal to enter a payment method). Requires auth."
+        -working: true
+        -agent: "testing"
+        -comment: "ALL 4 portal cases PASS. (1) POST /api/billing/portal as sophie → 200 with url starting https://billing.stripe.com/p/session/test_... (2) No auth → 401. (3) Fresh registered user (qa.stripe.fresh.<uuid>@photoscout.app, never touched Stripe) → 200 with valid billing.stripe.com URL — customer is lazily created via _ensure_stripe_customer. (4) After the portal call the fresh user's Mongo doc now has stripe_customer_id='cus_UMm5jbcA7xg4uP' confirming lazy-create path works end-to-end."
+
+  - task: "GET /api/billing/status — plan, renewal date, payment method, invoices"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Returns {plan, billing_status, renewal_date, canceled_at, cancel_at_period_end, payment_failed_at, payment_method{brand,last4,exp_*}, invoices[up to 10]}. Safe for users without Stripe customer (returns base fields only). Comp plans surface billing_status='comp'. Never 500s on transient Stripe errors."
+        -working: true
+        -agent: "testing"
+        -comment: "ALL 3 billing/status cases PASS. (1) As sophie → 200 with every documented key present: plan, billing_status, stripe_customer_id, stripe_subscription_id, renewal_date, canceled_at, cancel_at_period_end, payment_failed_at, payment_method, invoices (all 10). invoices is a list. (2) Brand-new user (no stripe activity) → 200, payment_method=null, invoices=[], stripe_customer_id=null — NO 500. (3) No auth → 401. Endpoint correctly short-circuits the Stripe retrieve calls for users without a customer_id."
+
+  - task: "POST /api/webhook/stripe — subscription lifecycle events"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Mounted on raw app (not /api router) to preserve raw body for signature verification. Handles checkout.session.completed (link customer/mark paid), customer.subscription.{created,updated} (apply plan + renewal_date + billing_status), customer.subscription.deleted (downgrade to free), invoice.payment_failed (set payment_failed_at + billing_status=past_due), invoice.paid (clear payment_failed_at). If STRIPE_WEBHOOK_SECRET is unset, accepts raw JSON as test-mode convenience. Records every event in stripe_events collection."
+        -working: true
+        -agent: "testing"
+        -comment: "ALL 7 webhook cases PASS. Endpoint is correctly mounted at POST /api/webhook/stripe on the raw app (not /api router). STRIPE_WEBHOOK_SECRET unset → accepts raw JSON. (1) customer.subscription.updated with customer=sophie's cus_*, status='active', items.data[0].price.id=price_1TO2RiAxyoRaRJ7bM7HSUvXq, current_period_end=4102444800, metadata.user_id=sophie → 200 {received:true, type:'customer.subscription.updated'}; sophie's user doc now has plan='pro', billing_status='active', renewal_date=2100-01-01. (2) invoice.payment_failed with customer=sophie's cus_* → 200; sophie's doc has payment_failed_at set AND billing_status='past_due'. (3) customer.subscription.deleted → 200; sophie's plan reverts to 'free' (billing_status remains 'canceled' from the _apply_subscription_to_user update — plan downgrade rule triggered). (4) Malformed JSON body 'this is not json {{{' → 400 {detail:'Invalid webhook: Expecting value: line 1 column 1 (char 0)'}. All events are persisted to stripe_events collection per the handler logic."
+
   - task: "GET /api/astronomy + /api/spots/{id}/astronomy — sunrise/sunset/golden-hour calculations"
     implemented: true
     working: true
@@ -312,9 +372,7 @@ metadata:
   run_ui: true
 
 test_plan:
-  current_focus:
-    - "Phase C — Post moderation: GET /api/admin/posts + DELETE + restore"
-    - "Phase C — Analytics: top_cities + top_contributors added to /api/admin/analytics"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -717,3 +775,97 @@ agent_communication:
       Full run: 25/25 cases PASS (backend_test_phase_d.py). Astronomy (7/7) and
       feed/home (5/5) were not retested per the review request scope — both
       previously passed and remain green. No action items remaining for backend.
+
+
+    -agent: "main"
+    -message: |
+      Phase E — Stripe Billing integration. Four new endpoints plus webhook need backend
+      validation. Please test ONLY the 4 new tasks at top of this file (billing/checkout,
+      billing/portal, billing/status, webhook/stripe). Historical items remain green, do not retest.
+
+      STRIPE_API_KEY is configured (real sk_test_... key from dashboard). Products & Prices
+      auto-bootstrap on startup. Expected price IDs will be logged in backend.out.log.
+
+      Creds: sophie@photoscout.app / demo123 (currently on pro from earlier tests — you may
+      want to reset her stripe_customer_id / subscription fields first via direct DB or ignore).
+      admin@photoscout.app / admin123 (super_admin).
+
+      1) POST /api/billing/checkout (auth required)
+         - As sophie: POST {plan:"pro"} → 200 {url, session_id}. url starts with
+           https://checkout.stripe.com or https://billing.stripe.com. session_id starts with cs_test_.
+         - Body plan="elite" → 200, different session.
+         - Body plan="gold" → 400.
+         - No auth → 401.
+         - A payment_transactions document should be created (status='initiated').
+         - User doc should now have stripe_customer_id set (starts with cus_).
+
+      2) POST /api/billing/portal (auth required)
+         - As sophie: POST {} → 200 {url}. URL starts with https://billing.stripe.com.
+         - No auth → 401.
+         - For a NEW user who has never checked out, the endpoint still works (creates
+           customer lazily) → 200 {url}.
+
+      3) GET /api/billing/status (auth required)
+         - As sophie: 200 with keys: plan, billing_status, stripe_customer_id,
+           stripe_subscription_id, renewal_date, canceled_at, cancel_at_period_end,
+           payment_failed_at, payment_method, invoices.
+         - For a new user (no stripe): payment_method=null, invoices=[], plan='free',
+           billing_status=null, stripe_customer_id=null. Does NOT 500.
+         - No auth → 401.
+
+      4) POST /api/webhook/stripe (no auth — Stripe calls this with signed payload)
+         - Since STRIPE_WEBHOOK_SECRET is NOT set, the endpoint accepts raw JSON for testing.
+         - Simulate checkout.session.completed: POST JSON body
+           {"type":"checkout.session.completed","id":"evt_test_1","data":{"object":
+           {"id":"cs_test_...","customer":"<sophie's stripe_customer_id>",
+           "metadata":{"user_id":"<sophie's user_id>","plan":"pro"}}}}
+           → 200 {received:true, type:"checkout.session.completed"}
+         - Simulate customer.subscription.updated with status=active and
+           items.data[0].price.id matching the Pro price_id → 200.
+           Check sophie's user doc has plan='pro', billing_status='active',
+           renewal_date set (not null).
+         - Simulate invoice.payment_failed → user doc payment_failed_at gets set,
+           billing_status='past_due'.
+         - Simulate customer.subscription.deleted → user plan reverts to 'free'.
+         - Bad payload → 400.
+
+      Note: The checkout URL returned by /billing/checkout should be openable in a browser;
+      you don't need to actually complete a checkout to validate these endpoints.
+
+    -agent: "testing"
+    -message: |
+      Phase E — Stripe billing validation. 20/20 assertions PASS (backend_test_phase_e.py).
+      Historical items not retested per scope.
+
+      ✅ POST /api/billing/checkout (6/6)
+        - sophie + {plan:"pro"} → 200 {url:"https://checkout.stripe.com/c/pay/cs_test_b1MMWFL45f3L02Lcsa...", session_id:"cs_test_b1MMWFL45f3L02Lcsan13A"}.
+        - sophie + {plan:"elite"} → 200 with a different session_id (cs_test_b1v7TI...).
+        - sophie + {plan:"gold"} → 400 {detail:"plan must be 'pro' or 'elite'"}.
+        - no auth → 401.
+        - sophie's user doc now has stripe_customer_id="cus_UMm5D2DXAbStB2" (starts cus_).
+        - payment_transactions row inserted for the pro session with status="initiated", user_id=sophie, currency=usd.
+
+      ✅ POST /api/billing/portal (4/4)
+        - sophie → 200 {url:"https://billing.stripe.com/p/session/test_..."}.
+        - no auth → 401.
+        - NEW user (qa.stripe.fresh.<uuid>@photoscout.app, never touched Stripe) → 200 billing.stripe.com url; customer lazily created (fresh user's doc now has stripe_customer_id="cus_UMm5jbcA7xg4uP").
+
+      ✅ GET /api/billing/status (3/3)
+        - sophie → 200 with every documented key: plan, billing_status, stripe_customer_id, stripe_subscription_id, renewal_date, canceled_at, cancel_at_period_end, payment_failed_at, payment_method, invoices (all 10).
+        - brand-new user (no stripe) → 200, payment_method=null, invoices=[], stripe_customer_id=null — NO 500.
+        - no auth → 401.
+
+      ✅ POST /api/webhook/stripe (7/7) — mounted on raw app at /api/webhook/stripe. STRIPE_WEBHOOK_SECRET unset → accepts raw JSON.
+        - customer.subscription.updated (customer=sophie cus_*, status="active", items[0].price.id=price_1TO2RiAxyoRaRJ7bM7HSUvXq, current_period_end=4102444800, metadata.user_id=sophie) → 200; sophie plan="pro", billing_status="active", renewal_date=2100-01-01.
+        - invoice.payment_failed → 200; sophie payment_failed_at set + billing_status="past_due".
+        - customer.subscription.deleted → 200; sophie plan reverts to "free" (billing_status stays "canceled" per _apply_subscription_to_user path).
+        - malformed body "this is not json {{{" → 400 {detail:"Invalid webhook: Expecting value: line 1 column 1 (char 0)"}.
+
+      Stripe bootstrap on startup logged "[stripe] price map ready: {'pro':'price_1TO2RiAxyoRaRJ7bM7HSUvXq','elite':'price_1TO2RjAxyoRaRJ7b48OzdcoK'}". Real sk_test_ key accepted by Stripe API.
+
+      Side-effects from this test run (for main agent awareness):
+        - sophie's user doc now has stripe_customer_id set and was toggled plan=pro → past_due → free during the webhook path. She ends on plan='free', billing_status='canceled', payment_failed_at populated. If you want her back to clean state, a quick $unset of stripe/billing fields will do it.
+        - One throwaway user was created per run: qa.stripe.fresh.<uuid10>@photoscout.app (password StripeQA!2026). They have a real Stripe Customer attached. Cleanup is optional.
+
+      No action items. All 4 new Stripe endpoints are green.
+

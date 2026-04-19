@@ -3156,7 +3156,7 @@ class BillingCheckoutIn(BaseModel):
 
 
 @api.post("/billing/checkout")
-async def billing_checkout(body: BillingCheckoutIn, user: dict = Depends(get_current_user)):
+async def billing_checkout(body: BillingCheckoutIn, request: Request, user: dict = Depends(get_current_user)):
     """Create a Stripe Checkout Session (mode=subscription) and return the URL."""
     if not _stripe_ready():
         raise HTTPException(status_code=503, detail="Billing is not configured")
@@ -3171,10 +3171,17 @@ async def billing_checkout(body: BillingCheckoutIn, user: dict = Depends(get_cur
     if not price_id:
         raise HTTPException(status_code=503, detail="Stripe price not available")
 
+    # Prefer caller-supplied origin; fall back to the request's own base (works
+    # on web preview + production deployments). Strip trailing slash.
     origin = (body.origin_url or "").rstrip("/")
     if not origin or not origin.startswith(("http://", "https://")):
-        # Fallback: path-only — frontend will be fine; Stripe requires absolute.
-        origin = "https://photoscout.app"
+        origin = str(request.base_url).rstrip("/")
+        # Swap backend host (localhost:8001) for the public frontend URL when
+        # available via the Host header — Kubernetes ingress forwards 80/443
+        # to frontend by default, backend to /api.
+        fwd_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+        if fwd_host and "localhost" not in fwd_host:
+            origin = f"https://{fwd_host}"
 
     customer_id = await _ensure_stripe_customer(user)
 
