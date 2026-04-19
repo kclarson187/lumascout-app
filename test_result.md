@@ -126,11 +126,11 @@ backend:
 
   - task: "GET /api/me/trends?days=7 — daily spots/saves series for Creator Dashboard"
     implemented: true
-    working: false
+    working: true
     file: "/app/backend/server.py"
     stuck_count: 2
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
@@ -162,6 +162,24 @@ backend:
             (c) Force aware on read: `ca = s["created_at"].replace(tzinfo=timezone.utc) if s["created_at"].tzinfo is None else s["created_at"]`.
           Live results: PASS no-token→401, PASS login sophie, FAIL days=7 (500),
           FAIL days=0 (500), FAIL days=100 (500). Auth guard works; bucket loop still broken.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          PASS — 5/5 retest after tz-aware `_norm()` helper fix. The helper coerces
+          naive BSON created_at values to tz-aware UTC before comparing against
+          tz-aware day_start/day_end. Live results against
+          https://photo-finder-60.preview.emergentagent.com/api with sophie@photoscout.app:
+            ✅ GET /api/me/trends (no token) → 401 {"detail":"Not authenticated"}
+            ✅ POST /api/auth/login → 200, token len 204 (response uses `token` key, not `access_token`)
+            ✅ GET /api/me/trends?days=7 → 200, len(series)=7. Every bucket has
+               date matching /^\d{4}-\d{2}-\d{2}$/, label a 3-char weekday (e.g. "Mon"),
+               spots & saves are ints ≥ 0. totals.spots == sum(series.spots) == 27,
+               totals.saves == sum(series.saves) == 19. Sample bucket:
+               {"date":"2026-04-13","label":"Mon","spots":1,"saves":0}.
+            ✅ GET /api/me/trends?days=0 → 200, len(series)=1 (clamped to 1).
+            ✅ GET /api/me/trends?days=100 → 200, len(series)=30 (clamped to 30).
+          Backend log confirms 200 OK on all three authenticated calls; no TypeError.
+          Test script: /app/backend_test_trends.py.
 
   - task: "Existing: /api/me/dashboard, /api/packs, /api/me/packs, /api/packs/{id}/purchase — regression"
     implemented: true
@@ -286,6 +304,22 @@ agent_communication:
         ❌ GET /api/me/trends?days=7   → 500 Internal Server Error
         ❌ GET /api/me/trends?days=0   → 500 Internal Server Error
         ❌ GET /api/me/trends?days=100 → 500 Internal Server Error
+
+
+    -agent: "testing"
+    -message: |
+      Retest of GET /api/me/trends after tz-aware `_norm()` helper fix: 5/5 PASS.
+        ✅ GET /api/me/trends (no token) → 401 Not authenticated
+        ✅ POST /api/auth/login (sophie@photoscout.app / demo123) → 200, token returned
+           (NOTE: login response uses key `token`, not `access_token` — test updated accordingly)
+        ✅ GET /api/me/trends?days=7 → 200; len(series)==7; every bucket has
+           date matching YYYY-MM-DD, 3-char weekday label, integer spots/saves ≥ 0;
+           totals.spots == sum(bucket.spots) == 27, totals.saves == sum(bucket.saves) == 19.
+        ✅ GET /api/me/trends?days=0 → 200; len(series)==1 (clamped to 1).
+        ✅ GET /api/me/trends?days=100 → 200; len(series)==30 (clamped to 30).
+      Backend logs show 200 OK on all three authenticated calls; no TypeError.
+      Marking trends task working=true, needs_retesting=false. Test script at
+      /app/backend_test_trends.py.
 
       Root cause: `start` is built from `utcnow()` (returns tz-aware UTC) at lines 949–952,
       so `day_start` and `day_end` are aware. But Mongo-stored `created_at` on db.spots and
