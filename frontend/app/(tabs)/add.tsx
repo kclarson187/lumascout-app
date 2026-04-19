@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import * as Location from 'expo-location';
 import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown, AlertTriangle, Search, Map as MapIcon, Edit3, FileText } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
@@ -115,6 +116,9 @@ export default function AddSpot() {
   const [mapOpen, setMapOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [recent, setRecent] = useState<any[]>([]);
+  // Raw editable string for style tags so the user can freely type commas and
+  // spaces. We only split into an array when the input loses focus.
+  const [tagsText, setTagsText] = useState<string>('');
 
   useEffect(() => {
     (async () => {
@@ -254,16 +258,44 @@ export default function AddSpot() {
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
-      quality: 0.6,
-      base64: true,
+      quality: 1,
+      base64: false,
       selectionLimit: 6,
     });
     if (res.canceled) return;
-    const added = res.assets.map((a, i) => ({
-      image_url: a.base64 ? `data:image/jpeg;base64,${a.base64}` : a.uri,
-      is_cover: draft.images.length === 0 && i === 0,
-    }));
-    setDraft({ ...draft, images: [...draft.images, ...added].slice(0, 8) });
+
+    // Resize & compress each picked image so the final BSON doc stays well under
+    // MongoDB's 16MB hard cap. We cap width at 1280px and JPEG quality at 0.6
+    // which typically keeps each base64 payload under ~600KB.
+    const processed: { image_url: string; is_cover: boolean }[] = [];
+    for (let i = 0; i < res.assets.length; i++) {
+      const a = res.assets[i];
+      try {
+        const manipulated = await ImageManipulator.manipulateAsync(
+          a.uri,
+          [{ resize: { width: 1280 } }],
+          {
+            compress: 0.6,
+            format: ImageManipulator.SaveFormat.JPEG,
+            base64: true,
+          },
+        );
+        if (manipulated.base64) {
+          processed.push({
+            image_url: `data:image/jpeg;base64,${manipulated.base64}`,
+            is_cover: draft.images.length === 0 && processed.length === 0,
+          });
+        }
+      } catch (err) {
+        console.warn('Image compression failed, skipping photo', err);
+      }
+    }
+
+    if (processed.length === 0) {
+      Alert.alert('Could not process photos', 'Please try picking different images.');
+      return;
+    }
+    setDraft({ ...draft, images: [...draft.images, ...processed].slice(0, 8) });
   };
 
   const setCover = (idx: number) => {
@@ -596,10 +628,48 @@ export default function AddSpot() {
               <Text style={styles.subSectionLabel}>Style tags (e.g. Sunset, Urban, Wildflowers)</Text>
               <Input
                 placeholder="Comma separated tags"
-                value={draft.style_tags.join(', ')}
-                onChangeText={(t) => setDraft({ ...draft, style_tags: t.split(',').map((x) => x.trim()).filter(Boolean) })}
+                value={tagsText}
+                onChangeText={setTagsText}
+                onBlur={() => {
+                  const tags = tagsText.split(',').map((x) => x.trim()).filter(Boolean);
+                  // De-duplicate while preserving order
+                  const seen = new Set<string>();
+                  const unique: string[] = [];
+                  for (const t of tags) {
+                    const k = t.toLowerCase();
+                    if (!seen.has(k)) {
+                      seen.add(k);
+                      unique.push(t);
+                    }
+                  }
+                  setDraft({ ...draft, style_tags: unique });
+                  // Reflect the cleaned-up version back to the input
+                  setTagsText(unique.join(', '));
+                }}
+                autoCapitalize="none"
+                autoCorrect={false}
                 testID="add-tags"
               />
+              {draft.style_tags.length > 0 && (
+                <View style={[styles.chipRow, { marginTop: space.sm }]}>
+                  {draft.style_tags.map((tg) => (
+                    <View key={tg} style={styles.tagPill}>
+                      <Text style={styles.tagPillText}>#{tg}</Text>
+                      <TouchableOpacity
+                        onPress={() => {
+                          const nextTags = draft.style_tags.filter((x) => x !== tg);
+                          setDraft({ ...draft, style_tags: nextTags });
+                          setTagsText(nextTags.join(', '));
+                        }}
+                        style={styles.tagPillClose}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <X size={12} color={colors.textMuted} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              )}
             </View>
           )}
 
@@ -868,6 +938,26 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8, marginTop: 6,
   },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  tagPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  tagPillText: { color: colors.text, fontSize: font.size.sm, fontWeight: '600' },
+  tagPillClose: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bg,
+  },
   coordsCard: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     padding: space.md, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,

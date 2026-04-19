@@ -18,6 +18,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import DocumentTooLarge
 from pydantic import BaseModel, Field, EmailStr
 
 # ============================================================================
@@ -674,7 +675,13 @@ async def create_spot(body: SpotCreateIn, user: dict = Depends(get_current_user)
         "created_at": utcnow(),
         "updated_at": utcnow(),
     })
-    await db.spots.insert_one(doc)
+    try:
+        await db.spots.insert_one(doc)
+    except DocumentTooLarge:
+        raise HTTPException(
+            status_code=413,
+            detail="Your photos are too large to store together. Please remove a photo or re-add them so they can be compressed.",
+        )
     return public_spot_view(doc, user)
 
 
