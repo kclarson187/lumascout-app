@@ -1294,9 +1294,7 @@ async def get_platform_settings() -> dict:
 
 # --------------- Legacy simple admin endpoints (kept for compatibility) ------
 @api.get("/admin/pending")
-async def admin_pending(user: dict = Depends(get_current_user)):
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Forbidden")
+async def admin_pending(user: dict = Depends(require_role("moderator"))):
     pending = await db.spots.find({"visibility_status": "pending_review"}, {"_id": 0}).to_list(200)
     return [public_spot_view(s, user) for s in pending]
 
@@ -1340,9 +1338,7 @@ async def admin_reject(spot_id: str, user: dict = Depends(require_role("moderato
 
 
 @api.get("/admin/reports")
-async def admin_reports(status: Optional[str] = None, user: dict = Depends(get_current_user)):
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Forbidden")
+async def admin_reports(status: Optional[str] = None, user: dict = Depends(require_role("moderator"))):
     q: dict = {}
     if status:
         q["status"] = status

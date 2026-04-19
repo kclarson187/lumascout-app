@@ -262,11 +262,11 @@ backend:
 
   - task: "Existing admin endpoints — approve/reject/resolve now emit audit logs"
     implemented: true
-    working: false
+    working: true
     file: "/app/backend/server.py"
     stuck_count: 1
     priority: "medium"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
@@ -274,6 +274,9 @@ backend:
         -working: false
         -agent: "testing"
         -comment: "POST /admin/spots/{id}/approve → works for super_admin, audit 'spot.approve' entry created with target_id matching. POST /admin/reports/{id}/resolve {action:'dismissed'} → works, audit 'report.resolve.dismissed' entry exists. BUG: Legacy GET /admin/pending (line ~1296) and GET /admin/reports (line ~1342) STILL use the hardcoded check `user.get('role') != 'admin'` and therefore reject super_admin users with 403. Since admin@ is auto-promoted to super_admin on startup, these endpoints are effectively broken for the default admin account. The review request explicitly required GET /admin/pending to return an array for super_admin. FIX: replace the inline `if user.get('role') != 'admin'` guard with `Depends(require_role('moderator'))` on admin_pending and admin_reports (same pattern already used by admin_approve/admin_reject/admin_resolve_report)."
+        -working: true
+        -agent: "testing"
+        -comment: "Legacy regression retest PASSED. (1) super_admin GET /api/admin/pending → HTTP 200, returns [] (empty array, correct type). (2) super_admin GET /api/admin/reports?status=pending → HTTP 200, returns array of 18 pending reports with proper enrichment (reporter, target). (3) sophie GET /api/admin/pending → HTTP 403 {detail: 'Forbidden'}. (4) sophie GET /api/admin/reports → HTTP 403 {detail: 'Forbidden'}. All 4 expectations met — legacy endpoints now use proper role-based guard."
 
 frontend:
   - task: "admin/_layout.tsx — role-guarded layout with scrollable top tabs + role-based tab visibility"
