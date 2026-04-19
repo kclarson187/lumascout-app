@@ -1,11 +1,12 @@
 import React from 'react';
 import { View, Text, StyleSheet, Image, TouchableOpacity, Pressable, Platform } from 'react-native';
 import { router } from 'expo-router';
-import { Bookmark, Star, Shield, Lock, EyeOff, MapPin } from 'lucide-react-native';
+import { Bookmark, Star, Shield, Lock, EyeOff, MapPin, Sun } from 'lucide-react-native';
 import { colors, radii, space, font } from '../theme';
 import { api } from '../api';
 import FreshnessBadge from './FreshnessBadge';
 import VerifiedBadge from './VerifiedBadge';
+import { goldenHourLabel } from '../utils/sun';
 
 export type Spot = any;
 
@@ -90,6 +91,14 @@ export default function SpotCard({
         <View style={styles.overlayBottom}>
           <ScoreBadge score={spot.shoot_score || 0} />
           <FreshnessBadge freshness={spot.freshness} label={spot.freshness_label} variant="compact" />
+          {!!goldenHourLabel(spot.latitude, spot.longitude) && (
+            <View style={styles.goldenPill}>
+              <Sun size={10} color={colors.primary} />
+              <Text style={styles.goldenPillTxt} numberOfLines={1}>
+                {goldenHourLabel(spot.latitude, spot.longitude)}
+              </Text>
+            </View>
+          )}
         </View>
       </View>
 
@@ -101,7 +110,7 @@ export default function SpotCard({
         <View style={styles.metaRow}>
           <Text style={styles.city} numberOfLines={1}>
             {spot.city}, {spot.state}
-            {spot.distance_km != null ? ` · ${spot.distance_km}km` : ''}
+            {spot.distance_mi != null ? ` · ${spot.distance_mi} mi` : spot.distance_km != null ? ` · ${spot.distance_km} km` : ''}
           </Text>
         </View>
         <View style={styles.tagRow}>
@@ -161,6 +170,24 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flexWrap: 'wrap',
+  },
+  goldenPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(20,16,8,0.78)',
+    borderColor: 'rgba(245,166,35,0.55)',
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radii.pill,
+  },
+  goldenPillTxt: {
+    color: colors.primary,
+    fontFamily: font.bodyBold,
+    fontSize: 10,
+    letterSpacing: 0.3,
   },
   premiumBadge: {
     backgroundColor: colors.primary,

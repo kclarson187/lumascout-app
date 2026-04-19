@@ -17,6 +17,7 @@ import { Search, TrendingUp, MessageCircle, Users, HandHeart, BookOpen } from 'l
 import { LinearGradient } from 'expo-linear-gradient';
 import { api } from '../../src/api';
 import { useAuth } from '../../src/auth';
+import { useGps } from '../../src/hooks/useGps';
 import { colors, font, space, radii, QUICK_FILTERS } from '../../src/theme';
 import SpotCard from '../../src/components/SpotCard';
 import { SectionHeader, Chip, EmptyState } from '../../src/components/ui';
@@ -31,16 +32,22 @@ export default function Home() {
   const [refreshing, setRefreshing] = useState(false);
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [filterResults, setFilterResults] = useState<any[] | null>(null);
+  const { coords } = useGps();
 
   const load = useCallback(async () => {
     try {
-      const data = await api.get('/feed/home');
+      const params: any = {};
+      if (coords) {
+        params.lat = coords.latitude;
+        params.lng = coords.longitude;
+      }
+      const data = await api.get('/feed/home', Object.keys(params).length ? params : undefined);
       setFeed(data);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [coords]);
 
   useEffect(() => { load(); }, [load]);
 
