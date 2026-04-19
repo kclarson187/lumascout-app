@@ -19,6 +19,36 @@ user_problem_statement: |
   /community/compose, /community/post/[id], /messages inbox and thread.
 
 backend:
+  - task: "Support Hub — /api/support/faqs, /api/support/tickets, /api/me/support/tickets, admin reply/resolve"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "FAQs endpoint is public. /support/tickets (POST) accepts subject+body+category(general|bug|billing|abuse|feature). /me/support/tickets lists viewer's tickets. /admin/support/tickets lists all with filters (staff only). /admin/support/tickets/{id}/reply pushes a staff reply and flips status to pending. /admin/support/tickets/{id}/resolve marks resolved. Auth required on all non-FAQ endpoints; staff only on /admin routes."
+        -working: true
+        -agent: "testing"
+        -comment: "ALL 23 Support Hub assertions PASS (backend_test_phase_g.py). (1) GET /api/support/faqs public → 200 with items[] each {id,q,a}; works with or without auth header. (2) POST /api/support/tickets as sophie {subject:'Can\\'t upgrade to Pro from iOS', body, category:'billing'} → 200 with ticket_id starting sup_, status='open', user_id=sophie, replies=[]. (3) Empty subject/body → 400. (4) Invalid category coerces to 'general' (per impl). (5) No auth → 401. (6) GET /api/me/support/tickets as sophie includes new ticket; no-auth → 401; marco's inbox does NOT leak sophie's ticket (per-user scoping OK). (7) GET /api/admin/support/tickets as admin → 200 with items[] + counts{open,pending,resolved,closed}; ?category=billing filter returns only billing tickets. (8) sophie (non-staff) → 403; no-auth → 401. (9) POST /admin/support/tickets/{id}/reply → 200 {ok:true, reply:{from:'staff',...}}; ticket.status flips to 'pending' with 1 reply appended. Sophie → 403 on reply; empty body → 400; bogus ticket_id → 404. (10) POST /admin/support/tickets/{id}/resolve → 200; ticket.status='resolved' verified from user's inbox. Bogus id → 404; sophie (non-staff) → 403."
+
+  - task: "Local Groups — create/list/get, join/leave, members, posts, group-scoped posts"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "POST /groups creates a chapter (owner auto-joins as 'owner'). GET /groups supports q, city, specialty, mine filters. GET /groups/{id} hydrates member_count, post_count, is_member, my_role for viewer. POST/DELETE /groups/{id}/join toggles membership (owner can't leave). GET /groups/{id}/members + GET /groups/{id}/posts. Community post composer accepts optional group_id — must be a member (403) if specified."
+        -working: true
+        -agent: "testing"
+        -comment: "ALL 23 Local Groups assertions PASS (backend_test_phase_g.py). (1) POST /api/groups as sophie {name:'Austin Family Photographers QA <uuid>', city:'Austin', ...} → 200 with group_id starting grp_, owner_user_id=sophie, member_count=1, post_count=0, is_member=true, my_role='owner' (owner auto-join confirmed). (2) Name <3 chars → 400; duplicate name+city → 409; no auth → 401. (3) GET /api/groups lists the new group; ?q=<suffix> finds it; ?city=Austin filters; ?mine=true (marco) excludes non-member group. (4) GET /api/groups/{id} as marco → 200 with is_member=false; bogus id → 404. (5) POST /api/groups/{id}/join (marco) → 200 with is_member=true, my_role='member'; repeat join idempotent (member_count stays 2, no duplicate member). (6) ?mine=true now includes group for marco. (7) GET /api/groups/{id}/members → 200 count=2 with sophie=owner + marco=member and profile hydrated (username/avatar/etc). (8) POST /api/posts with group_id as marco (member) → 200; GET /api/groups/{id}/posts returns the new post with author hydrated. (9) POST /api/posts with group_id as admin (NOT a member) → 403 'Join the group to post in it'. (10) POST /api/posts with bogus group_id → 404. (11) Owner DELETE /groups/{id}/join → 400 ('Owner cannot leave — transfer ownership first'). (12) Marco DELETE /join → 200 with is_member=false, member_count=1. (13) After leaving, marco POST /api/posts with that group_id → 403 (membership gate re-enforced). (14) Leave bogus group → 404. (15) GET /api/groups no auth → 401."
+
   - task: "POST/DELETE /api/posts/{id}/vote — poll voting with per-user tracking"
     implemented: true
     working: true
@@ -981,6 +1011,54 @@ agent_communication:
 
       1) POST /api/posts (poll) + POST/DELETE /api/posts/{id}/vote
          - As sophie: POST /posts {category:"poll",title:"Fav lens?",poll_options:["35mm","50mm","85mm"]} → 200 with poll={options:[3x{index,text,votes:0}], total_votes:0}
+
+    -agent: "main"
+    -message: |
+      Phase G — validate 2 new groups of endpoints (Support Hub + Local Groups).
+      Historical items green, skip.
+
+      Creds:
+        sophie@photoscout.app / demo123  (Austin TX, pro)
+        marco@photoscout.app / demo123   (free tier)
+        admin@photoscout.app / admin123  (super_admin)
+
+      SUPPORT HUB
+      1) GET /api/support/faqs → 200 {items:[...]} public, no auth. Each item has id, q, a.
+      2) POST /api/support/tickets (as sophie) {subject:"Billing question",body:"...",category:"billing"}
+         → 200 {ticket_id:"sup_...", user_id, subject, body, category:"billing", status:"open", replies:[]}
+      3) GET /api/me/support/tickets → 200 {items:[...]}, includes the ticket just created.
+      4) GET /api/admin/support/tickets (as admin) → 200 {items, counts{open,pending,resolved,closed}}.
+         - As non-staff user → 403.
+      5) POST /api/admin/support/tickets/{id}/reply (as admin) {body:"We'll check."}
+         → 200 {ok:true, reply:{from:"staff", body:..., created_at}}. Ticket status flips to "pending".
+         - GET /me/support/tickets as sophie → her ticket has replies[0].body === "We'll check."
+      6) POST /api/admin/support/tickets/{id}/resolve → 200, status → "resolved".
+      7) Bogus ticket id on reply/resolve → 404.
+      8) No auth on /support/tickets POST → 401.
+      9) Empty subject on POST → 400.
+
+      LOCAL GROUPS
+      1) POST /api/groups (as sophie) {name:"Test Austin Group",city:"Austin",state:"TX",specialties:["Test"]}
+         → 200 group. member_count=1, is_member=true, my_role="owner".
+      2) POST /api/groups with same name+city as existing group → 409.
+      3) POST /api/groups with name="ab" → 400 (too short).
+      4) GET /api/groups → 200 {items:[...]}. Should include at least 5 groups (4 seed + new one).
+      5) GET /api/groups?q=Austin → items all have "Austin" in name or tagline.
+      6) GET /api/groups?city=Austin → items filtered to Austin.
+      7) GET /api/groups?mine=true (as marco) → initially 0 or just his memberships.
+      8) GET /api/groups/{id} → full detail. For sophie on her own group, is_member=true, my_role="owner".
+         Bogus id → 404.
+      9) POST /api/groups/{id}/join (as marco) → 200, now is_member=true, my_role="member", member_count=2.
+      10) GET /api/groups/{id}/members → 200 {items:[...]}, includes sophie (owner) and marco. Each has profile hydrated.
+      11) POST /api/posts {category:"win",title:"Hi group",group_id:"<id>"} (as marco, who is now member) → 200.
+      12) POST /api/posts {category:"win",title:"Intruder",group_id:"<id>"} as a non-member (create a throwaway) → 403.
+      13) POST /api/posts {...,group_id:"grp_bogus"} → 404.
+      14) GET /api/groups/{id}/posts → 200 items contains marco's group post.
+      15) DELETE /api/groups/{id}/join (as sophie the owner) → 400 "Owner cannot leave".
+      16) DELETE /api/groups/{id}/join (as marco) → 200, he's no longer member.
+
+      Create /app/backend_test_phase_g.py. Update only the 2 new tasks' status_history.
+
          - POST /posts/{pid}/vote {option_index:1} → 200, poll.options[1].votes=1, total_votes=1, my_vote_index=1
          - Same user POST /posts/{pid}/vote {option_index:2} → 200, options[1].votes back to 0, options[2].votes=1, total_votes still 1 (vote reassigned)
          - As marco POST /posts/{pid}/vote {option_index:2} → total_votes=2

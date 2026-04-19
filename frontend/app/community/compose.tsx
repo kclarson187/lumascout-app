@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Alert, Image, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { X, Check, Image as ImageIcon, Sparkles } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { api, formatApiError } from '../../src/api';
@@ -24,6 +24,8 @@ const CATEGORIES: { k: string; label: string; hint: string; placeholder: string 
 
 export default function Compose() {
   const { user } = useAuth();
+  const params = useLocalSearchParams<{ group_id?: string }>();
+  const groupId = params.group_id ? String(params.group_id) : null;
   const [category, setCategory] = useState('win');
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -57,6 +59,7 @@ export default function Compose() {
       if (category === 'poll') {
         payload.poll_options = pollOptions.map((o) => o.trim()).filter(Boolean);
       }
+      if (groupId) payload.group_id = groupId;
       await api.post('/posts', payload);
       Alert.alert('Posted!', 'Your post is live in the community.', [
         { text: 'OK', onPress: () => router.replace('/community') },

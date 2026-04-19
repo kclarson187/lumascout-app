@@ -38,6 +38,7 @@ import {
   Handshake,
   GraduationCap,
   MessageCircle,
+  HelpCircle,
 } from 'lucide-react-native';
 import { useAuth } from '../../src/auth';
 import { api, formatApiError } from '../../src/api';
@@ -423,6 +424,10 @@ export default function Profile() {
                 {plan !== 'free' ? `${planLabel}` : 'Upgrade'}{'\n'}
                 {plan !== 'free' ? 'Manage billing' : 'to Pro'}
               </Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/support')} testID="profile-support">
+              <HelpCircle size={18} color={colors.text} />
+              <Text style={styles.actionTxt}>Help &{'\n'}Support</Text>
             </TouchableOpacity>
             {isStaff && (
               <TouchableOpacity style={[styles.actionCard, styles.adminCard]} onPress={() => router.push('/admin')} testID="profile-admin">
