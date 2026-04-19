@@ -65,17 +65,22 @@ export default function Community() {
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
           <Text style={styles.kicker}>Community</Text>
-          <Text style={styles.title}>Photographers helping{'\n'}photographers</Text>
+          <Text style={styles.title} numberOfLines={1}>Photographers</Text>
         </View>
         <TouchableOpacity onPress={() => router.push('/messages')} style={styles.iconBtn} testID="community-messages">
           <MessageCircle size={20} color={colors.text} />
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => router.push('/community/compose')} style={[styles.iconBtn, { backgroundColor: colors.primary, borderRadius: 18 }]} testID="community-compose">
+        <TouchableOpacity onPress={() => router.push('/community/compose')} style={styles.composeBtn} testID="community-compose">
           <Plus size={18} color={colors.textInverse} />
         </TouchableOpacity>
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabStrip}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.tabStripScroll}
+        contentContainerStyle={styles.tabStrip}
+      >
         {TABS.map((t) => (
           <TouchableOpacity
             key={t.k}
@@ -189,8 +194,10 @@ const styles = StyleSheet.create({
   kicker: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase' },
   title: { color: colors.text, fontFamily: font.display, fontSize: 22, lineHeight: 27, letterSpacing: -0.3 },
   iconBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  tabStrip: { paddingHorizontal: space.xl, paddingBottom: space.sm, gap: 6 },
-  tab: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
+  composeBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: colors.primary },
+  tabStripScroll: { flexGrow: 0, flexShrink: 0, maxHeight: 44 },
+  tabStrip: { paddingHorizontal: space.xl, paddingBottom: space.sm, gap: 6, alignItems: 'center' },
+  tab: { height: 30, paddingHorizontal: 12, justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
   tabActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   tabTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
   tabTxtActive: { color: colors.textInverse, fontFamily: font.bodySemibold },

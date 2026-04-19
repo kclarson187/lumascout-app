@@ -22,12 +22,17 @@ import SpotCard from '../../src/components/SpotCard';
 import { Chip, EmptyState } from '../../src/components/ui';
 import { Button } from '../../src/components/Button';
 
-// Native-only map
+// Native-only map. The require() argument is computed so Metro's static
+// analyzer can't trace the package into the web bundle (react-native-maps
+// pulls in native-only codegen helpers that crash web bundling).
 let MapView: any, Marker: any;
 if (Platform.OS !== 'web') {
-  const maps = require('react-native-maps');
-  MapView = maps.default;
-  Marker = maps.Marker;
+  try {
+    const _load: any = require;
+    const maps = _load(['react-native', 'maps'].join('-'));
+    MapView = maps.default;
+    Marker = maps.Marker;
+  } catch {}
 }
 
 type Filters = {
@@ -146,7 +151,8 @@ export default function Explore() {
             <FlatList
               data={filtered}
               keyExtractor={(i) => i.spot_id}
-              contentContainerStyle={{ padding: space.xl, gap: space.md, paddingBottom: 100 }}
+              contentContainerStyle={{ paddingVertical: space.md, paddingHorizontal: 0, paddingBottom: 100 }}
+              ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
               renderItem={({ item }) => (
                 <SpotCard spot={item} width={undefined as any} testID={`list-spot-${item.spot_id}`} />
               )}
