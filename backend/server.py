@@ -958,6 +958,17 @@ async def me_trends(days: int = 7, user: dict = Depends(get_current_user)):
         {"spot_id": {"$in": own_spot_ids}, "created_at": {"$gte": start}},
         {"_id": 0, "created_at": 1},
     ).to_list(5000) if own_spot_ids else []
+
+    def _norm(dt):
+        """Coerce stored datetime to tz-aware UTC so comparisons are consistent.
+        Mongo/BSON may return tz-naive values on some drivers — treat those as UTC.
+        """
+        if not dt:
+            return None
+        if getattr(dt, "tzinfo", None) is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
     # Bucket by day
     buckets = []
     for i in range(days):
@@ -965,11 +976,11 @@ async def me_trends(days: int = 7, user: dict = Depends(get_current_user)):
         day_end = day_start + timedelta(days=1)
         spots_count = sum(
             1 for s in own_spots
-            if s.get("created_at") and day_start <= s["created_at"] < day_end
+            if (d := _norm(s.get("created_at"))) and day_start <= d < day_end
         )
         saves_count = sum(
             1 for s in saves
-            if s.get("created_at") and day_start <= s["created_at"] < day_end
+            if (d := _norm(s.get("created_at"))) and day_start <= d < day_end
         )
         buckets.append({
             "date": day_start.strftime("%Y-%m-%d"),
