@@ -935,6 +935,20 @@ async def list_spots(
     fee_required: Optional[bool] = None,
     best_time_of_day: Optional[str] = None,
     min_rating: Optional[int] = None,
+    # ------ New photographer-specific filters (Priority #3) ----------------
+    min_parking_ease: Optional[int] = None,       # 1..5 (5 = easy, lots of spots)
+    max_walking_distance: Optional[int] = None,   # 1..5 (1 = trailhead; 5 = long hike)
+    max_crowd_level: Optional[int] = None,        # 1..5 (lower = less crowded)
+    best_season: Optional[str] = None,            # matches best_months item
+    hidden_gem: Optional[bool] = None,            # shoot_score >= 60 and low visit count
+    proven_spot: Optional[bool] = None,           # shoot_score >= 80 and images >= 3
+    verified_recently: Optional[bool] = None,     # verified in last 60 days
+    min_sunrise_strength: Optional[int] = None,   # 1..5
+    min_sunset_strength: Optional[int] = None,    # 1..5
+    min_morning_golden: Optional[int] = None,     # 1..5
+    min_evening_golden: Optional[int] = None,     # 1..5
+    min_variety: Optional[int] = None,            # 1..5 (background_variety / variety_rating)
+    # -----------------------------------------------------------------------
     q: Optional[str] = None,
     sort: str = "recent",  # recent, trending, golden_hour, score
     limit: int = 40,
@@ -966,6 +980,27 @@ async def list_spots(
         query["fee_required"] = fee_required
     if best_time_of_day:
         query["best_time_of_day"] = best_time_of_day
+    if best_season:
+        query["best_months"] = best_season
+    if min_parking_ease is not None:
+        query["parking_rating"] = {"$gte": int(min_parking_ease)}
+    if max_walking_distance is not None:
+        query["walk_rating"] = {"$lte": int(max_walking_distance)}
+    if max_crowd_level is not None:
+        query["crowd_level"] = {"$lte": int(max_crowd_level)}
+    if min_sunrise_strength is not None:
+        query["sunrise_quality"] = {"$gte": int(min_sunrise_strength)}
+    if min_sunset_strength is not None:
+        query["sunset_quality"] = {"$gte": int(min_sunset_strength)}
+    if min_morning_golden is not None:
+        query["morning_golden_hour_rating"] = {"$gte": int(min_morning_golden)}
+    if min_evening_golden is not None:
+        query["evening_golden_hour_rating"] = {"$gte": int(min_evening_golden)}
+    if min_variety is not None:
+        query["variety_rating"] = {"$gte": int(min_variety)}
+    if verified_recently:
+        cutoff = utcnow() - timedelta(days=60)
+        query["verified_at"] = {"$gte": cutoff}
     if q:
         query["$or"] = [
             {"title": {"$regex": q, "$options": "i"}},
@@ -979,6 +1014,11 @@ async def list_spots(
     out = [s for s in out if s is not None]
     if min_rating is not None:
         out = [s for s in out if s["shoot_score"] >= min_rating]
+    # Hidden gem / proven spot are derived flags on public view
+    if hidden_gem:
+        out = [s for s in out if s["shoot_score"] >= 60 and (s.get("save_count") or 0) < 5]
+    if proven_spot:
+        out = [s for s in out if s["shoot_score"] >= 80 and len(s.get("images") or []) >= 3]
 
     if sort == "score":
         out.sort(key=lambda s: s["shoot_score"], reverse=True)
