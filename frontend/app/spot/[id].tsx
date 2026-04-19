@@ -26,6 +26,9 @@ import SpotCard from '../../src/components/SpotCard';
 import { Button } from '../../src/components/Button';
 import { DetailSkeleton } from '../../src/components/Skeleton';
 import AddToCollectionSheet from '../../src/components/AddToCollectionSheet';
+import VerifiedBadge from '../../src/components/VerifiedBadge';
+import FreshnessBadge from '../../src/components/FreshnessBadge';
+import ReportSheet from '../../src/components/ReportSheet';
 
 const { width: W } = Dimensions.get('window');
 
@@ -37,6 +40,7 @@ export default function SpotDetail() {
   const [loading, setLoading] = useState(true);
   const [galleryIdx, setGalleryIdx] = useState(0);
   const [atcOpen, setAtcOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -73,16 +77,9 @@ export default function SpotDetail() {
     } catch {}
   };
 
-  const onReport = async () => {
-    Alert.alert('Report spot', 'This spot will be reviewed by admins.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Report', style: 'destructive', onPress: async () => {
-        try {
-          await api.post('/reports', { target_type: 'spot', target_id: id, reason: 'inappropriate' });
-          Alert.alert('Reported', 'Thanks — our team will take a look.');
-        } catch (e) { Alert.alert('Error', formatApiError(e)); }
-      } }
-    ]);
+  const onReport = () => {
+    if (!user) return router.push('/(auth)/login');
+    setReportOpen(true);
   };
 
   if (loading || !spot) {
@@ -140,12 +137,40 @@ export default function SpotDetail() {
         </View>
 
         <View style={styles.content}>
+          {spot.visibility_status === 'pending_review' && user?.user_id === spot.owner_user_id && (
+            <View style={styles.pendingBanner}>
+              <View style={styles.pendingDot} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.pendingTitle}>Pending moderation review</Text>
+                <Text style={styles.pendingBody}>
+                  Only you can see this spot. Our team reviews new public submissions to keep quality high — usually within 24h.
+                </Text>
+              </View>
+            </View>
+          )}
+          {spot.visibility_status === 'rejected' && user?.user_id === spot.owner_user_id && (
+            <View style={[styles.pendingBanner, { borderColor: colors.secondary, backgroundColor: 'rgba(208,72,72,0.08)' }]}>
+              <View style={[styles.pendingDot, { backgroundColor: colors.secondary }]} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.pendingTitle}>Submission rejected</Text>
+                <Text style={styles.pendingBody}>
+                  This spot didn't meet our public guidelines. It's private to you — edit and resubmit, or make it private/followers-only.
+                </Text>
+              </View>
+            </View>
+          )}
           <Text style={styles.title}>{spot.title}</Text>
           <View style={styles.metaRow}>
             <MapPin size={14} color={colors.textSecondary} />
             <Text style={styles.meta}>{spot.city}, {spot.state}</Text>
             {spot.distance_km != null && <Text style={styles.meta}>  ·  {spot.distance_km}km away</Text>}
           </View>
+
+          {(spot.freshness && spot.freshness !== 'unknown') && (
+            <View style={{ alignSelf: 'flex-start', marginTop: 6 }}>
+              <FreshnessBadge freshness={spot.freshness} label={spot.freshness_label} />
+            </View>
+          )}
 
           <View style={styles.tagRow}>
             {(spot.shoot_types || []).map((t: string) => (
@@ -168,8 +193,13 @@ export default function SpotDetail() {
                   <View style={[styles.ownerAvatar, { backgroundColor: colors.surface2 }]} />
                 )}
                 <View>
-                  <Text style={{ color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 }}>{spot.owner.name}</Text>
-                  <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 12 }}>Contributor</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={{ color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 }}>{spot.owner.name}</Text>
+                    <VerifiedBadge status={spot.owner.verification_status} variant="inline" size={14} />
+                  </View>
+                  <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 12 }}>
+                    {spot.owner.verification_status === 'verified' ? 'Verified contributor' : 'Contributor'}
+                  </Text>
                 </View>
               </TouchableOpacity>
               {user && user.user_id !== spot.owner.user_id && (
@@ -299,6 +329,13 @@ export default function SpotDetail() {
       )}
 
       <AddToCollectionSheet visible={atcOpen} onClose={() => setAtcOpen(false)} spotId={id} />
+      <ReportSheet
+        visible={reportOpen}
+        onClose={() => setReportOpen(false)}
+        targetType="spot"
+        targetId={id}
+        title={`Report "${spot.title}"`}
+      />
     </View>
   );
 }
@@ -424,4 +461,17 @@ const styles = StyleSheet.create({
   },
   actBtnPrimary: { backgroundColor: colors.primary, borderColor: colors.primary, flex: 1.4 },
   actTxt: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
+  pendingBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    padding: space.md, borderRadius: radii.md,
+    backgroundColor: 'rgba(245,166,35,0.08)',
+    borderColor: colors.primary, borderWidth: 1,
+    marginBottom: space.md,
+  },
+  pendingDot: {
+    width: 10, height: 10, borderRadius: 5, backgroundColor: colors.primary,
+    marginLeft: 4,
+  },
+  pendingTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
+  pendingBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17, marginTop: 2 },
 });

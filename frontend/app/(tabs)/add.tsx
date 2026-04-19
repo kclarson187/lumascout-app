@@ -15,7 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown, AlertTriangle } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii, SHOOT_TYPES, BEST_TIMES, PRIVACY_MODES } from '../../src/theme';
@@ -56,6 +56,16 @@ type Draft = {
   location_display_mode: string;
 };
 
+type DupCandidate = {
+  spot_id: string;
+  title: string;
+  city: string;
+  state: string;
+  distance_m: number;
+  title_similarity: number;
+  images?: { image_url: string }[];
+};
+
 const initialDraft: Draft = {
   images: [],
   title: '',
@@ -89,6 +99,31 @@ export default function AddSpot() {
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState<Draft>(initialDraft);
   const [submitting, setSubmitting] = useState(false);
+  const [dupCandidates, setDupCandidates] = useState<DupCandidate[]>([]);
+  const [dupChecking, setDupChecking] = useState(false);
+
+  // Debounced duplicate check whenever lat/lng/title changes
+  React.useEffect(() => {
+    if (draft.latitude == null || draft.longitude == null) {
+      setDupCandidates([]);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      setDupChecking(true);
+      try {
+        const r = await api.get('/spots/check-duplicates', {
+          latitude: draft.latitude,
+          longitude: draft.longitude,
+          title: draft.title || undefined,
+          radius_m: 200,
+        });
+        if (!cancelled) setDupCandidates(r?.candidates || []);
+      } catch { if (!cancelled) setDupCandidates([]); }
+      finally { if (!cancelled) setDupChecking(false); }
+    }, 400);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [draft.latitude, draft.longitude, draft.title]);
 
   if (!user) {
     return (
@@ -244,6 +279,47 @@ export default function AddSpot() {
                     <MapPin size={16} color={colors.primary} />
                     <Text style={{ color: colors.text, fontFamily: font.bodyMedium }}>{draft.locationLabel}</Text>
                   </View>
+                  {dupChecking && (
+                    <Text style={{ color: colors.textTertiary, fontFamily: font.body, fontSize: 12 }}>
+                      Checking for nearby spots…
+                    </Text>
+                  )}
+                  {dupCandidates.length > 0 && (
+                    <View style={styles.dupCard}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <AlertTriangle size={16} color={colors.warning} />
+                        <Text style={styles.dupTitle}>
+                          {dupCandidates.length === 1 ? 'Looks like this spot exists' : `${dupCandidates.length} nearby spots found`}
+                        </Text>
+                      </View>
+                      <Text style={styles.dupBody}>
+                        Tap one to view it — or continue if yours is truly different.
+                      </Text>
+                      <View style={{ gap: 8, marginTop: 6 }}>
+                        {dupCandidates.map((c) => (
+                          <TouchableOpacity
+                            key={c.spot_id}
+                            onPress={() => router.push(`/spot/${c.spot_id}`)}
+                            style={styles.dupRow}
+                            testID={`dup-${c.spot_id}`}
+                          >
+                            {c.images?.[0]?.image_url ? (
+                              <Image source={{ uri: c.images[0].image_url }} style={styles.dupThumb} />
+                            ) : <View style={[styles.dupThumb, { backgroundColor: colors.surface2 }]} />}
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 }} numberOfLines={1}>
+                                {c.title}
+                              </Text>
+                              <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 11 }} numberOfLines={1}>
+                                {c.city}, {c.state} · {c.distance_m}m away{c.title_similarity > 0.6 ? ' · likely match' : ''}
+                              </Text>
+                            </View>
+                            <ChevronRight size={16} color={colors.textSecondary} />
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    </View>
+                  )}
                   <TouchableOpacity
                     style={styles.quickSave}
                     onPress={() => { setDraft({ ...draft, privacy_mode: 'private', location_display_mode: 'exact' }); setStep(1); }}
@@ -539,6 +615,21 @@ const styles = StyleSheet.create({
     padding: space.md, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
     borderRadius: radii.md,
   },
+  dupCard: {
+    backgroundColor: 'rgba(245,166,35,0.06)',
+    borderColor: colors.warning, borderWidth: 1,
+    padding: space.md, borderRadius: radii.md,
+    gap: 4,
+  },
+  dupTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
+  dupBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17 },
+  dupRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    padding: 8, borderRadius: radii.sm,
+    backgroundColor: colors.surface1,
+    borderColor: colors.border, borderWidth: 1,
+  },
+  dupThumb: { width: 44, height: 44, borderRadius: radii.sm },
   quickSave: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     padding: space.md, borderWidth: 1, borderColor: colors.primary,
