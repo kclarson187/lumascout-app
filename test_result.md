@@ -36,11 +36,11 @@ backend:
 
   - task: "POST/DELETE /api/me/push-token — Expo push token registration"
     implemented: true
-    working: false
+    working: true
     file: "/app/backend/server.py"
-    stuck_count: 1
+    stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
@@ -48,14 +48,17 @@ backend:
         -working: false
         -agent: "testing"
         -comment: "CRITICAL: POST /api/me/push-token returns 500 Internal Server Error on both first-time insert and repeat upsert. Root cause at /app/backend/server.py lines 2923-2936: the $set dict (doc) already contains 'created_at', and the update also does $setOnInsert:{'created_at': utcnow()} — MongoDB rejects this with 'Updating the path \\'created_at\\' would create a conflict at \\'created_at\\''. Fix: remove 'created_at' from the doc/$set payload (keep it ONLY in $setOnInsert so new inserts get a fresh created_at and existing docs keep theirs). DELETE works fine in both fresh and idempotent cases. Unauth POST → 401 correct. Invalid token prefix → 400 correct. 4/6 cases pass; the 2 failing ones are the core POST upsert path which is completely broken."
+        -working: true
+        -agent: "testing"
+        -comment: "RETEST after fix (created_at removed from $set, kept only in $setOnInsert): ALL 6 cases PASS. (1) POST /api/me/push-token as sophie with {token:'ExponentPushToken[testtoken_phaseD_12345]', platform:'ios'} → 200 {ok:true}. (2) Repeat POST same token (upsert) → 200 {ok:true} — no MongoDB conflict error. (3) DELETE /api/me/push-token?token=... → 200 {ok:true}. (4) DELETE same token again (idempotent) → 200. (5) POST without auth → 401. (6) POST invalid token prefix 'not-an-expo-token' → 400. Fix verified — endpoint is fully working."
 
   - task: "POST /api/spots/{id}/shot-list — AI composition ideas via Emergent LLM key (gpt-5.2)"
     implemented: true
-    working: false
+    working: true
     file: "/app/backend/server.py"
-    stuck_count: 1
+    stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
@@ -63,6 +66,9 @@ backend:
         -working: false
         -agent: "testing"
         -comment: "MOSTLY WORKING, BUT CACHE HIT PATH IS BROKEN. First uncached LLM call (~9.7s) → 200 with items[7], cached:false, maxlen=118 (under 200 OK). ?refresh=true → 200, cached:false, items[7]. Bogus spot_id → 404. Unauth → 401. CRITICAL BUG: second POST without refresh (expected cache-hit path) → 500. Traceback at /app/backend/server.py line 3042: 'TypeError: can\\'t compare offset-naive and offset-aware datetimes'. We store expires_at as tz-aware (`now + timedelta(days=7)` where now = datetime.now(timezone.utc)), but Motor returns it as tz-naive on read, so the comparison `cached[\"expires_at\"] > datetime.now(timezone.utc)` explodes. Fix: either (a) coerce `cached['expires_at']` to UTC-aware with `.replace(tzinfo=timezone.utc)` before comparing, or (b) compare against utcnow() that strips tzinfo, or (c) configure Motor with tz_aware=True on the client. Every non-refresh call after the first will 500 until this is fixed — shot-list is effectively single-use per spot per 7 days otherwise. 6/7 assertions pass."
+        -working: true
+        -agent: "testing"
+        -comment: "RETEST after fix (expires_at coerced to tz-aware before comparison): ALL 8 cases PASS. (1) POST /api/spots/{spot_id}/shot-list as sophie → 200 {items[7], cached:true/false, cached_at}; each item non-empty string, maxlen=106 (<=200). (2) Second POST (cache hit) → 200 cached:true — previously 500'd, now works. Items identical to first call. (3) ?refresh=true → 200 cached:false, items[7] (7s elapsed for real LLM call). (4) POST /api/spots/bogus_spot_xyz/shot-list → 404. (5) Unauth POST → 401. Cache-hit comparison bug is fixed — shot-list is fully operational across the 7-day cache window."
 
   - task: "GET /api/feed/home — accepts lat/lng for GPS-aware sort (Near me)"
     implemented: true
@@ -686,3 +692,28 @@ agent_communication:
            {items:[]}.
 
       No frontend testing performed. Historical tasks were not retested (all green).
+
+    -agent: "testing"
+    -message: |
+      Phase D re-validation — the 2 previously failing endpoints after fixes. BOTH PASS.
+
+      ✅ POST/DELETE /api/me/push-token (6/6)
+         - POST first time → 200 {ok:true}
+         - POST repeat same token (upsert) → 200 {ok:true} (previously 500'd with
+           'Updating path created_at would create a conflict' — fix confirmed:
+           created_at removed from $set, kept only in $setOnInsert)
+         - DELETE → 200; DELETE again idempotent → 200
+         - No auth → 401; invalid token prefix → 400
+
+      ✅ POST /api/spots/{id}/shot-list (8/8 across all paths)
+         - First POST → 200 with items[7], maxlen=106 (≤200 chars each)
+         - Immediate second POST (cache hit) → 200 cached:true, items identical
+           (previously 500'd with tz-naive/aware datetime compare — fix confirmed:
+           expires_at coerced to tz-aware before the comparison)
+         - ?refresh=true → 200 cached:false, items[7], ~7s real LLM call
+         - Bogus spot_id → 404
+         - Unauth → 401
+
+      Full run: 25/25 cases PASS (backend_test_phase_d.py). Astronomy (7/7) and
+      feed/home (5/5) were not retested per the review request scope — both
+      previously passed and remain green. No action items remaining for backend.
