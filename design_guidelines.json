@@ -1,0 +1,217 @@
+{
+  "brand": {
+    "name": "PhotoScout",
+    "tagline": "Find better photo locations. Shoot smarter.",
+    "voice": "Authoritative, premium, adventurous, and professional",
+    "theme_archetype": "Archetype 5: Jewel & Luxury (Cinematic Utility Dark Theme)"
+  },
+  "color_system": {
+    "backgrounds": {
+      "base": "#0A0A0A",
+      "surface_level_1": "#141416",
+      "surface_level_2": "#1E1E21",
+      "overlay": "rgba(20, 20, 22, 0.7)"
+    },
+    "accents": {
+      "primary": "#F5A623",
+      "secondary": "#D04848",
+      "success": "#10B981",
+      "warning": "#FBBF24",
+      "info": "#60A5FA"
+    },
+    "text": {
+      "primary": "#FFFFFF",
+      "secondary": "#A1A1AA",
+      "tertiary": "#71717A",
+      "inverse": "#000000"
+    },
+    "map_pins": {
+      "public": "#FFFFFF",
+      "premium": "#F5A623",
+      "saved": "#60A5FA",
+      "verified": "#10B981"
+    },
+    "borders": {
+      "default": "#2A2A2E",
+      "subtle": "#1E1E21",
+      "focus": "#F5A623"
+    }
+  },
+  "typography": {
+    "font_families": {
+      "heading": "Playfair Display",
+      "body": "Manrope"
+    },
+    "scale": {
+      "h1": { "size": "32px", "line_height": "40px", "weight": "700", "letter_spacing": "-0.02em" },
+      "h2": { "size": "24px", "line_height": "32px", "weight": "600", "letter_spacing": "-0.01em" },
+      "h3": { "size": "20px", "line_height": "28px", "weight": "600", "letter_spacing": "0" },
+      "body_large": { "size": "16px", "line_height": "24px", "weight": "400", "letter_spacing": "0" },
+      "body_base": { "size": "14px", "line_height": "20px", "weight": "400", "letter_spacing": "0" },
+      "caption": { "size": "12px", "line_height": "16px", "weight": "500", "letter_spacing": "0.02em" },
+      "overline": { "size": "10px", "line_height": "12px", "weight": "700", "letter_spacing": "0.05em", "text_transform": "uppercase" }
+    }
+  },
+  "spacing_scale": {
+    "1": "4px",
+    "2": "8px",
+    "3": "12px",
+    "4": "16px",
+    "5": "20px",
+    "6": "24px",
+    "8": "32px",
+    "10": "40px",
+    "12": "48px",
+    "16": "64px"
+  },
+  "component_specs": {
+    "cards": {
+      "background": "#141416",
+      "border": "1px solid #2A2A2E",
+      "border_radius": "12px",
+      "shadow": "none"
+    },
+    "buttons": {
+      "primary": {
+        "background": "#F5A623",
+        "text": "#0A0A0A",
+        "border_radius": "8px",
+        "padding": "12px 24px",
+        "font_weight": "600"
+      },
+      "secondary": {
+        "background": "#1E1E21",
+        "text": "#FFFFFF",
+        "border": "1px solid #2A2A2E",
+        "border_radius": "8px",
+        "padding": "12px 24px"
+      }
+    },
+    "glass_surfaces": {
+      "background": "rgba(20, 20, 22, 0.7)",
+      "backdrop_filter": "blur(16px)",
+      "border": "1px solid rgba(255, 255, 255, 0.1)",
+      "border_radius": "16px"
+    },
+    "score_rings": {
+      "style": "circular_progress",
+      "stroke_width": "4px",
+      "background_stroke": "#2A2A2E",
+      "value_stroke_excellent": "#10B981",
+      "value_stroke_good": "#F5A623",
+      "value_stroke_poor": "#D04848"
+    },
+    "chips": {
+      "background": "#1E1E21",
+      "text": "#A1A1AA",
+      "border_radius": "100px",
+      "padding": "6px 12px",
+      "font_size": "12px"
+    },
+    "bottom_sheets": {
+      "background": "#141416",
+      "border_top_radius": "24px",
+      "handle_color": "#2A2A2E"
+    }
+  },
+  "screens": {
+    "onboarding": {
+      "layout": "Hero image taking top 60% of screen. Linear gradient overlay fading to #0A0A0A at bottom. Title in Playfair Display. Paged dot indicator. Bottom primary CTA."
+    },
+    "home_feed": {
+      "layout": "Vertical scroll container. Sticky header with logo and profile avatar. Horizontal scroll sections (Nearby, Trending, etc.). Section headers use H3 Playfair. Spot cards are image-forward with 3:2 aspect ratio, title, and Score Ring overlay."
+    },
+    "explore": {
+      "layout": "Full screen react-native-maps. Dark map style. Floating glassmorphism search bar at top. Floating list toggle bottom-right. Bottom sheet partially visible for rich filters. Map pins use semantic color system."
+    },
+    "spot_detail": {
+      "layout": "Hero image carousel (1:1 ratio) with gradient overlay at top. Floating back and save buttons. Title and distance. Shoot intelligence horizontal scrolling cards. Logistics vertical list with icons. Score summary section."
+    },
+    "add_spot": {
+      "layout": "Step-by-step wizard. Progress bar at top. Large tap targets for photo upload. Form fields have #141416 background with #2A2A2E borders. Sticky bottom CTA 'Next'."
+    },
+    "saved": {
+      "layout": "Tabs for Favorites, Private, Collections. 2-column masonry grid or vertical list of saved spots. Use empty state illustrations if no spots saved."
+    },
+    "profile": {
+      "layout": "Header with avatar, bio, and specialty badges. Tabbed view (Spots, Reviews, Collections). Settings gear top right."
+    },
+    "creator_dashboard": {
+      "layout": "2x2 grid of stat tiles (Views, Saves, Score). Recent activity list. Premium up-sell banner."
+    }
+  },
+  "motion_principles": {
+    "transitions": "Smooth fade and slide-up for screen transitions (spring configuration: stiffness 250, damping 20).",
+    "microinteractions": "Haptic feedback on all saves, check-ins, and map pin taps. Bottom sheet uses fluid spring physics.",
+    "loading": "Shimmer skeleton screens using surface_level_2 background. Avoid generic spinners."
+  },
+  "iconography": {
+    "library": "lucide-react-native",
+    "style": "Outline, stroke width 2, size 24px default, #FFFFFF for active, #A1A1AA for inactive."
+  },
+  "testing": {
+    "attributes": "All interactive elements MUST include testID (React Native equivalent of data-testid). Example: testID='spot-save-button'."
+  },
+  "media_urls": {
+    "texas_locations": [
+      {
+        "url": "https://images.unsplash.com/photo-1682458856875-7bc127399b77?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1ODR8MHwxfHNlYXJjaHw0fHx0ZXhhcyUyMGJsdWVib25uZXRzJTIwZmllbGQlMjBzdW5zZXR8ZW58MHx8fHwxNzc2NTY4MjcwfDA&ixlib=rb-4.1.0&q=85",
+        "description": "Bluebonnets field sunset"
+      },
+      {
+        "url": "https://images.pexels.com/photos/18554161/pexels-photo-18554161.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Bluebonnets field"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1682306550051-2f133f24572e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2OTV8MHwxfHNlYXJjaHw0fHxhdXN0aW4lMjB0ZXhhcyUyMHVyYmFuJTIwYXJjaGl0ZWN0dXJlJTIwYWxsZXl8ZW58MHx8fHwxNzc2NTY4MjcwfDA&ixlib=rb-4.1.0&q=85",
+        "description": "Austin urban architecture"
+      },
+      {
+        "url": "https://images.pexels.com/photos/7877261/pexels-photo-7877261.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Austin alleyway"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1769913995907-e1cc7ff527a1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MTN8MHwxfHNlYXJjaHwxfHx0ZXhhcyUyMGhpbGwlMjBjb3VudHJ5JTIwbGFuZHNjYXBlJTIwc3Vuc2V0fGVufDB8fHx8MTc3NjU2ODI4MHww&ixlib=rb-4.1.0&q=85",
+        "description": "Texas Hill Country lake"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1632452888109-af6d83269329?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MTN8MHwxfHNlYXJjaHw0fHx0ZXhhcyUyMGhpbGwlMjBjb3VudHJ5JTIwbGFuZHNjYXBlJTIwc3Vuc2V0fGVufDB8fHx8MTc3NjU2ODI4MHww&ixlib=rb-4.1.0&q=85",
+        "description": "Texas Hill Country mountain view"
+      },
+      {
+        "url": "https://images.pexels.com/photos/33508032/pexels-photo-33508032.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Fredericksburg Winery"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1776437209500-7595b5e0be72?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDR8MHwxfHNlYXJjaHwyfHxzYW4lMjBhbnRvbmlvJTIwcml2ZXIlMjB3YWxrJTIwbmlnaHR8ZW58MHx8fHwxNzc2NTY4MjgwfDA&ixlib=rb-4.1.0&q=85",
+        "description": "San Antonio River Walk"
+      }
+    ],
+    "avatars": [
+      {
+        "url": "https://images.unsplash.com/photo-1697063882499-f7fca7d2d713?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2MzR8MHwxfHNlYXJjaHwyfHxkaXZlcnNlJTIwcHJvZmVzc2lvbmFsJTIwcHJvZmlsZSUyMGhlYWRzaG90fGVufDB8fHx8MTc3NjU2ODI3MHww&ixlib=rb-4.1.0&q=85",
+        "description": "Female photographer profile"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1582070595814-fe36a8d39532?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2MzR8MHwxfHNlYXJjaHw0fHxkaXZlcnNlJTIwcHJvZmVzc2lvbmFsJTIwcHJvZmlsZSUyMGhlYWRzaG90fGVufDB8fHx8MTc3NjU2ODI3MHww&ixlib=rb-4.1.0&q=85",
+        "description": "Male photographer profile"
+      }
+    ],
+    "onboarding_hero": [
+      {
+        "url": "https://images.unsplash.com/photo-1672285312540-f1786a51a097?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNzl8MHwxfHNlYXJjaHwxfHxwaG90b2dyYXBoZXIlMjBjYW1lcmElMjBnb2xkZW4lMjBob3VyJTIwZmllbGR8ZW58MHx8fHwxNzc2NTY4MjcwfDA&ixlib=rb-4.1.0&q=85",
+        "description": "Photographer in field at golden hour"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1701220283030-0002d621ca5a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNzl8MHwxfHNlYXJjaHwzfHxwaG90b2dyYXBoZXIlMjBjYW1lcmElMjBnb2xkZW4lMjBob3VyJTIwZmllbGR8ZW58MHx8fHwxNzc2NTY4MjcwfDA&ixlib=rb-4.1.0&q=85",
+        "description": "Woman with camera"
+      }
+    ],
+    "empty_states": [
+      {
+        "url": "https://images.pexels.com/photos/15269510/pexels-photo-15269510.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Minimalist line art for empty state"
+      }
+    ]
+  }
+}
