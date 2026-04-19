@@ -961,8 +961,8 @@ async def me_trends(days: int = 7, user: dict = Depends(get_current_user)):
     # Bucket by day
     buckets = []
     for i in range(days):
-        day_start = start + datetime.timedelta(days=i)
-        day_end = day_start + datetime.timedelta(days=1)
+        day_start = start + timedelta(days=i)
+        day_end = day_start + timedelta(days=1)
         spots_count = sum(
             1 for s in own_spots
             if s.get("created_at") and day_start <= s["created_at"] < day_end

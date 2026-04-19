@@ -128,7 +128,7 @@ backend:
     implemented: true
     working: false
     file: "/app/backend/server.py"
-    stuck_count: 1
+    stuck_count: 2
     priority: "high"
     needs_retesting: true
     status_history:
@@ -138,6 +138,30 @@ backend:
         -working: false
         -agent: "testing"
         -comment: "FAIL — 500 Internal Server Error on every authenticated call (days=7, days=0, days=100). Backend log: AttributeError: type object 'datetime.datetime' has no attribute 'timedelta' at server.py line 964. The imports at the top of server.py are `from datetime import datetime, timezone, timedelta` — `timedelta` is already imported as a top-level name, so `datetime.timedelta(days=i)` is invalid. Fix: replace both occurrences in me_trends() with bare `timedelta(days=i)` (lines 964 and 965). Auth-required check (401 without bearer) DOES pass — failure is purely the bucket-loop bug."
+        -working: "NA"
+        -agent: "main"
+        -comment: "FIX APPLIED: replaced datetime.timedelta(days=i) and datetime.timedelta(days=1) with bare timedelta(...) on lines 964–965. grep -n 'datetime\\.timedelta' now returns no matches. Requesting retest."
+        -working: false
+        -agent: "testing"
+        -comment: |
+          FAIL — Retest after timedelta fix exposes a SECOND bug. All authenticated calls
+          (days=7, days=0, days=100) still return 500 Internal Server Error.
+          Backend traceback (server.py line 968):
+              TypeError: can't compare offset-naive and offset-aware datetimes
+              if s.get("created_at") and day_start <= s["created_at"] < day_end
+          Root cause: `start` (line 949–952) is built from `utcnow()` and is tz-aware UTC,
+          so `day_start`/`day_end` are tz-aware. But documents in db.spots and db.spot_saves
+          have `created_at` stored as tz-NAIVE datetimes (Mongo strips tzinfo on insert
+          unless you serialize them). Comparing aware vs naive raises TypeError.
+          Suggested fixes (pick one):
+            (a) Build `start` as tz-naive UTC: `start = datetime.utcnow().replace(...)`.
+                Then day_start/day_end are naive and match Mongo's stored values. The
+                $gte query at line 958 also needs the naive `start`.
+            (b) Strip tz from each `s["created_at"]` before comparing:
+                `ca = s["created_at"]; ca = ca.replace(tzinfo=None) if ca.tzinfo else ca`.
+            (c) Force aware on read: `ca = s["created_at"].replace(tzinfo=timezone.utc) if s["created_at"].tzinfo is None else s["created_at"]`.
+          Live results: PASS no-token→401, PASS login sophie, FAIL days=7 (500),
+          FAIL days=0 (500), FAIL days=100 (500). Auth guard works; bucket loop still broken.
 
   - task: "Existing: /api/me/dashboard, /api/packs, /api/me/packs, /api/packs/{id}/purchase — regression"
     implemented: true
@@ -247,3 +271,36 @@ agent_communication:
       /api/me/packs, /api/packs/{id}/purchase (waitlist + 404 for bogus id).
 
       ACTION: fix the two `datetime.timedelta` references in me_trends() and re-run the trends portion.
+
+    -agent: "testing"
+    -message: |
+      Live retest of GET /api/me/trends after main agent's `datetime.timedelta` → `timedelta` fix:
+      results 2/5 PASS, 3/5 FAIL. The original AttributeError is gone, but a new TypeError
+      surfaced one line below. Backend traceback (server.py:968):
+          TypeError: can't compare offset-naive and offset-aware datetimes
+              if s.get("created_at") and day_start <= s["created_at"] < day_end
+
+      Detailed live results (creds: sophie@photoscout.app / demo123):
+        ✅ GET /api/me/trends (no token) → 401 {"detail":"Not authenticated"}
+        ✅ POST /api/auth/login → 200, token len 204
+        ❌ GET /api/me/trends?days=7   → 500 Internal Server Error
+        ❌ GET /api/me/trends?days=0   → 500 Internal Server Error
+        ❌ GET /api/me/trends?days=100 → 500 Internal Server Error
+
+      Root cause: `start` is built from `utcnow()` (returns tz-aware UTC) at lines 949–952,
+      so `day_start` and `day_end` are aware. But Mongo-stored `created_at` on db.spots and
+      db.spot_saves is tz-NAIVE (Motor/PyMongo strips tzinfo on insert by default unless
+      CodecOptions(tz_aware=True) is set). Comparing aware vs naive raises TypeError.
+
+      Recommended fix (smallest delta, no schema change):
+        Inside me_trends, normalize each created_at on read OR build start tz-naive.
+        Option A — make boundaries naive (matches what's actually in Mongo):
+            now = datetime.utcnow()                       # naive UTC
+            start = (now - timedelta(days=days-1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            # then the $gte on db.spot_saves at line 958 also uses naive `start` — consistent.
+        Option B — coerce per row before compare:
+            def _aware(dt): return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            ... day_start <= _aware(s["created_at"]) < day_end ...
+
+      I did NOT change server.py — flagging for main agent. Auth guard verified working.
+      Test script: /app/backend_test_trends.py. Re-run after fix.
