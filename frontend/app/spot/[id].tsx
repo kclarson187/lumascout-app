@@ -18,7 +18,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import {
   ChevronLeft, Bookmark, Share2, Flag, MapPin, Sun, Sunrise, Sunset, Cloud,
   Camera, Car, Accessibility, Users, Shield, DogIcon, BabyIcon, TicketIcon, ClockIcon, CheckCircle,
-  FolderPlus, MessageSquarePlus, Navigation,
+  FolderPlus, MessageSquarePlus, Navigation, Wand2, ChevronRight,
 } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
@@ -31,6 +31,7 @@ import AddToCollectionSheet from '../../src/components/AddToCollectionSheet';
 import VerifiedBadge from '../../src/components/VerifiedBadge';
 import FreshnessBadge from '../../src/components/FreshnessBadge';
 import ReportSheet from '../../src/components/ReportSheet';
+import ShotListSheet from '../../src/components/ShotListSheet';
 
 const { width: W } = Dimensions.get('window');
 
@@ -43,6 +44,7 @@ export default function SpotDetail() {
   const [galleryIdx, setGalleryIdx] = useState(0);
   const [atcOpen, setAtcOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  const [shotListOpen, setShotListOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -273,14 +275,18 @@ export default function SpotDetail() {
               style={styles.aiBtn}
               onPress={() => setShotListOpen(true)}
               testID="spot-shot-list"
+              activeOpacity={0.85}
             >
-              <Wand2 size={16} color={colors.primary} />
+              <View style={styles.aiIconBubble}>
+                <Wand2 size={16} color={colors.primary} />
+              </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.aiBtnTitle}>AI shot list</Text>
                 <Text style={styles.aiBtnSub} numberOfLines={1}>
-                  6–8 composition ideas for {spot.title}
+                  6–8 composition ideas tailored to {spot.title}
                 </Text>
               </View>
+              <ChevronRight size={18} color={colors.textSecondary} />
             </TouchableOpacity>
           )}
 
@@ -397,6 +403,12 @@ export default function SpotDetail() {
         targetId={id}
         title={`Report "${spot.title}"`}
       />
+      <ShotListSheet
+        visible={shotListOpen}
+        onClose={() => setShotListOpen(false)}
+        spotId={id}
+        spotTitle={spot.title}
+      />
     </View>
   );
 }
@@ -479,6 +491,19 @@ const styles = StyleSheet.create({
   },
   directionsBtnTitle: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 },
   directionsBtnSub: { color: 'rgba(255,255,255,0.82)', fontFamily: font.bodyMedium, fontSize: 11, marginTop: 2 },
+  aiBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    marginTop: space.sm, paddingHorizontal: space.md, paddingVertical: 12,
+    backgroundColor: colors.surface1, borderRadius: radii.md,
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.35)',
+  },
+  aiIconBubble: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: 'rgba(245,166,35,0.15)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  aiBtnTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
+  aiBtnSub: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, marginTop: 2 },
   sectionH: { color: colors.text, fontFamily: font.display, fontSize: 20, marginTop: space.xl, letterSpacing: -0.2 },
   scoreGrid: {
     flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: space.md,

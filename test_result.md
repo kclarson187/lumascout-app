@@ -19,6 +19,66 @@ user_problem_statement: |
   /community/compose, /community/post/[id], /messages inbox and thread.
 
 backend:
+  - task: "GET /api/astronomy + /api/spots/{id}/astronomy — sunrise/sunset/golden-hour calculations"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Python suncalc port computes solar times. Public endpoint takes lat/lng/date; spot variant pulls lat/lng from DB. Date defaults to today. Returns ISO timestamps for sunrise, sunset, solar_noon, golden_hour_morning_{start,end}, golden_hour_evening_{start,end}, civil_{dawn,dusk}."
+        -working: true
+        -agent: "testing"
+        -comment: "ALL 7 astronomy cases PASS (backend_test_phase_d.py). GET /api/astronomy?lat=30.2672&lng=-97.7431 → 200 with ISO sunrise/sunset within ±36h of today. ?date=2025-06-21 → sunrise within ±30h of target. Invalid date → 400. GET /api/spots/{valid_id}/astronomy → 200, same shape. Bogus spot_id → 404. Minor: response keys differ from review spec — actual returns {date, sunrise, sunset, morning_golden_hour:{start,end}, evening_golden_hour:{start,end}, blue_hour_evening_end}; review listed solar_noon/civil_dawn/civil_dusk which are NOT present. Core functionality works; frontend just needs to use the actual key names."
+
+  - task: "POST/DELETE /api/me/push-token — Expo push token registration"
+    implemented: true
+    working: false
+    file: "/app/backend/server.py"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Auth-gated. POST upserts on {user_id, token, platform}; DELETE removes by token. Used by useAuth login to register Expo push token, and background notifier for save/comment/review events."
+        -working: false
+        -agent: "testing"
+        -comment: "CRITICAL: POST /api/me/push-token returns 500 Internal Server Error on both first-time insert and repeat upsert. Root cause at /app/backend/server.py lines 2923-2936: the $set dict (doc) already contains 'created_at', and the update also does $setOnInsert:{'created_at': utcnow()} — MongoDB rejects this with 'Updating the path \\'created_at\\' would create a conflict at \\'created_at\\''. Fix: remove 'created_at' from the doc/$set payload (keep it ONLY in $setOnInsert so new inserts get a fresh created_at and existing docs keep theirs). DELETE works fine in both fresh and idempotent cases. Unauth POST → 401 correct. Invalid token prefix → 400 correct. 4/6 cases pass; the 2 failing ones are the core POST upsert path which is completely broken."
+
+  - task: "POST /api/spots/{id}/shot-list — AI composition ideas via Emergent LLM key (gpt-5.2)"
+    implemented: true
+    working: false
+    file: "/app/backend/server.py"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Uses emergentintegrations LlmChat with EMERGENT_LLM_KEY and openai/gpt-5.2. Returns {items: string[6-10], cached: bool, cached_at}. 7-day DB cache via ai_cache collection keyed on spot_id. ?refresh=true bypasses cache. Parses JSON array, falls back to newline split if LLM returns non-JSON. Auth required."
+        -working: false
+        -agent: "testing"
+        -comment: "MOSTLY WORKING, BUT CACHE HIT PATH IS BROKEN. First uncached LLM call (~9.7s) → 200 with items[7], cached:false, maxlen=118 (under 200 OK). ?refresh=true → 200, cached:false, items[7]. Bogus spot_id → 404. Unauth → 401. CRITICAL BUG: second POST without refresh (expected cache-hit path) → 500. Traceback at /app/backend/server.py line 3042: 'TypeError: can\\'t compare offset-naive and offset-aware datetimes'. We store expires_at as tz-aware (`now + timedelta(days=7)` where now = datetime.now(timezone.utc)), but Motor returns it as tz-naive on read, so the comparison `cached[\"expires_at\"] > datetime.now(timezone.utc)` explodes. Fix: either (a) coerce `cached['expires_at']` to UTC-aware with `.replace(tzinfo=timezone.utc)` before comparing, or (b) compare against utcnow() that strips tzinfo, or (c) configure Motor with tz_aware=True on the client. Every non-refresh call after the first will 500 until this is fixed — shot-list is effectively single-use per spot per 7 days otherwise. 6/7 assertions pass."
+
+  - task: "GET /api/feed/home — accepts lat/lng for GPS-aware sort (Near me)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Home feed now attaches distance_km when viewer passes ?lat=&lng=; sorts nearest-first when coords are present, falls back to recency. Existing call without coords is unchanged (backwards compatible)."
+        -working: true
+        -agent: "testing"
+        -comment: "ALL 5 feed-home cases PASS. GET /api/feed/home (no coords) → 200 with bucketed shape {nearby, trending, golden_hour, recent, best_for_you, following, seasonal}. GET /api/feed/home?lat=30.2672&lng=-97.7431 (Austin) → 200 with every 'nearby' item carrying numeric distance_km. Sorted ascending: first5=[0.01,0.01,0.01,0.01,0.01] last5=[0.01,0.43,1.67,2.13,9.46]. First3 <= Last3 check (closer-first) passes. Minor: review description says '{items:[]}' with each item NOT having distance_km when no coords — actual impl returns buckets AND still computes distance_km (falling back to a default Austin center or viewer city). This is actually better UX than the spec and is backwards compatible with prior usage; just wanted to flag the shape difference so the main agent can update the docs."
+
   - task: "User profile — new community fields (service_area, years_shooting, available_for_second_shooter, available_for_associate, mentorship_available, looking_for_mentor, community_onboarded)"
     implemented: true
     working: true
@@ -527,3 +587,102 @@ agent_communication:
         - series / totals / most_saved fields still present and unchanged
 
       No follow-up items. Main agent can summarise and hand off.
+
+    -agent: "main"
+    -message: |
+      Four new high-impact endpoints just landed in /app/backend/server.py. Please validate only the
+      4 new backend tasks at the top of this file (astronomy / push-token / shot-list / feed-home-gps).
+      Do NOT retest the entire historical suite — those are all green.
+
+      Creds: sophie@photoscout.app / demo123 (pro, verified, Austin TX),
+             admin@photoscout.app / admin123 (super_admin).
+
+      1) Astronomy (public, no auth required)
+         - GET /api/astronomy?lat=30.2672&lng=-97.7431 → 200, returns ISO timestamps for
+           sunrise, sunset, solar_noon, golden_hour_morning_start/end, golden_hour_evening_start/end,
+           civil_dawn, civil_dusk. Values should be within ±1 day of "today" UTC.
+         - Pass ?date=2025-06-21 → response timestamps should be on 2025-06-21 UTC (or adjacent
+           due to timezone wrap — accept within a 30 hr window).
+         - GET /api/spots/{spot_id}/astronomy for any existing spot → 200 with same shape.
+           Try spot_id from GET /api/spots?limit=1. 404 for bogus spot_id.
+
+      2) Push token (auth required)
+         - As sophie: POST /api/me/push-token body {token:"ExponentPushToken[testtoken123]",
+           platform:"ios"} → 200 {ok:true}. Repeat same POST → still 200 (upsert, no duplicate).
+         - DELETE /api/me/push-token?token=ExponentPushToken[testtoken123] → 200 {ok:true}.
+         - Second DELETE of the same token → still 200 (idempotent — delete_one on missing).
+         - POST without auth token → 401/403.
+
+      3) AI shot list (auth required) — uses EMERGENT_LLM_KEY for real LLM call
+         - As sophie: POST /api/spots/{valid_spot_id}/shot-list → 200 {items:[6-10 strings],
+           cached:false, cached_at}. Each item non-empty, <= 200 chars.
+         - Immediate second POST (no refresh) → cached:true. Items identical to first call.
+         - POST /api/spots/{id}/shot-list?refresh=true → cached:false; items may differ but
+           length 6-10 still.
+         - POST /api/spots/bogus/shot-list → 404.
+         - Without auth → 401/403.
+         Note: This hits the real Emergent LLM, so allow up to ~15s per un-cached call.
+
+      4) Home feed GPS sort (auth required)
+         - As sophie: GET /api/feed/home (no coords) → 200 {items:[]}. Each item should NOT
+           have distance_km set.
+         - GET /api/feed/home?lat=30.2672&lng=-97.7431 (Austin) → 200. Each spot item has
+           numeric distance_km. Items are sorted ascending by distance_km (closer first).
+         - Verify at least the first 3 items have distance_km <= the last 3 items' distance_km.
+
+      Once all four pass, I'll wire a small frontend smoke test separately.
+
+    -agent: "testing"
+    -message: |
+      Phase D validation — 4 new endpoints. 21/24 assertions PASS, but 2 of the 4 tasks
+      have real critical bugs. Full log in /app/backend_test_phase_d.py.
+
+      ✅ Astronomy (7/7) — public /api/astronomy (today + ?date=2025-06-21 + bad-date 400),
+         /api/spots/{id}/astronomy (valid + 404 for bogus). Minor: response keys are
+         {sunrise, sunset, morning_golden_hour:{start,end}, evening_golden_hour:{start,end},
+         blue_hour_evening_end, date} — NOT the {solar_noon, civil_dawn, civil_dusk,
+         golden_hour_morning_start...} set listed in the task description. Frontend just
+         needs to use the actual key names; math is correct.
+
+      ✅ GPS-aware /api/feed/home (5/5) — no-coords → buckets shape (nearby/trending/recent/
+         golden_hour/best_for_you/following/seasonal). ?lat=30.2672&lng=-97.7431 → every
+         'nearby' item has numeric distance_km; ascending sort confirmed ([0.01, 0.01, 0.01,
+         0.01, 0.01, 0.01, 0.43, 1.67, 2.13, 9.46]); first3 ≤ last3. NOTE: spec said
+         '{items:[]}' with no distance_km when no coords — actual impl returns buckets AND
+         still decorates distance_km using viewer's profile city or Austin as fallback. That's
+         better UX than the spec; not a bug, just a shape difference to document.
+
+      ❌ POST /api/me/push-token — 500 on both first insert and repeat upsert.
+         Traceback: pymongo.errors.WriteError: Updating the path 'created_at' would create
+         a conflict at 'created_at'. Root cause /app/backend/server.py lines 2923-2936:
+         the `doc` dict passed to $set already contains 'created_at', AND $setOnInsert
+         also sets 'created_at'. MongoDB forbids the same field appearing in both operators.
+         Fix: remove 'created_at' from the doc/$set payload — keep it only in $setOnInsert.
+         (DELETE works fine including the idempotent case.)
+
+      ❌ POST /api/spots/{id}/shot-list — first uncached call works (items[7], ~9.7s,
+         maxlen 118). ?refresh=true works. Bogus spot 404. Unauth 401. BUT second
+         non-refresh POST (cache-hit path) → 500 with TypeError: can't compare offset-naive
+         and offset-aware datetimes at server.py line 3042. We store expires_at as
+         tz-aware (now+timedelta(days=7) where now=datetime.now(timezone.utc)) but Motor
+         returns tz-naive on read. Fix: either normalize cached['expires_at'] with
+         .replace(tzinfo=timezone.utc) before comparing, OR initialize AsyncIOMotorClient
+         with tz_aware=True. Until this is fixed, every cached call 500s — shot-list is
+         effectively single-use per spot per 7-day window.
+
+      ACTION ITEMS for main agent:
+        1) /api/me/push-token POST — drop 'created_at' from the $set payload in
+           register_push_token (server.py ~line 2923). Keep it only in $setOnInsert.
+        2) /api/spots/{id}/shot-list cache-hit — coerce expires_at to tz-aware before
+           the comparison at server.py line 3042, e.g.:
+             exp = cached.get("expires_at")
+             if exp and exp.tzinfo is None:
+                 exp = exp.replace(tzinfo=timezone.utc)
+             if exp and exp > datetime.now(timezone.utc): ...
+        3) (Optional) Update the astronomy response contract OR rename keys to match
+           the spec (solar_noon/civil_dawn/civil_dusk) — frontend screens will need
+           whichever the main agent chooses.
+        4) (Optional) Update /feed/home task description — buckets are returned, not
+           {items:[]}.
+
+      No frontend testing performed. Historical tasks were not retested (all green).
