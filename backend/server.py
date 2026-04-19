@@ -49,6 +49,43 @@ def plan_of(user: dict) -> str:
 def limits_for(user: dict) -> dict:
     return PLAN_LIMITS.get(plan_of(user), PLAN_LIMITS["free"])
 
+
+# ============================================================================
+# Rate limiting (in-memory, process-local) — basic spam prevention
+# Keyed by (endpoint, user_id). Values are deques of request timestamps.
+# NOTE: This resets on server restart. For production, use Redis. Good enough
+# for MVP + demo traffic.
+# ============================================================================
+from collections import defaultdict, deque
+
+RATE_LIMITS = {
+    "spot_create": (10, 3600),       # 10 per hour
+    "report_create": (20, 86400),    # 20 per day
+    "review_create": (30, 86400),    # 30 per day
+    "checkin_create": (30, 86400),   # 30 per day
+}
+_rate_buckets: dict = defaultdict(deque)
+
+
+def check_rate_limit(bucket_key: str, user_id: str):
+    """Raise HTTPException(429) if user has exceeded the rate limit for this bucket."""
+    if bucket_key not in RATE_LIMITS:
+        return
+    max_count, window_sec = RATE_LIMITS[bucket_key]
+    key = (bucket_key, user_id)
+    now_ts = datetime.now(timezone.utc).timestamp()
+    bucket = _rate_buckets[key]
+    # drop old entries
+    while bucket and (now_ts - bucket[0]) > window_sec:
+        bucket.popleft()
+    if len(bucket) >= max_count:
+        retry_in = int(window_sec - (now_ts - bucket[0]))
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many requests. Try again in {max(1, retry_in)}s.",
+        )
+    bucket.append(now_ts)
+
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
 
@@ -167,7 +204,58 @@ def public_spot_view(spot: dict, user: Optional[dict] = None) -> dict:
         spot["longitude"] = None
 
     spot["shoot_score"] = compute_shoot_score(spot)
+
+    # Freshness indicator based on last_verified_at
+    lv = spot.get("last_verified_at")
+    if lv:
+        lv_norm = lv if getattr(lv, "tzinfo", None) else lv.replace(tzinfo=timezone.utc)
+        age_days = (utcnow() - lv_norm).days
+        if age_days <= 30:
+            spot["freshness"] = "fresh"
+        elif age_days <= 90:
+            spot["freshness"] = "recent"
+        else:
+            spot["freshness"] = "stale"
+        # Human label
+        if age_days == 0:
+            spot["freshness_label"] = "Verified today"
+        elif age_days == 1:
+            spot["freshness_label"] = "Verified yesterday"
+        elif age_days < 7:
+            spot["freshness_label"] = f"Verified {age_days}d ago"
+        elif age_days < 30:
+            spot["freshness_label"] = f"Verified {age_days // 7}w ago"
+        elif age_days < 365:
+            spot["freshness_label"] = f"Verified {age_days // 30}mo ago"
+        else:
+            spot["freshness_label"] = "Needs refresh"
+    else:
+        spot["freshness"] = "unknown"
+        spot["freshness_label"] = None
+
     return spot
+
+
+async def attach_owners(spots: List[dict]) -> List[dict]:
+    """Batch-attach lightweight owner info (name, username, avatar_url,
+    verification_status) to a list of spot views. Used by list/feed endpoints
+    so cards can render verified badges without per-row round trips.
+    """
+    if not spots:
+        return spots
+    ids = list({s.get("owner_user_id") for s in spots if s.get("owner_user_id")})
+    if not ids:
+        return spots
+    users = await db.users.find(
+        {"user_id": {"$in": ids}},
+        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1},
+    ).to_list(500)
+    umap = {u["user_id"]: u for u in users}
+    for s in spots:
+        owner = umap.get(s.get("owner_user_id"))
+        if owner:
+            s["owner"] = owner
+    return spots
 
 
 # ============================================================================
@@ -281,6 +369,16 @@ class ReportIn(BaseModel):
     target_id: str
     reason: str
     details: Optional[str] = ""
+
+
+REPORT_REASONS = {
+    "not_a_location",   # not a real place
+    "unsafe",           # unsafe / private property
+    "inappropriate",    # inappropriate content
+    "spam",             # spam / promotional
+    "wrong_info",       # incorrect info
+    "other",
+}
 
 
 # ============================================================================
@@ -463,8 +561,48 @@ async def follow_user(user_id: str, user: dict = Depends(get_current_user)):
 # ============================================================================
 # Spots
 # ============================================================================
+@api.get("/spots/check-duplicates")
+async def check_duplicates(
+    latitude: float,
+    longitude: float,
+    title: Optional[str] = None,
+    radius_m: float = 200,
+    viewer: Optional[dict] = Depends(get_optional_user),
+):
+    """Return nearby approved public spots that might duplicate what the user is about to submit.
+    Radius is in METERS (default 200m). Only considers approved public/premium spots.
+    Optionally scores string similarity if a title is provided.
+    """
+    radius_km = max(0.05, min(2.0, radius_m / 1000.0))
+    candidates = []
+    async for s in db.spots.find(
+        {"privacy_mode": {"$in": ["public", "premium"]}, "visibility_status": "approved"},
+        {"_id": 0},
+    ):
+        d_km = haversine_km(latitude, longitude, s["latitude"], s["longitude"])
+        if d_km > radius_km:
+            continue
+        sim = 0.0
+        if title:
+            try:
+                from difflib import SequenceMatcher
+                sim = SequenceMatcher(None, title.strip().lower(), (s.get("title") or "").strip().lower()).ratio()
+            except Exception:
+                sim = 0.0
+        v = public_spot_view(s, viewer)
+        if not v:
+            continue
+        v["distance_m"] = int(round(d_km * 1000))
+        v["title_similarity"] = round(sim, 2)
+        candidates.append(v)
+    # Rank: closer + higher similarity first
+    candidates.sort(key=lambda c: (c["distance_m"], -c["title_similarity"]))
+    return {"count": len(candidates), "candidates": candidates[:5]}
+
+
 @api.post("/spots")
 async def create_spot(body: SpotCreateIn, user: dict = Depends(get_current_user)):
+    check_rate_limit("spot_create", user["user_id"])
     # Feature gating: free plan can only create 3 private/followers/invite_only spots
     if body.privacy_mode in ("private", "followers", "invite_only"):
         limits = limits_for(user)
@@ -643,7 +781,9 @@ async def list_spots(
     else:  # recent
         out.sort(key=lambda s: s.get("created_at") or utcnow(), reverse=True)
 
-    return out[:limit]
+    out = out[:limit]
+    await attach_owners(out)
+    return out
 
 
 @api.get("/spots/nearby/search")
@@ -665,7 +805,9 @@ async def nearby(
                 v["distance_km"] = round(d, 1)
                 out.append(v)
     out.sort(key=lambda s: s["distance_km"])
-    return out[:limit]
+    out = out[:limit]
+    await attach_owners(out)
+    return out
 
 
 @api.get("/feed/home")
@@ -677,6 +819,10 @@ async def home_feed(viewer: Optional[dict] = Depends(get_optional_user)):
         v = public_spot_view(s, viewer)
         if v:
             scored.append(v)
+
+    # Batch-attach owner info once across ALL buckets since the same objects are
+    # referenced in multiple sorted slices below.
+    await attach_owners(scored)
 
     # Nearby (if we don't have user location, pick random by default — use Austin TX center)
     center_lat, center_lng = 30.2672, -97.7431
@@ -857,6 +1003,7 @@ async def get_collection(collection_id: str, viewer: Optional[dict] = Depends(ge
 # ============================================================================
 @api.post("/spots/{spot_id}/reviews")
 async def create_review(spot_id: str, body: ReviewIn, user: dict = Depends(get_current_user)):
+    check_rate_limit("review_create", user["user_id"])
     spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0})
     if not spot:
         raise HTTPException(status_code=404, detail="Spot not found")
@@ -875,6 +1022,7 @@ async def create_review(spot_id: str, body: ReviewIn, user: dict = Depends(get_c
 
 @api.post("/spots/{spot_id}/checkins")
 async def create_checkin(spot_id: str, body: CheckinIn, user: dict = Depends(get_current_user)):
+    check_rate_limit("checkin_create", user["user_id"])
     spot = await db.spots.find_one({"spot_id": spot_id})
     if not spot:
         raise HTTPException(status_code=404, detail="Spot not found")
@@ -897,6 +1045,20 @@ async def create_checkin(spot_id: str, body: CheckinIn, user: dict = Depends(get
 # ============================================================================
 @api.post("/reports")
 async def create_report(body: ReportIn, user: dict = Depends(get_current_user)):
+    if body.reason not in REPORT_REASONS:
+        raise HTTPException(status_code=400, detail=f"Invalid reason. Expected one of {sorted(REPORT_REASONS)}.")
+    if body.target_type not in ("spot", "user", "review"):
+        raise HTTPException(status_code=400, detail="Invalid target_type")
+    check_rate_limit("report_create", user["user_id"])
+    # Dedupe: don't create another pending report from the same user on the same target
+    existing = await db.reports.find_one({
+        "reporter_user_id": user["user_id"],
+        "target_id": body.target_id,
+        "status": "pending",
+    })
+    if existing:
+        existing.pop("_id", None)
+        return existing
     doc = {
         "report_id": f"rep_{uuid.uuid4().hex[:12]}",
         "reporter_user_id": user["user_id"],
@@ -907,6 +1069,19 @@ async def create_report(body: ReportIn, user: dict = Depends(get_current_user)):
     await db.reports.insert_one(doc)
     doc.pop("_id", None)
     return doc
+
+
+@api.get("/reports/reasons")
+async def report_reasons():
+    """Enumerate allowed report reasons with human labels for the mobile UI."""
+    return [
+        {"key": "not_a_location", "label": "Not a real location"},
+        {"key": "unsafe", "label": "Unsafe or private property"},
+        {"key": "inappropriate", "label": "Inappropriate content"},
+        {"key": "spam", "label": "Spam or promotional"},
+        {"key": "wrong_info", "label": "Incorrect information"},
+        {"key": "other", "label": "Something else"},
+    ]
 
 
 # ============================================================================
@@ -1203,6 +1378,34 @@ async def on_startup():
     await db.follows.create_index([("follower_user_id", 1), ("followed_user_id", 1)], unique=True)
     await seed_admin()
     await seed_demo_content()
+    await backfill_freshness()
+
+
+async def backfill_freshness():
+    """One-time migration: stagger last_verified_at across existing spots so the
+    freshness UI has meaningful variety. Only runs on spots that are still at
+    the default 'freshly verified' timestamp (verified within the last 60 seconds
+    of their created_at), to avoid stomping on real data.
+    """
+    i = 0
+    async for s in db.spots.find({}, {"spot_id": 1, "last_verified_at": 1, "created_at": 1, "_id": 0}):
+        lv = s.get("last_verified_at")
+        cr = s.get("created_at")
+        if not lv or not cr:
+            continue
+        # Normalize tz
+        lv_n = lv if getattr(lv, "tzinfo", None) else lv.replace(tzinfo=timezone.utc)
+        cr_n = cr if getattr(cr, "tzinfo", None) else cr.replace(tzinfo=timezone.utc)
+        # If last_verified_at is within 60s of created_at (i.e. never refreshed),
+        # stagger it so we have fresh/recent/stale spots in the demo set.
+        if abs((lv_n - cr_n).total_seconds()) < 60:
+            offset_days = (i * 18) % 180
+            new_lv = utcnow() - timedelta(days=offset_days)
+            await db.spots.update_one(
+                {"spot_id": s["spot_id"]},
+                {"$set": {"last_verified_at": new_lv}},
+            )
+        i += 1
 
 
 async def seed_admin():
@@ -1701,7 +1904,9 @@ async def seed_demo_content():
             "fee_required": sp["fee_required"],
             "fee_notes": sp.get("fee_notes"),
             "images": images,
-            "last_verified_at": utcnow(),
+            # Stagger last_verified_at across the demo set so the freshness
+            # indicators on the UI have variety: fresh / recent / stale.
+            "last_verified_at": utcnow() - timedelta(days=(i * 18) % 180),
             "created_at": utcnow() - timedelta(days=len(DEMO_SPOTS) - i),
             "updated_at": utcnow(),
         }

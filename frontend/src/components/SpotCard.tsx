@@ -4,6 +4,8 @@ import { router } from 'expo-router';
 import { Bookmark, Star, Shield, Lock, EyeOff, MapPin } from 'lucide-react-native';
 import { colors, radii, space, font } from '../theme';
 import { api } from '../api';
+import FreshnessBadge from './FreshnessBadge';
+import VerifiedBadge from './VerifiedBadge';
 
 export type Spot = any;
 
@@ -87,11 +89,15 @@ export default function SpotCard({
         </View>
         <View style={styles.overlayBottom}>
           <ScoreBadge score={spot.shoot_score || 0} />
+          <FreshnessBadge freshness={spot.freshness} label={spot.freshness_label} variant="compact" />
         </View>
       </View>
 
       <View style={styles.info}>
-        <Text style={styles.title} numberOfLines={1}>{spot.title}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <Text style={[styles.title, { flex: 1 }]} numberOfLines={1}>{spot.title}</Text>
+          <VerifiedBadge status={spot.owner?.verification_status} variant="inline" size={14} />
+        </View>
         <View style={styles.metaRow}>
           <Text style={styles.city} numberOfLines={1}>
             {spot.city}, {spot.state}
@@ -142,6 +148,10 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: space.sm,
     left: space.sm,
+    right: space.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   premiumBadge: {
     backgroundColor: colors.primary,

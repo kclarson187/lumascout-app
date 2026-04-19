@@ -103,13 +103,13 @@
 #====================================================================================================
 
 user_problem_statement: |
-  PhotoScout — Creator Economy & Monetization wiring.
-  Hook newly created Settings/Billing/Creator Packs/Marketplace screens into the app
-  navigation; add a 7-day activity trend chart and "Earnings (coming soon)" tile to the
-  Creator Dashboard; gate the Premium privacy mode behind the Elite plan in the Add Spot flow.
+  PhotoScout — Trust, Moderation, Quality System
+  Ship a complete trust layer: report flow, duplicate detection, pending-review state,
+  admin approve/reject, last-verified date, freshness indicators, verified contributor
+  badge, basic spam prevention, and privacy-safe API behavior for hidden coordinates.
 
 backend:
-  - task: "GET /api/me/billing — billing overview with plan, usage, limits"
+  - task: "public_spot_view enriched with freshness + freshness_label"
     implemented: true
     working: true
     file: "/app/backend/server.py"
@@ -119,69 +119,102 @@ backend:
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Returns plan, plan_status, invoices=[], usage (saves/private_spots/collections), and full limits dict. Stripe-ready shape. Requires authenticated user."
+        -comment: "Every spot view now computes `freshness` (fresh/recent/stale/unknown) from last_verified_at plus a human label ('Verified 3d ago'). Tz-aware normalization. All list/feed/detail endpoints get these fields for free."
         -working: true
         -agent: "testing"
-        -comment: "PASS. Auth required (401 without bearer). For sophie (free) returned plan='free', plan_status='free', invoices=[], renews_at=null, payment_method=null, limits.saves=20, limits.private_spots=3, limits.collections=3, limits.advanced_filters=false, limits.sell_packs=false, and integer usage fields. NOTE: sophie's plan in DB had been mutated to 'pro' by an earlier test session; testing agent reset it back to 'free' via POST /api/me/upgrade {plan:'free'} so the spec assertions hold. The endpoint itself behaved correctly under both states."
+        -comment: "Verified on /feed/home trending and /spots?limit=50. Every spot returns `freshness` in {fresh,recent,stale,unknown} and `freshness_label` is non-empty when freshness != 'unknown'. Variety is present across the demo set: {'fresh': 25, 'recent': 1, 'stale': 1} in /spots?limit=50. Trending top-10 are all 'fresh' (expected — trending is score-sorted)."
 
-  - task: "GET /api/me/trends?days=7 — daily spots/saves series for Creator Dashboard"
+  - task: "attach_owners helper — batch-attach owner info (name, avatar, verification_status) to list endpoints"
     implemented: true
     working: true
     file: "/app/backend/server.py"
-    stuck_count: 2
+    stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Buckets own spots + saves received by UTC day. Clamps days 1..30, defaults 7. Returns series[{date,label,spots,saves}] plus totals."
-        -working: false
-        -agent: "testing"
-        -comment: "FAIL — 500 Internal Server Error on every authenticated call (days=7, days=0, days=100). Backend log: AttributeError: type object 'datetime.datetime' has no attribute 'timedelta' at server.py line 964. The imports at the top of server.py are `from datetime import datetime, timezone, timedelta` — `timedelta` is already imported as a top-level name, so `datetime.timedelta(days=i)` is invalid. Fix: replace both occurrences in me_trends() with bare `timedelta(days=i)` (lines 964 and 965). Auth-required check (401 without bearer) DOES pass — failure is purely the bucket-loop bug."
-        -working: "NA"
-        -agent: "main"
-        -comment: "FIX APPLIED: replaced datetime.timedelta(days=i) and datetime.timedelta(days=1) with bare timedelta(...) on lines 964–965. grep -n 'datetime\\.timedelta' now returns no matches. Requesting retest."
-        -working: false
-        -agent: "testing"
-        -comment: |
-          FAIL — Retest after timedelta fix exposes a SECOND bug. All authenticated calls
-          (days=7, days=0, days=100) still return 500 Internal Server Error.
-          Backend traceback (server.py line 968):
-              TypeError: can't compare offset-naive and offset-aware datetimes
-              if s.get("created_at") and day_start <= s["created_at"] < day_end
-          Root cause: `start` (line 949–952) is built from `utcnow()` and is tz-aware UTC,
-          so `day_start`/`day_end` are tz-aware. But documents in db.spots and db.spot_saves
-          have `created_at` stored as tz-NAIVE datetimes (Mongo strips tzinfo on insert
-          unless you serialize them). Comparing aware vs naive raises TypeError.
-          Suggested fixes (pick one):
-            (a) Build `start` as tz-naive UTC: `start = datetime.utcnow().replace(...)`.
-                Then day_start/day_end are naive and match Mongo's stored values. The
-                $gte query at line 958 also needs the naive `start`.
-            (b) Strip tz from each `s["created_at"]` before comparing:
-                `ca = s["created_at"]; ca = ca.replace(tzinfo=None) if ca.tzinfo else ca`.
-            (c) Force aware on read: `ca = s["created_at"].replace(tzinfo=timezone.utc) if s["created_at"].tzinfo is None else s["created_at"]`.
-          Live results: PASS no-token→401, PASS login sophie, FAIL days=7 (500),
-          FAIL days=0 (500), FAIL days=100 (500). Auth guard works; bucket loop still broken.
+        -comment: "Applied to /spots, /spots/nearby/search, /feed/home. Single batched users find() per request so cards can render verified-contributor badges + author names."
         -working: true
         -agent: "testing"
-        -comment: |
-          PASS — 5/5 retest after tz-aware `_norm()` helper fix. The helper coerces
-          naive BSON created_at values to tz-aware UTC before comparing against
-          tz-aware day_start/day_end. Live results against
-          https://photo-finder-60.preview.emergentagent.com/api with sophie@photoscout.app:
-            ✅ GET /api/me/trends (no token) → 401 {"detail":"Not authenticated"}
-            ✅ POST /api/auth/login → 200, token len 204 (response uses `token` key, not `access_token`)
-            ✅ GET /api/me/trends?days=7 → 200, len(series)=7. Every bucket has
-               date matching /^\d{4}-\d{2}-\d{2}$/, label a 3-char weekday (e.g. "Mon"),
-               spots & saves are ints ≥ 0. totals.spots == sum(series.spots) == 27,
-               totals.saves == sum(series.saves) == 19. Sample bucket:
-               {"date":"2026-04-13","label":"Mon","spots":1,"saves":0}.
-            ✅ GET /api/me/trends?days=0 → 200, len(series)=1 (clamped to 1).
-            ✅ GET /api/me/trends?days=100 → 200, len(series)=30 (clamped to 30).
-          Backend log confirms 200 OK on all three authenticated calls; no TypeError.
-          Test script: /app/backend_test_trends.py.
+        -comment: "GET /spots?limit=5 → every item has owner{user_id,name,verification_status} and at least one is verified_status=='verified'. GET /feed/home trending[0] and recent[0] both include full owner object (sophiereyes, verified). PASS."
 
-  - task: "Existing: /api/me/dashboard, /api/packs, /api/me/packs, /api/packs/{id}/purchase — regression"
+  - task: "GET /api/spots/check-duplicates?latitude=&longitude=&title= — duplicate submission detection"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Returns up to 5 approved public/premium spots within radius_m (default 200m, clamped 50–2000m), each annotated with distance_m and title_similarity (difflib). Sort: closest then most similar. Registered BEFORE /spots/{spot_id} so FastAPI routes correctly. Auth optional (Depends get_optional_user)."
+        -working: true
+        -agent: "testing"
+        -comment: "Positive: seed approved spot at (30.5225,-98.0017) returned count=1 with distance_m=0 (int) and title_similarity=0.67 (float in [0,1]). Ordering by (distance_m asc, title_similarity desc) verified. Negative (lat=89,lng=170): count==0, 200 OK. Route precedence: GET /spots/check-duplicates with no query params → 422 pydantic validation error (NOT /spots/{spot_id} 404 'Spot not found'). PASS."
+
+  - task: "POST /api/reports — reason enum + dedupe + rate limit"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Reason must be one of: not_a_location, unsafe, inappropriate, spam, wrong_info, other (400 otherwise). target_type in {spot,user,review}. Duplicate pending reports by same reporter on the same target are deduped (returns the existing pending doc, not a new one). Rate limited at 20/day per user."
+        -working: true
+        -agent: "testing"
+        -comment: "Valid submit as sophie → 200 with report_id=rep_3073e6112623, status='pending'. Dedupe: second identical POST returns same report_id (no new insert). Bad reason 'nonsense' → 400 with detail that enumerates all 6 allowed keys. Bad target_type 'invoice' → 400 'Invalid target_type'. PASS."
+
+  - task: "GET /api/reports/reasons — enumerated reasons with human labels for the mobile UI"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Public endpoint. Returns list of {key,label}. Mobile fallbacks to a baked-in list if this fails."
+        -working: true
+        -agent: "testing"
+        -comment: "No auth required, 200 OK. Returns exactly the 6 keys {not_a_location, unsafe, inappropriate, spam, wrong_info, other} with non-empty labels. PASS."
+
+  - task: "Rate limiting — check_rate_limit() on POST /spots, /reviews, /checkins, /reports"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "In-memory sliding window. Limits: spot_create 10/hr, report_create 20/day, review_create 30/day, checkin_create 30/day. Returns HTTP 429 with retry-in message when exceeded. Process-local (resets on restart)."
+        -working: true
+        -agent: "testing"
+        -comment: "Probed /reports with unique target_ids as sophie. 429 fired at request #19 (already had 1 prior report in this session → 19+1=20, matches the 20/day cap). Retry message: 'Too many requests. Try again in 86396s.' (<=21 threshold satisfied). Only /reports was exercised to avoid polluting demo DB. PASS."
+
+  - task: "Startup migration backfill_freshness — staggers existing demo spots' last_verified_at"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Only updates spots whose last_verified_at is within 60s of created_at (i.e., seed defaults) so real user spots are untouched. Staggered 0–180 days by index % 180."
+        -working: true
+        -agent: "testing"
+        -comment: "Observed via /spots?limit=50 freshness distribution {'fresh': 25, 'recent': 1, 'stale': 1} — the stagger is producing meaningful variety across the demo set, although the distribution is still heavily skewed to 'fresh'. Trending is score-sorted so its top-10 all landing on 'fresh' is expected. Functional PASS."
+
+  - task: "Existing: /api/admin/pending, /api/admin/spots/{id}/approve, /api/admin/spots/{id}/reject, /api/admin/reports, /api/admin/reports/{id}/resolve — regression"
     implemented: true
     working: true
     file: "/app/backend/server.py"
@@ -191,59 +224,92 @@ backend:
     status_history:
         -working: true
         -agent: "main"
-        -comment: "No signature changes in this iteration; re-verify they still return 200 for auth'd users. /packs/{id}/purchase should enqueue pack_interest and return waitlist message."
+        -comment: "No signature changes. Re-verify admin can still pull pending queue + report queue and approve/reject/resolve."
         -working: true
         -agent: "testing"
-        -comment: "PASS. /api/me/dashboard returns total_spots, public_spots, private_spots, saves_received, reviews_received, followers, top_spots[]. /api/me/spots returns 200 list. /api/packs?published=true returns 200 array (3 published packs in DB). /api/me/packs returns 200 list. /api/packs/{valid_id}/purchase returns status='waitlist' with the expected coming-soon message. /api/packs/{bogus}/purchase correctly returns 404."
+        -comment: "Admin login OK. GET /admin/pending → 200, [] (empty, acceptable). GET /admin/reports → 200 list length 7, includes the report submitted in this run (rep_3073e6112623). POST /admin/reports/{id}/resolve with body {action:'dismiss'} (the value specified in the review request) → 400 'Invalid action'; server only accepts the full tense values {dismissed, removed, warned}. Retrying with {action:'dismissed'} → 200 OK. FUNCTIONALLY PASS. Minor contract mismatch: review request uses 'dismiss' but server (and the credentials doc at /app/memory/test_credentials.md) expects 'dismissed'. Mobile clients must send the past-tense value. Recommend either: (a) accept both 'dismiss' and 'dismissed' in admin_resolve_report, or (b) confirm the frontend already sends 'dismissed'."
 
 frontend:
-  - task: "Profile tab — Settings + Marketplace navigation entry points"
+  - task: "VerifiedBadge component — reusable 'Verified contributor' pill"
     implemented: true
     working: "NA"
-    file: "/app/frontend/app/(tabs)/profile.tsx"
+    file: "/app/frontend/src/components/VerifiedBadge.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Three variants: chip (pill), compact (tight pill), inline (just the blue check next to a name). Renders nothing unless status === 'verified'."
+
+  - task: "FreshnessBadge component — color-coded freshness pill (fresh/recent/stale)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/FreshnessBadge.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Sourced from spot.freshness + spot.freshness_label. Green for fresh (<30d), primary orange for recent (<90d), red for stale. Chip/compact/inline variants."
+
+  - task: "ReportSheet component — bottom-sheet report flow with reason chips"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/ReportSheet.tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Added Settings gear in top bar → /settings. Added Marketplace action card → /marketplace. Actions row now wraps (flexWrap) for admin + 3 core cards."
+        -comment: "Modal bottom sheet. Fetches /reports/reasons on open with fallback list. Required reason selection; optional 500-char details textarea. Submit posts to /reports and shows success alert."
 
-  - task: "Creator Dashboard — 7-day trend chart + earnings tile + pack entry"
+  - task: "SpotCard — shows FreshnessBadge + VerifiedBadge next to owner"
     implemented: true
     working: "NA"
-    file: "/app/frontend/app/creator-dashboard.tsx"
+    file: "/app/frontend/src/components/SpotCard.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "FreshnessBadge rendered bottom-left of hero next to ScoreBadge. VerifiedBadge inline next to title — only shows when owner.verification_status === 'verified'."
+
+  - task: "Spot Detail — pending/rejected banner (owner-only), freshness pill, verified owner, ReportSheet wiring"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/spot/[id].tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "New inline SVG line chart (react-native-svg) showing 7-day saves + spot creations. 'Earnings $0 — COMING SOON' tile. CTA row with 'Manage spot packs' → /creator/packs."
+        -comment: "Amber 'Pending moderation review' banner when owner views their own pending_review spot. Red rejection banner for rejected. FreshnessBadge under title. VerifiedBadge inline next to owner name, plus 'Verified contributor' subtitle. Flag button now opens ReportSheet instead of single-tap alert."
 
-  - task: "Add Spot — Elite gating on Premium privacy mode"
+  - task: "Add Spot — duplicate warning card with tappable candidate list"
     implemented: true
     working: "NA"
     file: "/app/frontend/app/(tabs)/add.tsx"
     stuck_count: 0
-    priority: "medium"
+    priority: "high"
     needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Premium option tagged with ELITE pill, locked for non-elite users with alert → paywall. Inline upgrade prompt if plan < elite while premium is selected."
+        -comment: "After location is picked, debounced call to /spots/check-duplicates. If hits, renders amber 'Looks like this spot exists' card with thumbnails + 'X m away' + 'likely match' label (similarity > 0.6). Tapping a row pushes to that spot. User can still continue with their own submission."
 
 metadata:
   created_by: "main_agent"
-  version: "1.1"
-  test_sequence: 1
+  version: "1.2"
+  test_sequence: 2
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "GET /api/me/billing — billing overview with plan, usage, limits"
-    - "GET /api/me/trends?days=7 — daily spots/saves series for Creator Dashboard"
-    - "Existing: /api/me/dashboard, /api/packs, /api/me/packs, /api/packs/{id}/purchase — regression"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -251,90 +317,57 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      Added two new backend endpoints for the Creator Economy wiring:
-      1) GET /api/me/billing — returns plan/plan_status/invoices/usage/limits. No Stripe wired; invoices is always []
-         and renews_at/payment_method are null until Stripe ships.
-      2) GET /api/me/trends?days=7 — returns a per-day series of {spots_created, saves_received_on_own_spots}
-         plus totals. Clamped 1..30.
-
-      Please validate:
-      - Both endpoints require auth (401 when missing bearer token).
-      - /me/billing returns plan="free" with limits.saves=20 for a fresh user.
-      - /me/trends returns exactly 7 buckets with ISO dates (YYYY-MM-DD) and short day labels.
-      - Regression: /me/dashboard, /me/spots, /packs (published), /me/packs, /packs/{id}/purchase still return 200.
-
-      Credentials: see /app/memory/test_credentials.md.
-      Use sophie@photoscout.app / demo123 for a standard user and admin@photoscout.app / admin123 for admin.
-
+      Trust & Moderation backend additions this round:
+      
+      1) GET /api/spots/check-duplicates?latitude=&longitude=&title=&radius_m=
+         - Returns { count, candidates[ ≤5 ] } where each candidate has distance_m + title_similarity + full public_spot_view fields
+         - radius_m clamps 50–2000
+         - Must be ordered before /spots/{spot_id} in FastAPI — please verify by calling with a bogus latitude and confirming you don't get a 404 spot-not-found
+         - Auth is optional
+      
+      2) POST /api/reports — stricter
+         - reason MUST be one of: not_a_location, unsafe, inappropriate, spam, wrong_info, other — else 400
+         - target_type MUST be in {spot, user, review} — else 400
+         - Rate-limited 20/day per user (HTTP 429)
+         - Duplicate pending report from same user on same target is deduped (returns the existing doc, no new insert)
+      
     -agent: "testing"
     -message: |
-      Backend test pass: 10/13 checks pass. Two findings:
+      Trust & Moderation backend validation complete — 17/18 substantive checks PASS.
 
-      1) CRITICAL BUG in GET /api/me/trends — returns 500 on every call.
-         Root cause: server.py lines 964–965 use `datetime.timedelta(days=i)` and `day_start + datetime.timedelta(days=1)`,
-         but `datetime` is the *class* (imported via `from datetime import datetime, timezone, timedelta`),
-         not the module. AttributeError: type object 'datetime.datetime' has no attribute 'timedelta'.
-         Fix: use bare `timedelta(days=i)` and `timedelta(days=1)` — `timedelta` is already imported at the top.
-         Auth-required guard works (401 when no bearer); only the bucket loop is broken.
+      Task-by-task:
+      1) /spots/check-duplicates — PASS (positive returns distance_m int + title_similarity 0..1, correct ordering;
+         negative lat=89/lng=170 → count 0; route precedence → 422 validation, NOT /spots/{spot_id} 404).
+      2) POST /reports — PASS (valid submit returns pending report_id; dedupe returns same id on repeat;
+         bad reason 400 with enum list in detail; bad target_type 'invoice' → 400).
+      3) /reports/reasons — PASS (6 expected keys, all labels non-empty, no auth required).
+      4) /reports rate limit — PASS (429 at request #19 within same day, retry-in 86396s, matches 20/day cap).
+      5) freshness fields — PASS (all spots expose freshness ∈ {fresh,recent,stale,unknown}; freshness_label non-empty
+         when not unknown). Distribution across /spots?limit=50 = {fresh:25, recent:1, stale:1} — variety exists; trending
+         top-10 all 'fresh' because trending is score-sorted (expected, not a concern).
+      6) attach_owners — PASS on /spots?limit=5 (every item has owner{user_id,name,verification_status}, at least one
+         verified) and on /feed/home trending[0] + recent[0].
+      7) Admin regression — /admin/pending 200 [], /admin/reports 200 includes the new report. 
+         CONTRACT MISMATCH (minor): /admin/reports/{id}/resolve validates action against {dismissed,removed,warned} but
+         the review request (and some mobile clients might) send 'dismiss'. Request with {action:'dismiss'} → 400
+         'Invalid action'. Retrying with {action:'dismissed'} → 200. Recommend either (a) accept both 'dismiss' and
+         'dismissed' on the server, or (b) confirm the mobile ReportSheet/admin UI sends the past-tense form.
 
-      2) MINOR / data-state: sophie@photoscout.app's plan was "pro" in DB (not "free" as documented).
-         Likely mutated by a prior test run via /api/me/upgrade. I reset her back to "free" via
-         POST /api/me/upgrade {"plan":"free"} and re-verified /api/me/billing returns the spec-exact
-         shape: plan="free", plan_status="free", invoices=[], renews_at=null, payment_method=null,
-         limits {saves:20, private_spots:3, collections:3, advanced_filters:false, sell_packs:false},
-         usage with integer fields. Endpoint behavior was correct in both states; just flagging the
-         seed-vs-state mismatch in case main_agent wants seed_demo_content to enforce free on each boot.
+      No blocking issues found. Backend trust layer is good to ship. See /app/backend_test.py for the test harness.
 
-      Regressions all green: /api/me/dashboard, /api/me/spots, /api/packs?published=true,
-      /api/me/packs, /api/packs/{id}/purchase (waitlist + 404 for bogus id).
-
-      ACTION: fix the two `datetime.timedelta` references in me_trends() and re-run the trends portion.
-
-    -agent: "testing"
-    -message: |
-      Live retest of GET /api/me/trends after main agent's `datetime.timedelta` → `timedelta` fix:
-      results 2/5 PASS, 3/5 FAIL. The original AttributeError is gone, but a new TypeError
-      surfaced one line below. Backend traceback (server.py:968):
-          TypeError: can't compare offset-naive and offset-aware datetimes
-              if s.get("created_at") and day_start <= s["created_at"] < day_end
-
-      Detailed live results (creds: sophie@photoscout.app / demo123):
-        ✅ GET /api/me/trends (no token) → 401 {"detail":"Not authenticated"}
-        ✅ POST /api/auth/login → 200, token len 204
-        ❌ GET /api/me/trends?days=7   → 500 Internal Server Error
-        ❌ GET /api/me/trends?days=0   → 500 Internal Server Error
-        ❌ GET /api/me/trends?days=100 → 500 Internal Server Error
-
-
-    -agent: "testing"
-    -message: |
-      Retest of GET /api/me/trends after tz-aware `_norm()` helper fix: 5/5 PASS.
-        ✅ GET /api/me/trends (no token) → 401 Not authenticated
-        ✅ POST /api/auth/login (sophie@photoscout.app / demo123) → 200, token returned
-           (NOTE: login response uses key `token`, not `access_token` — test updated accordingly)
-        ✅ GET /api/me/trends?days=7 → 200; len(series)==7; every bucket has
-           date matching YYYY-MM-DD, 3-char weekday label, integer spots/saves ≥ 0;
-           totals.spots == sum(bucket.spots) == 27, totals.saves == sum(bucket.saves) == 19.
-        ✅ GET /api/me/trends?days=0 → 200; len(series)==1 (clamped to 1).
-        ✅ GET /api/me/trends?days=100 → 200; len(series)==30 (clamped to 30).
-      Backend logs show 200 OK on all three authenticated calls; no TypeError.
-      Marking trends task working=true, needs_retesting=false. Test script at
-      /app/backend_test_trends.py.
-
-      Root cause: `start` is built from `utcnow()` (returns tz-aware UTC) at lines 949–952,
-      so `day_start` and `day_end` are aware. But Mongo-stored `created_at` on db.spots and
-      db.spot_saves is tz-NAIVE (Motor/PyMongo strips tzinfo on insert by default unless
-      CodecOptions(tz_aware=True) is set). Comparing aware vs naive raises TypeError.
-
-      Recommended fix (smallest delta, no schema change):
-        Inside me_trends, normalize each created_at on read OR build start tz-naive.
-        Option A — make boundaries naive (matches what's actually in Mongo):
-            now = datetime.utcnow()                       # naive UTC
-            start = (now - timedelta(days=days-1)).replace(hour=0, minute=0, second=0, microsecond=0)
-            # then the $gte on db.spot_saves at line 958 also uses naive `start` — consistent.
-        Option B — coerce per row before compare:
-            def _aware(dt): return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-            ... day_start <= _aware(s["created_at"]) < day_end ...
-
-      I did NOT change server.py — flagging for main agent. Auth guard verified working.
-      Test script: /app/backend_test_trends.py. Re-run after fix.
+      3) GET /api/reports/reasons — public; returns array of {key,label}
+      
+      4) Rate limiting on writes:
+         - POST /spots                 10/hr
+         - POST /spots/{id}/reviews    30/day
+         - POST /spots/{id}/checkins   30/day
+         - POST /reports               20/day
+      
+      5) public_spot_view now returns freshness ∈ {fresh, recent, stale, unknown} plus freshness_label
+      
+      6) attach_owners() is applied to /spots, /spots/nearby/search, /feed/home
+      
+      Please validate the above + regression on admin moderation endpoints.
+      Credentials: /app/memory/test_credentials.md — sophie@photoscout.app / demo123 (standard), admin@photoscout.app / admin123 (admin).
+      
+      Do NOT run frontend tests. Main agent will ask the user before invoking the UI testing agent.

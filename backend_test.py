@@ -1,221 +1,387 @@
 """
-Backend tests for PhotoScout Creator Economy wiring.
-Focus: /api/me/billing, /api/me/trends, regressions on dashboard/spots/packs.
+PhotoScout Trust & Moderation backend tests.
+
+Runs against the external preview URL. Validates:
+  1) GET /api/spots/check-duplicates (positive, negative, route-precedence)
+  2) POST /api/reports (valid, dedupe, bad reason, bad target_type)
+  3) GET /api/reports/reasons (public)
+  4) POST /api/reports rate limit 20/day
+  5) public_spot_view freshness + freshness_label
+  6) attach_owners on /api/spots and /api/feed/home
+  7) Admin moderation regression (/admin/pending, /admin/reports, /admin/reports/{id}/resolve)
 """
-import os
-import sys
 import json
-import re
-from datetime import datetime
-from pathlib import Path
+import sys
+import time
+import uuid
+from typing import Any, Dict, List, Optional
 
 import requests
 
-# Resolve backend URL from frontend env
-FRONT_ENV = Path("/app/frontend/.env")
-BASE_URL = None
-for line in FRONT_ENV.read_text().splitlines():
-    if line.startswith("EXPO_PUBLIC_BACKEND_URL="):
-        BASE_URL = line.split("=", 1)[1].strip().strip('"')
-        break
-
-assert BASE_URL, "EXPO_PUBLIC_BACKEND_URL not found"
-API = BASE_URL.rstrip("/") + "/api"
-print(f"Testing API at: {API}")
+BASE = "https://photo-finder-60.preview.emergentagent.com/api"
 
 SOPHIE = {"email": "sophie@photoscout.app", "password": "demo123"}
 ADMIN = {"email": "admin@photoscout.app", "password": "admin123"}
 
-results = []  # (name, ok, detail)
+results: List[Dict[str, Any]] = []
 
 
-def record(name, ok, detail=""):
-    status = "PASS" if ok else "FAIL"
-    print(f"[{status}] {name} :: {detail}")
-    results.append((name, ok, detail))
+def record(name: str, ok: bool, detail: str = "") -> None:
+    tag = "PASS" if ok else "FAIL"
+    print(f"[{tag}] {name}  {detail}")
+    results.append({"name": name, "ok": ok, "detail": detail})
 
 
-def login(creds):
-    r = requests.post(f"{API}/auth/login", json=creds, timeout=15)
-    r.raise_for_status()
+def login(creds: Dict[str, str]) -> Optional[str]:
+    r = requests.post(f"{BASE}/auth/login", json=creds, timeout=30)
+    if r.status_code != 200:
+        print(f"login failed {creds['email']}: {r.status_code} {r.text}")
+        return None
     return r.json()["token"]
 
 
-def auth(token):
-    return {"Authorization": f"Bearer {token}"}
+def auth(tok: str) -> Dict[str, str]:
+    return {"Authorization": f"Bearer {tok}"}
 
 
-# -------- Login --------
-try:
-    sophie_token = login(SOPHIE)
-    record("login sophie", True, "200 OK")
-except Exception as e:
-    record("login sophie", False, str(e))
+# ---------------------------------------------------------------------------
+# Bootstrap: login sophie + admin, grab a reference spot from the feed
+# ---------------------------------------------------------------------------
+print("\n=== Bootstrap ===")
+sophie_tok = login(SOPHIE)
+admin_tok = login(ADMIN)
+if not sophie_tok or not admin_tok:
+    print("Could not obtain required tokens.")
     sys.exit(1)
+record("login/sophie", bool(sophie_tok))
+record("login/admin", bool(admin_tok))
 
+feed_r = requests.get(f"{BASE}/feed/home", headers=auth(sophie_tok), timeout=30)
+if feed_r.status_code != 200:
+    print("feed/home failed", feed_r.status_code, feed_r.text)
+    sys.exit(1)
+feed = feed_r.json()
+# /api/feed/home returns sections as TOP-LEVEL keys (nearby/trending/recent/...),
+# not wrapped inside a `sections` object. Handle both in case implementation changes.
+sections = feed.get("sections") if isinstance(feed.get("sections"), dict) else feed
+trending = sections.get("trending", []) or []
+recent_section = sections.get("recent", []) or []
+assert trending, "No trending spots in feed/home"
+ref_spot = trending[0]
+REF_LAT = ref_spot["latitude"]
+REF_LNG = ref_spot["longitude"]
+REF_TITLE = ref_spot.get("title", "")
+REF_SPOT_ID = ref_spot["spot_id"]
+print(f"Reference spot: {REF_SPOT_ID}  '{REF_TITLE}'  ({REF_LAT},{REF_LNG})")
 
-# -------- /api/me/billing --------
-# 1. Auth required
-r = requests.get(f"{API}/me/billing", timeout=15)
-record("billing requires auth (no header → 401/403)", r.status_code in (401, 403),
-       f"status={r.status_code}, body={r.text[:200]}")
+# ---------------------------------------------------------------------------
+# 1) GET /api/spots/check-duplicates
+# ---------------------------------------------------------------------------
+print("\n=== Task 1: /spots/check-duplicates ===")
 
-# 2. Authenticated call
-r = requests.get(f"{API}/me/billing", headers=auth(sophie_token), timeout=15)
+# Positive
+sim_title = (REF_TITLE[: max(4, len(REF_TITLE) // 2)] or "Spot") + " Overlook"
+r = requests.get(
+    f"{BASE}/spots/check-duplicates",
+    params={"latitude": REF_LAT, "longitude": REF_LNG, "title": sim_title, "radius_m": 200},
+    timeout=30,
+)
 ok = r.status_code == 200
 detail = ""
 if ok:
     body = r.json()
-    checks = []
-    checks.append(("plan==free", body.get("plan") == "free"))
-    checks.append(("plan_status==free", body.get("plan_status") == "free"))
-    checks.append(("invoices==[]", body.get("invoices") == []))
-    checks.append(("renews_at==null", body.get("renews_at") is None))
-    checks.append(("payment_method==null", body.get("payment_method") is None))
-    limits = body.get("limits", {})
-    checks.append(("limits.saves==20", limits.get("saves") == 20))
-    checks.append(("limits.private_spots==3", limits.get("private_spots") == 3))
-    checks.append(("limits.collections==3", limits.get("collections") == 3))
-    checks.append(("limits.advanced_filters==False", limits.get("advanced_filters") is False))
-    checks.append(("limits.sell_packs==False", limits.get("sell_packs") is False))
-    usage = body.get("usage", {})
-    checks.append(("usage.saves int", isinstance(usage.get("saves"), int)))
-    checks.append(("usage.private_spots int", isinstance(usage.get("private_spots"), int)))
-    checks.append(("usage.collections int", isinstance(usage.get("collections"), int)))
-    failed = [name for name, c in checks if not c]
-    ok = len(failed) == 0
-    detail = "all field checks ok" if ok else f"failed: {failed} | body={json.dumps(body)[:400]}"
-else:
-    detail = f"status={r.status_code} body={r.text[:300]}"
-record("/api/me/billing (sophie)", ok, detail)
-
-
-# -------- /api/me/trends --------
-# 1. Auth required
-r = requests.get(f"{API}/me/trends", timeout=15)
-record("trends requires auth (no header → 401/403)", r.status_code in (401, 403),
-       f"status={r.status_code}")
-
-# 2. Default 7 days
-r = requests.get(f"{API}/me/trends?days=7", headers=auth(sophie_token), timeout=15)
-if r.status_code != 200:
-    record("/api/me/trends?days=7", False, f"status={r.status_code} body={r.text[:500]}")
-else:
-    body = r.json()
-    series = body.get("series", [])
-    checks = []
-    checks.append(("days==7", body.get("days") == 7))
-    checks.append(("series length==7", len(series) == 7))
-    bucket_ok = True
-    for b in series:
-        if not isinstance(b.get("spots"), int) or not isinstance(b.get("saves"), int):
-            bucket_ok = False; break
-        if not re.match(r"^\d{4}-\d{2}-\d{2}$", b.get("date", "")):
-            bucket_ok = False; break
-        if not isinstance(b.get("label"), str) or not b.get("label"):
-            bucket_ok = False; break
-    checks.append(("each bucket has date/label/spots/saves", bucket_ok))
-    totals = body.get("totals", {})
-    checks.append(("totals.spots == sum(series.spots)", totals.get("spots") == sum(b["spots"] for b in series)))
-    checks.append(("totals.saves == sum(series.saves)", totals.get("saves") == sum(b["saves"] for b in series)))
-    failed = [n for n, c in checks if not c]
-    ok = len(failed) == 0
-    detail = "shape ok" if ok else f"failed: {failed} | body={json.dumps(body)[:400]}"
-    record("/api/me/trends?days=7", ok, detail)
-
-# 3. Clamp days=0 -> >=1 bucket
-r = requests.get(f"{API}/me/trends?days=0", headers=auth(sophie_token), timeout=15)
-if r.status_code != 200:
-    record("trends days=0 clamps", False, f"status={r.status_code} body={r.text[:300]}")
-else:
-    body = r.json()
-    ok = len(body.get("series", [])) >= 1
-    record("trends days=0 clamps to >=1 bucket", ok, f"series_len={len(body.get('series', []))}")
-
-# 4. Clamp days=100 -> 30 buckets
-r = requests.get(f"{API}/me/trends?days=100", headers=auth(sophie_token), timeout=15)
-if r.status_code != 200:
-    record("trends days=100 clamps", False, f"status={r.status_code} body={r.text[:300]}")
-else:
-    body = r.json()
-    ok = len(body.get("series", [])) == 30
-    record("trends days=100 clamps to 30 buckets", ok, f"series_len={len(body.get('series', []))}")
-
-
-# -------- Regression: /api/me/dashboard --------
-r = requests.get(f"{API}/me/dashboard", headers=auth(sophie_token), timeout=15)
-if r.status_code != 200:
-    record("/api/me/dashboard", False, f"status={r.status_code} body={r.text[:300]}")
-else:
-    body = r.json()
-    needed = ["total_spots", "public_spots", "private_spots", "saves_received", "reviews_received", "followers", "top_spots"]
-    missing = [k for k in needed if k not in body]
-    ok = len(missing) == 0 and isinstance(body.get("top_spots"), list)
-    record("/api/me/dashboard", ok, "ok" if ok else f"missing={missing}")
-
-# -------- Regression: /api/me/spots --------
-r = requests.get(f"{API}/me/spots", headers=auth(sophie_token), timeout=15)
-ok = r.status_code == 200 and isinstance(r.json(), list)
-record("/api/me/spots (auth)", ok, f"status={r.status_code} type={type(r.json()).__name__ if r.ok else 'n/a'}")
-
-# -------- Regression: /api/packs?published=true --------
-r = requests.get(f"{API}/packs?published=true", timeout=15)
-ok = r.status_code == 200 and isinstance(r.json(), list)
-packs = r.json() if ok else []
-record("/api/packs?published=true (public)", ok, f"status={r.status_code} count={len(packs)}")
-
-# -------- Regression: /api/me/packs --------
-r = requests.get(f"{API}/me/packs", headers=auth(sophie_token), timeout=15)
-ok = r.status_code == 200 and isinstance(r.json(), list)
-record("/api/me/packs (auth)", ok, f"status={r.status_code} count={len(r.json()) if r.ok else 'n/a'}")
-
-
-# -------- Regression: /api/packs/{id}/purchase --------
-target_pack_id = None
-if packs:
-    target_pack_id = packs[0]["pack_id"]
-else:
-    # Try elite user route — upgrade sophie temporarily, create a pack, purchase, downgrade
-    # Use upgrade endpoint to set elite
-    r = requests.post(f"{API}/me/upgrade", json={"plan": "elite"}, headers=auth(sophie_token), timeout=15)
-    if r.status_code == 200:
-        new_pack = {
-            "name": "Hill Country Golden Hour Pack",
-            "description": "Test pack",
-            "cover_image_url": None,
-            "price_cents": 999,
-            "spot_ids": [],
-            "published": True,
-        }
-        rc = requests.post(f"{API}/packs", json=new_pack, headers=auth(sophie_token), timeout=15)
-        if rc.status_code == 200:
-            target_pack_id = rc.json().get("pack_id")
-        # downgrade back to free
-        requests.post(f"{API}/me/upgrade", json={"plan": "free"}, headers=auth(sophie_token), timeout=15)
-
-if target_pack_id:
-    r = requests.post(f"{API}/packs/{target_pack_id}/purchase", headers=auth(sophie_token), timeout=15)
-    if r.status_code == 200:
-        b = r.json()
-        ok = b.get("status") == "waitlist" and "message" in b
-        record(f"/api/packs/{{id}}/purchase (waitlist)", ok, f"body={b}")
+    count = body.get("count", 0)
+    cands = body.get("candidates", [])
+    if count < 1 or not cands:
+        ok = False
+        detail = f"count={count} candidates={len(cands)} — expected >=1"
     else:
-        record("/api/packs/{id}/purchase", False, f"status={r.status_code} body={r.text[:300]}")
+        c0 = cands[0]
+        d = c0.get("distance_m")
+        sim = c0.get("title_similarity")
+        if not isinstance(d, int):
+            ok = False; detail = f"distance_m type={type(d).__name__} (expected int)"
+        elif not isinstance(sim, (int, float)) or sim < 0 or sim > 1:
+            ok = False; detail = f"title_similarity={sim} not in [0,1]"
+        else:
+            keys = [(c["distance_m"], -c["title_similarity"]) for c in cands]
+            sorted_keys = sorted(keys)
+            if keys != sorted_keys:
+                ok = False; detail = f"ordering violated keys={keys}"
+            else:
+                detail = f"count={count}, top distance={d}m, sim={sim}"
 else:
-    record("/api/packs/{id}/purchase", False, "could not obtain a pack id to test")
+    detail = f"{r.status_code} {r.text[:200]}"
+record("duplicates/positive", ok, detail)
 
-# 404 handling
-r = requests.post(f"{API}/packs/pack_doesnotexist/purchase", headers=auth(sophie_token), timeout=15)
-record("/api/packs/{bogus}/purchase → 404", r.status_code == 404, f"status={r.status_code}")
+# Negative — middle of nowhere
+r = requests.get(
+    f"{BASE}/spots/check-duplicates",
+    params={"latitude": 89, "longitude": 170, "radius_m": 200},
+    timeout=30,
+)
+ok = r.status_code == 200 and r.json().get("count", 1) == 0
+record("duplicates/negative", ok, f"{r.status_code} count={r.json().get('count') if r.status_code == 200 else 'n/a'}")
 
+# Route precedence — missing lat/lng must be 422 validation, NOT 404 spot-not-found
+r = requests.get(f"{BASE}/spots/check-duplicates", timeout=30)
+code = r.status_code
+try:
+    body = r.json()
+except Exception:
+    body = {}
+is_validation = code == 422
+is_spot_404 = code == 404 and ("spot not found" in str(body).lower())
+ok = is_validation and not is_spot_404
+record("duplicates/route_precedence", ok, f"status={code} body={str(body)[:160]}")
 
+# ---------------------------------------------------------------------------
+# 2) POST /api/reports
+# ---------------------------------------------------------------------------
+print("\n=== Task 2: POST /api/reports ===")
+
+payload_valid = {
+    "target_type": "spot",
+    "target_id": REF_SPOT_ID,
+    "reason": "spam",
+    "details": "test automated trust-layer QA",
+}
+r = requests.post(f"{BASE}/reports", json=payload_valid, headers=auth(sophie_tok), timeout=30)
+ok = r.status_code == 200
+first_report_id = None
+if ok:
+    body = r.json()
+    first_report_id = body.get("report_id")
+    if not first_report_id or body.get("status") != "pending":
+        ok = False
+    record("reports/valid_submit", ok, f"report_id={first_report_id} status={body.get('status')}")
+else:
+    record("reports/valid_submit", False, f"{r.status_code} {r.text[:200]}")
+
+# Dedupe
+r2 = requests.post(f"{BASE}/reports", json=payload_valid, headers=auth(sophie_tok), timeout=30)
+ok = r2.status_code == 200 and r2.json().get("report_id") == first_report_id
+record(
+    "reports/dedupe",
+    ok,
+    f"status={r2.status_code} same_id={r2.json().get('report_id') == first_report_id if r2.status_code==200 else 'n/a'}",
+)
+
+# Bad reason
+bad_reason = {**payload_valid, "reason": "nonsense"}
+r = requests.post(f"{BASE}/reports", json=bad_reason, headers=auth(sophie_tok), timeout=30)
+ok = r.status_code == 400
+detail = ""
+if ok:
+    msg = str(r.json().get("detail", "")).lower()
+    expected_keys = ["not_a_location", "spam", "unsafe", "inappropriate", "wrong_info", "other"]
+    missing = [k for k in expected_keys if k not in msg]
+    if missing:
+        ok = False
+        detail = f"detail missing enum keys: {missing}"
+    else:
+        detail = "enum list present"
+else:
+    detail = f"{r.status_code} {r.text[:200]}"
+record("reports/bad_reason", ok, detail)
+
+# Bad target_type
+bad_type = {**payload_valid, "target_type": "invoice", "reason": "spam"}
+r = requests.post(f"{BASE}/reports", json=bad_type, headers=auth(sophie_tok), timeout=30)
+ok = r.status_code == 400
+record("reports/bad_target_type", ok, f"status={r.status_code} {r.text[:160]}")
+
+# ---------------------------------------------------------------------------
+# 3) GET /api/reports/reasons
+# ---------------------------------------------------------------------------
+print("\n=== Task 3: GET /api/reports/reasons ===")
+r = requests.get(f"{BASE}/reports/reasons", timeout=30)
+ok = r.status_code == 200
+detail = ""
+if ok:
+    arr = r.json()
+    keys_wanted = {"not_a_location", "unsafe", "inappropriate", "spam", "wrong_info", "other"}
+    got_keys = {item.get("key") for item in arr}
+    if got_keys != keys_wanted:
+        ok = False
+        detail = f"keys mismatch got={got_keys} want={keys_wanted}"
+    else:
+        empty = [item for item in arr if not item.get("label")]
+        if empty:
+            ok = False
+            detail = f"empty labels: {empty}"
+        else:
+            detail = f"{len(arr)} reasons ok"
+else:
+    detail = f"{r.status_code} {r.text[:200]}"
+record("reports/reasons", ok, detail)
+
+# ---------------------------------------------------------------------------
+# 5) Freshness
+# ---------------------------------------------------------------------------
+print("\n=== Task 5: freshness fields ===")
+allowed = {"fresh", "recent", "stale", "unknown"}
+bad = []
+values = []
+for s in trending[:20]:
+    f = s.get("freshness")
+    values.append(f)
+    if f not in allowed:
+        bad.append((s.get("spot_id"), f))
+    if f != "unknown" and not s.get("freshness_label"):
+        bad.append((s.get("spot_id"), f"missing freshness_label for {f}"))
+ok = not bad
+variety_note = ""
+if ok:
+    unique = set(values)
+    if len(unique) <= 1:
+        variety_note = f" (concern: only one freshness value across trending: {unique})"
+record(
+    "freshness/fields",
+    ok,
+    f"values={set(values)}{variety_note}" if ok else f"violations={bad[:5]}",
+)
+
+# ---------------------------------------------------------------------------
+# 6) attach_owners
+# ---------------------------------------------------------------------------
+print("\n=== Task 6: attach_owners ===")
+r = requests.get(f"{BASE}/spots", params={"limit": 5}, headers=auth(sophie_tok), timeout=30)
+ok = r.status_code == 200
+detail = ""
+if ok:
+    items = r.json()
+    missing_owner = []
+    has_verified = False
+    for s in items:
+        o = s.get("owner")
+        if not o or not all(k in o for k in ("user_id", "name", "verification_status")):
+            missing_owner.append(s.get("spot_id"))
+            continue
+        if o.get("verification_status") == "verified":
+            has_verified = True
+    if missing_owner:
+        ok = False
+        detail = f"items without owner: {missing_owner}"
+    elif not has_verified:
+        ok = False
+        detail = f"no verified owner in {len(items)} items"
+    else:
+        detail = f"{len(items)} items, all have owner, at least one verified"
+else:
+    detail = f"{r.status_code} {r.text[:200]}"
+record("attach_owners/spots", ok, detail)
+
+missing = []
+for section_name in ("trending", "recent"):
+    section = sections.get(section_name, []) or []
+    if not section:
+        missing.append(f"{section_name}=empty")
+        continue
+    o = section[0].get("owner")
+    if not o or not all(k in o for k in ("user_id", "name", "verification_status")):
+        missing.append(f"{section_name}[0] owner={o}")
+ok = not missing
+record(
+    "attach_owners/feed_home",
+    ok,
+    f"missing={missing}" if missing else "trending[0] + recent[0] have owner obj",
+)
+
+# ---------------------------------------------------------------------------
+# 7) Admin regression
+# ---------------------------------------------------------------------------
+print("\n=== Task 7: admin moderation regression ===")
+r = requests.get(f"{BASE}/admin/pending", headers=auth(admin_tok), timeout=30)
+ok = r.status_code == 200 and isinstance(r.json(), list)
+record("admin/pending", ok, f"{r.status_code} len={len(r.json()) if r.status_code==200 else 'n/a'}")
+
+r = requests.get(f"{BASE}/admin/reports", headers=auth(admin_tok), timeout=30)
+ok_base = r.status_code == 200 and isinstance(r.json(), list)
+admin_reports = r.json() if ok_base else []
+if ok_base and first_report_id:
+    found = any(x.get("report_id") == first_report_id for x in admin_reports)
+    if not found:
+        record("admin/reports", False, f"first_report_id={first_report_id} not in {len(admin_reports)} reports")
+    else:
+        record("admin/reports", True, f"{len(admin_reports)} reports returned, contains {first_report_id}")
+else:
+    record("admin/reports", ok_base, f"status={r.status_code}")
+
+resolve_id = first_report_id
+if resolve_id:
+    r = requests.post(
+        f"{BASE}/admin/reports/{resolve_id}/resolve",
+        json={"action": "dismiss"},
+        headers=auth(admin_tok),
+        timeout=30,
+    )
+    literal_ok = r.status_code == 200
+    if literal_ok:
+        record("admin/resolve[action=dismiss]", True, "literal 'dismiss' accepted (review_request value)")
+    else:
+        r2 = requests.post(
+            f"{BASE}/admin/reports/{resolve_id}/resolve",
+            json={"action": "dismissed"},
+            headers=auth(admin_tok),
+            timeout=30,
+        )
+        ok2 = r2.status_code == 200
+        record(
+            "admin/resolve[action=dismiss]",
+            False,
+            f"literal 'dismiss' => {r.status_code} {r.text[:160]}; fallback 'dismissed' => {r2.status_code}",
+        )
+        # Separate line so we can see the functional fallback works
+        record(
+            "admin/resolve[fallback=dismissed]",
+            ok2,
+            f"'dismissed' => {r2.status_code}",
+        )
+else:
+    record("admin/resolve", False, "no report_id to resolve")
+
+# ---------------------------------------------------------------------------
+# 4) Rate-limit smoke (runs last because it burns sophie's daily quota)
+# ---------------------------------------------------------------------------
+print("\n=== Task 4: /reports rate-limit 20/day ===")
+hit_429_at = None
+retry_msg = None
+last_status = None
+for i in range(1, 26):
+    body = {
+        "target_type": "spot",
+        "target_id": f"spot_ratelimit_{uuid.uuid4().hex[:10]}",
+        "reason": "spam",
+        "details": f"rate limit probe {i}",
+    }
+    rr = requests.post(f"{BASE}/reports", json=body, headers=auth(sophie_tok), timeout=30)
+    last_status = rr.status_code
+    if rr.status_code == 429:
+        hit_429_at = i
+        try:
+            retry_msg = rr.json().get("detail")
+        except Exception:
+            retry_msg = rr.text[:200]
+        break
+    if rr.status_code != 200:
+        print(f"  req {i}: unexpected status {rr.status_code} {rr.text[:120]}")
+
+ok = hit_429_at is not None and hit_429_at <= 21
+record(
+    "reports/rate_limit_20_per_day",
+    ok,
+    f"429 at req #{hit_429_at} (limit 20); retry_msg={retry_msg!r}; last_status={last_status}",
+)
+
+# ---------------------------------------------------------------------------
 # Summary
-print("\n========= SUMMARY =========")
-passed = sum(1 for _, ok, _ in results if ok)
-failed = [(n, d) for n, ok, d in results if not ok]
-print(f"Passed: {passed}/{len(results)}")
-if failed:
-    print("Failed:")
-    for n, d in failed:
-        print(f"  - {n}: {d}")
+# ---------------------------------------------------------------------------
+print("\n=== SUMMARY ===")
+passed = sum(1 for r in results if r["ok"])
+failed = [r for r in results if not r["ok"]]
+print(f"{passed}/{len(results)} passed")
+for r in failed:
+    print(f"  FAIL: {r['name']}  {r['detail']}")
+
 sys.exit(0 if not failed else 1)
