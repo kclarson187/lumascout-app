@@ -5,19 +5,12 @@ import * as Location from 'expo-location';
 import { api } from '../api';
 import { colors, font, space, radii } from '../theme';
 
-// Lazy-load react-native-maps so web bundling doesn't fail.
-let MapView: any, Marker: any;
-if (Platform.OS !== 'web') {
-  try {
-    const maps = require('react-native-maps');
-    MapView = maps.default;
-    Marker = maps.Marker;
-  } catch {}
-}
-
 /**
  * Drop-pin-on-map sheet. Shows a draggable marker, performs reverse geocode
  * on drag-end to label the pin with the nearest city/state.
+ * NOTE: react-native-maps is loaded LAZILY on first open (not at module import
+ * time) so an absent native binary — e.g. Expo Go without a dev client — does
+ * not crash the whole Add Spot screen; users just get a graceful fallback.
  */
 export default function MapPickerSheet({
   visible,
@@ -33,7 +26,20 @@ export default function MapPickerSheet({
   const [pin, setPin] = useState<{ latitude: number; longitude: number } | null>(initial || null);
   const [labelInfo, setLabelInfo] = useState<{ label: string; city: string; state: string; country: string } | null>(null);
   const [reversing, setReversing] = useState(false);
+  const [mapsMod, setMapsMod] = useState<{ MapView: any; Marker: any } | null>(null);
+  const [mapsFailed, setMapsFailed] = useState(false);
   const mapRef = useRef<any>(null);
+
+  // Lazy-load maps the first time the sheet becomes visible.
+  useEffect(() => {
+    if (!visible || mapsMod || mapsFailed || Platform.OS === 'web') return;
+    try {
+      const mod = require('react-native-maps');
+      setMapsMod({ MapView: mod.default, Marker: mod.Marker });
+    } catch {
+      setMapsFailed(true);
+    }
+  }, [visible, mapsMod, mapsFailed]);
 
   // Default center when no pin yet — Austin, TX
   const defaultRegion = useMemo(() => ({
@@ -104,13 +110,15 @@ export default function MapPickerSheet({
     onClose();
   };
 
-  if (!MapView) {
+  if (!mapsMod) {
     return (
       <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="pageSheet">
         <View style={styles.webFallback}>
           <MapPin size={28} color={colors.primary} />
-          <Text style={styles.webFallbackTitle}>Map picker unavailable on web</Text>
-          <Text style={styles.webFallbackBody}>Use the mobile app to drop a pin, or try “Search a place” / “Enter manually”.</Text>
+          <Text style={styles.webFallbackTitle}>
+            {Platform.OS === 'web' ? 'Map picker unavailable on web' : mapsFailed ? 'Map not available in this build' : 'Loading map…'}
+          </Text>
+          <Text style={styles.webFallbackBody}>Use the mobile app with a dev client to drop a pin, or try "Search a place" / "Enter manually".</Text>
           <TouchableOpacity style={styles.webBackBtn} onPress={onClose}>
             <Text style={styles.webBackTxt}>Close</Text>
           </TouchableOpacity>
@@ -118,6 +126,8 @@ export default function MapPickerSheet({
       </Modal>
     );
   }
+
+  const { MapView, Marker } = mapsMod;
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="pageSheet">

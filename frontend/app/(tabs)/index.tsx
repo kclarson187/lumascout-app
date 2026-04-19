@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { Search, TrendingUp } from 'lucide-react-native';
+import { Search, TrendingUp, MessageCircle, Users, HandHeart, BookOpen } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { api } from '../../src/api';
 import { useAuth } from '../../src/auth';
@@ -101,10 +101,17 @@ export default function Home() {
         contentContainerStyle={{ paddingBottom: space.xxxl }}
       >
         <View style={styles.header}>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={styles.hello}>Hello{user ? `, ${user.name.split(' ')[0]}` : ''}</Text>
             <Text style={styles.brand}>PhotoScout</Text>
           </View>
+          <TouchableOpacity
+            onPress={() => router.push('/messages')}
+            style={styles.topIconBtn}
+            testID="home-messages"
+          >
+            <MessageCircle size={20} color={colors.text} />
+          </TouchableOpacity>
           {user?.avatar_url ? (
             <TouchableOpacity onPress={() => router.push('/(tabs)/profile')} testID="home-avatar">
               <Image source={{ uri: user.avatar_url }} style={styles.avatar} />
@@ -117,6 +124,28 @@ export default function Home() {
             </TouchableOpacity>
           )}
         </View>
+
+        {/* Community tab strip — single source of social navigation */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.communityStrip}>
+          <View style={[styles.cTab, styles.cTabActive]}>
+            <Text style={[styles.cTabTxt, { color: colors.textInverse }]}>For You</Text>
+          </View>
+          <TouchableOpacity style={styles.cTab} onPress={() => router.push('/community')} testID="home-tab-community">
+            <Users size={12} color={colors.text} />
+            <Text style={styles.cTabTxt}>Community</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.cTab} onPress={() => router.push({ pathname: '/community', params: { cat: 'all' } })} testID="home-tab-local">
+            <Text style={styles.cTabTxt}>Local</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.cTab} onPress={() => router.push({ pathname: '/community', params: { cat: 'referral' } })} testID="home-tab-opps">
+            <HandHeart size={12} color={colors.text} />
+            <Text style={styles.cTabTxt}>Opportunities</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.cTab} onPress={() => router.push({ pathname: '/community', params: { cat: 'tip' } })} testID="home-tab-learn">
+            <BookOpen size={12} color={colors.text} />
+            <Text style={styles.cTabTxt}>Learn</Text>
+          </TouchableOpacity>
+        </ScrollView>
 
         <TouchableOpacity
           style={styles.searchBar}
@@ -227,7 +256,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.xl,
     paddingTop: space.md,
     paddingBottom: space.sm,
+    gap: 10,
   },
+  topIconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
+  communityStrip: { paddingHorizontal: space.xl, paddingBottom: space.sm, gap: 6 },
+  cTab: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1 },
+  cTabActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  cTabTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },
   hello: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13 },
   brand: { color: colors.text, fontFamily: font.display, fontSize: 30, letterSpacing: -0.5 },
   avatar: { width: 44, height: 44, borderRadius: 22 },
