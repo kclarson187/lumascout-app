@@ -1177,13 +1177,18 @@ NOMINATIM_HEADERS = {
 
 def _parse_nominatim_item(it: dict) -> dict:
     addr = it.get("address", {}) or {}
+    # City resolution — ONLY real municipalities. County/region go into county_region
+    # so they never bleed into the "city" field (a notorious Nominatim gotcha
+    # that previously put "Travis County" into the City input).
     city = (
         addr.get("city")
         or addr.get("town")
         or addr.get("village")
         or addr.get("hamlet")
         or addr.get("municipality")
-        or addr.get("county")
+        or addr.get("suburb")
+        or addr.get("city_district")
+        or addr.get("locality")
         or ""
     )
     country_code = (addr.get("country_code") or "").upper() or None

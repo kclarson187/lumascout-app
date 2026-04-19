@@ -28,7 +28,11 @@ export default function Paywall() {
   const { user, refresh } = useAuth();
   const params = useLocalSearchParams<{ reason?: string }>();
   const [busy, setBusy] = useState<string | null>(null);
-  const [cycle, setCycle] = useState<BillingCycle>('annual');
+  const [cycle, setCycle] = useState<BillingCycle>('monthly');
+  // Annual billing Stripe prices not yet created — keep the toggle visible as a
+  // "Coming soon" preview but don't let users select it until we wire elite_annual /
+  // pro_annual Stripe prices on the backend.
+  const annualEnabled = false;
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -120,26 +124,37 @@ export default function Paywall() {
             : reasonCopy}
         </Text>
 
-        {/* Billing cycle toggle */}
+        {/* Billing cycle toggle — annual is preview only until Stripe annual prices are wired */}
         <View style={styles.cycleWrap}>
-          {(['monthly', 'annual'] as BillingCycle[]).map((c) => (
-            <Pressable
-              key={c}
-              onPress={() => setCycle(c)}
-              style={[styles.cycleBtn, cycle === c && styles.cycleBtnActive]}
-              testID={`cycle-${c}`}
-            >
-              <Text style={[styles.cycleBtnTxt, cycle === c && styles.cycleBtnTxtActive]}>
-                {c === 'monthly' ? 'Monthly' : 'Annual'}
-              </Text>
-              {c === 'annual' && (
-                <View style={styles.saveBadge}>
-                  <Sparkles size={10} color={colors.textInverse} />
-                  <Text style={styles.saveBadgeTxt}>Save up to 17%</Text>
-                </View>
-              )}
-            </Pressable>
-          ))}
+          {(['monthly', 'annual'] as BillingCycle[]).map((c) => {
+            const disabled = c === 'annual' && !annualEnabled;
+            return (
+              <Pressable
+                key={c}
+                onPress={() => !disabled && setCycle(c)}
+                style={[
+                  styles.cycleBtn,
+                  cycle === c && styles.cycleBtnActive,
+                  disabled && { opacity: 0.5 },
+                ]}
+                testID={`cycle-${c}`}
+              >
+                <Text style={[styles.cycleBtnTxt, cycle === c && styles.cycleBtnTxtActive]}>
+                  {c === 'monthly' ? 'Monthly' : 'Annual'}
+                </Text>
+                {c === 'annual' && (
+                  <View style={styles.saveBadge}>
+                    {disabled
+                      ? <Text style={styles.saveBadgeTxt}>Coming soon</Text>
+                      : <>
+                          <Sparkles size={10} color={colors.textInverse} />
+                          <Text style={styles.saveBadgeTxt}>Save up to 17%</Text>
+                        </>}
+                  </View>
+                )}
+              </Pressable>
+            );
+          })}
         </View>
 
         <View style={{ gap: space.md, marginTop: space.xl }}>

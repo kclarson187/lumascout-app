@@ -42,6 +42,35 @@ export default function Home() {
         params.lng = coords.longitude;
       }
       const data = await api.get('/feed/home', Object.keys(params).length ? params : undefined);
+
+      // Sanitize feed — drop spots that would render as blank/incomplete cards
+      // (no title, no images), and limit same-spot repetition to max 2 sections
+      // to avoid feeling seeded. This preserves hero since hero is a single pick.
+      const isRenderable = (s: any) => {
+        if (!s) return false;
+        if (!s.title) return false;
+        const imgs = Array.isArray(s.images) ? s.images : [];
+        const cover = imgs.find((i: any) => i?.is_cover) || imgs[0];
+        return !!cover?.image_url;
+      };
+      const appearances: Record<string, number> = {};
+      if (data && typeof data === 'object') {
+        for (const key of Object.keys(data)) {
+          if (!Array.isArray(data[key])) continue;
+          data[key] = data[key]
+            .filter(isRenderable)
+            .filter((s: any) => {
+              const id = s.spot_id;
+              if (!id) return false;
+              const n = appearances[id] || 0;
+              if (n >= 2) return false;  // cap repetition across sections
+              appearances[id] = n + 1;
+              return true;
+            });
+        }
+        // Hero: only keep if renderable
+        if (data.hero && !isRenderable(data.hero)) data.hero = null;
+      }
       setFeed(data);
     } finally {
       setLoading(false);
@@ -79,7 +108,8 @@ export default function Home() {
     { key: 'seasonal', title: 'Seasonal highlights' },
     { key: 'following', title: 'From photographers you follow' },
     { key: 'recent', title: 'Recently added' },
-  ].filter((s) => !['best_for_you', 'following'].includes(s.key) || (feed[s.key] && feed[s.key].length > 0));
+  ].filter((s) => Array.isArray(feed[s.key]) && feed[s.key].length > 0);
+  // ^ hide every empty section globally — prevents blank headers in production UI
 
   if (loading) {
     return (
