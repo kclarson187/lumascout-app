@@ -57,6 +57,34 @@ export default function AdminUserDetail() {
     );
   };
 
+  const grantWithDuration = (plan: 'comp_pro' | 'comp_elite') => {
+    Alert.alert(
+      `Gift ${plan === 'comp_pro' ? 'complimentary Pro' : 'complimentary Elite'}`,
+      'Choose how long this complimentary access should last.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: '30 days',  onPress: () => doGrant(plan, 30) },
+        { text: '90 days',  onPress: () => doGrant(plan, 90) },
+        { text: '365 days', onPress: () => doGrant(plan, 365) },
+        { text: 'Never expire', onPress: () => doGrant(plan, null) },
+      ],
+    );
+  };
+
+  const doGrant = async (plan: string, days: number | null) => {
+    try {
+      await api.post(`/admin/users/${u.user_id}/grant-plan`, {
+        plan,
+        duration_days: days,
+        reason: `comp grant (${days ? days + 'd' : 'permanent'})`,
+      });
+      await load();
+      Alert.alert('Plan granted', `User is now on ${plan}${days ? ` for ${days} days.` : ' (permanent).'}`);
+    } catch (e) {
+      Alert.alert('Could not grant plan', formatApiError(e));
+    }
+  };
+
   const toggleSuspend = () => {
     if (u.status === 'suspended') {
       patch({ status: 'active', suspension_reason: '', reason: 'reactivated' }, 'User reactivated.');
@@ -160,8 +188,27 @@ export default function AdminUserDetail() {
               </TouchableOpacity>
             ))}
           </View>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: space.sm }}>
+            <TouchableOpacity
+              style={styles.giftBtn}
+              onPress={() => grantWithDuration('comp_pro')}
+              testID="gift-pro"
+            >
+              <Sparkles size={13} color={colors.textInverse} />
+              <Text style={styles.giftBtnTxt}>Gift complimentary Pro…</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.giftBtn, { backgroundColor: colors.primary }]}
+              onPress={() => grantWithDuration('comp_elite')}
+              testID="gift-elite"
+            >
+              <Crown size={13} color={colors.textInverse} />
+              <Text style={styles.giftBtnTxt}>Gift complimentary Elite…</Text>
+            </TouchableOpacity>
+          </View>
           <Text style={styles.helper}>
-            Comp/trial plans override billing. Stripe is not wired — this sets the tier immediately.
+            Comp/trial plans override billing. Pick an expiry (30 / 90 / 365 days or never). Stripe is
+            not wired — this sets the tier immediately.
           </Text>
         </Section>
 
@@ -368,6 +415,11 @@ const styles = StyleSheet.create({
   optChipTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
   optChipTxtActive: { color: colors.textInverse, fontFamily: font.bodySemibold },
   helper: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 4 },
+  giftBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: colors.info, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radii.md,
+  },
+  giftBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 12 },
   warn: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, backgroundColor: 'rgba(251,191,36,0.08)', padding: 8, borderRadius: radii.md, borderColor: colors.warning, borderWidth: 1, marginTop: 6 },
   warnTxt: { flex: 1, color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17 },
   actBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 10, borderRadius: radii.md },

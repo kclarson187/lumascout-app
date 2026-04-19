@@ -92,6 +92,23 @@ function PaywallOverlay() {
     onPaywallNeeded((m) => setMessage(m));
   }, []);
   if (!message) return null;
+
+  // Infer a reason code from the server message so the paywall can tailor copy.
+  const m = message.toLowerCase();
+  const reason = m.includes('save')
+    ? 'saves'
+    : m.includes('collection')
+    ? 'collections'
+    : m.includes('private')
+    ? 'private'
+    : m.includes('filter')
+    ? 'filters'
+    : undefined;
+
+  const headline = reason === 'saves'
+    ? "You've reached your 5-save limit"
+    : "You've hit your Free limit";
+
   return (
     <Modal transparent animationType="fade" visible>
       <View style={overlayStyles.bg}>
@@ -100,11 +117,18 @@ function PaywallOverlay() {
             <X size={20} color={colors.text} />
           </TouchableOpacity>
           <View style={overlayStyles.icon}><Crown size={28} color={colors.primary} /></View>
-          <Text style={overlayStyles.title}>You've hit your Free limit</Text>
-          <Text style={overlayStyles.body}>{message}</Text>
+          <Text style={overlayStyles.title}>{headline}</Text>
+          <Text style={overlayStyles.body}>
+            {reason === 'saves'
+              ? 'Upgrade to Pro for unlimited saved locations, advanced filters, and premium features — just $9.99/month.'
+              : message}
+          </Text>
           <Button
             title="See Pro & Elite plans"
-            onPress={() => { setMessage(null); router.push('/paywall'); }}
+            onPress={() => {
+              setMessage(null);
+              router.push(reason ? `/paywall?reason=${reason}` : '/paywall');
+            }}
             testID="paywall-overlay-cta"
             style={{ marginTop: space.lg }}
           />

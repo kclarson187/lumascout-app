@@ -37,18 +37,53 @@ ACCESS_TOKEN_DAYS = 30
 
 # Plan feature gating
 PLAN_LIMITS = {
-    "free": {"saves": 20, "private_spots": 3, "collections": 3, "advanced_filters": False, "sell_packs": False},
-    "pro": {"saves": 10_000, "private_spots": 10_000, "collections": 500, "advanced_filters": True, "sell_packs": False},
-    "elite": {"saves": 10_000, "private_spots": 10_000, "collections": 10_000, "advanced_filters": True, "sell_packs": True},
+    "free": {"saves": 5, "private_spots": 1, "collections": 1, "advanced_filters": False, "sell_packs": False, "creator_analytics": False},
+    "pro": {"saves": 10_000, "private_spots": 10_000, "collections": 500, "advanced_filters": True, "sell_packs": False, "creator_analytics": False},
+    "elite": {"saves": 10_000, "private_spots": 10_000, "collections": 10_000, "advanced_filters": True, "sell_packs": True, "creator_analytics": True},
+    # Comp plans mirror their paid counterparts for feature gating purposes.
+    "comp_pro": {"saves": 10_000, "private_spots": 10_000, "collections": 500, "advanced_filters": True, "sell_packs": False, "creator_analytics": False},
+    "comp_elite": {"saves": 10_000, "private_spots": 10_000, "collections": 10_000, "advanced_filters": True, "sell_packs": True, "creator_analytics": True},
+    "trial_pro": {"saves": 10_000, "private_spots": 10_000, "collections": 500, "advanced_filters": True, "sell_packs": False, "creator_analytics": False},
+    "trial_elite": {"saves": 10_000, "private_spots": 10_000, "collections": 10_000, "advanced_filters": True, "sell_packs": True, "creator_analytics": True},
+    "suspended": {"saves": 0, "private_spots": 0, "collections": 0, "advanced_filters": False, "sell_packs": False, "creator_analytics": False},
 }
+
+# Display pricing in USD (cents). Stripe billing is not wired yet — these power
+# the paywall/pricing UI and are returned by /api/plans.
+PLAN_PRICING = {
+    "free":  {"monthly_cents": 0,    "annual_cents": 0},
+    "pro":   {"monthly_cents": 999,  "annual_cents": 9900},   # $9.99/mo · $99/yr
+    "elite": {"monthly_cents": 1999, "annual_cents": 20000},  # $19.99/mo · $200/yr
+}
+
+# Normalise any comp/trial plan to the underlying tier for feature gating.
+def _effective_plan(plan: str) -> str:
+    if plan in ("comp_pro", "trial_pro"):
+        return "pro"
+    if plan in ("comp_elite", "trial_elite"):
+        return "elite"
+    return plan
 
 
 def plan_of(user: dict) -> str:
-    return (user or {}).get("plan") or "free"
+    raw = (user or {}).get("plan") or "free"
+    # Expired comp plans silently revert to 'free'.
+    expiry = (user or {}).get("comp_expiration")
+    if expiry and raw in ("comp_pro", "comp_elite", "trial_pro", "trial_elite"):
+        try:
+            exp_dt = expiry if isinstance(expiry, datetime) else datetime.fromisoformat(str(expiry).replace("Z", "+00:00"))
+            if exp_dt.tzinfo is None:
+                exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+            if exp_dt < datetime.now(timezone.utc):
+                return "free"
+        except Exception:
+            pass
+    return raw
 
 
 def limits_for(user: dict) -> dict:
-    return PLAN_LIMITS.get(plan_of(user), PLAN_LIMITS["free"])
+    effective = _effective_plan(plan_of(user))
+    return PLAN_LIMITS.get(effective, PLAN_LIMITS["free"])
 
 
 # ============================================================================
@@ -296,6 +331,19 @@ class UserUpdateIn(BaseModel):
     mentorship_available: Optional[bool] = None
     looking_for_mentor: Optional[bool] = None
     community_onboarded: Optional[bool] = None
+    # --- Social profile (Phase A) -------------------------------------------
+    banner_image_url: Optional[str] = None
+    avatar_image_url: Optional[str] = None
+    years_experience: Optional[int] = None
+    service_radius_miles: Optional[int] = None
+    booking_available: Optional[bool] = None
+    facebook_url: Optional[str] = None
+    tiktok_url: Optional[str] = None
+    # --- Location scalability -----------------------------------------------
+    primary_country: Optional[str] = None   # ISO alpha-2, e.g. "US", "CA", "MX"
+    primary_region: Optional[str] = None    # State/Province
+    timezone: Optional[str] = None          # IANA zone, e.g. "America/Chicago"
+    language_hint: Optional[str] = None     # "en", "es", "fr"
 
 
 class SpotImageIn(BaseModel):
@@ -354,6 +402,13 @@ class SpotCreateIn(BaseModel):
     address_line1: Optional[str] = None
     postal_code: Optional[str] = None
     landmark_notes: Optional[str] = None
+    # --- North America scalability ------------------------------------------
+    country_code: Optional[str] = None     # ISO alpha-2: "US", "CA", "MX"
+    country_name: Optional[str] = None     # "United States", "Canada", "Mexico"
+    province_state: Optional[str] = None   # fuller label than 2-letter state
+    county_region: Optional[str] = None
+    timezone: Optional[str] = None         # IANA zone
+    language_hint: Optional[str] = None    # "en", "es", "fr"
 
 
 class ReviewIn(BaseModel):
@@ -420,16 +475,26 @@ async def register(body: RegisterIn):
         "name": body.name,
         "username": username,
         "avatar_url": None,
+        "avatar_image_url": None,
+        "banner_image_url": None,
         "bio": "",
         "city": "",
         "state": "",
         "specialties": body.specialties or [],
         "website": "",
         "instagram": "",
+        "facebook_url": "",
+        "tiktok_url": "",
         "role": "user",
         "verification_status": "unverified",
         "auth_provider": "email",
         "plan": "free",
+        "billing_cycle": None,
+        # --- North America defaults (overridable in profile) ----------------
+        "primary_country": "US",
+        "primary_region": None,
+        "timezone": None,
+        "language_hint": "en",
         "created_at": utcnow(),
         "updated_at": utcnow(),
     }
@@ -468,15 +533,98 @@ async def me(user: dict = Depends(get_current_user)):
 
 class UpgradeIn(BaseModel):
     plan: str  # free | pro | elite
+    cycle: Optional[str] = "monthly"  # 'monthly' or 'annual'
+
+
+@api.get("/plans")
+async def list_plans():
+    """Public plans catalogue used by the paywall / onboarding comparison."""
+    def _price(cents: int) -> str:
+        return f"${cents / 100:.2f}" if cents else "$0"
+    return {
+        "plans": [
+            {
+                "key": "free",
+                "name": "Free",
+                "tagline": "For casual scouting",
+                "monthly_price": _price(PLAN_PRICING["free"]["monthly_cents"]),
+                "annual_price": _price(PLAN_PRICING["free"]["annual_cents"]),
+                "monthly_cents": PLAN_PRICING["free"]["monthly_cents"],
+                "annual_cents": PLAN_PRICING["free"]["annual_cents"],
+                "limits": PLAN_LIMITS["free"],
+                "features": [
+                    "Browse all public spots",
+                    "Save up to 5 spots",
+                    "1 collection",
+                    "Basic community access",
+                ],
+            },
+            {
+                "key": "pro",
+                "name": "Pro",
+                "tagline": "For working photographers",
+                "monthly_price": _price(PLAN_PRICING["pro"]["monthly_cents"]),
+                "annual_price": _price(PLAN_PRICING["pro"]["annual_cents"]),
+                "monthly_cents": PLAN_PRICING["pro"]["monthly_cents"],
+                "annual_cents": PLAN_PRICING["pro"]["annual_cents"],
+                "limits": PLAN_LIMITS["pro"],
+                "features": [
+                    "Unlimited saved spots",
+                    "Unlimited collections",
+                    "Advanced map filters",
+                    "Better discovery",
+                    "Advanced messaging",
+                    "Priority support",
+                ],
+                "popular": True,
+            },
+            {
+                "key": "elite",
+                "name": "Elite",
+                "tagline": "For creators who sell",
+                "monthly_price": _price(PLAN_PRICING["elite"]["monthly_cents"]),
+                "annual_price": _price(PLAN_PRICING["elite"]["annual_cents"]),
+                "monthly_cents": PLAN_PRICING["elite"]["monthly_cents"],
+                "annual_cents": PLAN_PRICING["elite"]["annual_cents"],
+                "limits": PLAN_LIMITS["elite"],
+                "features": [
+                    "Everything in Pro",
+                    "Creator analytics dashboard",
+                    "Sell curated spot packs",
+                    "Verified creator badge",
+                    "Priority in discovery",
+                    "DM read receipts",
+                ],
+            },
+        ],
+    }
 
 
 @api.post("/me/upgrade")
 async def upgrade_plan(body: UpgradeIn, user: dict = Depends(get_current_user)):
-    if body.plan not in PLAN_LIMITS:
+    if body.plan not in ("free", "pro", "elite"):
         raise HTTPException(status_code=400, detail="Unknown plan")
+    cycle = (body.cycle or "monthly").lower()
+    if cycle not in ("monthly", "annual"):
+        raise HTTPException(status_code=400, detail="cycle must be 'monthly' or 'annual'")
     # NOTE: billing is not wired yet; this is a preview toggle until Stripe ships.
-    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"plan": body.plan, "updated_at": utcnow()}})
-    return {"ok": True, "plan": body.plan, "limits": PLAN_LIMITS[body.plan]}
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {
+            "plan": body.plan,
+            "billing_cycle": None if body.plan == "free" else cycle,
+            # Preview-toggle upgrades clear any comp_expiration since this is a real plan transition.
+            "comp_expiration": None,
+            "updated_at": utcnow(),
+        }},
+    )
+    return {
+        "ok": True,
+        "plan": body.plan,
+        "cycle": cycle,
+        "limits": PLAN_LIMITS[body.plan],
+        "pricing": PLAN_PRICING.get(body.plan, PLAN_PRICING["free"]),
+    }
 
 
 @api.patch("/auth/me")
@@ -516,16 +664,25 @@ async def google_session(body: GoogleSessionIn):
             "name": data.get("name") or username,
             "username": username,
             "avatar_url": data.get("picture"),
+            "avatar_image_url": data.get("picture"),
+            "banner_image_url": None,
             "bio": "",
             "city": "",
             "state": "",
             "specialties": [],
             "website": "",
             "instagram": "",
+            "facebook_url": "",
+            "tiktok_url": "",
             "role": "user",
             "verification_status": "unverified",
             "auth_provider": "google",
             "plan": "free",
+            "billing_cycle": None,
+            "primary_country": "US",
+            "primary_region": None,
+            "timezone": None,
+            "language_hint": "en",
             "created_at": utcnow(),
             "updated_at": utcnow(),
         }
@@ -974,6 +1131,14 @@ def _parse_nominatim_item(it: dict) -> dict:
         or addr.get("county")
         or ""
     )
+    country_code = (addr.get("country_code") or "").upper() or None
+    # Heuristic: English-speaking in US/CA, Spanish in MX, French-speaking in QC.
+    province_state = addr.get("state") or ""
+    lang = "en"
+    if country_code == "MX":
+        lang = "es"
+    elif country_code == "CA" and ("Québec" in province_state or "Quebec" in province_state):
+        lang = "fr"
     return {
         "place_id": str(it.get("place_id", "")),
         "display_name": it.get("display_name", ""),
@@ -981,11 +1146,16 @@ def _parse_nominatim_item(it: dict) -> dict:
         "longitude": float(it.get("lon")) if it.get("lon") else None,
         "name": it.get("name") or (it.get("display_name", "").split(",")[0].strip() if it.get("display_name") else ""),
         "city": city,
-        "state": addr.get("state", ""),
+        "state": province_state,
+        "province_state": province_state,
+        "county_region": addr.get("county") or "",
         "country": addr.get("country", ""),
+        "country_name": addr.get("country", ""),
+        "country_code": country_code,
         "postcode": addr.get("postcode", ""),
         "type": it.get("type") or it.get("class"),
         "confidence": float(it.get("importance", 0.0)),
+        "language_hint": lang,
     }
 
 
@@ -1808,6 +1978,56 @@ class AdminNoteIn(BaseModel):
     pinned: bool = False
 
 
+class AdminGrantPlanIn(BaseModel):
+    plan: str  # pro | elite | comp_pro | comp_elite | trial_pro | trial_elite | free
+    duration_days: Optional[int] = None  # 30 / 90 / 365 / None(=never expire)
+    reason: Optional[str] = None
+
+
+@api.post("/admin/users/{user_id}/grant-plan")
+async def admin_grant_plan(
+    user_id: str,
+    body: AdminGrantPlanIn,
+    me: dict = Depends(require_role("admin")),
+):
+    """Grant or revoke a paid / comp / trial plan in one call.
+    - duration_days: 30, 90, 365 → sets comp_expiration that many days out.
+    - duration_days: None → plan never expires (use for paid upgrades).
+    - Granting "free" clears plan + comp_expiration.
+    """
+    target = await db.users.find_one({"user_id": user_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if body.plan not in VALID_PLANS:
+        raise HTTPException(status_code=400, detail=f"Invalid plan. Expected one of {sorted(VALID_PLANS)}")
+
+    updates: dict = {"plan": body.plan, "updated_at": utcnow(), "updated_by": me["user_id"]}
+    before = {"plan": target.get("plan"), "comp_expiration": target.get("comp_expiration")}
+
+    if body.plan == "free":
+        updates["comp_expiration"] = None
+        updates["billing_cycle"] = None
+    elif body.duration_days and body.duration_days > 0:
+        expiry = datetime.now(timezone.utc) + timedelta(days=int(body.duration_days))
+        updates["comp_expiration"] = expiry
+    else:
+        # Permanent grant — clear any previous expiration.
+        updates["comp_expiration"] = None
+
+    after = {"plan": updates["plan"], "comp_expiration": updates.get("comp_expiration")}
+    if after.get("comp_expiration"):
+        after["comp_expiration"] = after["comp_expiration"].isoformat()
+
+    await db.users.update_one({"user_id": user_id}, {"$set": updates})
+    await audit_log(
+        me, "user.grant_plan", "user", user_id,
+        before=before, after=after,
+        notes=body.reason or f"Granted {body.plan}" + (f" for {body.duration_days}d" if body.duration_days else " (permanent)"),
+    )
+    fresh = await db.users.find_one({"user_id": user_id}, {"_id": 0, "password_hash": 0})
+    return {"ok": True, "user": fresh}
+
+
 @api.post("/admin/users/{user_id}/notes")
 async def admin_add_note(user_id: str, body: AdminNoteIn, me: dict = Depends(require_role("support"))):
     if not (body.body or "").strip():
@@ -2406,6 +2626,8 @@ async def on_startup():
     )
     await seed_demo_content()
     await backfill_freshness()
+    await backfill_country_fields()
+    await seed_na_content()
 
 
 async def backfill_freshness():
@@ -2842,6 +3064,9 @@ async def seed_demo_content():
     # Only seed if no demo photographers exist
     count = await db.users.count_documents({"email": {"$regex": "@photoscout.app$"}})
     if count >= len(DEMO_PHOTOGRAPHERS):
+        # Demo users already present — still make sure NA content is seeded on
+        # previously-bootstrapped databases.
+        await seed_na_content()
         return
     photographer_ids = []
     for p in DEMO_PHOTOGRAPHERS:
@@ -2901,7 +3126,13 @@ async def seed_demo_content():
             "visibility_status": "approved",
             "city": sp["city"],
             "state": sp["state"],
-            "country": "USA",
+            "country": sp.get("country_name", "United States"),
+            "country_code": sp.get("country_code", "US"),
+            "country_name": sp.get("country_name", "United States"),
+            "province_state": sp.get("province_state", sp["state"]),
+            "county_region": sp.get("county_region"),
+            "timezone": sp.get("timezone", "America/Chicago"),
+            "language_hint": sp.get("language_hint", "en"),
             "location_display_mode": "exact",
             "shoot_types": sp["shoot_types"],
             "style_tags": sp["style_tags"],
@@ -2968,6 +3199,256 @@ async def seed_demo_content():
         })
 
     logger.info(f"Seeded {len(DEMO_SPOTS)} demo spots")
+    await seed_na_content()
+
+
+# -----------------------------------------------------------------------------
+# North America scalability seed — US/CA/MX cities with realistic users + spots.
+# Idempotent: only fires when no non-US seed data exists yet.
+# -----------------------------------------------------------------------------
+NA_PHOTOGRAPHERS = [
+    {"email": "emily.toronto@photoscout.app", "username": "emilytoronto", "name": "Emily Chen",
+     "bio": "Urban portraits across the GTA.", "city": "Toronto", "state": "Ontario",
+     "country_code": "CA", "country_name": "Canada", "timezone": "America/Toronto", "language_hint": "en",
+     "specialties": ["Urban", "Portrait"], "avatar_url": None},
+    {"email": "noah.vancouver@photoscout.app", "username": "noahvancouver", "name": "Noah Kim",
+     "bio": "PNW landscapes + wedding work.", "city": "Vancouver", "state": "British Columbia",
+     "country_code": "CA", "country_name": "Canada", "timezone": "America/Vancouver", "language_hint": "en",
+     "specialties": ["Nature", "Wedding"], "avatar_url": None},
+    {"email": "diego.cdmx@photoscout.app", "username": "diegocdmx", "name": "Diego Ramírez",
+     "bio": "Fotógrafo de bodas en Ciudad de México.", "city": "Mexico City", "state": "CDMX",
+     "country_code": "MX", "country_name": "Mexico", "timezone": "America/Mexico_City", "language_hint": "es",
+     "specialties": ["Wedding", "Portrait"], "avatar_url": None},
+    {"email": "valeria.gdl@photoscout.app", "username": "valeriagdl", "name": "Valeria Morales",
+     "bio": "Retratos de familia en Guadalajara.", "city": "Guadalajara", "state": "Jalisco",
+     "country_code": "MX", "country_name": "Mexico", "timezone": "America/Mexico_City", "language_hint": "es",
+     "specialties": ["Family", "Lifestyle"], "avatar_url": None},
+    {"email": "alex.la@photoscout.app", "username": "alexla", "name": "Alex Rivera",
+     "bio": "LA creative + brand shooter.", "city": "Los Angeles", "state": "CA",
+     "country_code": "US", "country_name": "United States", "timezone": "America/Los_Angeles", "language_hint": "en",
+     "specialties": ["Branding", "Urban"], "avatar_url": None},
+    {"email": "maya.denver@photoscout.app", "username": "mayadenver", "name": "Maya Johnson",
+     "bio": "Rocky Mountain elopements.", "city": "Denver", "state": "CO",
+     "country_code": "US", "country_name": "United States", "timezone": "America/Denver", "language_hint": "en",
+     "specialties": ["Wedding", "Nature"], "avatar_url": None},
+]
+
+NA_SPOTS = [
+    {
+        "title": "Toronto Harbourfront at Golden Hour",
+        "description": "CN Tower skyline mirrored in Lake Ontario — best from the foot of York St.",
+        "city": "Toronto", "state": "Ontario", "province_state": "Ontario",
+        "country_code": "CA", "country_name": "Canada", "timezone": "America/Toronto", "language_hint": "en",
+        "latitude": 43.6396, "longitude": -79.3805,
+        "shoot_types": ["Wedding", "Portrait"], "style_tags": ["Urban", "Sunset", "Skyline"],
+        "best_time_of_day": "sunset", "sunrise_rating": 3, "sunset_rating": 5,
+        "morning_golden_hour_rating": 3, "evening_golden_hour_rating": 5,
+        "shade_rating": 3, "variety_rating": 4, "crowd_level": 4, "safety_rating": 5,
+        "best_months": ["May", "June", "September", "October"], "fee_required": False,
+        "permit_required": False,
+        "owner_email": "emily.toronto@photoscout.app",
+        "images": ["https://images.unsplash.com/photo-1517935706615-2717063c2225?w=1200&q=85"],
+    },
+    {
+        "title": "Stanley Park Seawall Sunrise",
+        "description": "Cedar giants, ocean, and the Lions Gate Bridge — everything a PNW portrait needs.",
+        "city": "Vancouver", "state": "British Columbia", "province_state": "British Columbia",
+        "country_code": "CA", "country_name": "Canada", "timezone": "America/Vancouver", "language_hint": "en",
+        "latitude": 49.3017, "longitude": -123.1444,
+        "shoot_types": ["Nature", "Portrait", "Wedding"], "style_tags": ["Sunrise", "Nature", "Forest"],
+        "best_time_of_day": "sunrise", "sunrise_rating": 5, "sunset_rating": 3,
+        "morning_golden_hour_rating": 5, "evening_golden_hour_rating": 3,
+        "shade_rating": 4, "variety_rating": 5, "crowd_level": 3, "safety_rating": 5,
+        "best_months": ["April", "May", "September", "October"], "fee_required": False,
+        "permit_required": True, "permit_notes": "Park board permit for weddings.",
+        "owner_email": "noah.vancouver@photoscout.app",
+        "images": ["https://images.unsplash.com/photo-1609825488888-3a766db05542?w=1200&q=85"],
+    },
+    {
+        "title": "Coyoacán Cobblestone Courtyards",
+        "description": "Coloured walls, bougainvillea, and intimate Frida-era courtyards.",
+        "city": "Mexico City", "state": "CDMX", "province_state": "CDMX",
+        "country_code": "MX", "country_name": "Mexico", "timezone": "America/Mexico_City", "language_hint": "es",
+        "latitude": 19.3467, "longitude": -99.1618,
+        "shoot_types": ["Family", "Portrait", "Wedding"], "style_tags": ["Color", "Urban", "Culture"],
+        "best_time_of_day": "morning", "sunrise_rating": 3, "sunset_rating": 4,
+        "morning_golden_hour_rating": 5, "evening_golden_hour_rating": 4,
+        "shade_rating": 4, "variety_rating": 5, "crowd_level": 4, "safety_rating": 4,
+        "best_months": ["November", "December", "January", "February", "March"], "fee_required": False,
+        "permit_required": False,
+        "owner_email": "diego.cdmx@photoscout.app",
+        "images": ["https://images.unsplash.com/photo-1518659526054-190340b61bee?w=1200&q=85"],
+    },
+    {
+        "title": "Centro Histórico Guadalajara",
+        "description": "Cathedral towers, plazas, and warm stone for cinematic family portraits.",
+        "city": "Guadalajara", "state": "Jalisco", "province_state": "Jalisco",
+        "country_code": "MX", "country_name": "Mexico", "timezone": "America/Mexico_City", "language_hint": "es",
+        "latitude": 20.6767, "longitude": -103.3467,
+        "shoot_types": ["Family", "Lifestyle", "Branding"], "style_tags": ["Urban", "Culture", "Warm"],
+        "best_time_of_day": "golden_hour", "sunrise_rating": 3, "sunset_rating": 4,
+        "morning_golden_hour_rating": 4, "evening_golden_hour_rating": 5,
+        "shade_rating": 3, "variety_rating": 5, "crowd_level": 4, "safety_rating": 4,
+        "best_months": ["October", "November", "February", "March"], "fee_required": False,
+        "permit_required": False,
+        "owner_email": "valeria.gdl@photoscout.app",
+        "images": ["https://images.unsplash.com/photo-1585975406140-f2b8e7f1f472?w=1200&q=85"],
+    },
+    {
+        "title": "Griffith Observatory Overlook",
+        "description": "Classic LA skyline at dusk — Hollywood sign over your shoulder.",
+        "city": "Los Angeles", "state": "CA", "province_state": "California",
+        "country_code": "US", "country_name": "United States", "timezone": "America/Los_Angeles", "language_hint": "en",
+        "latitude": 34.1184, "longitude": -118.3004,
+        "shoot_types": ["Urban", "Portrait", "Branding"], "style_tags": ["Sunset", "Skyline", "Urban"],
+        "best_time_of_day": "sunset", "sunrise_rating": 3, "sunset_rating": 5,
+        "morning_golden_hour_rating": 3, "evening_golden_hour_rating": 5,
+        "shade_rating": 2, "variety_rating": 4, "crowd_level": 5, "safety_rating": 4,
+        "best_months": ["March", "April", "October", "November"], "fee_required": False,
+        "permit_required": True, "permit_notes": "Tripod permit for commercial work.",
+        "owner_email": "alex.la@photoscout.app",
+        "images": ["https://images.unsplash.com/photo-1503891617560-5b8c2e28cbbf?w=1200&q=85"],
+    },
+    {
+        "title": "Red Rocks Amphitheatre Morning Glow",
+        "description": "Sandstone stage and endless plains — arrive pre-dawn for magic.",
+        "city": "Morrison", "state": "CO", "province_state": "Colorado",
+        "country_code": "US", "country_name": "United States", "timezone": "America/Denver", "language_hint": "en",
+        "latitude": 39.6654, "longitude": -105.2057,
+        "shoot_types": ["Wedding", "Branding"], "style_tags": ["Sunrise", "Nature", "Rock"],
+        "best_time_of_day": "sunrise", "sunrise_rating": 5, "sunset_rating": 4,
+        "morning_golden_hour_rating": 5, "evening_golden_hour_rating": 4,
+        "shade_rating": 2, "variety_rating": 5, "crowd_level": 3, "safety_rating": 4,
+        "best_months": ["May", "June", "September", "October"], "fee_required": False,
+        "permit_required": True, "permit_notes": "Commercial photo permit via Denver Arts & Venues.",
+        "owner_email": "maya.denver@photoscout.app",
+        "images": ["https://images.unsplash.com/photo-1509316785289-025f5b846b35?w=1200&q=85"],
+    },
+]
+
+
+async def seed_na_content():
+    """Idempotent seed of US/CA/MX content. Only runs when no non-US seed exists."""
+    existing_non_us = await db.spots.count_documents({"country_code": {"$in": ["CA", "MX"]}})
+    if existing_non_us > 0:
+        return
+
+    owner_by_email: dict = {}
+    for p in NA_PHOTOGRAPHERS:
+        existing = await db.users.find_one({"email": p["email"]})
+        if existing:
+            owner_by_email[p["email"]] = existing["user_id"]
+            continue
+        uid = f"user_{uuid.uuid4().hex[:12]}"
+        doc = {
+            "user_id": uid,
+            "email": p["email"],
+            "password_hash": hash_password("demo123"),
+            "username": p["username"],
+            "name": p["name"],
+            "avatar_url": p.get("avatar_url"),
+            "avatar_image_url": p.get("avatar_url"),
+            "banner_image_url": None,
+            "bio": p["bio"],
+            "city": p["city"],
+            "state": p["state"],
+            "specialties": p["specialties"],
+            "website": "",
+            "instagram": f"@{p['username']}",
+            "facebook_url": "",
+            "tiktok_url": "",
+            "role": "user",
+            "verification_status": "verified",
+            "auth_provider": "email",
+            "plan": "free",
+            "billing_cycle": None,
+            "primary_country": p["country_code"],
+            "primary_region": p["state"],
+            "timezone": p["timezone"],
+            "language_hint": p["language_hint"],
+            "created_at": utcnow(),
+            "updated_at": utcnow(),
+        }
+        await db.users.insert_one(doc)
+        owner_by_email[p["email"]] = uid
+
+    for i, sp in enumerate(NA_SPOTS):
+        owner_id = owner_by_email.get(sp["owner_email"])
+        if not owner_id:
+            continue
+        images = [{
+            "image_id": f"img_{uuid.uuid4().hex[:10]}",
+            "image_url": url,
+            "caption": None,
+            "is_cover": j == 0,
+            "sort_order": j,
+        } for j, url in enumerate(sp["images"])]
+        doc = {
+            "spot_id": f"spot_{uuid.uuid4().hex[:12]}",
+            "owner_user_id": owner_id,
+            "title": sp["title"],
+            "slug": "-".join(sp["title"].lower().split())[:60],
+            "description": sp["description"],
+            "latitude": sp["latitude"],
+            "longitude": sp["longitude"],
+            "privacy_mode": "public",
+            "visibility_status": "approved",
+            "city": sp["city"],
+            "state": sp["state"],
+            "country": sp["country_name"],
+            "country_code": sp["country_code"],
+            "country_name": sp["country_name"],
+            "province_state": sp["province_state"],
+            "county_region": None,
+            "timezone": sp["timezone"],
+            "language_hint": sp["language_hint"],
+            "location_display_mode": "exact",
+            "shoot_types": sp["shoot_types"],
+            "style_tags": sp["style_tags"],
+            "best_time_of_day": sp["best_time_of_day"],
+            "sunrise_rating": sp["sunrise_rating"],
+            "sunset_rating": sp["sunset_rating"],
+            "morning_golden_hour_rating": sp["morning_golden_hour_rating"],
+            "evening_golden_hour_rating": sp["evening_golden_hour_rating"],
+            "shade_rating": sp["shade_rating"],
+            "variety_rating": sp["variety_rating"],
+            "crowd_level": sp["crowd_level"],
+            "safety_rating": sp["safety_rating"],
+            "dog_friendly": True,
+            "kid_friendly": True,
+            "accessible": True,
+            "indoor": False,
+            "permit_required": sp.get("permit_required", False),
+            "permit_notes": sp.get("permit_notes"),
+            "parking_notes": None,
+            "restroom_notes": None,
+            "walking_notes": None,
+            "accessibility_notes": None,
+            "safety_notes": None,
+            "weather_notes": None,
+            "lens_recommendations": None,
+            "best_months": sp["best_months"],
+            "fee_required": sp.get("fee_required", False),
+            "fee_notes": None,
+            "images": images,
+            "last_verified_at": utcnow() - timedelta(days=(i * 11) % 90),
+            "created_at": utcnow() - timedelta(days=len(NA_SPOTS) - i),
+            "updated_at": utcnow(),
+        }
+        await db.spots.insert_one(doc)
+    logger.info(f"Seeded {len(NA_SPOTS)} North America spots across {len(set(s['country_code'] for s in NA_SPOTS))} countries")
+
+
+async def backfill_country_fields():
+    """Idempotent one-time migration: ensure every spot & user has NA fields."""
+    await db.spots.update_many(
+        {"country_code": {"$exists": False}},
+        {"$set": {"country_code": "US", "country_name": "United States", "language_hint": "en"}},
+    )
+    await db.users.update_many(
+        {"primary_country": {"$exists": False}},
+        {"$set": {"primary_country": "US", "language_hint": "en"}},
+    )
 
 
 @app.on_event("shutdown")

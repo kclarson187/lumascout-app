@@ -103,6 +103,66 @@ backend:
         -agent: "testing"
         -comment: "Regression happy-path verified. (1) POST /api/spots as sophie with Austin lat/lng + tiny 1x1 PNG base64 image + privacy_mode=private → 200 with spot_id. (2) POST /api/spots with save_as_draft:true and privacy_mode=public → 200, response.visibility_status='draft' (draft override beats the moderation path). No 500s. The DocumentTooLarge → 413 wrapper is in place at line 678-684 but genuinely oversized payloads were not generated through HTTP per the task note; the wrapper path is unexercised but structurally correct."
 
+  - task: "Phase A — pricing & limits: GET /api/plans + POST /api/me/upgrade with billing_cycle"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Free plan saves reduced 20→5 (was 20). Pro $9.99/mo · $99/yr. Elite $19.99/mo · $200/yr. GET /api/plans is public & returns {plans:[{key,name,tagline,monthly_price,annual_price,monthly_cents,annual_cents,limits,features,popular?}]}. POST /api/me/upgrade now accepts {plan, cycle:'monthly'|'annual'} and returns {ok, plan, cycle, limits, pricing}. billing_cycle persists on user doc."
+        -working: true
+        -agent: "testing"
+        -comment: "ALL 13 plans+upgrade cases PASS. GET /api/plans (public, no auth) returns exactly 3 plans {free,pro,elite}. pro: monthly_price=$9.99, annual_price=$99.00, monthly_cents=999, annual_cents=9900, popular=true. elite: monthly_price=$19.99, annual_price=$200.00, monthly_cents=1999, annual_cents=20000. free.limits.saves=5 (migration from 20 confirmed). POST /api/me/upgrade {plan:'pro',cycle:'annual'} as sophie → 200 with ok=true, plan=pro, cycle=annual, limits.saves=10000, pricing={monthly_cents:999,annual_cents:9900}. GET /auth/me reflects plan='pro' billing_cycle='annual'. Downgrade to free → billing_cycle=null. Invalid cycle 'weekly' → 400 with detail containing 'monthly' or 'annual'. Invalid plan 'gold' → 400."
+
+  - task: "Phase A — admin comp-plan grant: POST /api/admin/users/{id}/grant-plan"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Admin-only endpoint. Body: {plan, duration_days?, reason?}."
+        -working: true
+        -agent: "testing"
+        -comment: "ALL 8 grant-plan cases PASS. POST /admin/users/{marco_id}/grant-plan {plan:'comp_pro',duration_days:30} as admin → 200, marco.plan='comp_pro', comp_expiration within 60s of now+30d. {plan:'comp_elite',duration_days:null} → 200, comp_expiration=null (permanent). {plan:'free'} → 200, plan=free, comp_expiration=null, billing_cycle=null. {plan:'bogus'} → 400. Non-admin (sophie) → 403 Forbidden. GET /admin/audit-logs?action=user.grant_plan&target_id={marco_id} returns 3 entries for this run."
+
+  - task: "Phase A — extended user profile fields via PATCH /api/auth/me"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "UserUpdateIn extended with: banner_image_url, avatar_image_url, years_experience, service_radius_miles, booking_available, facebook_url, tiktok_url, primary_country, primary_region, timezone, language_hint."
+        -working: true
+        -agent: "testing"
+        -comment: "PATCH /api/auth/me as sophie with all 11 fields {banner_image_url:'data:image/jpeg;base64,AAA', avatar_image_url:'data:image/jpeg;base64,BBB', facebook_url:'https://facebook.com/s', tiktok_url:'https://tiktok.com/@s', years_experience:7, service_radius_miles:50, booking_available:true, primary_country:'US', primary_region:'Texas', timezone:'America/Chicago', language_hint:'en'} → 200. Subsequent GET /auth/me reflects all 11 fields exactly (mismatched=[])."
+
+  - task: "Phase A — North America seed data + country_code on spots/users"
+    implemented: true
+    working: false
+    file: "/app/backend/server.py"
+    stuck_count: 1
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "On startup runs backfill_country_fields() + seed_na_content() (6 users + 6 spots in Toronto, Vancouver, Mexico City, Guadalajara, Los Angeles, Denver). Verify: at least 6 spots with country_code in ('CA','MX')."
+        -working: false
+        -agent: "testing"
+        -comment: "PARTIAL: backfill + geocode language_hint PASS, but CA+MX spot count FAILS the spec. GET /api/spots?limit=300 returned {'US':30, 'CA':2, 'MX':2, missing:0}. Total non-US = 4, but the review request expects at least 6 combined. Root cause is in the seed data NA_SPOTS at /app/backend/server.py lines ~3200–3327 — it only contains 6 total NA spots but 2 of those are US (Los Angeles, Denver), leaving just 4 non-US (2 CA + 2 MX). Either (a) add ≥2 more CA/MX spots to NA_SPOTS so CA+MX ≥ 6, or (b) relax the test expectation to ≥4. Everything else on this task PASSES: no spots with missing country_code (all legacy backfilled to US), Toronto geocode → country_code='CA' & language_hint='en', Ciudad de Mexico geocode → results include country_code='MX' with language_hint='es'."
+
 frontend:
   - task: "Home — community tab strip + Messages icon"
     implemented: true
@@ -183,7 +243,11 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Phase A — pricing & limits: GET /api/plans + POST /api/me/upgrade with billing_cycle"
+    - "Phase A — admin comp-plan grant: POST /api/admin/users/{id}/grant-plan"
+    - "Phase A — extended user profile fields via PATCH /api/auth/me"
+    - "Phase A — North America seed data + country_code on spots/users"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -281,3 +345,37 @@ agent_communication:
 
       After the fix, please re-trigger backend testing so I can run the full Phase 1 suite
       (backend_test.py at /app/backend_test.py covers everything requested).
+
+    -agent: "testing"
+    -message: |
+      Phase A backend suite (backend_test_phase_a.py): 35/36 cases PASS.
+
+      ✅ GET /api/plans (13/13) — public, 3 plans, Pro $9.99/$99 (cents 999/9900, popular=true),
+         Elite $19.99/$200 (cents 1999/20000), Free.limits.saves=5 (migration from 20 confirmed).
+      ✅ POST /api/me/upgrade w/ billing_cycle (6/6) — sophie pro+annual → 200 {ok,plan,cycle,
+         limits,pricing}; GET /auth/me persists plan=pro billing_cycle=annual. Downgrade to free
+         clears billing_cycle to null. Invalid cycle 'weekly' → 400 with 'monthly or annual'.
+         Invalid plan 'gold' → 400.
+      ✅ POST /api/admin/users/{id}/grant-plan (8/8) — comp_pro+30d sets comp_expiration within
+         60s tolerance; comp_elite+null → permanent; free clears plan/comp_expiration/billing_cycle;
+         bogus plan → 400; sophie (non-admin) → 403; /admin/audit-logs returns 3 user.grant_plan
+         entries for marco.
+      ✅ PATCH /api/auth/me extended profile fields (2/2) — all 11 new fields (banner_image_url,
+         avatar_image_url, facebook_url, tiktok_url, years_experience, service_radius_miles,
+         booking_available, primary_country, primary_region, timezone, language_hint) round-trip
+         via PATCH → GET exactly.
+      ✅ Geocode language_hint (2/2) — Toronto → country_code=CA, language_hint=en; Ciudad de
+         Mexico → country_code=MX with language_hint=es.
+      ✅ Country-code backfill on spots (1/1) — GET /api/spots?limit=300 has zero items with
+         missing country_code (all legacy US spots backfilled).
+
+      ❌ NA seed count (1/1) — GET /api/spots returned {US:30, CA:2, MX:2}. Review expected
+         CA+MX combined ≥ 6, got 4. Root cause: NA_SPOTS array in server.py (around lines
+         3200–3327) has 6 spots but 2 are US (Los Angeles, Denver), leaving only 4 non-US.
+         Fix: add 2+ more CA/MX spots to NA_SPOTS so CA+MX≥6 (e.g., Montréal QC, Monterrey MX).
+         Existing seed guard `existing_non_us > 0` will skip re-seeding — you'll need to either
+         change the guard to count < desired, or wipe + reseed during startup for the fix to
+         take effect on existing DBs.
+
+      Everything else in Phase A is green. Please address the NA seed count and I'll re-run
+      just that one task. No frontend testing will be run — main agent to ask the user first.
