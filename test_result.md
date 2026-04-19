@@ -103,13 +103,14 @@
 #====================================================================================================
 
 user_problem_statement: |
-  PhotoScout — Trust, Moderation, Quality System
-  Ship a complete trust layer: report flow, duplicate detection, pending-review state,
-  admin approve/reject, last-verified date, freshness indicators, verified contributor
-  badge, basic spam prevention, and privacy-safe API behavior for hidden coordinates.
+  PhotoScout — Admin Dashboard (Phase 1 of 3)
+  Role hierarchy (user|moderator|support|admin|super_admin), require_role() gate,
+  audit trail, platform settings, admin overview/users/user-detail/spots/reports/
+  analytics/audit/settings screens, with destructive confirmations and role-based
+  visibility. Legacy admin.tsx removed in favor of admin/ directory layout.
 
 backend:
-  - task: "public_spot_view enriched with freshness + freshness_label"
+  - task: "Role hierarchy + require_role() dependency + super_admin promotion on startup"
     implemented: true
     working: true
     file: "/app/backend/server.py"
@@ -119,12 +120,12 @@ backend:
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Every spot view now computes `freshness` (fresh/recent/stale/unknown) from last_verified_at plus a human label ('Verified 3d ago'). Tz-aware normalization. All list/feed/detail endpoints get these fields for free."
+        -comment: "ROLE_LEVELS {user:0, moderator:1, support:1, admin:3, super_admin:4}. require_role(min_role) admits higher levels; always admits super_admin. Existing admin@ account is auto-promoted to super_admin on startup (idempotent)."
         -working: true
         -agent: "testing"
-        -comment: "Verified on /feed/home trending and /spots?limit=50. Every spot returns `freshness` in {fresh,recent,stale,unknown} and `freshness_label` is non-empty when freshness != 'unknown'. Variety is present across the demo set: {'fresh': 25, 'recent': 1, 'stale': 1} in /spots?limit=50. Trending top-10 are all 'fresh' (expected — trending is score-sorted)."
+        -comment: "Verified. Login as admin@photoscout.app returns role='super_admin' confirming auto-promotion on startup. All require_role() gates returned 403 for sophie (non-admin) across every /admin/* endpoint."
 
-  - task: "attach_owners helper — batch-attach owner info (name, avatar, verification_status) to list endpoints"
+  - task: "audit_log() helper + indexes (created_at, admin_user_id, target_id)"
     implemented: true
     working: true
     file: "/app/backend/server.py"
@@ -134,12 +135,12 @@ backend:
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Applied to /spots, /spots/nearby/search, /feed/home. Single batched users find() per request so cards can render verified-contributor badges + author names."
+        -comment: "Writes one entry per admin write action (approve/reject/update/resolve/notes/settings). Fields: admin_user_id, admin_email, admin_role, action, target_type, target_id, before, after, notes, created_at."
         -working: true
         -agent: "testing"
-        -comment: "GET /spots?limit=5 → every item has owner{user_id,name,verification_status} and at least one is verified_status=='verified'. GET /feed/home trending[0] and recent[0] both include full owner object (sophiereyes, verified). PASS."
+        -comment: "Verified. Audit entries appear for user.update (with before.plan/after.plan diff), spot.approve (target_id matches), report.resolve.dismissed, and settings.update. admin_user_id is populated on all entries."
 
-  - task: "GET /api/spots/check-duplicates?latitude=&longitude=&title= — duplicate submission detection"
+  - task: "GET /api/admin/overview — dashboard metrics (users, moderation queue, top contributors, trending cities, revenue estimate)"
     implemented: true
     working: true
     file: "/app/backend/server.py"
@@ -149,12 +150,12 @@ backend:
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Returns up to 5 approved public/premium spots within radius_m (default 200m, clamped 50–2000m), each annotated with distance_m and title_similarity (difflib). Sort: closest then most similar. Registered BEFORE /spots/{spot_id} so FastAPI routes correctly. Auth optional (Depends get_optional_user)."
+        -comment: "Requires moderator+. Emits users.{total,new_today,active_7d,suspended,by_plan{free/pro/elite}}, moderation.{pending_spots,pending_reports,pending_photos}, top_contributors[:5], top_cities[:5], revenue.monthly_estimate_usd (MOCKED Stripe)."
         -working: true
         -agent: "testing"
-        -comment: "Positive: seed approved spot at (30.5225,-98.0017) returned count=1 with distance_m=0 (int) and title_similarity=0.67 (float in [0,1]). Ordering by (distance_m asc, title_similarity desc) verified. Negative (lat=89,lng=170): count==0, 200 OK. Route precedence: GET /spots/check-duplicates with no query params → 422 pydantic validation error (NOT /spots/{spot_id} 404 'Spot not found'). PASS."
+        -comment: "Shape verified exactly as spec. users.{total,new_today,active_7d,suspended,by_plan.{free,pro,elite}}, moderation.{pending_spots,pending_reports,pending_photos}, top_contributors & top_cities arrays, revenue.monthly_estimate_usd numeric. NOTE: revenue is a MOCKED estimate (pro*9 + elite*19) — Stripe not wired."
 
-  - task: "POST /api/reports — reason enum + dedupe + rate limit"
+  - task: "GET /api/admin/users — paginated/filterable user search"
     implemented: true
     working: true
     file: "/app/backend/server.py"
@@ -164,12 +165,42 @@ backend:
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Reason must be one of: not_a_location, unsafe, inappropriate, spam, wrong_info, other (400 otherwise). target_type in {spot,user,review}. Duplicate pending reports by same reporter on the same target are deduped (returns the existing pending doc, not a new one). Rate limited at 20/day per user."
+        -comment: "Requires support+. Supports q (regex over email/name/username/user_id), role/plan/status filters, page (default 1), limit (1..100, default 25). Returns {total, page, limit, pages, items[]}. Items enriched with spot_count + open_reports. Never returns password_hash."
         -working: true
         -agent: "testing"
-        -comment: "Valid submit as sophie → 200 with report_id=rep_3073e6112623, status='pending'. Dedupe: second identical POST returns same report_id (no new insert). Bad reason 'nonsense' → 400 with detail that enumerates all 6 allowed keys. Bad target_type 'invoice' → 400 'Invalid target_type'. PASS."
+        -comment: "Verified. q='sophie' returns total>=1 and sophie as items[0]. password_hash NOT present. Items carry plan/role/status/spot_count/open_reports. Pagination (page=1, limit=2) produces correct items.length<=2 and pages=ceil(total/limit)."
 
-  - task: "GET /api/reports/reasons — enumerated reasons with human labels for the mobile UI"
+  - task: "GET /api/admin/users/{id} — full user detail incl. notes + recent audit"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Requires support+. Bundles counts, recent 5 spots, last 20 notes, last 20 audit entries. 404 for unknown user_id."
+        -working: true
+        -agent: "testing"
+        -comment: "Verified. Response for sophie_id included notes[], recent_audit[], recent_spots[] as arrays, plus plan/role/status/spot_count/save_count/open_reports all present."
+
+  - task: "PATCH /api/admin/users/{id} — plan/role/status/verification/comp in one call, audit-logged"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Requires admin+. Authorization: only super_admin can set role=admin/super_admin. Non-super-admin cannot modify a super_admin user. Admins cannot change their own role. Validates enums for plan/role/status. Returns fresh user. Emits before/after audit log."
+        -working: true
+        -agent: "testing"
+        -comment: "Verified. plan='pro' succeeds (audit user.update before/after diff captured). plan='bogus' → 400. Changing own role (super_admin→admin) → 400. Notes: also verified reason field flows through to audit notes."
+
+  - task: "POST /api/admin/users/{id}/notes — internal per-user notes"
     implemented: true
     working: true
     file: "/app/backend/server.py"
@@ -179,12 +210,12 @@ backend:
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Public endpoint. Returns list of {key,label}. Mobile fallbacks to a baked-in list if this fails."
+        -comment: "Requires support+. 2000-char cap. Creates admin_notes doc with author_user_id + author_email. Emits audit log."
         -working: true
         -agent: "testing"
-        -comment: "No auth required, 200 OK. Returns exactly the 6 keys {not_a_location, unsafe, inappropriate, spam, wrong_info, other} with non-empty labels. PASS."
+        -comment: "Verified. POST 'chargeback risk' → 200; subsequent GET /admin/users/{sophie_id} shows that exact note in notes[]."
 
-  - task: "Rate limiting — check_rate_limit() on POST /spots, /reviews, /checkins, /reports"
+  - task: "GET /api/admin/audit-logs — paginated audit trail, filter by action/admin/target"
     implemented: true
     working: true
     file: "/app/backend/server.py"
@@ -194,12 +225,27 @@ backend:
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "In-memory sliding window. Limits: spot_create 10/hr, report_create 20/day, review_create 30/day, checkin_create 30/day. Returns HTTP 429 with retry-in message when exceeded. Process-local (resets on restart)."
+        -comment: "Requires admin+. Supports action (prefix regex), admin_user_id, target_id filters. page/limit pagination. Sorted DESC by created_at."
         -working: true
         -agent: "testing"
-        -comment: "Probed /reports with unique target_ids as sophie. 429 fired at request #19 (already had 1 prior report in this session → 19+1=20, matches the 20/day cap). Retry message: 'Too many requests. Try again in 86396s.' (<=21 threshold satisfied). Only /reports was exercised to avoid polluting demo DB. PASS."
+        -comment: "Verified. action='user.update' prefix filter returns entries DESC by created_at. target_id filter returns spot.approve entry for the specific spot_id. admin_user_id populated on every entry."
 
-  - task: "Startup migration backfill_freshness — staggers existing demo spots' last_verified_at"
+  - task: "GET /api/admin/analytics — 30-day time-series + most saved leaderboard"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Requires moderator+. Days 1..90 (default 30). Series per UTC day: {signups, spots, approvals, rejections}. Totals sum. most_saved[:5] from spot_saves agg."
+        -working: true
+        -agent: "testing"
+        -comment: "Verified. days=30 → series.length=30, totals.signups == sum(series[*].signups), most_saved array returned."
+
+  - task: "GET/PATCH /api/admin/settings — platform settings singleton"
     implemented: true
     working: true
     file: "/app/backend/server.py"
@@ -209,107 +255,144 @@ backend:
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Only updates spots whose last_verified_at is within 60s of created_at (i.e., seed defaults) so real user spots are untouched. Staggered 0–180 days by index % 180."
+        -comment: "GET requires admin+. PATCH requires super_admin. Fields: app_name, support_email, maintenance_mode, public_registration, auto_approve_verified, require_moderation_spots/_photos, duplicate_radius_m, default_privacy_mode, approximate_radius_km. Stored as singleton {settings_id:'platform_v1'}. Emits audit log on change."
         -working: true
         -agent: "testing"
-        -comment: "Observed via /spots?limit=50 freshness distribution {'fresh': 25, 'recent': 1, 'stale': 1} — the stagger is producing meaningful variety across the demo set, although the distribution is still heavily skewed to 'fresh'. Trending is score-sorted so its top-10 all landing on 'fresh' is expected. Functional PASS."
+        -comment: "Verified. GET returns app_name/maintenance_mode/public_registration (and more). PATCH support_email='test@photoscout.app' → 200 {ok:true, settings:{...}} and subsequent GET reflects the change. Sophie gets 403 on PATCH as expected."
 
-  - task: "Existing: /api/admin/pending, /api/admin/spots/{id}/approve, /api/admin/spots/{id}/reject, /api/admin/reports, /api/admin/reports/{id}/resolve — regression"
+  - task: "Existing admin endpoints — approve/reject/resolve now emit audit logs"
     implemented: true
-    working: true
+    working: false
     file: "/app/backend/server.py"
-    stuck_count: 0
+    stuck_count: 1
     priority: "medium"
-    needs_retesting: false
+    needs_retesting: true
     status_history:
-        -working: true
+        -working: "NA"
         -agent: "main"
-        -comment: "No signature changes. Re-verify admin can still pull pending queue + report queue and approve/reject/resolve."
-        -working: true
+        -comment: "admin/spots/{id}/approve, reject, reports/{id}/resolve now use require_role('moderator') and record audit_logs with spot.approve/spot.reject/report.resolve.{action}. Spot moderation also sets moderated_by + moderated_at."
+        -working: false
         -agent: "testing"
-        -comment: "Admin login OK. GET /admin/pending → 200, [] (empty, acceptable). GET /admin/reports → 200 list length 7, includes the report submitted in this run (rep_3073e6112623). POST /admin/reports/{id}/resolve with body {action:'dismiss'} (the value specified in the review request) → 400 'Invalid action'; server only accepts the full tense values {dismissed, removed, warned}. Retrying with {action:'dismissed'} → 200 OK. FUNCTIONALLY PASS. Minor contract mismatch: review request uses 'dismiss' but server (and the credentials doc at /app/memory/test_credentials.md) expects 'dismissed'. Mobile clients must send the past-tense value. Recommend either: (a) accept both 'dismiss' and 'dismissed' in admin_resolve_report, or (b) confirm the frontend already sends 'dismissed'."
+        -comment: "POST /admin/spots/{id}/approve → works for super_admin, audit 'spot.approve' entry created with target_id matching. POST /admin/reports/{id}/resolve {action:'dismissed'} → works, audit 'report.resolve.dismissed' entry exists. BUG: Legacy GET /admin/pending (line ~1296) and GET /admin/reports (line ~1342) STILL use the hardcoded check `user.get('role') != 'admin'` and therefore reject super_admin users with 403. Since admin@ is auto-promoted to super_admin on startup, these endpoints are effectively broken for the default admin account. The review request explicitly required GET /admin/pending to return an array for super_admin. FIX: replace the inline `if user.get('role') != 'admin'` guard with `Depends(require_role('moderator'))` on admin_pending and admin_reports (same pattern already used by admin_approve/admin_reject/admin_resolve_report)."
 
 frontend:
-  - task: "VerifiedBadge component — reusable 'Verified contributor' pill"
+  - task: "admin/_layout.tsx — role-guarded layout with scrollable top tabs + role-based tab visibility"
     implemented: true
     working: "NA"
-    file: "/app/frontend/src/components/VerifiedBadge.tsx"
-    stuck_count: 0
-    priority: "medium"
-    needs_retesting: false
-    status_history:
-        -working: "NA"
-        -agent: "main"
-        -comment: "Three variants: chip (pill), compact (tight pill), inline (just the blue check next to a name). Renders nothing unless status === 'verified'."
-
-  - task: "FreshnessBadge component — color-coded freshness pill (fresh/recent/stale)"
-    implemented: true
-    working: "NA"
-    file: "/app/frontend/src/components/FreshnessBadge.tsx"
-    stuck_count: 0
-    priority: "medium"
-    needs_retesting: false
-    status_history:
-        -working: "NA"
-        -agent: "main"
-        -comment: "Sourced from spot.freshness + spot.freshness_label. Green for fresh (<30d), primary orange for recent (<90d), red for stale. Chip/compact/inline variants."
-
-  - task: "ReportSheet component — bottom-sheet report flow with reason chips"
-    implemented: true
-    working: "NA"
-    file: "/app/frontend/src/components/ReportSheet.tsx"
+    file: "/app/frontend/app/admin/_layout.tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Modal bottom sheet. Fetches /reports/reasons on open with fallback list. Required reason selection; optional 500-char details textarea. Submit posts to /reports and shows success alert."
+        -comment: "Hard redirect for non-admin users (gate screen). Tabs: Overview, Users, Spots, Reports, Analytics (moderator+), Audit (admin+), Settings (super_admin only). Exit button returns to Profile."
 
-  - task: "SpotCard — shows FreshnessBadge + VerifiedBadge next to owner"
+  - task: "admin/index.tsx — dashboard overview with KPIs, queue cards, contributors, trending cities"
     implemented: true
     working: "NA"
-    file: "/app/frontend/src/components/SpotCard.tsx"
+    file: "/app/frontend/app/admin/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Pull-to-refresh. Tappable queue cards route to /admin/spots and /admin/reports."
+
+  - task: "admin/users.tsx — paginated searchable user table with role/plan/status filters"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/admin/users.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Horizontal chip strip of filters. Prev/Next pager. Each row shows plan/role/status pills + open report count. Taps → user detail."
+
+  - task: "admin/user/[id].tsx — user detail: plan/role/status/verify actions + notes + audit + role confirmation modal"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/admin/user/[id].tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Typed confirmation modal for role changes (must type exact role name). Plan chips grant immediate override. Suspend/verify toggle buttons. Notes composer + list. Recent admin activity feed."
+
+  - task: "admin/spots.tsx — moderation queue (approve/reject) using new layout"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/admin/spots.tsx"
     stuck_count: 0
     priority: "medium"
     needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "FreshnessBadge rendered bottom-left of hero next to ScoreBadge. VerifiedBadge inline next to title — only shows when owner.verification_status === 'verified'."
+        -comment: "Ported from legacy admin.tsx. Pull-to-refresh. Uses SpotCard + approve/reject buttons. Empty state when queue is clear."
 
-  - task: "Spot Detail — pending/rejected banner (owner-only), freshness pill, verified owner, ReportSheet wiring"
+  - task: "admin/reports.tsx — upgraded to live inside new layout (no duplicate chrome)"
     implemented: true
     working: "NA"
-    file: "/app/frontend/app/spot/[id].tsx"
+    file: "/app/frontend/app/admin/reports.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Removed SafeAreaView + back button + role check (layout handles all three). Kept pending/resolved filter chips. resolve actions remain the same."
+
+  - task: "admin/audit.tsx — audit log viewer with action-prefix filter and pagination"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/admin/audit.tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Amber 'Pending moderation review' banner when owner views their own pending_review spot. Red rejection banner for rejected. FreshnessBadge under title. VerifiedBadge inline next to owner name, plus 'Verified contributor' subtitle. Flag button now opens ReportSheet instead of single-tap alert."
+        -comment: "Shows action, actor (email + role), target, before/after JSON diff, notes. Filter box does prefix search. Pager for >50 entries."
 
-  - task: "Add Spot — duplicate warning card with tappable candidate list"
+  - task: "admin/analytics.tsx — 30-day signup/spot/approval SVG charts + most saved leaderboard"
     implemented: true
     working: "NA"
-    file: "/app/frontend/app/(tabs)/add.tsx"
+    file: "/app/frontend/app/admin/analytics.tsx"
     stuck_count: 0
-    priority: "high"
+    priority: "medium"
     needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "After location is picked, debounced call to /spots/check-duplicates. If hits, renders amber 'Looks like this spot exists' card with thumbnails + 'X m away' + 'likely match' label (similarity > 0.6). Tapping a row pushes to that spot. User can still continue with their own submission."
+        -comment: "Three charts using react-native-svg. Totals strip. 'Most saved spots' leaderboard."
+
+  - task: "admin/settings.tsx — platform settings editor (super_admin-only writes)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/admin/settings.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "View-only banner when not super_admin. Toggles for maintenance/registration/moderation/auto-approve. Text rows save on explicit Save tap after typing changes. Maintenance mode is UI-only today (Phase 2 wires backend enforcement)."
 
 metadata:
   created_by: "main_agent"
-  version: "1.2"
-  test_sequence: 2
+  version: "1.4"
+  test_sequence: 4
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Existing admin endpoints — approve/reject/resolve now emit audit logs"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -317,57 +400,62 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      Trust & Moderation backend additions this round:
+      Phase 1 Admin Dashboard backend is live. Please validate in this order:
+      AUTH RULES (critical):
+      - admin@photoscout.app / admin123 is now SUPER_ADMIN on startup (auto-promoted).
+      - Non-admin users (e.g. sophie@photoscout.app / demo123) MUST get 403 from every /admin/* endpoint.
       
-      1) GET /api/spots/check-duplicates?latitude=&longitude=&title=&radius_m=
-         - Returns { count, candidates[ ≤5 ] } where each candidate has distance_m + title_similarity + full public_spot_view fields
-         - radius_m clamps 50–2000
-         - Must be ordered before /spots/{spot_id} in FastAPI — please verify by calling with a bogus latitude and confirming you don't get a 404 spot-not-found
-         - Auth is optional
+      NEW ENDPOINTS (all under /api/admin/*):
+      1) GET /overview — as super_admin, assert shape matches spec (users.total, users.by_plan.{free,pro,elite}, moderation.*, top_contributors[], top_cities[], revenue.monthly_estimate_usd).
+      2) GET /users?q=&role=&plan=&status=&page=&limit= — as super_admin:
+         - q="sophie" returns sophie in items
+         - role="user" filters correctly, each item has plan/role/status/spot_count/open_reports, NEVER password_hash
+         - page=2&limit=1 works (pager math correct)
+      3) GET /users/{id} — returns notes, recent_audit, spot_count, save_count, open_reports arrays.
+      4) PATCH /users/{id} — as super_admin on sophie:
+         - plan="pro" succeeds, audit log entry appears
+         - plan="bogus" returns 400
+         - role="admin" succeeds, audit entry action="user.update" with before.role="user" / after.role="admin"
+         - Then login as a plain admin (create temporarily via direct promotion if needed, or just skip this sub-test)
+           — non-super-admin cannot set role to super_admin (403)
+         - Admins cannot change their own role (400)
+      5) POST /users/{id}/notes — body "chargeback risk", verify note appears in subsequent GET /users/{id}.notes.
+      6) GET /audit-logs?action=user.update — returns the prior update; pagination fields present.
+      7) GET /analytics?days=30 — series length 30, totals match sum(series), most_saved array present.
+      8) GET /settings — returns the singleton with default fields.
+         PATCH /settings {"support_email":"foo@bar.com"} as super_admin — returns {ok:true, settings:{...}}.
+         PATCH /settings as sophie (normal user) — 403.
+         PATCH /settings as a plain 'admin' (non-super) — 403 (super_admin required).
       
-      2) POST /api/reports — stricter
-         - reason MUST be one of: not_a_location, unsafe, inappropriate, spam, wrong_info, other — else 400
-         - target_type MUST be in {spot, user, review} — else 400
-         - Rate-limited 20/day per user (HTTP 429)
-         - Duplicate pending report from same user on same target is deduped (returns the existing doc, no new insert)
+      Regression:
+      - POST /admin/spots/{id}/approve and /reject now require moderator+; audit_logs entry with action "spot.approve"/"spot.reject" appears.
+      - POST /admin/reports/{id}/resolve with body {"action":"dismissed"} still works and emits audit "report.resolve.dismissed".
       
+      Do NOT run frontend UI tests. Main agent will ask user first.
+      
+      Revert helper: after testing, please set sophie back to plan="pro" if you changed her plan (role should already be "user").
     -agent: "testing"
     -message: |
-      Trust & Moderation backend validation complete — 17/18 substantive checks PASS.
+      Admin Dashboard Phase 1 backend validation complete — 64/65 checks PASSED.
 
-      Task-by-task:
-      1) /spots/check-duplicates — PASS (positive returns distance_m int + title_similarity 0..1, correct ordering;
-         negative lat=89/lng=170 → count 0; route precedence → 422 validation, NOT /spots/{spot_id} 404).
-      2) POST /reports — PASS (valid submit returns pending report_id; dedupe returns same id on repeat;
-         bad reason 400 with enum list in detail; bad target_type 'invoice' → 400).
-      3) /reports/reasons — PASS (6 expected keys, all labels non-empty, no auth required).
-      4) /reports rate limit — PASS (429 at request #19 within same day, retry-in 86396s, matches 20/day cap).
-      5) freshness fields — PASS (all spots expose freshness ∈ {fresh,recent,stale,unknown}; freshness_label non-empty
-         when not unknown). Distribution across /spots?limit=50 = {fresh:25, recent:1, stale:1} — variety exists; trending
-         top-10 all 'fresh' because trending is score-sorted (expected, not a concern).
-      6) attach_owners — PASS on /spots?limit=5 (every item has owner{user_id,name,verification_status}, at least one
-         verified) and on /feed/home trending[0] + recent[0].
-      7) Admin regression — /admin/pending 200 [], /admin/reports 200 includes the new report. 
-         CONTRACT MISMATCH (minor): /admin/reports/{id}/resolve validates action against {dismissed,removed,warned} but
-         the review request (and some mobile clients might) send 'dismiss'. Request with {action:'dismiss'} → 400
-         'Invalid action'. Retrying with {action:'dismissed'} → 200. Recommend either (a) accept both 'dismiss' and
-         'dismissed' on the server, or (b) confirm the mobile ReportSheet/admin UI sends the past-tense form.
+      ALL NEW ENDPOINTS PASSED:
+      - Auth guards: sophie gets 403 on every /admin/* endpoint in the list (overview, users list, user detail, user PATCH, user notes, audit-logs, analytics, settings GET, settings PATCH).
+      - admin@photoscout.app is auto-promoted to super_admin on startup (verified on login).
+      - GET /admin/overview — shape matches spec exactly (users.*, moderation.*, top_contributors[], top_cities[], revenue.monthly_estimate_usd numeric). revenue is a MOCKED estimate (Stripe not wired).
+      - GET /admin/users — search, filter, pagination, enrichment (spot_count/open_reports), password_hash never exposed.
+      - GET /admin/users/{id} — notes[], recent_audit[], recent_spots[], plus all enrichment fields.
+      - PATCH /admin/users/{id} — plan='pro' succeeds with before/after audit diff; plan='bogus' → 400; self-role-change for super_admin → 400.
+      - POST /admin/users/{id}/notes — note persisted and visible in user detail.
+      - GET /admin/audit-logs — prefix filter on action works; admin_user_id populated on entries.
+      - GET /admin/analytics?days=30 — series.length==30, totals == sum(series), most_saved[] present.
+      - GET /admin/settings / PATCH /admin/settings (super_admin only) — round-trip of support_email confirmed.
+      - POST /admin/spots/{id}/approve and POST /admin/reports/{id}/resolve both emit audit logs with correct action and target_id.
 
-      No blocking issues found. Backend trust layer is good to ship. See /app/backend_test.py for the test harness.
+      ONE REGRESSION FAILURE (existing legacy endpoints):
+      - GET /admin/pending returns 403 for super_admin. Root cause: line ~1297 still uses the hardcoded `if user.get('role') != 'admin'` check. Because admin@ is auto-promoted to super_admin on startup, this check now rejects the default admin account.
+      - GET /admin/reports has the identical bug on line ~1343.
+      - FIX: swap those two inline role checks for `Depends(require_role('moderator'))` — the same dependency already used by admin_approve / admin_reject / admin_resolve_report further down. Two-line change. Marked task "Existing admin endpoints — approve/reject/resolve now emit audit logs" as working: false until this is fixed.
 
-      3) GET /api/reports/reasons — public; returns array of {key,label}
-      
-      4) Rate limiting on writes:
-         - POST /spots                 10/hr
-         - POST /spots/{id}/reviews    30/day
-         - POST /spots/{id}/checkins   30/day
-         - POST /reports               20/day
-      
-      5) public_spot_view now returns freshness ∈ {fresh, recent, stale, unknown} plus freshness_label
-      
-      6) attach_owners() is applied to /spots, /spots/nearby/search, /feed/home
-      
-      Please validate the above + regression on admin moderation endpoints.
-      Credentials: /app/memory/test_credentials.md — sophie@photoscout.app / demo123 (standard), admin@photoscout.app / admin123 (admin).
-      
-      Do NOT run frontend tests. Main agent will ask the user before invoking the UI testing agent.
+      CLEANUP: sophie left on plan='pro' per request.
+
+      Backend test script: /app/backend_test.py

@@ -1,15 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Image, Alert } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
-import { ChevronLeft, Check, X, AlertTriangle } from 'lucide-react-native';
+import { Check, X, AlertTriangle } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
-import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 import { EmptyState } from '../../src/components/ui';
 
 export default function AdminReports() {
-  const { user } = useAuth();
   const [reports, setReports] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'pending' | 'resolved'>('pending');
@@ -28,14 +24,6 @@ export default function AdminReports() {
 
   useEffect(() => { load(); }, [load]);
 
-  if (!user || user.role !== 'admin') {
-    return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' }}>
-        <Text style={{ color: colors.text, fontFamily: font.display, fontSize: 24 }}>Admin only</Text>
-      </SafeAreaView>
-    );
-  }
-
   const resolve = async (id: string, action: 'dismissed' | 'removed' | 'warned') => {
     try {
       await api.post(`/admin/reports/${id}/resolve`, { action });
@@ -46,26 +34,16 @@ export default function AdminReports() {
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
-      <View style={styles.head}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} testID="admin-reports-back">
-          <ChevronLeft size={22} color={colors.text} />
-        </TouchableOpacity>
-        <Text style={styles.title}>Reports</Text>
-      </View>
-
-      <View style={styles.tabs}>
-        {[
-          { k: 'pending', l: 'Pending' },
-          { k: 'resolved', l: 'Resolved' },
-        ].map((t) => (
+    <View style={{ flex: 1, backgroundColor: colors.bg }}>
+      <View style={styles.filterRow}>
+        {(['pending', 'resolved'] as const).map((f) => (
           <TouchableOpacity
-            key={t.k}
-            style={[styles.tab, filter === t.k && styles.tabActive]}
-            onPress={() => setFilter(t.k as any)}
-            testID={`report-tab-${t.k}`}
+            key={f}
+            onPress={() => setFilter(f)}
+            style={[styles.filterChip, filter === f && styles.filterChipActive]}
+            testID={`admin-reports-filter-${f}`}
           >
-            <Text style={[styles.tabTxt, filter === t.k && { color: colors.textInverse }]}>{t.l}</Text>
+            <Text style={[styles.filterTxt, filter === f && styles.filterTxtActive]}>{f}</Text>
           </TouchableOpacity>
         ))}
       </View>
@@ -131,21 +109,16 @@ export default function AdminReports() {
           ))}
         </ScrollView>
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  head: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: space.xl, paddingVertical: space.md, gap: 8 },
-  backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  title: { color: colors.text, fontFamily: font.display, fontSize: 26 },
-  tabs: { flexDirection: 'row', gap: 8, paddingHorizontal: space.xl, marginBottom: space.md },
-  tab: {
-    paddingHorizontal: 14, paddingVertical: 7, borderRadius: radii.pill,
-    backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
-  },
-  tabActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  tabTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },
+  filterRow: { flexDirection: 'row', gap: 8, paddingHorizontal: space.xl, paddingVertical: space.sm },
+  filterChip: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
+  filterChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  filterTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12, textTransform: 'capitalize' },
+  filterTxtActive: { color: colors.textInverse, fontFamily: font.bodySemibold },
   card: {
     padding: space.lg, backgroundColor: colors.surface1,
     borderColor: colors.border, borderWidth: 1, borderRadius: radii.lg, gap: space.md,
