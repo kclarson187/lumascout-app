@@ -3227,10 +3227,14 @@ NA_PHOTOGRAPHERS = [
      "bio": "LA creative + brand shooter.", "city": "Los Angeles", "state": "CA",
      "country_code": "US", "country_name": "United States", "timezone": "America/Los_Angeles", "language_hint": "en",
      "specialties": ["Branding", "Urban"], "avatar_url": None},
-    {"email": "maya.denver@photoscout.app", "username": "mayadenver", "name": "Maya Johnson",
-     "bio": "Rocky Mountain elopements.", "city": "Denver", "state": "CO",
-     "country_code": "US", "country_name": "United States", "timezone": "America/Denver", "language_hint": "en",
-     "specialties": ["Wedding", "Nature"], "avatar_url": None},
+    {"email": "sophie.montreal@photoscout.app", "username": "sophiemontreal", "name": "Sophie Tremblay",
+     "bio": "Photographe de mariage à Montréal.", "city": "Montréal", "state": "Québec",
+     "country_code": "CA", "country_name": "Canada", "timezone": "America/Montreal", "language_hint": "fr",
+     "specialties": ["Wedding", "Portrait"], "avatar_url": None},
+    {"email": "luis.monterrey@photoscout.app", "username": "luismonterrey", "name": "Luis Hernández",
+     "bio": "Fotógrafo editorial en Monterrey.", "city": "Monterrey", "state": "Nuevo León",
+     "country_code": "MX", "country_name": "Mexico", "timezone": "America/Monterrey", "language_hint": "es",
+     "specialties": ["Urban", "Branding"], "avatar_url": None},
 ]
 
 NA_SPOTS = [
@@ -3324,13 +3328,49 @@ NA_SPOTS = [
         "owner_email": "maya.denver@photoscout.app",
         "images": ["https://images.unsplash.com/photo-1509316785289-025f5b846b35?w=1200&q=85"],
     },
+    {
+        "title": "Old Montréal Cobblestones at Sunset",
+        "description": "17th-century stone architecture and warm lantern light — perfect for timeless weddings.",
+        "city": "Montréal", "state": "Québec", "province_state": "Québec",
+        "country_code": "CA", "country_name": "Canada", "timezone": "America/Montreal", "language_hint": "fr",
+        "latitude": 45.5050, "longitude": -73.5547,
+        "shoot_types": ["Wedding", "Portrait"], "style_tags": ["Urban", "Sunset", "Architecture"],
+        "best_time_of_day": "sunset", "sunrise_rating": 3, "sunset_rating": 5,
+        "morning_golden_hour_rating": 3, "evening_golden_hour_rating": 5,
+        "shade_rating": 4, "variety_rating": 5, "crowd_level": 4, "safety_rating": 5,
+        "best_months": ["May", "June", "September", "October"], "fee_required": False,
+        "permit_required": False,
+        "owner_email": "sophie.montreal@photoscout.app",
+        "images": ["https://images.unsplash.com/photo-1519178614-68673b201f36?w=1200&q=85"],
+    },
+    {
+        "title": "Cerro de la Silla at Golden Hour",
+        "description": "Iconic twin-peak silhouette of Monterrey — ideal for editorial and brand work.",
+        "city": "Monterrey", "state": "Nuevo León", "province_state": "Nuevo León",
+        "country_code": "MX", "country_name": "Mexico", "timezone": "America/Monterrey", "language_hint": "es",
+        "latitude": 25.6335, "longitude": -100.2421,
+        "shoot_types": ["Branding", "Urban"], "style_tags": ["Sunset", "Mountain", "Editorial"],
+        "best_time_of_day": "golden_hour", "sunrise_rating": 4, "sunset_rating": 5,
+        "morning_golden_hour_rating": 4, "evening_golden_hour_rating": 5,
+        "shade_rating": 2, "variety_rating": 4, "crowd_level": 2, "safety_rating": 4,
+        "best_months": ["November", "December", "February", "March"], "fee_required": False,
+        "permit_required": False,
+        "owner_email": "luis.monterrey@photoscout.app",
+        "images": ["https://images.unsplash.com/photo-1518659526054-190340b61bee?w=1200&q=85"],
+    },
 ]
 
 
 async def seed_na_content():
-    """Idempotent seed of US/CA/MX content. Only runs when no non-US seed exists."""
-    existing_non_us = await db.spots.count_documents({"country_code": {"$in": ["CA", "MX"]}})
-    if existing_non_us > 0:
+    """Idempotent top-up seed of US/CA/MX content. Seeds any missing NA_SPOTS
+    rows by matching on title within city — safe to re-run after adding entries.
+    """
+    # Short-circuit only when the set is complete, not merely 'any non-US row'.
+    existing_titles = set()
+    async for s in db.spots.find({"country_code": {"$in": ["CA", "MX", "US"]}}, {"title": 1, "city": 1, "_id": 0}):
+        existing_titles.add((s.get("title"), s.get("city")))
+    missing_rows = [sp for sp in NA_SPOTS if (sp["title"], sp["city"]) not in existing_titles]
+    if not missing_rows:
         return
 
     owner_by_email: dict = {}
@@ -3372,7 +3412,7 @@ async def seed_na_content():
         await db.users.insert_one(doc)
         owner_by_email[p["email"]] = uid
 
-    for i, sp in enumerate(NA_SPOTS):
+    for i, sp in enumerate(missing_rows):
         owner_id = owner_by_email.get(sp["owner_email"])
         if not owner_id:
             continue
