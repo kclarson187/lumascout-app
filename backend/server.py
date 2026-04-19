@@ -519,14 +519,25 @@ async def login(body: LoginIn):
 async def me(user: dict = Depends(get_current_user)):
     user["plan"] = plan_of(user)
     user["limits"] = limits_for(user)
+    uid = user["user_id"]
     # live counts
     user["usage"] = {
-        "saves": await db.spot_saves.count_documents({"user_id": user["user_id"]}),
+        "saves": await db.spot_saves.count_documents({"user_id": uid}),
         "private_spots": await db.spots.count_documents({
-            "owner_user_id": user["user_id"],
+            "owner_user_id": uid,
             "privacy_mode": {"$in": ["private", "followers", "invite_only"]},
         }),
-        "collections": await db.collections.count_documents({"owner_user_id": user["user_id"]}),
+        "collections": await db.collections.count_documents({"owner_user_id": uid}),
+    }
+    # Social stats for creator profile (Phase B)
+    user["stats"] = {
+        "followers": await db.follows.count_documents({"followed_user_id": uid}),
+        "following": await db.follows.count_documents({"follower_user_id": uid}),
+        "spots_created": await db.spots.count_documents({"owner_user_id": uid}),
+        "reviews_received": await db.spot_reviews.count_documents({
+            "spot_id": {"$in": [s["spot_id"] async for s in db.spots.find({"owner_user_id": uid}, {"spot_id": 1, "_id": 0})]},
+        }),
+        "posts_count": await db.community_posts.count_documents({"author_id": uid}),
     }
     return user
 

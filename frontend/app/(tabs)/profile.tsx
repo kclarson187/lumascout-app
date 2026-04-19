@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -7,13 +7,37 @@ import {
   Image,
   TouchableOpacity,
   Alert,
-  TextInput,
-  FlatList,
+  ActivityIndicator,
+  Linking,
+  Share,
+  Switch,
+  Platform,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
-import { LinearGradient } from 'expo-linear-gradient';
-import { LogOut, Settings, BarChart3, Crown, Check, Edit3, Store } from 'lucide-react-native';
+import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
+import {
+  LogOut,
+  Settings,
+  BarChart3,
+  Crown,
+  Edit3,
+  Store,
+  Camera,
+  Share2,
+  Globe,
+  Instagram,
+  Facebook,
+  Music2,
+  ShieldCheck,
+  Briefcase,
+  Users as UsersIcon,
+  MapPin,
+  Handshake,
+  GraduationCap,
+} from 'lucide-react-native';
 import { useAuth } from '../../src/auth';
 import { api, formatApiError } from '../../src/api';
 import { colors, font, space, radii, SHOOT_TYPES } from '../../src/theme';
@@ -21,25 +45,55 @@ import { Button } from '../../src/components/Button';
 import { Input, Chip } from '../../src/components/ui';
 import SpotCard from '../../src/components/SpotCard';
 
+type TabKey = 'posts' | 'spots' | 'photos' | 'reviews' | 'collections' | 'about';
+const TABS: { key: TabKey; label: string }[] = [
+  { key: 'posts', label: 'Posts' },
+  { key: 'spots', label: 'Spots' },
+  { key: 'photos', label: 'Photos' },
+  { key: 'reviews', label: 'Reviews' },
+  { key: 'collections', label: 'Collections' },
+  { key: 'about', label: 'About' },
+];
+
+const emptyForm = {
+  name: '',
+  bio: '',
+  city: '',
+  state: '',
+  instagram: '',
+  website: '',
+  facebook_url: '',
+  tiktok_url: '',
+  years_experience: '',
+  service_radius_miles: '',
+  booking_available: false,
+  available_for_second_shooter: false,
+  mentorship_available: false,
+  primary_country: 'US',
+  specialties: [] as string[],
+};
+
 export default function Profile() {
   const { user, logout, updateProfile } = useAuth();
   const [mySpots, setMySpots] = useState<any[]>([]);
+  const [myPosts, setMyPosts] = useState<any[]>([]);
+  const [collections, setCollections] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<TabKey>('posts');
   const [editMode, setEditMode] = useState(false);
-  const [form, setForm] = useState({
-    name: user?.name || '',
-    bio: user?.bio || '',
-    city: user?.city || '',
-    state: user?.state || '',
-    instagram: user?.instagram || '',
-    website: user?.website || '',
-    specialties: user?.specialties || [],
-  });
+  const [uploading, setUploading] = useState<'banner' | 'avatar' | null>(null);
+  const [form, setForm] = useState(emptyForm);
 
   const load = useCallback(async () => {
     if (!user) return;
     try {
-      const s = await api.get('/me/spots');
-      setMySpots(s);
+      const [spotsRes, postsRes, collRes] = await Promise.all([
+        api.get('/me/spots').catch(() => []),
+        api.get('/posts', { author_id: user.user_id, limit: 20 }).catch(() => ({ items: [] })),
+        api.get('/me/collections').catch(() => []),
+      ]);
+      setMySpots(Array.isArray(spotsRes) ? spotsRes : spotsRes?.items || []);
+      setMyPosts(postsRes?.items || []);
+      setCollections(Array.isArray(collRes) ? collRes : collRes?.items || []);
     } catch {}
   }, [user]);
 
@@ -54,23 +108,63 @@ export default function Profile() {
         state: user.state || '',
         instagram: user.instagram || '',
         website: user.website || '',
+        facebook_url: user.facebook_url || '',
+        tiktok_url: user.tiktok_url || '',
+        years_experience: String(user.years_experience ?? ''),
+        service_radius_miles: String(user.service_radius_miles ?? ''),
+        booking_available: !!user.booking_available,
+        available_for_second_shooter: !!user.available_for_second_shooter,
+        mentorship_available: !!user.mentorship_available,
+        primary_country: user.primary_country || 'US',
         specialties: user.specialties || [],
       });
     }
   }, [user, editMode]);
 
+  const photos = useMemo(() => {
+    const all: { url: string; spot_id: string }[] = [];
+    mySpots.forEach((s: any) => {
+      (s.images || []).forEach((img: any) => {
+        if (img.image_url) all.push({ url: img.image_url, spot_id: s.spot_id });
+      });
+    });
+    return all;
+  }, [mySpots]);
+
   if (!user) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center', gap: 16, padding: space.xl }}>
-        <Text style={{ color: colors.text, fontFamily: font.display, fontSize: 28 }}>Sign in</Text>
+      <SafeAreaView style={styles.loadingWrap}>
+        <Text style={styles.loadingTitle}>Sign in</Text>
         <Button title="Sign in" onPress={() => router.push('/(auth)/login')} />
       </SafeAreaView>
     );
   }
 
+  const staffRoles = ['admin', 'super_admin', 'moderator', 'support'];
+  const isStaff = staffRoles.includes(user.role || '');
+
   const saveProfile = async () => {
+    const body: any = {
+      name: form.name,
+      bio: form.bio,
+      city: form.city,
+      state: form.state,
+      instagram: form.instagram,
+      website: form.website,
+      facebook_url: form.facebook_url,
+      tiktok_url: form.tiktok_url,
+      booking_available: form.booking_available,
+      available_for_second_shooter: form.available_for_second_shooter,
+      mentorship_available: form.mentorship_available,
+      primary_country: form.primary_country,
+      specialties: form.specialties,
+    };
+    const years = parseInt(form.years_experience, 10);
+    const radius = parseInt(form.service_radius_miles, 10);
+    if (!Number.isNaN(years)) body.years_experience = years;
+    if (!Number.isNaN(radius)) body.service_radius_miles = radius;
     try {
-      await updateProfile(form);
+      await updateProfile(body);
       setEditMode(false);
     } catch (e) {
       Alert.alert('Error', formatApiError(e));
@@ -78,179 +172,578 @@ export default function Profile() {
   };
 
   const toggleSpecialty = (s: string) => {
-    setForm({
-      ...form,
-      specialties: form.specialties.includes(s)
-        ? form.specialties.filter((x) => x !== s)
-        : [...form.specialties, s],
-    });
+    setForm((prev) => ({
+      ...prev,
+      specialties: prev.specialties.includes(s)
+        ? prev.specialties.filter((x) => x !== s)
+        : [...prev.specialties, s],
+    }));
   };
+
+  const pickAndUpload = async (kind: 'banner' | 'avatar') => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Media permission required');
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 1,
+      base64: false,
+      allowsEditing: true,
+      aspect: kind === 'banner' ? [3, 1] : [1, 1],
+    });
+    if (res.canceled) return;
+    const asset = res.assets[0];
+    setUploading(kind);
+    try {
+      const manipulated = await ImageManipulator.manipulateAsync(
+        asset.uri,
+        [{ resize: { width: kind === 'banner' ? 1400 : 600 } }],
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+      );
+      if (!manipulated.base64) {
+        Alert.alert('Could not process image');
+        return;
+      }
+      const dataUrl = `data:image/jpeg;base64,${manipulated.base64}`;
+      await updateProfile(
+        kind === 'banner'
+          ? { banner_image_url: dataUrl }
+          : { avatar_image_url: dataUrl, avatar_url: dataUrl },
+      );
+    } catch (e) {
+      Alert.alert('Upload failed', formatApiError(e));
+    } finally {
+      setUploading(null);
+    }
+  };
+
+  const openUrl = (url?: string) => {
+    if (!url) return;
+    const normalized = url.startsWith('http') ? url : `https://${url}`;
+    Linking.openURL(normalized).catch(() => {});
+  };
+
+  const shareProfile = async () => {
+    try {
+      await Share.share({
+        message: `Check out ${user.name}'s photography profile on PhotoScout`,
+      });
+    } catch {}
+  };
+
+  const banner = user.banner_image_url;
+  const avatar = user.avatar_image_url || user.avatar_url;
+  const stats = user.stats || {};
+
+  const plan = (user.plan || 'free') as string;
+  const isComp = plan.startsWith('comp_') || plan.startsWith('trial_');
+  const planLabel =
+    plan === 'free' ? 'Free' : plan.replace('comp_', 'Comp · ').replace('trial_', 'Trial · ').toUpperCase();
 
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
-        <View style={styles.bannerWrap}>
-          <LinearGradient
-            colors={['rgba(245,166,35,0.28)', 'rgba(208,72,72,0.18)', 'transparent']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={StyleSheet.absoluteFillObject as any}
-          />
-        </View>
-        <View style={[styles.topBar, { marginTop: -60 }]}>
-          <TouchableOpacity onPress={() => router.push('/settings')} style={styles.iconBtn} testID="profile-settings">
-            <Settings size={18} color={colors.text} />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => setEditMode(!editMode)} style={styles.iconBtn} testID="profile-edit">
-            <Edit3 size={18} color={colors.text} />
-          </TouchableOpacity>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView contentContainerStyle={{ paddingBottom: 60 }}>
+          {/* Banner */}
           <TouchableOpacity
-            onPress={() => {
-              Alert.alert('Sign out?', '', [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Sign out', style: 'destructive', onPress: () => { logout(); router.replace('/onboarding'); } },
-              ]);
-            }}
-            style={styles.iconBtn}
-            testID="profile-logout"
+            activeOpacity={0.9}
+            onPress={() => pickAndUpload('banner')}
+            style={styles.banner}
+            testID="profile-banner"
           >
-            <LogOut size={18} color={colors.text} />
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.headerCard}>
-          {user.avatar_url ? (
-            <Image source={{ uri: user.avatar_url }} style={styles.avatar} />
-          ) : (
-            <View style={[styles.avatar, { backgroundColor: colors.surface2, alignItems: 'center', justifyContent: 'center' }]}>
-              <Text style={{ color: colors.text, fontFamily: font.display, fontSize: 36 }}>
-                {user.name?.[0]?.toUpperCase()}
+            {banner ? (
+              <Image source={{ uri: banner }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
+            ) : (
+              <View style={styles.bannerFallback} />
+            )}
+            <View style={styles.bannerOverlay} />
+            <View style={styles.bannerEdit}>
+              <Camera size={14} color={colors.textInverse} />
+              <Text style={styles.bannerEditTxt}>
+                {uploading === 'banner' ? 'Uploading…' : banner ? 'Change cover' : 'Add cover photo'}
               </Text>
             </View>
-          )}
-          <Text style={styles.name}>{user.name}</Text>
-          <Text style={styles.handle}>@{user.username}</Text>
-          {user.verification_status === 'verified' && (
-            <View style={styles.badge}>
-              <Check size={12} color={colors.textInverse} />
-              <Text style={styles.badgeText}>Verified contributor</Text>
+            {/* Top-right quick actions */}
+            <View style={styles.bannerTopRight}>
+              <TouchableOpacity style={styles.iconBtnDark} onPress={shareProfile} testID="profile-share">
+                <Share2 size={16} color={colors.textInverse} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.iconBtnDark} onPress={() => router.push('/settings')} testID="profile-settings">
+                <Settings size={16} color={colors.textInverse} />
+              </TouchableOpacity>
             </View>
-          )}
-          {user.bio ? <Text style={styles.bio}>{user.bio}</Text> : null}
-          {user.city ? <Text style={styles.city}>{user.city}{user.state ? `, ${user.state}` : ''}</Text> : null}
-          {(user.specialties && user.specialties.length > 0) && (
-            <View style={styles.specs}>
-              {user.specialties.map((s: string) => (
-                <View key={s} style={styles.specPill}><Text style={styles.specTxt}>{s}</Text></View>
-              ))}
-            </View>
-          )}
-        </View>
+          </TouchableOpacity>
 
-        {editMode && (
-          <View style={styles.editCard}>
-            <Input label="Name" value={form.name} onChangeText={(t) => setForm({ ...form, name: t })} testID="profile-name" />
-            <Input label="Bio" value={form.bio} onChangeText={(t) => setForm({ ...form, bio: t })} multiline style={{ minHeight: 80 }} />
-            <View style={{ flexDirection: 'row', gap: space.md }}>
-              <View style={{ flex: 2 }}>
-                <Input label="City" value={form.city} onChangeText={(t) => setForm({ ...form, city: t })} />
+          {/* Avatar overlapping banner */}
+          <View style={styles.avatarWrap}>
+            <TouchableOpacity activeOpacity={0.9} onPress={() => pickAndUpload('avatar')} testID="profile-avatar">
+              {avatar ? (
+                <Image source={{ uri: avatar }} style={styles.avatar} />
+              ) : (
+                <View style={[styles.avatar, { backgroundColor: colors.surface2, alignItems: 'center', justifyContent: 'center' }]}>
+                  <Camera size={22} color={colors.textSecondary} />
+                </View>
+              )}
+              <View style={styles.avatarEditBadge}>
+                {uploading === 'avatar'
+                  ? <ActivityIndicator size="small" color={colors.textInverse} />
+                  : <Camera size={12} color={colors.textInverse} />}
               </View>
-              <View style={{ flex: 1 }}>
-                <Input label="State" value={form.state} onChangeText={(t) => setForm({ ...form, state: t })} />
-              </View>
-            </View>
-            <Input label="Instagram" value={form.instagram} onChangeText={(t) => setForm({ ...form, instagram: t })} autoCapitalize="none" />
-            <Input label="Website" value={form.website} onChangeText={(t) => setForm({ ...form, website: t })} autoCapitalize="none" />
-            <Text style={{ color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 }}>Specialties</Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-              {SHOOT_TYPES.map((s) => (
-                <Chip key={s} label={s} active={form.specialties.includes(s)} onPress={() => toggleSpecialty(s)} />
-              ))}
-            </View>
-            <Button title="Save" onPress={saveProfile} testID="profile-save" />
-          </View>
-        )}
-
-        <View style={styles.actionsRow}>
-          <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/creator-dashboard')} testID="profile-dashboard">
-            <BarChart3 size={18} color={colors.primary} />
-            <Text style={styles.actionTxt}>Creator{'\n'}Dashboard</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/marketplace')} testID="profile-marketplace">
-            <Store size={18} color={colors.primary} />
-            <Text style={styles.actionTxt}>Pack{'\n'}Marketplace</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/paywall')} testID="profile-paywall">
-            <Crown size={18} color={colors.primary} />
-            <Text style={styles.actionTxt}>{user.plan && user.plan !== 'free' ? `On ${user.plan}` : 'Upgrade'}{'\n'}{user.plan === 'elite' ? 'Creator' : 'to Pro'}</Text>
-          </TouchableOpacity>
-          {user.role === 'admin' && (
-            <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/admin')} testID="profile-admin">
-              <Settings size={18} color={colors.primary} />
-              <Text style={styles.actionTxt}>Admin{'\n'}Panel</Text>
             </TouchableOpacity>
-          )}
-        </View>
+          </View>
 
-        <View style={{ paddingHorizontal: space.xl, marginTop: space.lg }}>
-          <Text style={styles.sectionTitle}>My Spots · {mySpots.length}</Text>
-        </View>
-        <View style={{ paddingHorizontal: space.xl, gap: space.md, marginTop: space.md }}>
-          {mySpots.length === 0 ? (
-            <Text style={{ color: colors.textSecondary, fontFamily: font.body }}>You haven't added any spots yet.</Text>
-          ) : (
-            mySpots.slice(0, 5).map((s) => <SpotCard key={s.spot_id} spot={s} width={undefined as any} />)
+          {/* Name + handle + primary actions */}
+          <View style={styles.headerText}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, justifyContent: 'center' }}>
+              <Text style={styles.name} numberOfLines={1}>{user.name}</Text>
+              {user.verification_status === 'verified' && (
+                <View style={styles.verifiedDot} testID="profile-verified">
+                  <ShieldCheck size={14} color={colors.textInverse} />
+                </View>
+              )}
+            </View>
+            <Text style={styles.handle}>@{user.username}</Text>
+            {(user.city || user.state) && (
+              <View style={styles.locRow}>
+                <MapPin size={12} color={colors.textTertiary} />
+                <Text style={styles.locTxt}>
+                  {[user.city, user.state].filter(Boolean).join(', ')}
+                  {user.primary_country && user.primary_country !== 'US'
+                    ? ` · ${user.primary_country}`
+                    : ''}
+                </Text>
+              </View>
+            )}
+            {!!(user.specialties || []).length && (
+              <View style={styles.specs}>
+                {user.specialties.slice(0, 4).map((s: string) => (
+                  <View key={s} style={styles.specPill}>
+                    <Text style={styles.specTxt}>{s}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Availability badges */}
+            <View style={styles.availRow}>
+              {user.booking_available && (
+                <View style={[styles.availBadge, { backgroundColor: 'rgba(46,204,113,0.15)', borderColor: colors.success }]}>
+                  <Briefcase size={11} color={colors.success} />
+                  <Text style={[styles.availTxt, { color: colors.success }]}>Booking</Text>
+                </View>
+              )}
+              {user.available_for_second_shooter && (
+                <View style={[styles.availBadge, { backgroundColor: 'rgba(52,152,219,0.15)', borderColor: colors.info }]}>
+                  <Handshake size={11} color={colors.info} />
+                  <Text style={[styles.availTxt, { color: colors.info }]}>2nd shooter</Text>
+                </View>
+              )}
+              {user.mentorship_available && (
+                <View style={[styles.availBadge, { backgroundColor: 'rgba(245,166,35,0.18)', borderColor: colors.primary }]}>
+                  <GraduationCap size={11} color={colors.primary} />
+                  <Text style={[styles.availTxt, { color: colors.primary }]}>Mentor</Text>
+                </View>
+              )}
+            </View>
+
+            {/* Social + web links */}
+            {(user.website || user.instagram || user.facebook_url || user.tiktok_url) && (
+              <View style={styles.linkRow}>
+                {!!user.website && (
+                  <TouchableOpacity onPress={() => openUrl(user.website)} style={styles.linkBtn}>
+                    <Globe size={14} color={colors.textSecondary} />
+                  </TouchableOpacity>
+                )}
+                {!!user.instagram && (
+                  <TouchableOpacity onPress={() => openUrl(`https://instagram.com/${user.instagram.replace('@', '')}`)} style={styles.linkBtn}>
+                    <Instagram size={14} color={colors.textSecondary} />
+                  </TouchableOpacity>
+                )}
+                {!!user.facebook_url && (
+                  <TouchableOpacity onPress={() => openUrl(user.facebook_url)} style={styles.linkBtn}>
+                    <Facebook size={14} color={colors.textSecondary} />
+                  </TouchableOpacity>
+                )}
+                {!!user.tiktok_url && (
+                  <TouchableOpacity onPress={() => openUrl(user.tiktok_url)} style={styles.linkBtn}>
+                    <Music2 size={14} color={colors.textSecondary} />
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+
+            <View style={styles.ctaRow}>
+              <Button
+                title={editMode ? 'Cancel' : 'Edit profile'}
+                variant="secondary"
+                onPress={() => setEditMode(!editMode)}
+                style={{ flex: 1 }}
+                testID="profile-edit-toggle"
+              />
+              <Button
+                title="Share profile"
+                variant="ghost"
+                onPress={shareProfile}
+                style={{ flex: 1 }}
+              />
+            </View>
+          </View>
+
+          {/* Stats row */}
+          <View style={styles.statsRow}>
+            <StatCell label="Followers" value={stats.followers ?? 0} onPress={() => {}} />
+            <StatCell label="Following" value={stats.following ?? 0} onPress={() => {}} />
+            <StatCell label="Spots"     value={stats.spots_created ?? mySpots.length} />
+            <StatCell label="Posts"     value={stats.posts_count ?? myPosts.length} />
+          </View>
+
+          {/* Action cards (Creator Dash / Marketplace / Upgrade / Admin) */}
+          <View style={styles.actionsRow}>
+            <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/creator-dashboard')} testID="profile-dashboard">
+              <BarChart3 size={18} color={colors.primary} />
+              <Text style={styles.actionTxt}>Creator{'\n'}Dashboard</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/marketplace')} testID="profile-marketplace">
+              <Store size={18} color={colors.primary} />
+              <Text style={styles.actionTxt}>Pack{'\n'}Marketplace</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/paywall')} testID="profile-paywall">
+              <Crown size={18} color={colors.primary} />
+              <Text style={styles.actionTxt}>
+                {plan !== 'free' ? `On ${planLabel}` : 'Upgrade'}{'\n'}
+                {isComp ? 'Complimentary' : plan === 'elite' ? 'Creator' : plan === 'pro' ? 'Active' : 'to Pro'}
+              </Text>
+            </TouchableOpacity>
+            {isStaff && (
+              <TouchableOpacity style={[styles.actionCard, styles.adminCard]} onPress={() => router.push('/admin')} testID="profile-admin">
+                <Settings size={18} color={colors.textInverse} />
+                <Text style={[styles.actionTxt, { color: colors.textInverse }]}>Admin{'\n'}Dashboard</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity style={styles.actionCard} onPress={logout} testID="profile-logout">
+              <LogOut size={18} color={colors.secondary} />
+              <Text style={[styles.actionTxt, { color: colors.secondary }]}>Sign out</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Edit form */}
+          {editMode && (
+            <View style={styles.editCard}>
+              <Input label="Name" value={form.name} onChangeText={(t) => setForm({ ...form, name: t })} testID="profile-name" />
+              <Input label="Bio" value={form.bio} onChangeText={(t) => setForm({ ...form, bio: t })} multiline style={{ minHeight: 80, textAlignVertical: 'top' }} />
+              <View style={{ flexDirection: 'row', gap: space.md }}>
+                <View style={{ flex: 2 }}>
+                  <Input label="City" value={form.city} onChangeText={(t) => setForm({ ...form, city: t })} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Input label="State / Province" value={form.state} onChangeText={(t) => setForm({ ...form, state: t })} />
+                </View>
+              </View>
+              <View style={{ flexDirection: 'row', gap: space.md }}>
+                <View style={{ flex: 1 }}>
+                  <Input label="Country" value={form.primary_country} onChangeText={(t) => setForm({ ...form, primary_country: t.toUpperCase().slice(0, 2) })} autoCapitalize="characters" maxLength={2} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Input label="Years in biz" keyboardType="numeric" value={form.years_experience} onChangeText={(t) => setForm({ ...form, years_experience: t.replace(/[^0-9]/g, '') })} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Input label="Radius (mi)" keyboardType="numeric" value={form.service_radius_miles} onChangeText={(t) => setForm({ ...form, service_radius_miles: t.replace(/[^0-9]/g, '') })} />
+                </View>
+              </View>
+
+              <Input label="Website" value={form.website} onChangeText={(t) => setForm({ ...form, website: t })} autoCapitalize="none" />
+              <Input label="Instagram handle" value={form.instagram} onChangeText={(t) => setForm({ ...form, instagram: t })} autoCapitalize="none" />
+              <Input label="Facebook URL" value={form.facebook_url} onChangeText={(t) => setForm({ ...form, facebook_url: t })} autoCapitalize="none" />
+              <Input label="TikTok URL" value={form.tiktok_url} onChangeText={(t) => setForm({ ...form, tiktok_url: t })} autoCapitalize="none" />
+
+              <Text style={styles.editLabel}>Availability</Text>
+              <ToggleRow label="Accepting bookings" value={form.booking_available} onChange={(v) => setForm({ ...form, booking_available: v })} />
+              <ToggleRow label="Available as 2nd shooter" value={form.available_for_second_shooter} onChange={(v) => setForm({ ...form, available_for_second_shooter: v })} />
+              <ToggleRow label="Open to mentoring" value={form.mentorship_available} onChange={(v) => setForm({ ...form, mentorship_available: v })} />
+
+              <Text style={styles.editLabel}>Specialties</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {SHOOT_TYPES.map((s) => (
+                  <Chip key={s} label={s} active={form.specialties.includes(s)} onPress={() => toggleSpecialty(s)} />
+                ))}
+              </View>
+              <Button title="Save profile" onPress={saveProfile} testID="profile-save" style={{ marginTop: space.md }} />
+            </View>
           )}
-        </View>
-      </ScrollView>
+
+          {/* Tabs */}
+          <View style={styles.tabStrip}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 18, paddingHorizontal: space.xl }}>
+              {TABS.map((t) => (
+                <TouchableOpacity key={t.key} onPress={() => setActiveTab(t.key)} style={styles.tabBtn} testID={`tab-${t.key}`}>
+                  <Text style={[styles.tabTxt, activeTab === t.key && styles.tabTxtActive]}>{t.label}</Text>
+                  {activeTab === t.key && <View style={styles.tabUnderline} />}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+
+          {/* Tab content */}
+          <View style={{ paddingHorizontal: space.xl, gap: space.md, marginTop: space.md }}>
+            {activeTab === 'posts' && (
+              myPosts.length === 0
+                ? <EmptyState text="You haven't posted yet. Share a tip or a recent win in Community." />
+                : myPosts.slice(0, 20).map((p: any) => (
+                    <TouchableOpacity key={p.post_id} style={styles.postCard} onPress={() => router.push(`/community/post/${p.post_id}`)}>
+                      <Text style={styles.postCategory}>{(p.category || 'post').toUpperCase()}</Text>
+                      <Text style={styles.postTitle}>{p.title || p.body?.slice(0, 80)}</Text>
+                      {!!p.body && <Text style={styles.postBody} numberOfLines={3}>{p.body}</Text>}
+                      <Text style={styles.postMeta}>{(p.like_count || 0)} likes · {(p.comment_count || 0)} comments</Text>
+                    </TouchableOpacity>
+                  ))
+            )}
+
+            {activeTab === 'spots' && (
+              mySpots.length === 0
+                ? <EmptyState text="No spots yet. Add your first in the Add tab." />
+                : mySpots.slice(0, 20).map((s) => <SpotCard key={s.spot_id} spot={s} width={undefined as any} />)
+            )}
+
+            {activeTab === 'photos' && (
+              photos.length === 0
+                ? <EmptyState text="Photos you upload to your spots will appear here." />
+                : (
+                  <View style={styles.photoGrid}>
+                    {photos.slice(0, 30).map((p, idx) => (
+                      <TouchableOpacity key={`${p.spot_id}-${idx}`} onPress={() => router.push(`/spot/${p.spot_id}`)} style={styles.photoTile}>
+                        <Image source={{ uri: p.url }} style={StyleSheet.absoluteFillObject} />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )
+            )}
+
+            {activeTab === 'reviews' && (
+              <EmptyState text={`${stats.reviews_received ?? 0} reviews received. Full review list coming soon.`} />
+            )}
+
+            {activeTab === 'collections' && (
+              collections.length === 0
+                ? <EmptyState text="You haven't built any collections yet." />
+                : collections.map((c: any) => (
+                    <TouchableOpacity key={c.collection_id} style={styles.postCard} onPress={() => router.push(`/collection/${c.collection_id}`)}>
+                      <Text style={styles.postTitle}>{c.title}</Text>
+                      <Text style={styles.postMeta}>{(c.spot_ids || []).length} spots</Text>
+                    </TouchableOpacity>
+                  ))
+            )}
+
+            {activeTab === 'about' && (
+              <View style={styles.aboutCard}>
+                {!!user.bio && <AboutRow label="Bio" value={user.bio} />}
+                <AboutRow label="Email" value={user.email} />
+                <AboutRow label="Joined" value={user.created_at ? new Date(user.created_at).toLocaleDateString() : '—'} />
+                <AboutRow label="Plan" value={planLabel} />
+                {user.comp_expiration && (
+                  <AboutRow label="Comp expires" value={new Date(user.comp_expiration).toLocaleDateString()} />
+                )}
+                {!!user.years_experience && (
+                  <AboutRow label="Years shooting" value={String(user.years_experience)} />
+                )}
+                {!!user.service_radius_miles && (
+                  <AboutRow label="Service radius" value={`${user.service_radius_miles} mi`} />
+                )}
+                {!!user.primary_country && (
+                  <AboutRow label="Country" value={user.primary_country} />
+                )}
+                {!!user.timezone && (
+                  <AboutRow label="Timezone" value={user.timezone} />
+                )}
+              </View>
+            )}
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
+  );
+}
+
+function StatCell({ label, value, onPress }: { label: string; value: number; onPress?: () => void }) {
+  return (
+    <TouchableOpacity style={styles.statCell} onPress={onPress} activeOpacity={onPress ? 0.7 : 1}>
+      <Text style={styles.statVal}>{value}</Text>
+      <Text style={styles.statLbl}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+function ToggleRow({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <View style={styles.toggleRow}>
+      <Text style={styles.toggleLabel}>{label}</Text>
+      <Switch
+        value={value}
+        onValueChange={onChange}
+        trackColor={{ false: colors.surface2, true: colors.primary }}
+        thumbColor={colors.textInverse}
+      />
+    </View>
+  );
+}
+
+function EmptyState({ text }: { text: string }) {
+  return <Text style={styles.empty}>{text}</Text>;
+}
+
+function AboutRow({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.aboutRow}>
+      <Text style={styles.aboutLabel}>{label}</Text>
+      <Text style={styles.aboutVal}>{value}</Text>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
-  bannerWrap: { height: 140, backgroundColor: colors.surface1, position: 'relative', overflow: 'hidden' },
-  topBar: {
-    flexDirection: 'row', justifyContent: 'flex-end', gap: 8,
-    paddingHorizontal: space.xl, paddingTop: space.sm,
+  loadingWrap: { flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center', gap: 16, padding: space.xl },
+  loadingTitle: { color: colors.text, fontFamily: font.display, fontSize: 28 },
+
+  banner: {
+    height: 160, backgroundColor: colors.surface1, position: 'relative', overflow: 'hidden',
   },
-  iconBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
+  bannerFallback: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: colors.surface1,
+  },
+  bannerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.25)',
+  },
+  bannerEdit: {
+    position: 'absolute', bottom: 48, left: space.xl,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: radii.pill,
+  },
+  bannerEditTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.3 },
+  bannerTopRight: {
+    position: 'absolute', top: space.md, right: space.xl, flexDirection: 'row', gap: 8,
+  },
+  iconBtnDark: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center',
+  },
+
+  avatarWrap: {
+    alignItems: 'center', marginTop: -44,
+  },
+  avatar: {
+    width: 104, height: 104, borderRadius: 52,
+    borderWidth: 4, borderColor: colors.bg, backgroundColor: colors.surface2,
+  },
+  avatarEditBadge: {
+    position: 'absolute', right: 4, bottom: 4, width: 26, height: 26, borderRadius: 13,
+    backgroundColor: colors.primary, borderColor: colors.bg, borderWidth: 2,
     alignItems: 'center', justifyContent: 'center',
   },
-  headerCard: {
-    alignItems: 'center', paddingHorizontal: space.xl, paddingTop: space.md,
+
+  headerText: { paddingHorizontal: space.xl, paddingTop: space.md, alignItems: 'center' },
+  name: { color: colors.text, fontFamily: font.display, fontSize: 28, letterSpacing: -0.3, textAlign: 'center' },
+  verifiedDot: {
+    width: 22, height: 22, borderRadius: 11, backgroundColor: colors.info,
+    alignItems: 'center', justifyContent: 'center',
   },
-  avatar: { width: 96, height: 96, borderRadius: 48, borderWidth: 2, borderColor: colors.border, marginBottom: space.md },
-  name: { color: colors.text, fontFamily: font.display, fontSize: 30, letterSpacing: -0.3 },
   handle: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13, marginTop: 2 },
-  badge: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: colors.success, paddingHorizontal: 10, paddingVertical: 4,
-    borderRadius: radii.pill, marginTop: space.md,
-  },
-  badgeText: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.4 },
-  bio: { color: colors.textSecondary, fontFamily: font.body, fontSize: 14, marginTop: space.md, textAlign: 'center', lineHeight: 20, paddingHorizontal: space.lg },
-  city: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 13, marginTop: 6 },
-  specs: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.md, justifyContent: 'center', paddingHorizontal: space.xl },
+  locRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 },
+  locTxt: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 12 },
+
+  specs: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.md, justifyContent: 'center' },
   specPill: {
-    backgroundColor: colors.surface2, paddingHorizontal: 12, paddingVertical: 5,
+    backgroundColor: colors.surface2, paddingHorizontal: 10, paddingVertical: 4,
     borderRadius: radii.pill, borderColor: colors.border, borderWidth: 1,
   },
   specTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.3 },
-  editCard: {
-    backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
-    padding: space.lg, borderRadius: radii.lg, gap: space.md,
-    margin: space.xl,
+
+  availRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.sm, justifyContent: 'center' },
+  availBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 8, paddingVertical: 4, borderRadius: radii.pill, borderWidth: 1,
   },
+  availTxt: { fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.3 },
+
+  linkRow: { flexDirection: 'row', gap: 8, marginTop: space.md, justifyContent: 'center' },
+  linkBtn: {
+    width: 32, height: 32, borderRadius: 16, backgroundColor: colors.surface1,
+    borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center',
+  },
+
+  ctaRow: { flexDirection: 'row', gap: 8, marginTop: space.lg, width: '100%' },
+
+  statsRow: {
+    flexDirection: 'row', marginTop: space.lg, paddingHorizontal: space.xl,
+    gap: 8,
+  },
+  statCell: {
+    flex: 1, alignItems: 'center', paddingVertical: 10,
+    backgroundColor: colors.surface1, borderRadius: radii.md, borderColor: colors.border, borderWidth: 1,
+  },
+  statVal: { color: colors.text, fontFamily: font.display, fontSize: 20 },
+  statLbl: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10, letterSpacing: 0.4, textTransform: 'uppercase', marginTop: 2 },
+
   actionsRow: {
-    flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: space.xl, marginTop: space.xl,
+    flexDirection: 'row', flexWrap: 'wrap', gap: 8,
+    paddingHorizontal: space.xl, marginTop: space.lg,
   },
   actionCard: {
     flexBasis: '48%', flexGrow: 1, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
     padding: space.md, borderRadius: radii.md, gap: 6, minHeight: 80,
   },
+  adminCard: { backgroundColor: colors.primary, borderColor: colors.primary },
   actionTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12, lineHeight: 16 },
-  sectionTitle: { color: colors.text, fontFamily: font.display, fontSize: 22, letterSpacing: -0.3 },
+
+  editCard: {
+    backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
+    padding: space.lg, borderRadius: radii.lg, gap: space.md, margin: space.xl,
+  },
+  editLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6, marginTop: 4 },
+  toggleRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: 6,
+  },
+  toggleLabel: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 14, flex: 1 },
+
+  tabStrip: {
+    marginTop: space.lg, borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  tabBtn: { paddingVertical: 12 },
+  tabTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 14, letterSpacing: 0.2 },
+  tabTxtActive: { color: colors.text },
+  tabUnderline: {
+    height: 2, backgroundColor: colors.primary, marginTop: 8,
+    marginHorizontal: -2, borderRadius: 2,
+  },
+
+  postCard: {
+    backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
+    borderRadius: radii.md, padding: space.md, gap: 6,
+  },
+  postCategory: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.8 },
+  postTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 15 },
+  postBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 18 },
+  postMeta: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 11, marginTop: 4 },
+
+  photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginHorizontal: -space.xl / 2 },
+  photoTile: {
+    width: '32%', aspectRatio: 1, backgroundColor: colors.surface2, borderRadius: radii.sm, overflow: 'hidden',
+  },
+
+  aboutCard: {
+    backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
+    borderRadius: radii.md, padding: space.lg, gap: space.sm,
+  },
+  aboutRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4, gap: 12 },
+  aboutLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
+  aboutVal: { color: colors.text, fontFamily: font.body, fontSize: 13, flexShrink: 1, textAlign: 'right' },
+
+  empty: { color: colors.textSecondary, fontFamily: font.body, fontSize: 14, textAlign: 'center', paddingVertical: space.xxl },
 });

@@ -241,15 +241,31 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.5"
-  test_sequence: 5
+  version: "1.6"
+  test_sequence: 6
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Phase B — /auth/me now returns stats {followers, following, spots_created, reviews_received, posts_count}"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+  - task: "Phase B — /auth/me now returns stats {followers, following, spots_created, reviews_received, posts_count}"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "GET /auth/me response now includes top-level 'stats' object populated from follows, spots, spot_reviews, community_posts collections. Verify: sophie's /auth/me returns stats.followers (number), stats.following (number), stats.spots_created (number >= 1), stats.reviews_received (number, may be 0), stats.posts_count (number). All fields non-null integers."
+        -working: true
+        -agent: "testing"
+        -comment: "PASS. Login as sophie@photoscout.app / demo123 succeeded. GET /api/auth/me returns top-level stats object: {followers:0, following:2, spots_created:31, reviews_received:8, posts_count:0}. All 5 fields are non-negative ints (bool-excluded); spots_created=31 satisfies >=1 for sophie. All pre-existing fields intact: plan='free', user_id='user_7480271a521f', email='sophie@photoscout.app', limits (dict with saves/private_spots/collections/advanced_filters/sell_packs/creator_analytics), usage={saves:1, private_spots:16, collections:7}. Test script: /app/backend_test_phase_b_stats.py."
 
 agent_communication:
     -agent: "main"
