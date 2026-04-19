@@ -143,10 +143,11 @@ export default function Explore() {
             <FlatList
               data={filtered}
               keyExtractor={(i) => i.spot_id}
-              contentContainerStyle={{ paddingVertical: space.md, paddingHorizontal: 0, paddingBottom: 100 }}
-              ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
+              contentContainerStyle={{ paddingVertical: space.md, paddingHorizontal: 12, paddingBottom: 100 }}
+              ItemSeparatorComponent={() => <View style={{ height: space.md }} />}
+              showsVerticalScrollIndicator={false}
               renderItem={({ item }) => (
-                <SpotCard spot={item} width={undefined as any} testID={`list-spot-${item.spot_id}`} />
+                <SpotCard spot={item} testID={`list-spot-${item.spot_id}`} />
               )}
             />
           )}
