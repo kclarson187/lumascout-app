@@ -16,6 +16,9 @@ export type User = {
   role?: string;
   verification_status?: string;
   auth_provider?: string;
+  plan?: 'free' | 'pro' | 'elite';
+  limits?: { saves: number; private_spots: number; collections: number; advanced_filters: boolean; sell_packs: boolean };
+  usage?: { saves: number; private_spots: number; collections: number };
 };
 
 type AuthState = {
@@ -59,13 +62,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (email: string, password: string) => {
     const data = await api.post('/auth/login', { email, password });
     await api.setToken(data.token);
-    setUser(data.user);
+    await refresh(); // Fetch full user data with plan, limits, usage
   };
 
   const register = async (email: string, password: string, name: string, specialties: string[] = []) => {
     const data = await api.post('/auth/register', { email, password, name, specialties });
     await api.setToken(data.token);
-    setUser(data.user);
+    await refresh(); // Fetch full user data with plan, limits, usage
   };
 
   const googleExchange = async (session_id: string) => {

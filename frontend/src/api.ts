@@ -5,6 +5,11 @@ import * as SecureStore from 'expo-secure-store';
 const BASE_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || '') + '/api';
 const TOKEN_KEY = 'photoscout_token';
 
+// Global listeners for paywall triggers (402 responses)
+type PaywallHandler = (message: string) => void;
+let paywallHandler: PaywallHandler | null = null;
+export function onPaywallNeeded(fn: PaywallHandler) { paywallHandler = fn; }
+
 // Web-safe token storage: SecureStore on native, localStorage on web
 async function storageGet(key: string): Promise<string | null> {
   if (Platform.OS === 'web') {
@@ -45,6 +50,16 @@ class Api {
       }
       return config;
     });
+    this.client.interceptors.response.use(
+      (r) => r,
+      (err) => {
+        if (err?.response?.status === 402 && paywallHandler) {
+          const detail = err.response.data?.detail || 'Upgrade to continue.';
+          paywallHandler(typeof detail === 'string' ? detail : 'Upgrade to continue.');
+        }
+        return Promise.reject(err);
+      }
+    );
   }
 
   async setToken(token: string | null) {

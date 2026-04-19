@@ -74,7 +74,18 @@ export default function Saved() {
     <SafeAreaView style={styles.root} edges={['top']}>
       <View style={styles.head}>
         <Text style={styles.title}>Saved</Text>
+        {user.plan && user.plan !== 'free' ? null : (
+          <View style={styles.planPill}><Text style={styles.planPillTxt}>FREE</Text></View>
+        )}
       </View>
+      {user.plan === 'free' && user.limits && user.usage && (
+        <TouchableOpacity onPress={() => router.push('/paywall')} style={styles.usageBanner} testID="saved-usage-banner">
+          <Text style={styles.usageTxt}>
+            {user.usage.saves}/{user.limits.saves} saves · {user.usage.private_spots}/{user.limits.private_spots} private · {user.usage.collections}/{user.limits.collections} collections
+          </Text>
+          <Text style={styles.usageCta}>Upgrade →</Text>
+        </TouchableOpacity>
+      )}
       <View style={styles.tabs}>
         {[
           { k: 'favorites', l: 'Favorites', icon: <Bookmark size={14} color={tab === 'favorites' ? colors.textInverse : colors.text} /> },
@@ -182,8 +193,21 @@ export default function Saved() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
-  head: { paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.sm },
+  head: { paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.sm, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
   title: { color: colors.text, fontFamily: font.display, fontSize: 34, letterSpacing: -0.5 },
+  planPill: {
+    backgroundColor: colors.surface2, paddingHorizontal: 10, paddingVertical: 3,
+    borderRadius: radii.pill, borderColor: colors.border, borderWidth: 1, marginBottom: 6,
+  },
+  planPillTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.6 },
+  usageBanner: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    marginHorizontal: space.xl, marginBottom: space.md,
+    padding: space.md, backgroundColor: colors.surface1,
+    borderColor: colors.primary, borderWidth: 1, borderRadius: radii.md,
+  },
+  usageTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12, flex: 1 },
+  usageCta: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 12 },
   tabs: {
     flexDirection: 'row', paddingHorizontal: space.xl, gap: 8, marginBottom: space.md,
   },

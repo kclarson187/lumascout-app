@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, Image, TouchableOpacity, Pressable } from 'react-native';
 import { router } from 'expo-router';
-import { Bookmark, Star, Shield } from 'lucide-react-native';
+import { Bookmark, Star, Shield, Lock, EyeOff, MapPin } from 'lucide-react-native';
 import { colors, radii, space, font } from '../theme';
 import { api } from '../api';
 
@@ -57,6 +57,23 @@ export default function SpotCard({
           {isPremium && (
             <View style={styles.premiumBadge}>
               <Text style={styles.premiumText}>PREMIUM</Text>
+            </View>
+          )}
+          {spot.privacy_mode === 'private' && (
+            <View style={[styles.premiumBadge, { backgroundColor: 'rgba(10,10,10,0.8)', flexDirection: 'row', alignItems: 'center', gap: 4 }]}>
+              <Lock size={9} color="#fff" />
+              <Text style={[styles.premiumText, { color: '#fff' }]}>PRIVATE</Text>
+            </View>
+          )}
+          {spot.privacy_mode === 'followers' && (
+            <View style={[styles.premiumBadge, { backgroundColor: 'rgba(10,10,10,0.8)' }]}>
+              <Text style={[styles.premiumText, { color: '#fff' }]}>FOLLOWERS</Text>
+            </View>
+          )}
+          {spot.location_display_mode === 'approximate' && spot.privacy_mode !== 'private' && (
+            <View style={[styles.premiumBadge, { backgroundColor: 'rgba(96,165,250,0.9)', flexDirection: 'row', alignItems: 'center', gap: 4 }]}>
+              <MapPin size={9} color="#fff" />
+              <Text style={[styles.premiumText, { color: '#fff' }]}>APPROX</Text>
             </View>
           )}
           <View style={{ flex: 1 }} />
