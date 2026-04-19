@@ -52,13 +52,16 @@ export function EmptyState({
   title,
   subtitle,
   action,
+  icon,
 }: {
   title: string;
   subtitle?: string;
   action?: React.ReactNode;
+  icon?: React.ReactNode;
 }) {
   return (
     <View style={styles.empty}>
+      {icon && <View style={styles.emptyIcon}>{icon}</View>}
       <Text style={styles.emptyTitle}>{title}</Text>
       {subtitle && <Text style={styles.emptySub}>{subtitle}</Text>}
       {action && <View style={{ marginTop: space.lg }}>{action}</View>}
@@ -129,6 +132,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: space.xxxl,
     paddingHorizontal: space.xl,
+  },
+  emptyIcon: {
+    width: 64, height: 64, borderRadius: 32,
+    backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: space.md,
   },
   emptyTitle: {
     color: colors.text,

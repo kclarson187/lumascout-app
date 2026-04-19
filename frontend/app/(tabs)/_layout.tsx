@@ -85,10 +85,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: -14,
-    shadowColor: colors.primary,
-    shadowOpacity: 0.4,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 4px 10px rgba(245,166,35,0.4)' }
+      : {
+          shadowColor: colors.primary,
+          shadowOpacity: 0.4,
+          shadowRadius: 10,
+          shadowOffset: { width: 0, height: 4 },
+          elevation: 6,
+        }),
   },
 });

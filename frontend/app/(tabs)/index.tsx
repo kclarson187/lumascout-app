@@ -126,7 +126,7 @@ export default function Home() {
         </View>
 
         {/* Community tab strip — single source of social navigation */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.communityStrip}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, flexShrink: 0, maxHeight: 48 }} contentContainerStyle={styles.communityStrip}>
           <View style={[styles.cTab, styles.cTabActive]}>
             <Text style={[styles.cTabTxt, { color: colors.textInverse }]}>For You</Text>
           </View>
@@ -259,7 +259,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   topIconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
-  communityStrip: { paddingHorizontal: space.xl, paddingBottom: space.sm, gap: 6 },
+  communityStrip: { paddingHorizontal: space.xl, paddingBottom: space.sm, gap: 6, alignItems: 'center' },
   cTab: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1 },
   cTabActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   cTabTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },

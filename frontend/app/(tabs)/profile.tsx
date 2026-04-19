@@ -42,7 +42,7 @@ import { useAuth } from '../../src/auth';
 import { api, formatApiError } from '../../src/api';
 import { colors, font, space, radii, SHOOT_TYPES } from '../../src/theme';
 import { Button } from '../../src/components/Button';
-import { Input, Chip } from '../../src/components/ui';
+import { Input, Chip, EmptyState } from '../../src/components/ui';
 import SpotCard from '../../src/components/SpotCard';
 
 type TabKey = 'posts' | 'spots' | 'photos' | 'reviews' | 'collections' | 'about';
@@ -478,7 +478,7 @@ export default function Profile() {
 
           {/* Tabs */}
           <View style={styles.tabStrip}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 18, paddingHorizontal: space.xl }}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, flexShrink: 0, maxHeight: 44 }} contentContainerStyle={{ gap: 18, paddingHorizontal: space.xl, alignItems: 'center' }}>
               {TABS.map((t) => (
                 <TouchableOpacity key={t.key} onPress={() => setActiveTab(t.key)} style={styles.tabBtn} testID={`tab-${t.key}`}>
                   <Text style={[styles.tabTxt, activeTab === t.key && styles.tabTxtActive]}>{t.label}</Text>
@@ -492,7 +492,12 @@ export default function Profile() {
           <View style={{ paddingHorizontal: space.xl, gap: space.md, marginTop: space.md }}>
             {activeTab === 'posts' && (
               myPosts.length === 0
-                ? <EmptyState text="You haven't posted yet. Share a tip or a recent win in Community." />
+                ? <EmptyState
+                    title="Start a conversation"
+                    subtitle="Share a recent win, drop a tip, or ask the community for help."
+                    icon={<MessageCircle size={28} color={colors.textSecondary} />}
+                    action={<Button title="Write a post" onPress={() => router.push('/community/compose')} />}
+                  />
                 : myPosts.slice(0, 20).map((p: any) => (
                     <TouchableOpacity key={p.post_id} style={styles.postCard} onPress={() => router.push(`/community/post/${p.post_id}`)}>
                       <Text style={styles.postCategory}>{(p.category || 'post').toUpperCase()}</Text>
@@ -505,13 +510,22 @@ export default function Profile() {
 
             {activeTab === 'spots' && (
               mySpots.length === 0
-                ? <EmptyState text="No spots yet. Add your first in the Add tab." />
+                ? <EmptyState
+                    title="No spots yet"
+                    subtitle="Scout a great location and add your first spot — it takes less than a minute."
+                    icon={<MapPin size={28} color={colors.textSecondary} />}
+                    action={<Button title="Add a spot" onPress={() => router.push('/(tabs)/add')} />}
+                  />
                 : mySpots.slice(0, 20).map((s) => <SpotCard key={s.spot_id} spot={s} width={undefined as any} />)
             )}
 
             {activeTab === 'photos' && (
               photos.length === 0
-                ? <EmptyState text="Photos you upload to your spots will appear here." />
+                ? <EmptyState
+                    title="Photos land here"
+                    subtitle="Upload photos to your spots and they'll all show up in one beautiful grid."
+                    icon={<Camera size={28} color={colors.textSecondary} />}
+                  />
                 : (
                   <View style={styles.photoGrid}>
                     {photos.slice(0, 30).map((p, idx) => (
@@ -524,12 +538,21 @@ export default function Profile() {
             )}
 
             {activeTab === 'reviews' && (
-              <EmptyState text={`${stats.reviews_received ?? 0} reviews received. Full review list coming soon.`} />
+              <EmptyState
+                title={`${stats.reviews_received ?? 0} review${stats.reviews_received === 1 ? '' : 's'} received`}
+                subtitle="Full review list coming soon — photographers who have visited your spots will leave feedback here."
+                icon={<ShieldCheck size={28} color={colors.textSecondary} />}
+              />
             )}
 
             {activeTab === 'collections' && (
               collections.length === 0
-                ? <EmptyState text="You haven't built any collections yet." />
+                ? <EmptyState
+                    title="Build your first collection"
+                    subtitle="Group your favorite spots into curated collections — seasonal picks, bridal locations, or family-friendly."
+                    icon={<Store size={28} color={colors.textSecondary} />}
+                    action={<Button title="Create a collection" variant="secondary" onPress={() => router.push('/collections')} />}
+                  />
                 : collections.map((c: any) => (
                     <TouchableOpacity key={c.collection_id} style={styles.postCard} onPress={() => router.push(`/collection/${c.collection_id}`)}>
                       <Text style={styles.postTitle}>{c.title}</Text>
@@ -591,7 +614,8 @@ function ToggleRow({ label, value, onChange }: { label: string; value: boolean; 
   );
 }
 
-function EmptyState({ text }: { text: string }) {
+function EmptyStateLegacy({ text }: { text: string }) {
+  // kept around only if any caller still references it — unused in the new profile.
   return <Text style={styles.empty}>{text}</Text>;
 }
 

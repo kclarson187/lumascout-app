@@ -59,7 +59,7 @@ export default function AdminUsers() {
           />
         </View>
       </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsStrip}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, flexShrink: 0, maxHeight: 44 }} contentContainerStyle={styles.chipsStrip}>
         {ROLE_FILTERS.map((r) => <Chip key={`role-${r}`} label={`role: ${r}`} active={role === r} onPress={() => { setPage(1); setRole(r); }} />)}
         {PLAN_FILTERS.map((p) => <Chip key={`plan-${p}`} label={`plan: ${p}`} active={plan === p} onPress={() => { setPage(1); setPlan(p); }} />)}
         {STATUS_FILTERS.map((s) => <Chip key={`status-${s}`} label={`status: ${s}`} active={status === s} onPress={() => { setPage(1); setStatus(s); }} />)}
@@ -167,7 +167,7 @@ const styles = StyleSheet.create({
     borderRadius: radii.md, paddingHorizontal: space.md, paddingVertical: 10,
   },
   searchInput: { flex: 1, color: colors.text, fontFamily: font.body, fontSize: 14 },
-  chipsStrip: { paddingHorizontal: space.xl, paddingVertical: space.sm, gap: 6 },
+  chipsStrip: { paddingHorizontal: space.xl, paddingVertical: space.sm, gap: 6, alignItems: 'center' },
   chip: {
     paddingHorizontal: 10, paddingVertical: 5, borderRadius: radii.pill,
     backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
