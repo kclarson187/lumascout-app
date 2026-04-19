@@ -2920,18 +2920,20 @@ class PushTokenIn(BaseModel):
 async def register_push_token(body: PushTokenIn, user: dict = Depends(get_current_user)):
     if not body.token or not body.token.startswith("ExponentPushToken"):
         raise HTTPException(status_code=400, detail="Not a valid Expo push token")
-    doc = {
+    now = utcnow()
+    set_doc = {
         "user_id": user["user_id"],
         "token": body.token,
         "platform": body.platform or "unknown",
         "device_id": body.device_id,
-        "updated_at": utcnow(),
-        "created_at": utcnow(),
+        "updated_at": now,
     }
-    # Upsert by (user_id, token) so reinstalls don't duplicate
+    # Upsert by (user_id, token) so reinstalls don't duplicate.
+    # created_at lives only in $setOnInsert so it's preserved on updates and
+    # doesn't conflict with $set on the same path.
     await db.push_tokens.update_one(
         {"user_id": user["user_id"], "token": body.token},
-        {"$set": doc, "$setOnInsert": {"created_at": utcnow()}},
+        {"$set": set_doc, "$setOnInsert": {"created_at": now}},
         upsert=True,
     )
     return {"ok": True}
@@ -3039,8 +3041,14 @@ async def spot_shot_list(spot_id: str, refresh: bool = False, user: dict = Depen
     cache_key = f"shotlist:{spot_id}"
     if not refresh:
         cached = await db.ai_cache.find_one({"_id": cache_key})
-        if cached and cached.get("expires_at") and cached["expires_at"] > datetime.now(timezone.utc):
-            return {"items": cached["items"], "cached": True, "cached_at": cached.get("created_at")}
+        if cached and cached.get("expires_at"):
+            exp = cached["expires_at"]
+            # Motor may return tz-naive datetimes depending on BSON codec options;
+            # normalise to UTC-aware before comparison.
+            if isinstance(exp, datetime) and exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp > datetime.now(timezone.utc):
+                return {"items": cached["items"], "cached": True, "cached_at": cached.get("created_at")}
     items = await _generate_shot_list(spot)
     now = datetime.now(timezone.utc)
     await db.ai_cache.update_one(
