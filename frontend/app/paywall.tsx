@@ -1,80 +1,79 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
-import { ChevronLeft, Check, Crown } from 'lucide-react-native';
+import { router, useLocalSearchParams } from 'expo-router';
+import { ChevronLeft, Check, Crown, Sparkles } from 'lucide-react-native';
 import { colors, font, space, radii } from '../src/theme';
 import { Button } from '../src/components/Button';
 import { api, formatApiError } from '../src/api';
 import { useAuth } from '../src/auth';
 
-const PLANS = [
-  {
-    key: 'free',
-    name: 'Free',
-    price: '$0',
-    tagline: 'For casual scouting',
-    features: [
-      'Browse all public spots',
-      'Save up to 20 spots',
-      '3 private spots',
-      '3 collections',
-      'Basic filters',
-    ],
-    cta: 'Current plan',
-  },
-  {
-    key: 'pro',
-    name: 'Pro',
-    price: '$7.99',
-    period: '/mo',
-    tagline: 'For working photographers',
-    features: [
-      'Unlimited saves & collections',
-      'Unlimited private spots',
-      'Advanced filters & search',
-      'Detailed logistics data',
-      'Priority in search results',
-      'Offline saved spots (soon)',
-    ],
-    popular: true,
-    cta: 'Start 7-day free trial',
-  },
-  {
-    key: 'elite',
-    name: 'Elite',
-    price: '$19.99',
-    period: '/mo',
-    tagline: 'For creators who sell',
-    features: [
-      'Everything in Pro',
-      'Premium creator analytics',
-      'Sell curated spot packs',
-      'Private audience access',
-      'Enhanced verified profile',
-      'Early access to new features',
-    ],
-    cta: 'Go Elite',
-  },
-];
+type BillingCycle = 'monthly' | 'annual';
+
+interface Plan {
+  key: string;
+  name: string;
+  tagline: string;
+  monthly_price: string;
+  annual_price: string;
+  monthly_cents: number;
+  annual_cents: number;
+  features: string[];
+  popular?: boolean;
+}
 
 export default function Paywall() {
   const { user, refresh } = useAuth();
+  const params = useLocalSearchParams<{ reason?: string }>();
   const [busy, setBusy] = useState<string | null>(null);
+  const [cycle, setCycle] = useState<BillingCycle>('annual');
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await api.get('/plans');
+        setPlans(r?.plans || []);
+      } catch {
+        // Render will gracefully show nothing; user can back out.
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
 
   const tryPlan = async (plan: string) => {
     if (plan === 'free' || plan === user?.plan) return;
     setBusy(plan);
     try {
-      await api.post('/me/upgrade', { plan });
+      await api.post('/me/upgrade', { plan, cycle });
       await refresh();
-      Alert.alert('You\'re on ' + plan.toUpperCase(), 'Preview unlock active. Real billing will move to Stripe at launch.');
+      Alert.alert(
+        "You're on " + plan.toUpperCase(),
+        `Preview unlock active (${cycle}). Real billing will move to Stripe at launch.`,
+      );
     } catch (e) {
       Alert.alert('Could not upgrade', formatApiError(e));
     } finally {
       setBusy(null);
     }
   };
+
+  const reasonCopy = (() => {
+    switch (params.reason) {
+      case 'saves':
+        return "You've reached your free save limit.";
+      case 'collections':
+        return 'Free plan includes 1 collection. Go Pro for unlimited.';
+      case 'filters':
+        return 'Advanced filters are a Pro feature.';
+      case 'private':
+        return 'Unlimited private spots are a Pro feature.';
+      default:
+        return 'Upgrade for unlimited saves, advanced filters, and creator tools.';
+    }
+  })();
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
@@ -87,72 +86,120 @@ export default function Paywall() {
         <View style={styles.crown}><Crown size={28} color={colors.primary} /></View>
         <Text style={styles.title}>Scout smarter.{'\n'}Shoot better.</Text>
         <Text style={styles.sub}>
-          {user?.plan && user.plan !== 'free'
+          {user?.plan && user.plan !== 'free' && !params.reason
             ? `You're on ${user.plan.toUpperCase()}. Thank you for supporting PhotoScout.`
-            : 'Upgrade for unlimited saves, advanced filters, and creator tools.'}
+            : reasonCopy}
         </Text>
 
+        {/* Billing cycle toggle */}
+        <View style={styles.cycleWrap}>
+          {(['monthly', 'annual'] as BillingCycle[]).map((c) => (
+            <Pressable
+              key={c}
+              onPress={() => setCycle(c)}
+              style={[styles.cycleBtn, cycle === c && styles.cycleBtnActive]}
+              testID={`cycle-${c}`}
+            >
+              <Text style={[styles.cycleBtnTxt, cycle === c && styles.cycleBtnTxtActive]}>
+                {c === 'monthly' ? 'Monthly' : 'Annual'}
+              </Text>
+              {c === 'annual' && (
+                <View style={styles.saveBadge}>
+                  <Sparkles size={10} color={colors.textInverse} />
+                  <Text style={styles.saveBadgeTxt}>Save up to 17%</Text>
+                </View>
+              )}
+            </Pressable>
+          ))}
+        </View>
+
         <View style={{ gap: space.md, marginTop: space.xl }}>
-          {PLANS.map((p) => {
+          {plans.map((p) => {
             const onPlan = user?.plan === p.key;
+            const price = cycle === 'monthly' ? p.monthly_price : p.annual_price;
+            const period =
+              p.key === 'free' ? '' : cycle === 'monthly' ? '/mo' : '/yr';
+            const equivMonthly =
+              cycle === 'annual' && p.annual_cents > 0
+                ? `$${(p.annual_cents / 12 / 100).toFixed(2)}/mo equivalent`
+                : '';
             return (
-            <View key={p.key} style={[styles.planCard, p.popular && styles.planPopular, onPlan && { borderColor: colors.success }]}>
-              {p.popular && !onPlan && (
-                <View style={styles.popBadge}>
-                  <Text style={styles.popBadgeTxt}>MOST POPULAR</Text>
-                </View>
-              )}
-              {onPlan && (
-                <View style={[styles.popBadge, { backgroundColor: colors.success }]}>
-                  <Text style={styles.popBadgeTxt}>YOUR PLAN</Text>
-                </View>
-              )}
-              <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4 }}>
-                <Text style={styles.planName}>{p.name}</Text>
-                <Text style={styles.planPrice}>{p.price}</Text>
-                {p.period && <Text style={styles.planPeriod}>{p.period}</Text>}
-              </View>
-              <Text style={styles.planTag}>{p.tagline}</Text>
-
-              <View style={{ gap: 8, marginTop: space.md }}>
-                {p.features.map((f) => (
-                  <View key={f} style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-                    <Check size={14} color={colors.success} />
-                    <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 13 }}>{f}</Text>
+              <View
+                key={p.key}
+                style={[
+                  styles.planCard,
+                  p.popular && styles.planPopular,
+                  onPlan && { borderColor: colors.success },
+                ]}
+              >
+                {p.popular && !onPlan && (
+                  <View style={styles.popBadge}>
+                    <Text style={styles.popBadgeTxt}>MOST POPULAR</Text>
                   </View>
-                ))}
-              </View>
+                )}
+                {onPlan && (
+                  <View style={[styles.popBadge, { backgroundColor: colors.success }]}>
+                    <Text style={styles.popBadgeTxt}>YOUR PLAN</Text>
+                  </View>
+                )}
+                <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4, flexWrap: 'wrap' }}>
+                  <Text style={styles.planName}>{p.name}</Text>
+                  <Text style={styles.planPrice}>{price}</Text>
+                  {!!period && <Text style={styles.planPeriod}>{period}</Text>}
+                </View>
+                {!!equivMonthly && <Text style={styles.planEquiv}>{equivMonthly}</Text>}
+                <Text style={styles.planTag}>{p.tagline}</Text>
 
-              <Button
-                title={onPlan ? 'Current plan' : p.cta}
-                variant={p.popular && !onPlan ? 'primary' : 'secondary'}
-                loading={busy === p.key}
-                disabled={onPlan || p.key === 'free'}
-                onPress={() => tryPlan(p.key)}
-                style={{ marginTop: space.md }}
-                testID={`paywall-${p.key}`}
-              />
-            </View>
+                <View style={{ gap: 8, marginTop: space.md }}>
+                  {p.features.map((f) => (
+                    <View key={f} style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start' }}>
+                      <Check size={14} color={colors.success} style={{ marginTop: 3 }} />
+                      <Text style={styles.featLine}>{f}</Text>
+                    </View>
+                  ))}
+                </View>
+
+                <Button
+                  title={
+                    onPlan
+                      ? 'Current plan'
+                      : p.key === 'free'
+                      ? 'Downgrade to Free'
+                      : `Go ${p.name}`
+                  }
+                  variant={p.popular && !onPlan ? 'primary' : 'secondary'}
+                  loading={busy === p.key}
+                  disabled={onPlan || p.key === 'free'}
+                  onPress={() => tryPlan(p.key)}
+                  style={{ marginTop: space.md }}
+                  testID={`paywall-${p.key}`}
+                />
+              </View>
             );
           })}
         </View>
 
         <Text style={styles.fine}>
-          Preview unlock is free during beta. Stripe billing ships at launch — your plan will migrate automatically.
+          Preview unlock is free during beta. Stripe billing ships at launch — your plan will migrate
+          automatically. Cancel anytime.
         </Text>
 
-        <Text style={[styles.compareHead]}>Compare plans</Text>
+        <Text style={styles.compareHead}>Compare plans</Text>
         <View style={styles.compare}>
           {[
-            ['Saved spots', '20', 'Unlimited', 'Unlimited'],
-            ['Private spots', '3', 'Unlimited', 'Unlimited'],
-            ['Collections', '3', 'Unlimited', 'Unlimited'],
+            ['Saved spots', '5', 'Unlimited', 'Unlimited'],
+            ['Private spots', '1', 'Unlimited', 'Unlimited'],
+            ['Collections', '1', 'Unlimited', 'Unlimited'],
             ['Advanced filters', '—', '✓', '✓'],
             ['Creator analytics', '—', '—', '✓'],
             ['Sell spot packs', '—', '—', '✓'],
-            ['Enhanced profile', '—', '—', '✓'],
+            ['Verified creator badge', '—', '—', '✓'],
+            ['DM read receipts', '—', '—', '✓'],
           ].map((row, i) => (
-            <View key={i} style={[styles.cmpRow, i % 2 === 1 && { backgroundColor: colors.surface1 }]}>
+            <View
+              key={i}
+              style={[styles.cmpRow, i % 2 === 1 && { backgroundColor: colors.surface1 }]}
+            >
               <Text style={[styles.cmpCell, { flex: 1.6, textAlign: 'left' }]}>{row[0]}</Text>
               <Text style={styles.cmpCell}>{row[1]}</Text>
               <Text style={[styles.cmpCell, { color: colors.primary }]}>{row[2]}</Text>
@@ -160,12 +207,19 @@ export default function Paywall() {
             </View>
           ))}
           <View style={[styles.cmpRow, styles.cmpHead]}>
-            <Text style={[styles.cmpCell, { flex: 1.6, textAlign: 'left', color: colors.textSecondary }]}></Text>
+            <Text
+              style={[
+                styles.cmpCell,
+                { flex: 1.6, textAlign: 'left', color: colors.textSecondary },
+              ]}
+            />
             <Text style={[styles.cmpCell, styles.cmpHeadTxt]}>Free</Text>
             <Text style={[styles.cmpCell, styles.cmpHeadTxt]}>Pro</Text>
             <Text style={[styles.cmpCell, styles.cmpHeadTxt]}>Elite</Text>
           </View>
         </View>
+
+        {loading && <Text style={[styles.fine, { marginTop: space.lg }]}>Loading plans…</Text>}
       </ScrollView>
     </SafeAreaView>
   );
@@ -184,6 +238,25 @@ const styles = StyleSheet.create({
     lineHeight: 40, letterSpacing: -0.5, textAlign: 'center', marginTop: space.xl,
   },
   sub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 15, textAlign: 'center', marginTop: space.sm, lineHeight: 22 },
+
+  cycleWrap: {
+    flexDirection: 'row', alignSelf: 'center', marginTop: space.xl,
+    backgroundColor: colors.surface1, borderRadius: radii.pill, padding: 4,
+    borderColor: colors.border, borderWidth: 1,
+  },
+  cycleBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 18, paddingVertical: 8, borderRadius: radii.pill,
+  },
+  cycleBtnActive: { backgroundColor: colors.primary },
+  cycleBtnTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 13 },
+  cycleBtnTxtActive: { color: colors.textInverse },
+  saveBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    backgroundColor: 'rgba(0,0,0,0.18)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.pill,
+  },
+  saveBadgeTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.3 },
+
   planCard: {
     padding: space.xl, backgroundColor: colors.surface1,
     borderColor: colors.border, borderWidth: 1, borderRadius: radii.lg,
@@ -197,7 +270,9 @@ const styles = StyleSheet.create({
   planName: { color: colors.text, fontFamily: font.display, fontSize: 26 },
   planPrice: { color: colors.primary, fontFamily: font.display, fontSize: 26 },
   planPeriod: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13 },
+  planEquiv: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 2 },
   planTag: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2 },
+  featLine: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, flex: 1, lineHeight: 19 },
   fine: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, textAlign: 'center', marginTop: space.xl, lineHeight: 16 },
   compareHead: { color: colors.text, fontFamily: font.display, fontSize: 22, marginTop: space.xxl, marginBottom: space.md },
   compare: { borderRadius: radii.md, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' },
