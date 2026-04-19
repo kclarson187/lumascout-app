@@ -52,6 +52,43 @@ export default function AdminAnalytics() {
           </View>
         </View>
       )}
+      {data.top_cities?.length > 0 && (
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Top cities (approved spots)</Text>
+          <View style={{ gap: 8, marginTop: 6 }}>
+            {data.top_cities.map((c: any, i: number) => (
+              <View key={`${c.city}-${i}`} style={styles.savedRow}>
+                <Text style={styles.rank}>#{i + 1}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.savedName} numberOfLines={1}>{c.city}</Text>
+                  <Text style={styles.savedMeta}>{c.state || '—'}{c.country_code && c.country_code !== 'US' ? ` · ${c.country_code}` : ''}</Text>
+                </View>
+                <Text style={styles.savedCount}>{c.count}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      )}
+
+      {data.top_contributors?.length > 0 && (
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Top contributors</Text>
+          <View style={{ gap: 8, marginTop: 6 }}>
+            {data.top_contributors.map((u: any, i: number) => (
+              <View key={u.user_id} style={styles.savedRow}>
+                <Text style={styles.rank}>#{i + 1}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.savedName} numberOfLines={1}>{u.name || u.username}</Text>
+                  <Text style={styles.savedMeta}>
+                    @{u.username || '—'}{u.city ? ` · ${u.city}${u.state ? ', ' + u.state : ''}` : ''}{u.plan && u.plan !== 'free' ? ` · ${u.plan.toUpperCase()}` : ''}
+                  </Text>
+                </View>
+                <Text style={styles.savedCount}>{u.spot_count}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      )}
     </ScrollView>
   );
 }
