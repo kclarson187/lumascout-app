@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Pressable, Platform } from 'react-native';
 import { router } from 'expo-router';
 import { Bookmark, Star, Shield, Lock, EyeOff, MapPin } from 'lucide-react-native';
 import { colors, radii, space, font } from '../theme';
@@ -22,13 +22,13 @@ export default function SpotCard({
   spot,
   onPress,
   onToggleSave,
-  width = 260,
+  width,
   testID,
 }: {
   spot: Spot;
   onPress?: () => void;
   onToggleSave?: () => void;
-  width?: number;
+  width?: number | string;
   testID?: string;
 }) {
   const cover = (spot.images && (spot.images.find((i: any) => i.is_cover) || spot.images[0]))?.image_url;
@@ -48,7 +48,7 @@ export default function SpotCard({
   };
 
   return (
-    <Pressable onPress={handlePress} style={[styles.card, { width }]} testID={testID}>
+    <Pressable onPress={handlePress} style={[styles.card, { width: width ?? '100%' }]} testID={testID}>
       <View style={styles.imageWrap}>
         {cover ? (
           <Image source={{ uri: cover }} style={styles.image} />
@@ -129,6 +129,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     overflow: 'hidden',
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 4px 14px rgba(0,0,0,0.35)' }
+      : {
+          shadowColor: '#000',
+          shadowOpacity: 0.3,
+          shadowRadius: 12,
+          shadowOffset: { width: 0, height: 4 },
+          elevation: 3,
+        }),
   },
   imageWrap: {
     width: '100%',

@@ -37,6 +37,7 @@ import {
   MapPin,
   Handshake,
   GraduationCap,
+  MessageCircle,
 } from 'lucide-react-native';
 import { useAuth } from '../../src/auth';
 import { api, formatApiError } from '../../src/api';
