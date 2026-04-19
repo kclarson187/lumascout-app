@@ -719,10 +719,22 @@ async def get_user(user_id: str, viewer: Optional[dict] = Depends(get_optional_u
     spots_count = await db.spots.count_documents({"owner_user_id": user_id, "privacy_mode": {"$in": ["public", "premium"]}})
     followers = await db.follows.count_documents({"followed_user_id": user_id})
     following = await db.follows.count_documents({"follower_user_id": user_id})
+    posts_count = await db.community_posts.count_documents({"author_id": user_id})
+    reviews_received = await db.spot_reviews.count_documents({
+        "spot_id": {"$in": [s["spot_id"] async for s in db.spots.find({"owner_user_id": user_id}, {"spot_id": 1, "_id": 0})]},
+    })
     is_following = False
     if viewer:
         is_following = await db.follows.count_documents({"follower_user_id": viewer["user_id"], "followed_user_id": user_id}) > 0
-    user["stats"] = {"spots": spots_count, "followers": followers, "following": following}
+    # Alias fields so the public profile UI can share rendering code with /auth/me.
+    user["stats"] = {
+        "spots": spots_count,
+        "spots_created": spots_count,
+        "followers": followers,
+        "following": following,
+        "posts_count": posts_count,
+        "reviews_received": reviews_received,
+    }
     user["is_following"] = is_following
     return user
 
