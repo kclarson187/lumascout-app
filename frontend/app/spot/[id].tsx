@@ -276,6 +276,29 @@ export default function SpotDetail() {
           )}
         </View>
       </ScrollView>
+
+      {user && (
+        <View style={styles.actionBar}>
+          <TouchableOpacity style={styles.actBtn} onPress={toggleSave} testID="spot-action-save">
+            <Bookmark size={20} color={spot.is_saved ? colors.primary : colors.text} fill={spot.is_saved ? colors.primary : 'transparent'} />
+            <Text style={[styles.actTxt, spot.is_saved && { color: colors.primary }]}>Saved</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actBtn} onPress={() => setAtcOpen(true)} testID="spot-action-collection">
+            <FolderPlus size={20} color={colors.text} />
+            <Text style={styles.actTxt}>Add</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.actBtn, styles.actBtnPrimary]}
+            onPress={() => router.push(`/review/${id}`)}
+            testID="spot-action-review"
+          >
+            <MessageSquarePlus size={20} color={colors.textInverse} />
+            <Text style={[styles.actTxt, { color: colors.textInverse }]}>Check-in</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <AddToCollectionSheet visible={atcOpen} onClose={() => setAtcOpen(false)} spotId={id} />
     </View>
   );
 }

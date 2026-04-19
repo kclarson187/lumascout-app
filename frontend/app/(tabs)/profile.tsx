@@ -89,7 +89,15 @@ export default function Profile() {
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
-        <View style={styles.topBar}>
+        <View style={styles.bannerWrap}>
+          <LinearGradient
+            colors={['rgba(245,166,35,0.28)', 'rgba(208,72,72,0.18)', 'transparent']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={StyleSheet.absoluteFillObject as any}
+          />
+        </View>
+        <View style={[styles.topBar, { marginTop: -60 }]}>
           <TouchableOpacity onPress={() => setEditMode(!editMode)} style={styles.iconBtn} testID="profile-edit">
             <Edit3 size={18} color={colors.text} />
           </TouchableOpacity>

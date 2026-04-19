@@ -170,25 +170,48 @@ export default function Home() {
             )}
           </>
         ) : (
-          sections.map((sec) => {
-            const items = feed[sec.key] || [];
-            if (items.length === 0) return null;
-            return (
-              <View key={sec.key}>
-                <SectionHeader title={sec.title} />
-                <FlatList
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  data={items}
-                  keyExtractor={(it) => it.spot_id}
-                  contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.md }}
-                  renderItem={({ item }) => (
-                    <SpotCard spot={item} testID={`spot-${item.spot_id}`} onToggleSave={load} />
-                  )}
-                />
-              </View>
-            );
-          })
+          <>
+            {hero && (
+              <TouchableOpacity
+                style={styles.heroCard}
+                onPress={() => router.push(`/spot/${hero.spot_id}`)}
+                testID="home-hero"
+                activeOpacity={0.9}
+              >
+                <Image source={{ uri: (hero.images?.find((i: any) => i.is_cover) || hero.images?.[0])?.image_url }} style={styles.heroImg} />
+                <LinearGradient colors={['transparent', 'rgba(10,10,10,0.9)']} style={styles.heroGrad} />
+                <View style={styles.heroTop}>
+                  <View style={styles.heroTag}>
+                    <TrendingUp size={12} color={colors.textInverse} />
+                    <Text style={styles.heroTagTxt}>EDITOR'S PICK</Text>
+                  </View>
+                </View>
+                <View style={styles.heroBottom}>
+                  <Text style={styles.heroTitle} numberOfLines={2}>{hero.title}</Text>
+                  <Text style={styles.heroMeta}>{hero.city}, {hero.state} · Shoot Score {hero.shoot_score}</Text>
+                </View>
+              </TouchableOpacity>
+            )}
+            {sections.map((sec) => {
+              const items = feed[sec.key] || [];
+              if (items.length === 0) return null;
+              return (
+                <View key={sec.key}>
+                  <SectionHeader title={sec.title} />
+                  <FlatList
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    data={items}
+                    keyExtractor={(it) => it.spot_id}
+                    contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.md }}
+                    renderItem={({ item }) => (
+                      <SpotCard spot={item} testID={`spot-${item.spot_id}`} onToggleSave={load} />
+                    )}
+                  />
+                </View>
+              );
+            })}
+          </>
         )}
       </ScrollView>
     </SafeAreaView>
