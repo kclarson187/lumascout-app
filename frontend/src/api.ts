@@ -1,8 +1,31 @@
 import axios, { AxiosInstance } from 'axios';
+import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
 const BASE_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || '') + '/api';
 const TOKEN_KEY = 'photoscout_token';
+
+// Web-safe token storage: SecureStore on native, localStorage on web
+async function storageGet(key: string): Promise<string | null> {
+  if (Platform.OS === 'web') {
+    try { return typeof window !== 'undefined' ? window.localStorage.getItem(key) : null; } catch { return null; }
+  }
+  try { return await SecureStore.getItemAsync(key); } catch { return null; }
+}
+async function storageSet(key: string, value: string) {
+  if (Platform.OS === 'web') {
+    try { if (typeof window !== 'undefined') window.localStorage.setItem(key, value); } catch {}
+    return;
+  }
+  try { await SecureStore.setItemAsync(key, value); } catch {}
+}
+async function storageDelete(key: string) {
+  if (Platform.OS === 'web') {
+    try { if (typeof window !== 'undefined') window.localStorage.removeItem(key); } catch {}
+    return;
+  }
+  try { await SecureStore.deleteItemAsync(key); } catch {}
+}
 
 class Api {
   private client: AxiosInstance;
@@ -15,9 +38,7 @@ class Api {
     });
     this.client.interceptors.request.use(async (config) => {
       if (!this.token) {
-        try {
-          this.token = await SecureStore.getItemAsync(TOKEN_KEY);
-        } catch {}
+        this.token = await storageGet(TOKEN_KEY);
       }
       if (this.token) {
         config.headers.Authorization = `Bearer ${this.token}`;
@@ -29,17 +50,15 @@ class Api {
   async setToken(token: string | null) {
     this.token = token;
     if (token) {
-      await SecureStore.setItemAsync(TOKEN_KEY, token);
+      await storageSet(TOKEN_KEY, token);
     } else {
-      await SecureStore.deleteItemAsync(TOKEN_KEY);
+      await storageDelete(TOKEN_KEY);
     }
   }
 
   async getTokenFromStorage() {
     if (this.token) return this.token;
-    try {
-      this.token = await SecureStore.getItemAsync(TOKEN_KEY);
-    } catch {}
+    this.token = await storageGet(TOKEN_KEY);
     return this.token;
   }
 
