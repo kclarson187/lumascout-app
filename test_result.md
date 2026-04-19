@@ -21,51 +21,63 @@ user_problem_statement: |
 backend:
   - task: "POST/DELETE /api/posts/{id}/vote — poll voting with per-user tracking"
     implemented: true
-    working: "NA"
+    working: true
     file: "/app/backend/server.py"
     stuck_count: 0
     priority: "medium"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
         -comment: "Vote/change/remove a poll vote on a community post. Backed by poll_votes collection with unique index on (post_id, user_id). Increments/decrements options[i].votes and poll.total_votes atomically. Returns hydrated poll object with my_vote_index. Idempotent same-option votes are no-ops. DELETE removes vote and decrements counters. 400 if post has no poll, 404 if post missing."
+        -working: true
+        -agent: "testing"
+        -comment: "ALL 8 vote cases PASS (backend_test_phase_f.py). (1) sophie POST /api/posts/{pid}/vote {option_index:1} → 200 {poll:{options:[{votes:0},{votes:1},{votes:0}], total_votes:1, my_vote_index:1}}. (2) sophie re-vote {option_index:2} → 200, total_votes stays 1 (reassigned), options[1].votes=0, options[2].votes=1, my_vote_index=2. (3) marco vote {option_index:2} → 200, total_votes=2, options[2].votes=2. (4) marco DELETE /vote → 200 {ok:true}; GET /posts/{pid} confirms total_votes=1, options[2].votes=1, my_vote_index=null for marco. (5) option_index=99 → 400 {detail:'Invalid option index'}. (6) bogus post_id → 404 {detail:'Post not found'}. (7) vote on a category='tip' (non-poll) post → 400 {detail:'This post is not a poll'}. (8) POST vote without auth → 401. Per-user dedup + counter math is correct across cast/change/remove."
 
   - task: "GET /api/mentors and /api/mentees — mentorship discovery"
     implemented: true
-    working: "NA"
+    working: true
     file: "/app/backend/server.py"
     stuck_count: 0
     priority: "medium"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
         -comment: "Lists users with mentorship_available=true (/mentors) or looking_for_mentor=true (/mentees). Excludes viewer and suspended. Supports optional specialty + city filters. Auth required."
+        -working: true
+        -agent: "testing"
+        -comment: "ALL 6 mentors/mentees cases PASS. (1) GET /api/mentors as marco → 200, count=4; every item has mentorship_available=true, none has user_id==marco, none contains password_hash; first item username='noahvancouver'. (2) GET /api/mentors?specialty=Family as marco → 200, count=1, item's specialties contains 'Family'. (3) GET /api/mentors?city=Austin as marco → 200, count=1, item.city=='Austin'. (4) GET /api/mentors no auth → 401. (5) GET /api/mentees as sophie → 200, count=2, every item looking_for_mentor=true, NO sophie self-result, marco IS present in the list, no password_hash. (6) GET /api/mentees no auth → 401."
 
   - task: "GET /api/me/reviews-received — reviews left on my spots"
     implemented: true
-    working: "NA"
+    working: true
     file: "/app/backend/server.py"
     stuck_count: 0
     priority: "medium"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
         -comment: "Returns reviews that other users left on spots owned by the viewer. Hydrates reviewer (name/avatar/verification) and spot (title/city/state/cover) on each row. Sorted newest first. Excludes self-reviews."
+        -working: true
+        -agent: "testing"
+        -comment: "ALL 3 reviews-received cases PASS. (1) GET /api/me/reviews-received as sophie → 200 {count:2, items:[2]}; every item has reviewer{user_id,username,name,avatar_url,verification_status,plan} + spot{spot_id,title,city,state,cover_image_url}; no reviewer.user_id equals sophie's (self-review exclusion confirmed); first reviewer username='marcoalvarez'. (2) GET /api/me/reviews-received as priya (user with no owned spots) → 200 {count:0, items:[]} — clean early-return path. (3) No auth → 401."
 
   - task: "POST /api/posts with poll_options — polls as a post category"
     implemented: true
-    working: "NA"
+    working: true
     file: "/app/backend/server.py"
     stuck_count: 0
     priority: "medium"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
         -comment: "When category='poll', accepts poll_options: List[str] (2-6). Attaches poll={options:[{index,text,votes:0}], total_votes:0} to post doc. Feed hydration includes viewer's my_vote_index via poll_votes lookup."
+        -working: true
+        -agent: "testing"
+        -comment: "ALL 3 poll-create cases PASS. (1) sophie POST /api/posts {category:'poll', title:'Fav portrait lens?', poll_options:['35mm f/1.4','50mm f/1.2','85mm f/1.4']} → 200 with post_id=pst_fb2b21676509 and poll={options:[3x{index,text,votes:0}], total_votes:0}. Each option has index/text/votes keys; all votes initialised to 0. (2) poll with only 1 option → 400 {detail:'Poll needs 2-6 options'}. (3) poll with 7 options → 400 {detail:'Poll needs 2-6 options'}. Validation + doc shape are exactly as spec'd."
 
   - task: "POST /api/billing/checkout — Stripe Checkout Session (subscription mode) for Pro/Elite"
     implemented: true
@@ -957,3 +969,73 @@ agent_communication:
 
       No action items. All 4 new Stripe endpoints are green.
 
+
+
+    -agent: "main"
+    -message: |
+      Phase F — validate 4 new endpoints. Historical items green, do not retest.
+
+      Creds (see /app/memory/test_credentials.md):
+        sophie@photoscout.app / demo123  (Austin, mentorship_available=true)
+        marco@photoscout.app / demo123   (looking_for_mentor=true)
+
+      1) POST /api/posts (poll) + POST/DELETE /api/posts/{id}/vote
+         - As sophie: POST /posts {category:"poll",title:"Fav lens?",poll_options:["35mm","50mm","85mm"]} → 200 with poll={options:[3x{index,text,votes:0}], total_votes:0}
+         - POST /posts/{pid}/vote {option_index:1} → 200, poll.options[1].votes=1, total_votes=1, my_vote_index=1
+         - Same user POST /posts/{pid}/vote {option_index:2} → 200, options[1].votes back to 0, options[2].votes=1, total_votes still 1 (vote reassigned)
+         - As marco POST /posts/{pid}/vote {option_index:2} → total_votes=2
+         - DELETE /posts/{pid}/vote (marco) → 200 {ok:true}, total_votes back to 1
+         - POST with option_index=99 → 400. Bogus post → 404. Non-poll post → 400. No auth → 401.
+         - POST /posts category='poll' + only 1 option → 400. + 7 options → 400.
+
+      2) GET /api/mentors + /api/mentees
+
+    -agent: "testing"
+    -message: |
+      Phase F validation — 4 new endpoints. 20/20 assertions PASS (backend_test_phase_f.py).
+      Historical tasks not retested per scope.
+
+      ✅ POST /api/posts with poll_options (3/3)
+        - sophie {category:"poll", title:"Fav portrait lens?", poll_options:["35mm f/1.4","50mm f/1.2","85mm f/1.4"]} → 200, post_id=pst_fb2b21676509, poll={options:[3x{index,text,votes:0}], total_votes:0}.
+        - 1 option → 400 {detail:"Poll needs 2-6 options"}.
+        - 7 options → 400 {detail:"Poll needs 2-6 options"}.
+
+      ✅ POST/DELETE /api/posts/{id}/vote (8/8)
+        - sophie vote {option_index:1} → total_votes=1, options[1].votes=1, my_vote_index=1.
+        - sophie re-vote {option_index:2} → total_votes stays 1 (reassigned), options[1].votes=0, options[2].votes=1, my_vote_index=2.
+        - marco vote {option_index:2} → total_votes=2, options[2].votes=2.
+        - marco DELETE /vote → 200 {ok:true}; GET /posts/{pid} confirms total_votes=1, options[2].votes=1, my_vote_index=null.
+        - option_index=99 → 400 "Invalid option index".
+        - Bogus post_id → 404 "Post not found".
+        - Vote on non-poll (category='tip') post → 400 "This post is not a poll".
+        - No auth → 401.
+
+      ✅ GET /api/mentors + /api/mentees (6/6)
+        - /mentors as marco → count=4; every item has mentorship_available=true, none is marco, no password_hash leaked.
+        - ?specialty=Family → count=1, item.specialties contains 'Family'.
+        - ?city=Austin → count=1, item.city=='Austin'.
+        - /mentors no auth → 401.
+        - /mentees as sophie → count=2; every item looking_for_mentor=true, no sophie self-result, marco IS included, no password_hash.
+        - /mentees no auth → 401.
+
+      ✅ GET /api/me/reviews-received (3/3)
+        - sophie → 200 {count:2, items:[2]}; every item has reviewer{user_id,username,name,avatar_url,verification_status,plan} and spot{spot_id,title,city,state,cover_image_url}; no self-reviews; first reviewer username='marcoalvarez'.
+        - priya (no owned spots) → 200 {count:0, items:[]} — clean early-return path.
+        - No auth → 401.
+
+      Note: Test seeded deterministic state by PATCH /auth/me to ensure sophie.mentorship_available=true and marco.looking_for_mentor=true, but both were already true in the test DB so no mutation was needed.
+
+      No action items remaining for backend. All 4 Phase F tasks are green.
+
+         - As marco: GET /mentors → count>=4. Each item has mentorship_available=true. Should NOT include marco.
+         - GET /mentors?city=Austin → filters.
+         - GET /mentees (as sophie) → should include marco. No marco self-result.
+         - No auth → 401.
+
+      3) GET /api/me/reviews-received
+         - As sophie: 200 with items. Each has review_id, overall_rating, review_body, created_at, reviewer{...}, spot{spot_id,title,cover_image_url}.
+         - reviewer.user_id != sophie.user_id on every item.
+         - User without spots returns {count:0, items:[]}.
+         - No auth → 401.
+
+      Please create /app/backend_test_phase_f.py for these.
