@@ -126,7 +126,7 @@ const styles = StyleSheet.create({
   },
   imageWrap: {
     width: '100%',
-    aspectRatio: 3 / 2,
+    aspectRatio: 4 / 5,
     position: 'relative',
   },
   image: { width: '100%', height: '100%' },
@@ -183,8 +183,9 @@ const styles = StyleSheet.create({
   },
   title: {
     color: colors.text,
-    fontSize: 15,
+    fontSize: 16,
     fontFamily: font.bodySemibold,
+    letterSpacing: -0.2,
   },
   metaRow: { flexDirection: 'row' },
   city: {

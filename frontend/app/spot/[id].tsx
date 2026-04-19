@@ -6,7 +6,6 @@ import {
   ScrollView,
   Image,
   TouchableOpacity,
-  ActivityIndicator,
   Dimensions,
   Alert,
   Share,
@@ -17,6 +16,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import {
   ChevronLeft, Bookmark, Share2, Flag, MapPin, Sun, Sunrise, Sunset, Cloud,
   Camera, Car, Accessibility, Users, Shield, DogIcon, BabyIcon, TicketIcon, ClockIcon, CheckCircle,
+  FolderPlus, MessageSquarePlus,
 } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
@@ -24,6 +24,8 @@ import { colors, font, space, radii } from '../../src/theme';
 import ScoreRing from '../../src/components/ScoreRing';
 import SpotCard from '../../src/components/SpotCard';
 import { Button } from '../../src/components/Button';
+import { DetailSkeleton } from '../../src/components/Skeleton';
+import AddToCollectionSheet from '../../src/components/AddToCollectionSheet';
 
 const { width: W } = Dimensions.get('window');
 
@@ -34,6 +36,7 @@ export default function SpotDetail() {
   const [spot, setSpot] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [galleryIdx, setGalleryIdx] = useState(0);
+  const [atcOpen, setAtcOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -83,11 +86,7 @@ export default function SpotDetail() {
   };
 
   if (loading || !spot) {
-    return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' }}>
-        <ActivityIndicator color={colors.primary} />
-      </SafeAreaView>
-    );
+    return <DetailSkeleton />;
   }
 
   const lightScore = Math.round(((spot.sunrise_rating + spot.sunset_rating + spot.morning_golden_hour_rating + spot.evening_golden_hour_rating) / 4) * 20);
@@ -98,7 +97,7 @@ export default function SpotDetail() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
-      <ScrollView contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
         <View style={styles.heroWrap}>
           <ScrollView
             horizontal
@@ -388,4 +387,18 @@ const styles = StyleSheet.create({
     padding: space.md, backgroundColor: colors.surface1,
     borderColor: colors.border, borderWidth: 1, borderRadius: radii.md,
   },
+  actionBar: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    flexDirection: 'row', gap: 8,
+    paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.xl,
+    backgroundColor: 'rgba(10,10,10,0.95)',
+    borderTopWidth: 1, borderTopColor: colors.border,
+  },
+  actBtn: {
+    flex: 1, flexDirection: 'row', gap: 6, alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 12, borderRadius: radii.md,
+    backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border,
+  },
+  actBtnPrimary: { backgroundColor: colors.primary, borderColor: colors.primary, flex: 1.4 },
+  actTxt: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
 });
