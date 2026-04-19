@@ -2487,6 +2487,28 @@ class PollOptionIn(BaseModel):
     text: str
 
 
+class SupportTicketIn(BaseModel):
+    subject: str
+    body: str
+    category: Optional[str] = "general"  # general | bug | billing | abuse | feature
+
+
+class SupportReplyIn(BaseModel):
+    body: str
+
+
+class GroupIn(BaseModel):
+    name: str
+    tagline: Optional[str] = ""
+    description: Optional[str] = ""
+    city: Optional[str] = None
+    state: Optional[str] = None
+    country: Optional[str] = "US"
+    specialties: Optional[List[str]] = None
+    cover_image_url: Optional[str] = None
+    visibility: Optional[str] = "public"  # public | private
+
+
 class CommunityPostIn(BaseModel):
     category: str
     title: str
@@ -2496,6 +2518,8 @@ class CommunityPostIn(BaseModel):
     state: Optional[str] = None
     # Polls (optional; only used when category == 'poll')
     poll_options: Optional[List[str]] = None  # 2-6 option labels
+    # Groups — if set, post is scoped to the group feed.
+    group_id: Optional[str] = None
 
 
 async def _hydrate_posts(posts: List[dict], viewer: Optional[dict]) -> List[dict]:
@@ -2566,6 +2590,15 @@ async def create_post(body: CommunityPostIn, user: dict = Depends(get_current_us
             "options": [{"index": i, "text": t[:120], "votes": 0} for i, t in enumerate(raw_opts)],
             "total_votes": 0,
         }
+    # Group scoping (must be a member of the group)
+    if body.group_id:
+        g = await db.groups.find_one({"group_id": body.group_id})
+        if not g:
+            raise HTTPException(status_code=404, detail="Group not found")
+        m = await db.group_members.find_one({"group_id": body.group_id, "user_id": user["user_id"]})
+        if not m:
+            raise HTTPException(status_code=403, detail="Join the group to post in it")
+        doc["group_id"] = body.group_id
     await db.community_posts.insert_one(doc)
     doc.pop("_id", None)
     out = await _hydrate_posts([doc], user)
@@ -2844,6 +2877,266 @@ async def my_reviews_received(limit: int = 50, user: dict = Depends(get_current_
             "cover_image_url": imgs[0]["image_url"] if imgs and isinstance(imgs[0], dict) else None,
         }
     return {"count": len(reviews), "items": reviews}
+
+
+# ============================================================================
+# SUPPORT HUB — User tickets + admin inbox
+# ============================================================================
+SUPPORT_FAQS = [
+    {"id": "pricing", "q": "How does PhotoScout pricing work?", "a": "Free gives you up to 5 saved spots, community access, and public maps. Pro ($9.99/mo) removes the save limit, unlocks unlimited collections, AI shot lists, and direct messaging. Elite ($19.99/mo) adds verified photographer badge, featured placement in discovery, and mentorship matchmaking priority."},
+    {"id": "cancel", "q": "How do I cancel my subscription?", "a": "Open Profile → Plan card → Manage billing. Stripe's portal lets you cancel any time. You keep access until the end of your current billing period."},
+    {"id": "refunds", "q": "Do you offer refunds?", "a": "If something feels off in your first 7 days after upgrading, message us via the Contact form and we'll sort it out."},
+    {"id": "verify", "q": "How do I get verified?", "a": "Upload a portfolio of at least 10 high-quality images to your spots, keep your profile complete (bio, specialties, city), and our team reviews verification requests within 3–5 business days."},
+    {"id": "report", "q": "Someone is posting spam or harassing me. What do I do?", "a": "Long-press any post or tap the ⋯ menu and choose Report. Our moderators triage within 24 hours. For urgent safety concerns, use the Contact form with category 'Abuse'."},
+    {"id": "data", "q": "Can I export my data or delete my account?", "a": "Yes — message us via the Contact form with category 'General' and we'll respond within 72 hours with your export or deletion confirmation."},
+]
+
+
+@api.get("/support/faqs")
+async def support_faqs():
+    return {"items": SUPPORT_FAQS}
+
+
+@api.post("/support/tickets")
+async def create_support_ticket(body: SupportTicketIn, user: dict = Depends(get_current_user)):
+    subj = (body.subject or "").strip()
+    msg = (body.body or "").strip()
+    if not subj or not msg:
+        raise HTTPException(status_code=400, detail="Subject and message are required")
+    cat = (body.category or "general").lower()
+    if cat not in ("general", "bug", "billing", "abuse", "feature"):
+        cat = "general"
+    doc = {
+        "ticket_id": f"sup_{uuid.uuid4().hex[:12]}",
+        "user_id": user["user_id"],
+        "user_email": user.get("email"),
+        "user_name": user.get("name") or user.get("username"),
+        "subject": subj[:140],
+        "body": msg[:4000],
+        "category": cat,
+        "status": "open",  # open | pending | resolved | closed
+        "replies": [],
+        "created_at": utcnow(),
+        "updated_at": utcnow(),
+    }
+    await db.support_tickets.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.get("/me/support/tickets")
+async def my_support_tickets(user: dict = Depends(get_current_user)):
+    items = await db.support_tickets.find(
+        {"user_id": user["user_id"]},
+        {"_id": 0},
+    ).sort("created_at", -1).limit(100).to_list(100)
+    return {"count": len(items), "items": items}
+
+
+@api.get("/admin/support/tickets")
+async def admin_list_tickets(
+    status: Optional[str] = None,
+    category: Optional[str] = None,
+    limit: int = 50,
+    user: dict = Depends(get_current_user),
+):
+    if user.get("role") not in ("admin", "super_admin", "support"):
+        raise HTTPException(status_code=403, detail="Staff only")
+    q: Dict[str, Any] = {}
+    if status:
+        q["status"] = status
+    if category:
+        q["category"] = category
+    items = await db.support_tickets.find(q, {"_id": 0}).sort("created_at", -1).limit(min(limit, 200)).to_list(200)
+    counts = {
+        "open": await db.support_tickets.count_documents({"status": "open"}),
+        "pending": await db.support_tickets.count_documents({"status": "pending"}),
+        "resolved": await db.support_tickets.count_documents({"status": "resolved"}),
+        "closed": await db.support_tickets.count_documents({"status": "closed"}),
+    }
+    return {"items": items, "counts": counts}
+
+
+@api.post("/admin/support/tickets/{ticket_id}/reply")
+async def admin_reply_ticket(ticket_id: str, body: SupportReplyIn, user: dict = Depends(get_current_user)):
+    if user.get("role") not in ("admin", "super_admin", "support"):
+        raise HTTPException(status_code=403, detail="Staff only")
+    if not (body.body or "").strip():
+        raise HTTPException(status_code=400, detail="Reply body required")
+    reply = {
+        "from": "staff",
+        "staff_id": user["user_id"],
+        "staff_name": user.get("name") or user.get("username"),
+        "body": body.body.strip()[:4000],
+        "created_at": utcnow(),
+    }
+    r = await db.support_tickets.update_one(
+        {"ticket_id": ticket_id},
+        {"$push": {"replies": reply}, "$set": {"status": "pending", "updated_at": utcnow()}},
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    return {"ok": True, "reply": reply}
+
+
+@api.post("/admin/support/tickets/{ticket_id}/resolve")
+async def admin_resolve_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
+    if user.get("role") not in ("admin", "super_admin", "support"):
+        raise HTTPException(status_code=403, detail="Staff only")
+    r = await db.support_tickets.update_one(
+        {"ticket_id": ticket_id},
+        {"$set": {"status": "resolved", "updated_at": utcnow()}},
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    return {"ok": True}
+
+
+# ============================================================================
+# LOCAL GROUPS / CHAPTERS
+# ============================================================================
+async def _hydrate_group(g: dict, viewer: Optional[dict] = None) -> dict:
+    g = dict(g)
+    g.pop("_id", None)
+    g["member_count"] = await db.group_members.count_documents({"group_id": g["group_id"]})
+    g["post_count"] = await db.community_posts.count_documents({"group_id": g["group_id"], "status": "active"})
+    if viewer:
+        m = await db.group_members.find_one({"group_id": g["group_id"], "user_id": viewer["user_id"]})
+        g["is_member"] = bool(m)
+        g["my_role"] = m.get("role") if m else None
+    else:
+        g["is_member"] = False
+        g["my_role"] = None
+    return g
+
+
+@api.post("/groups")
+async def create_group(body: GroupIn, user: dict = Depends(get_current_user)):
+    name = (body.name or "").strip()
+    if len(name) < 3:
+        raise HTTPException(status_code=400, detail="Group name must be at least 3 characters")
+    # Prevent near-duplicate names in the same city
+    dup_q = {"name": {"$regex": f"^{name}$", "$options": "i"}}
+    if body.city:
+        dup_q["city"] = body.city
+    if await db.groups.find_one(dup_q):
+        raise HTTPException(status_code=409, detail="A group with this name already exists in that city")
+    gid = f"grp_{uuid.uuid4().hex[:12]}"
+    doc = {
+        "group_id": gid,
+        "name": name[:80],
+        "tagline": (body.tagline or "").strip()[:140],
+        "description": (body.description or "").strip()[:2000],
+        "city": body.city or user.get("city"),
+        "state": body.state or user.get("state"),
+        "country": body.country or user.get("primary_country") or "US",
+        "specialties": body.specialties or [],
+        "cover_image_url": body.cover_image_url,
+        "visibility": body.visibility or "public",
+        "owner_user_id": user["user_id"],
+        "created_at": utcnow(),
+        "updated_at": utcnow(),
+    }
+    await db.groups.insert_one(doc)
+    # Owner is automatically an admin member.
+    await db.group_members.insert_one({
+        "group_id": gid,
+        "user_id": user["user_id"],
+        "role": "owner",
+        "joined_at": utcnow(),
+    })
+    return await _hydrate_group(doc, user)
+
+
+@api.get("/groups")
+async def list_groups(
+    q: Optional[str] = None,
+    city: Optional[str] = None,
+    specialty: Optional[str] = None,
+    mine: bool = False,
+    limit: int = 50,
+    user: dict = Depends(get_current_user),
+):
+    query: Dict[str, Any] = {"visibility": "public"}
+    if q:
+        query["$or"] = [
+            {"name": {"$regex": q, "$options": "i"}},
+            {"tagline": {"$regex": q, "$options": "i"}},
+        ]
+    if city:
+        query["city"] = city
+    if specialty:
+        query["specialties"] = specialty
+    if mine:
+        my_ids = [m["group_id"] async for m in db.group_members.find({"user_id": user["user_id"]}, {"group_id": 1, "_id": 0})]
+        query = {"group_id": {"$in": my_ids}}  # my groups override other filters
+    groups = await db.groups.find(query).sort("created_at", -1).limit(min(limit, 100)).to_list(100)
+    items = [await _hydrate_group(g, user) for g in groups]
+    return {"count": len(items), "items": items}
+
+
+@api.get("/groups/{group_id}")
+async def get_group(group_id: str, user: dict = Depends(get_current_user)):
+    g = await db.groups.find_one({"group_id": group_id})
+    if not g:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return await _hydrate_group(g, user)
+
+
+@api.post("/groups/{group_id}/join")
+async def join_group(group_id: str, user: dict = Depends(get_current_user)):
+    g = await db.groups.find_one({"group_id": group_id})
+    if not g:
+        raise HTTPException(status_code=404, detail="Group not found")
+    await db.group_members.update_one(
+        {"group_id": group_id, "user_id": user["user_id"]},
+        {"$setOnInsert": {
+            "group_id": group_id,
+            "user_id": user["user_id"],
+            "role": "member",
+            "joined_at": utcnow(),
+        }},
+        upsert=True,
+    )
+    return await _hydrate_group(g, user)
+
+
+@api.delete("/groups/{group_id}/join")
+async def leave_group(group_id: str, user: dict = Depends(get_current_user)):
+    g = await db.groups.find_one({"group_id": group_id})
+    if not g:
+        raise HTTPException(status_code=404, detail="Group not found")
+    if g.get("owner_user_id") == user["user_id"]:
+        raise HTTPException(status_code=400, detail="Owner cannot leave — transfer ownership first")
+    await db.group_members.delete_one({"group_id": group_id, "user_id": user["user_id"]})
+    return await _hydrate_group(g, user)
+
+
+@api.get("/groups/{group_id}/members")
+async def list_group_members(group_id: str, user: dict = Depends(get_current_user)):
+    members = await db.group_members.find({"group_id": group_id}, {"_id": 0}).sort("joined_at", 1).to_list(500)
+    uids = [m["user_id"] for m in members]
+    users = await db.users.find(
+        {"user_id": {"$in": uids}},
+        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "city": 1, "verification_status": 1, "plan": 1, "specialties": 1},
+    ).to_list(500)
+    umap = {u["user_id"]: u for u in users}
+    for m in members:
+        m["profile"] = umap.get(m["user_id"])
+    return {"count": len(members), "items": members}
+
+
+@api.get("/groups/{group_id}/posts")
+async def list_group_posts(group_id: str, limit: int = 30, user: dict = Depends(get_current_user)):
+    g = await db.groups.find_one({"group_id": group_id})
+    if not g:
+        raise HTTPException(status_code=404, detail="Group not found")
+    posts = await db.community_posts.find(
+        {"group_id": group_id, "status": "active"},
+        {"_id": 0},
+    ).sort("created_at", -1).limit(min(limit, 100)).to_list(100)
+    items = await _hydrate_posts(posts, user)
+    return {"count": len(items), "items": items}
 
 
 # ----- Discovery -------------------------------------------------------------
@@ -3634,6 +3927,12 @@ async def on_startup():
     await db.post_likes.create_index([("post_id", 1), ("user_id", 1)], unique=True)
     await db.post_comments.create_index("post_id")
     await db.poll_votes.create_index([("post_id", 1), ("user_id", 1)], unique=True)
+    await db.support_tickets.create_index("user_id")
+    await db.support_tickets.create_index("status")
+    await db.groups.create_index([("city", 1), ("name", 1)])
+    await db.group_members.create_index([("group_id", 1), ("user_id", 1)], unique=True)
+    await db.group_members.create_index("user_id")
+    await db.community_posts.create_index("group_id")
     await db.conversations.create_index("participant_key", unique=True)
     await db.conversations.create_index("participant_user_ids")
     await db.messages.create_index([("conversation_id", 1), ("created_at", 1)])

@@ -68,6 +68,9 @@ export default function Community() {
           <Text style={styles.kicker}>Community</Text>
           <Text style={styles.title} numberOfLines={1}>Photographers</Text>
         </View>
+        <TouchableOpacity onPress={() => router.push('/groups')} style={styles.iconBtn} testID="community-groups">
+          <Users size={20} color={colors.text} />
+        </TouchableOpacity>
         <TouchableOpacity onPress={() => router.push('/mentors')} style={styles.iconBtn} testID="community-mentors">
           <GraduationCap size={20} color={colors.text} />
         </TouchableOpacity>
