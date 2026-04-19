@@ -19,6 +19,54 @@ user_problem_statement: |
   /community/compose, /community/post/[id], /messages inbox and thread.
 
 backend:
+  - task: "POST/DELETE /api/posts/{id}/vote — poll voting with per-user tracking"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Vote/change/remove a poll vote on a community post. Backed by poll_votes collection with unique index on (post_id, user_id). Increments/decrements options[i].votes and poll.total_votes atomically. Returns hydrated poll object with my_vote_index. Idempotent same-option votes are no-ops. DELETE removes vote and decrements counters. 400 if post has no poll, 404 if post missing."
+
+  - task: "GET /api/mentors and /api/mentees — mentorship discovery"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Lists users with mentorship_available=true (/mentors) or looking_for_mentor=true (/mentees). Excludes viewer and suspended. Supports optional specialty + city filters. Auth required."
+
+  - task: "GET /api/me/reviews-received — reviews left on my spots"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Returns reviews that other users left on spots owned by the viewer. Hydrates reviewer (name/avatar/verification) and spot (title/city/state/cover) on each row. Sorted newest first. Excludes self-reviews."
+
+  - task: "POST /api/posts with poll_options — polls as a post category"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "When category='poll', accepts poll_options: List[str] (2-6). Attaches poll={options:[{index,text,votes:0}], total_votes:0} to post doc. Feed hydration includes viewer's my_vote_index via poll_votes lookup."
+
   - task: "POST /api/billing/checkout — Stripe Checkout Session (subscription mode) for Pro/Elite"
     implemented: true
     working: true

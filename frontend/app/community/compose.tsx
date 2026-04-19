@@ -19,6 +19,7 @@ const CATEGORIES: { k: string; label: string; hint: string; placeholder: string 
   { k: 'collab',   label: 'Collab',   hint: '🎨 Team up on a creative project, portfolio swap, or styled shoot', placeholder: 'What collab are you proposing?' },
   { k: 'meetup',   label: 'Meetup',   hint: '📅 Organize or join a photo walk / coffee meetup',            placeholder: 'Date, time, city, what to bring, how many can join…' },
   { k: 'intro',    label: 'Intro',    hint: '👋 New here? Introduce yourself to the community',           placeholder: 'Your name, location, style, what you are looking for here…' },
+  { k: 'poll',     label: 'Poll',     hint: '📊 Ask a 2-to-6-option question and let the community vote', placeholder: 'Optional context for your poll…' },
 ];
 
 export default function Compose() {
@@ -28,6 +29,7 @@ export default function Compose() {
   const [body, setBody] = useState('');
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [pollOptions, setPollOptions] = useState<string[]>(['', '']);
 
   const pickImage = async () => {
     const r = await ImagePicker.launchImageLibraryAsync({
@@ -41,12 +43,21 @@ export default function Compose() {
 
   const submit = async () => {
     if (!title.trim()) { Alert.alert('Title required', 'Give your post a title so others can find it.'); return; }
+    if (category === 'poll') {
+      const opts = pollOptions.map((o) => o.trim()).filter(Boolean);
+      if (opts.length < 2) { Alert.alert('Poll needs options', 'Add at least 2 options.'); return; }
+      if (opts.length > 6) { Alert.alert('Too many options', 'Max 6 poll options.'); return; }
+    }
     setSubmitting(true);
     try {
-      await api.post('/posts', {
+      const payload: any = {
         category, title: title.trim(), body: body.trim(), image_url: imageUri,
         city: user?.city, state: user?.state,
-      });
+      };
+      if (category === 'poll') {
+        payload.poll_options = pollOptions.map((o) => o.trim()).filter(Boolean);
+      }
+      await api.post('/posts', payload);
       Alert.alert('Posted!', 'Your post is live in the community.', [
         { text: 'OK', onPress: () => router.replace('/community') },
       ]);
@@ -120,6 +131,45 @@ export default function Compose() {
             testID="compose-body"
           />
 
+          {category === 'poll' && (
+            <View style={{ marginTop: space.md }}>
+              <Text style={styles.label}>Poll options (2–6)</Text>
+              {pollOptions.map((opt, idx) => (
+                <View key={idx} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <TextInput
+                    value={opt}
+                    onChangeText={(t) => {
+                      const next = [...pollOptions]; next[idx] = t; setPollOptions(next);
+                    }}
+                    placeholder={`Option ${idx + 1}`}
+                    placeholderTextColor={colors.textTertiary}
+                    style={[styles.input, { flex: 1, marginTop: 0 }]}
+                    maxLength={120}
+                    testID={`compose-poll-opt-${idx}`}
+                  />
+                  {pollOptions.length > 2 && (
+                    <TouchableOpacity
+                      onPress={() => setPollOptions(pollOptions.filter((_, i) => i !== idx))}
+                      style={styles.removeOptBtn}
+                      testID={`compose-poll-del-${idx}`}
+                    >
+                      <X size={14} color={colors.textSecondary} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ))}
+              {pollOptions.length < 6 && (
+                <TouchableOpacity
+                  onPress={() => setPollOptions([...pollOptions, ''])}
+                  style={styles.addOptBtn}
+                  testID="compose-poll-add"
+                >
+                  <Text style={styles.addOptTxt}>+ Add option</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+
           <Text style={styles.label}>Photo (optional)</Text>
           {imageUri ? (
             <View>
@@ -163,4 +213,7 @@ const styles = StyleSheet.create({
   imgPickTxt: { color: colors.primary, fontFamily: font.bodySemibold, fontSize: 14 },
   preview: { width: '100%', aspectRatio: 16 / 10, borderRadius: radii.md },
   removeImgBtn: { position: 'absolute', top: 8, right: 8, width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center' },
+  removeOptBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.surface2, borderColor: colors.border, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  addOptBtn: { padding: 10, borderRadius: radii.md, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1, borderStyle: 'dashed', alignItems: 'center', marginTop: 4 },
+  addOptTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 13 },
 });

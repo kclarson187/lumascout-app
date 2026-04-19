@@ -2,11 +2,12 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Image, RefreshControl, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ChevronLeft, Plus, MessageCircle, Heart, Users, Sparkles, Coffee, Camera, HandHeart, Wrench, Eye, BookOpen, Briefcase, Star } from 'lucide-react-native';
+import { ChevronLeft, Plus, MessageCircle, Heart, Users, Sparkles, Coffee, Camera, HandHeart, Wrench, Eye, BookOpen, Briefcase, Star, GraduationCap } from 'lucide-react-native';
 import { api } from '../src/api';
 import { useAuth } from '../src/auth';
 import { colors, font, space, radii } from '../src/theme';
 import VerifiedBadge from '../src/components/VerifiedBadge';
+import PollCard from '../src/components/PollCard';
 
 const TABS = [
   { k: 'all',       label: 'All' },
@@ -67,6 +68,9 @@ export default function Community() {
           <Text style={styles.kicker}>Community</Text>
           <Text style={styles.title} numberOfLines={1}>Photographers</Text>
         </View>
+        <TouchableOpacity onPress={() => router.push('/mentors')} style={styles.iconBtn} testID="community-mentors">
+          <GraduationCap size={20} color={colors.text} />
+        </TouchableOpacity>
         <TouchableOpacity onPress={() => router.push('/messages')} style={styles.iconBtn} testID="community-messages">
           <MessageCircle size={20} color={colors.text} />
         </TouchableOpacity>
@@ -123,6 +127,7 @@ export default function Community() {
 function PostCard({ post, onLike, meId }: { post: any; onLike: () => void; meId?: string }) {
   const [liked, setLiked] = useState(!!post.liked_by_me);
   const [likeCount, setLikeCount] = useState(post.like_count || 0);
+  const [poll, setPoll] = useState<any>(post.poll || null);
   const Cat = CATEGORY_ICONS[post.category] || BookOpen;
   const color = CATEGORY_COLORS[post.category] || colors.primary;
 
@@ -165,6 +170,11 @@ function PostCard({ post, onLike, meId }: { post: any; onLike: () => void; meId?
       </View>
       <Text style={styles.postTitle}>{post.title}</Text>
       {post.body ? <Text style={styles.postBody} numberOfLines={4}>{post.body}</Text> : null}
+      {poll ? (
+        <View onStartShouldSetResponder={() => true}>
+          <PollCard postId={post.post_id} poll={poll} onChange={setPoll} />
+        </View>
+      ) : null}
       {post.image_url ? <Image source={{ uri: post.image_url }} style={styles.postImg} /> : null}
       <View style={styles.actions}>
         <TouchableOpacity onPress={toggleLike} style={styles.action} testID={`post-like-${post.post_id}`}>

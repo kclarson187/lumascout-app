@@ -2479,8 +2479,12 @@ app.add_middleware(
 
 POST_CATEGORIES = {
     "win", "question", "tip", "gear", "critique", "bts",
-    "referral", "collab", "meetup", "intro",
+    "referral", "collab", "meetup", "intro", "poll",
 }
+
+
+class PollOptionIn(BaseModel):
+    text: str
 
 
 class CommunityPostIn(BaseModel):
@@ -2490,6 +2494,8 @@ class CommunityPostIn(BaseModel):
     image_url: Optional[str] = None  # single base64 data URL for MVP
     city: Optional[str] = None
     state: Optional[str] = None
+    # Polls (optional; only used when category == 'poll')
+    poll_options: Optional[List[str]] = None  # 2-6 option labels
 
 
 async def _hydrate_posts(posts: List[dict], viewer: Optional[dict]) -> List[dict]:
@@ -2511,9 +2517,21 @@ async def _hydrate_posts(posts: List[dict], viewer: Optional[dict]) -> List[dict
             {"_id": 0, "post_id": 1},
         ).to_list(500)
         liked_ids = {lk["post_id"] for lk in liked}
+    # Poll vote lookup — per post, per viewer.
+    poll_votes: Dict[str, int] = {}
+    if viewer:
+        poll_pids = [p["post_id"] for p in posts if p.get("poll")]
+        if poll_pids:
+            pv = await db.poll_votes.find(
+                {"user_id": viewer["user_id"], "post_id": {"$in": poll_pids}},
+                {"_id": 0, "post_id": 1, "option_index": 1},
+            ).to_list(500)
+            poll_votes = {v["post_id"]: v["option_index"] for v in pv}
     for p in posts:
         p["author"] = umap.get(p.get("author_user_id"))
         p["liked_by_me"] = p["post_id"] in liked_ids
+        if p.get("poll"):
+            p["poll"]["my_vote_index"] = poll_votes.get(p["post_id"])
     return posts
 
 
@@ -2539,6 +2557,15 @@ async def create_post(body: CommunityPostIn, user: dict = Depends(get_current_us
         "created_at": utcnow(),
         "updated_at": utcnow(),
     }
+    # Polls: attach options with zero-initial counts when category==poll.
+    if body.category == "poll":
+        raw_opts = [str(o).strip() for o in (body.poll_options or []) if str(o).strip()]
+        if not (2 <= len(raw_opts) <= 6):
+            raise HTTPException(status_code=400, detail="Poll needs 2-6 options")
+        doc["poll"] = {
+            "options": [{"index": i, "text": t[:120], "votes": 0} for i, t in enumerate(raw_opts)],
+            "total_votes": 0,
+        }
     await db.community_posts.insert_one(doc)
     doc.pop("_id", None)
     out = await _hydrate_posts([doc], user)
@@ -2667,6 +2694,156 @@ async def create_comment(post_id: str, body: CommentIn, user: dict = Depends(get
     except Exception:
         pass
     return doc
+
+
+# ----- Polls ---------------------------------------------------------------
+class PollVoteIn(BaseModel):
+    option_index: int
+
+
+@api.post("/posts/{post_id}/vote")
+async def cast_poll_vote(post_id: str, body: PollVoteIn, user: dict = Depends(get_current_user)):
+    """Cast or change a poll vote. Idempotent per user per post."""
+    p = await db.community_posts.find_one({"post_id": post_id})
+    if not p:
+        raise HTTPException(status_code=404, detail="Post not found")
+    poll = p.get("poll")
+    if not poll:
+        raise HTTPException(status_code=400, detail="This post is not a poll")
+    opts = poll.get("options") or []
+    idx = body.option_index
+    if not (0 <= idx < len(opts)):
+        raise HTTPException(status_code=400, detail="Invalid option index")
+    # Remove previous vote from this user (if any) and decrement old bucket.
+    prev = await db.poll_votes.find_one({"post_id": post_id, "user_id": user["user_id"]})
+    if prev and prev.get("option_index") == idx:
+        # No-op: same option — return current state.
+        p.pop("_id", None)
+        out = await _hydrate_posts([p], user)
+        return {"poll": out[0].get("poll")}
+    if prev:
+        await db.community_posts.update_one(
+            {"post_id": post_id},
+            {"$inc": {f"poll.options.{prev['option_index']}.votes": -1, "poll.total_votes": -1}},
+        )
+        await db.poll_votes.delete_one({"_id": prev["_id"]})
+    # Record new vote.
+    await db.poll_votes.insert_one({
+        "post_id": post_id,
+        "user_id": user["user_id"],
+        "option_index": idx,
+        "created_at": utcnow(),
+    })
+    await db.community_posts.update_one(
+        {"post_id": post_id},
+        {"$inc": {f"poll.options.{idx}.votes": 1, "poll.total_votes": 1}},
+    )
+    fresh = await db.community_posts.find_one({"post_id": post_id}, {"_id": 0})
+    out = await _hydrate_posts([fresh], user)
+    return {"poll": out[0].get("poll")}
+
+
+@api.delete("/posts/{post_id}/vote")
+async def revoke_poll_vote(post_id: str, user: dict = Depends(get_current_user)):
+    prev = await db.poll_votes.find_one({"post_id": post_id, "user_id": user["user_id"]})
+    if not prev:
+        return {"ok": True}
+    await db.community_posts.update_one(
+        {"post_id": post_id},
+        {"$inc": {f"poll.options.{prev['option_index']}.votes": -1, "poll.total_votes": -1}},
+    )
+    await db.poll_votes.delete_one({"_id": prev["_id"]})
+    return {"ok": True}
+
+
+# ----- Mentorship matching ------------------------------------------------
+@api.get("/mentors")
+async def list_mentors(
+    specialty: Optional[str] = None,
+    city: Optional[str] = None,
+    limit: int = 50,
+    user: dict = Depends(get_current_user),
+):
+    """List photographers offering mentorship. Excludes viewer + suspended."""
+    q: Dict[str, Any] = {
+        "mentorship_available": True,
+        "user_id": {"$ne": user["user_id"]},
+        "plan": {"$ne": "suspended"},
+    }
+    if specialty:
+        q["specialties"] = specialty
+    if city:
+        q["city"] = city
+    items = await db.users.find(
+        q,
+        {
+            "_id": 0, "password_hash": 0,
+        },
+    ).sort([("verification_status", -1), ("created_at", -1)]).limit(min(limit, 100)).to_list(100)
+    return {"count": len(items), "items": items}
+
+
+@api.get("/mentees")
+async def list_mentees(
+    specialty: Optional[str] = None,
+    city: Optional[str] = None,
+    limit: int = 50,
+    user: dict = Depends(get_current_user),
+):
+    """List photographers looking for a mentor. Mirror endpoint for /mentors."""
+    q: Dict[str, Any] = {
+        "looking_for_mentor": True,
+        "user_id": {"$ne": user["user_id"]},
+        "plan": {"$ne": "suspended"},
+    }
+    if specialty:
+        q["specialties"] = specialty
+    if city:
+        q["city"] = city
+    items = await db.users.find(
+        q,
+        {"_id": 0, "password_hash": 0},
+    ).sort("created_at", -1).limit(min(limit, 100)).to_list(100)
+    return {"count": len(items), "items": items}
+
+
+# ----- Reviews received on your spots -------------------------------------
+@api.get("/me/reviews-received")
+async def my_reviews_received(limit: int = 50, user: dict = Depends(get_current_user)):
+    """Reviews that other photographers left on spots you created.
+    Ordered newest first. Hydrates reviewer + spot info."""
+    spot_ids = [s["spot_id"] async for s in db.spots.find({"owner_user_id": user["user_id"]}, {"spot_id": 1, "_id": 0})]
+    if not spot_ids:
+        return {"count": 0, "items": []}
+    reviews = await db.spot_reviews.find(
+        {"spot_id": {"$in": spot_ids}, "user_id": {"$ne": user["user_id"]}},
+        {"_id": 0},
+    ).sort("created_at", -1).limit(min(limit, 100)).to_list(100)
+    # Hydrate reviewer + spot
+    ruids = list({r.get("user_id") for r in reviews if r.get("user_id")})
+    rspids = list({r.get("spot_id") for r in reviews})
+    users = await db.users.find(
+        {"user_id": {"$in": ruids}},
+        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1, "plan": 1},
+    ).to_list(200)
+    umap = {u["user_id"]: u for u in users}
+    spots = await db.spots.find(
+        {"spot_id": {"$in": rspids}},
+        {"_id": 0, "spot_id": 1, "title": 1, "city": 1, "state": 1, "images": 1},
+    ).to_list(200)
+    smap = {s["spot_id"]: s for s in spots}
+    for r in reviews:
+        r["reviewer"] = umap.get(r.get("user_id"))
+        s = smap.get(r.get("spot_id")) or {}
+        imgs = s.get("images") or []
+        r["spot"] = {
+            "spot_id": s.get("spot_id"),
+            "title": s.get("title"),
+            "city": s.get("city"),
+            "state": s.get("state"),
+            "cover_image_url": imgs[0]["image_url"] if imgs and isinstance(imgs[0], dict) else None,
+        }
+    return {"count": len(reviews), "items": reviews}
 
 
 # ----- Discovery -------------------------------------------------------------
@@ -3456,6 +3633,7 @@ async def on_startup():
     await db.community_posts.create_index("city")
     await db.post_likes.create_index([("post_id", 1), ("user_id", 1)], unique=True)
     await db.post_comments.create_index("post_id")
+    await db.poll_votes.create_index([("post_id", 1), ("user_id", 1)], unique=True)
     await db.conversations.create_index("participant_key", unique=True)
     await db.conversations.create_index("participant_user_ids")
     await db.messages.create_index([("conversation_id", 1), ("created_at", 1)])

@@ -45,6 +45,7 @@ import { colors, font, space, radii, SHOOT_TYPES } from '../../src/theme';
 import { Button } from '../../src/components/Button';
 import { Input, Chip, EmptyState } from '../../src/components/ui';
 import SpotCard from '../../src/components/SpotCard';
+import VerifiedBadge from '../../src/components/VerifiedBadge';
 
 type TabKey = 'posts' | 'spots' | 'photos' | 'reviews' | 'collections' | 'about';
 const TABS: { key: TabKey; label: string }[] = [
@@ -79,6 +80,7 @@ export default function Profile() {
   const [mySpots, setMySpots] = useState<any[]>([]);
   const [myPosts, setMyPosts] = useState<any[]>([]);
   const [collections, setCollections] = useState<any[]>([]);
+  const [reviewsReceived, setReviewsReceived] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<TabKey>('posts');
   const [editMode, setEditMode] = useState(false);
   const [uploading, setUploading] = useState<'banner' | 'avatar' | null>(null);
@@ -87,14 +89,16 @@ export default function Profile() {
   const load = useCallback(async () => {
     if (!user) return;
     try {
-      const [spotsRes, postsRes, collRes] = await Promise.all([
+      const [spotsRes, postsRes, collRes, reviewsRes] = await Promise.all([
         api.get('/me/spots').catch(() => []),
         api.get('/posts', { author_id: user.user_id, limit: 20 }).catch(() => ({ items: [] })),
         api.get('/me/collections').catch(() => []),
+        api.get('/me/reviews-received').catch(() => ({ items: [] })),
       ]);
       setMySpots(Array.isArray(spotsRes) ? spotsRes : spotsRes?.items || []);
       setMyPosts(postsRes?.items || []);
       setCollections(Array.isArray(collRes) ? collRes : collRes?.items || []);
+      setReviewsReceived(reviewsRes?.items || []);
     } catch {}
   }, [user]);
 
@@ -539,11 +543,41 @@ export default function Profile() {
             )}
 
             {activeTab === 'reviews' && (
-              <EmptyState
-                title={`${stats.reviews_received ?? 0} review${stats.reviews_received === 1 ? '' : 's'} received`}
-                subtitle="Full review list coming soon — photographers who have visited your spots will leave feedback here."
-                icon={<ShieldCheck size={28} color={colors.textSecondary} />}
-              />
+              reviewsReceived.length === 0
+                ? <EmptyState
+                    title="No reviews received yet"
+                    subtitle="When other photographers visit your spots and leave feedback, their reviews will appear here."
+                    icon={<ShieldCheck size={28} color={colors.textSecondary} />}
+                  />
+                : reviewsReceived.map((r: any, idx: number) => (
+                    <View key={r.review_id || `${r.spot_id}-${idx}`} style={styles.postCard}>
+                      <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
+                        {r.reviewer?.avatar_url
+                          ? <Image source={{ uri: r.reviewer.avatar_url }} style={styles.reviewerAvatar} />
+                          : <View style={[styles.reviewerAvatar, { backgroundColor: colors.surface2 }]} />}
+                        <View style={{ flex: 1 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                            <Text style={styles.reviewerName}>{r.reviewer?.name || 'Photographer'}</Text>
+                            <VerifiedBadge status={r.reviewer?.verification_status} variant="inline" size={12} />
+                          </View>
+                          <TouchableOpacity onPress={() => router.push(`/spot/${r.spot_id}`)}>
+                            <Text style={styles.reviewSpot} numberOfLines={1}>
+                              on {r.spot?.title || 'your spot'}{r.spot?.city ? ` · ${r.spot.city}` : ''}
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                        <View style={styles.starRow}>
+                          {Array.from({ length: 5 }).map((_, i) => (
+                            <Text key={i} style={{ fontSize: 12, color: i < (r.overall_rating || 0) ? colors.primary : colors.surface3 }}>★</Text>
+                          ))}
+                        </View>
+                      </View>
+                      {!!r.review_body && (
+                        <Text style={styles.reviewBody} numberOfLines={5}>{r.review_body}</Text>
+                      )}
+                      <Text style={styles.reviewDate}>{r.created_at ? new Date(r.created_at).toLocaleDateString() : ''}</Text>
+                    </View>
+                  ))
             )}
 
             {activeTab === 'collections' && (
@@ -756,6 +790,12 @@ const styles = StyleSheet.create({
   postTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 15 },
   postBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 18 },
   postMeta: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 11, marginTop: 4 },
+  reviewerAvatar: { width: 36, height: 36, borderRadius: 18 },
+  reviewerName: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
+  reviewSpot: { color: colors.primary, fontFamily: font.bodyMedium, fontSize: 12, marginTop: 2 },
+  starRow: { flexDirection: 'row', gap: 1 },
+  reviewBody: { color: colors.text, fontFamily: font.body, fontSize: 13, lineHeight: 19, marginTop: space.sm },
+  reviewDate: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 6 },
 
   photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginHorizontal: -space.xl / 2 },
   photoTile: {
