@@ -333,6 +333,18 @@ class SpotCreateIn(BaseModel):
     fee_required: bool = False
     fee_notes: Optional[str] = None
     images: List[SpotImageIn] = []
+    # --- Location provenance (new) -------------------------------------------
+    source_type: Optional[str] = None
+    # one of: gps, searched_place, dropped_pin, manual_entry, metadata_detected
+    original_search_query: Optional[str] = None
+    geocode_confidence: Optional[float] = None  # 0..1 — from Nominatim importance
+    imported_from_bulk_mode: Optional[bool] = False
+    # When True, spot is saved as a private draft (no moderation / no feed).
+    save_as_draft: Optional[bool] = False
+    # --- Optional extended address for manual-entry spots --------------------
+    address_line1: Optional[str] = None
+    postal_code: Optional[str] = None
+    landmark_notes: Optional[str] = None
 
 
 class ReviewIn(BaseModel):
@@ -637,9 +649,13 @@ async def create_spot(body: SpotCreateIn, user: dict = Depends(get_current_user)
     visibility_status = "pending_review" if body.privacy_mode in ("public", "premium") else "approved"
     if user.get("verification_status") == "verified" and body.privacy_mode in ("public", "premium"):
         visibility_status = "approved"
+    # Drafts override everything — stays owner-only, never hits moderation.
+    if body.save_as_draft:
+        visibility_status = "draft"
 
     doc = body.dict()
     doc.pop("images", None)
+    doc.pop("save_as_draft", None)  # not persisted as a spot field
     doc.update({
         "spot_id": spot_id,
         "owner_user_id": user["user_id"],
@@ -918,6 +934,149 @@ async def my_saves(user: dict = Depends(get_current_user)):
     spots = await db.spots.find({"spot_id": {"$in": spot_ids}}, {"_id": 0}).to_list(500)
     spot_map = {s["spot_id"]: public_spot_view(s, user) for s in spots}
     return [spot_map[sid] for sid in spot_ids if sid in spot_map and spot_map[sid]]
+
+
+# =============================================================================
+# Location helpers — geocode proxy + recent-locations for manual spot creation.
+# Nominatim (OpenStreetMap) is used as a keyless geocoder. Per their usage
+# policy we set a descriptive User-Agent and cap rate on the client side.
+# =============================================================================
+NOMINATIM_BASE = "https://nominatim.openstreetmap.org"
+NOMINATIM_HEADERS = {
+    "User-Agent": "PhotoScout/1.0 (support@photoscout.app)",
+    "Accept-Language": "en",
+}
+
+
+def _parse_nominatim_item(it: dict) -> dict:
+    addr = it.get("address", {}) or {}
+    city = (
+        addr.get("city")
+        or addr.get("town")
+        or addr.get("village")
+        or addr.get("hamlet")
+        or addr.get("municipality")
+        or addr.get("county")
+        or ""
+    )
+    return {
+        "place_id": str(it.get("place_id", "")),
+        "display_name": it.get("display_name", ""),
+        "latitude": float(it.get("lat")) if it.get("lat") else None,
+        "longitude": float(it.get("lon")) if it.get("lon") else None,
+        "name": it.get("name") or (it.get("display_name", "").split(",")[0].strip() if it.get("display_name") else ""),
+        "city": city,
+        "state": addr.get("state", ""),
+        "country": addr.get("country", ""),
+        "postcode": addr.get("postcode", ""),
+        "type": it.get("type") or it.get("class"),
+        "confidence": float(it.get("importance", 0.0)),
+    }
+
+
+@api.get("/geocode/search")
+async def geocode_search(q: str, limit: int = 8, country: Optional[str] = None):
+    """Autocomplete-style place search via OSM Nominatim. Keyless."""
+    q = (q or "").strip()
+    if len(q) < 2:
+        return {"query": q, "results": []}
+    limit = max(1, min(15, limit))
+    params: dict = {
+        "q": q,
+        "format": "jsonv2",
+        "addressdetails": 1,
+        "limit": limit,
+    }
+    if country:
+        params["countrycodes"] = country
+    try:
+        async with httpx.AsyncClient(timeout=8.0, headers=NOMINATIM_HEADERS) as client:
+            r = await client.get(f"{NOMINATIM_BASE}/search", params=params)
+            r.raise_for_status()
+            items = r.json() or []
+    except Exception as e:
+        # Graceful degradation — empty results, not 5xx.
+        return {"query": q, "results": [], "error": str(e)[:120]}
+    return {"query": q, "results": [_parse_nominatim_item(it) for it in items]}
+
+
+@api.get("/geocode/reverse")
+async def geocode_reverse(lat: float, lng: float):
+    """Reverse geocode a coordinate pair. Used after dropping a pin on the map."""
+    params = {"lat": lat, "lon": lng, "format": "jsonv2", "addressdetails": 1, "zoom": 14}
+    try:
+        async with httpx.AsyncClient(timeout=8.0, headers=NOMINATIM_HEADERS) as client:
+            r = await client.get(f"{NOMINATIM_BASE}/reverse", params=params)
+            r.raise_for_status()
+            data = r.json() or {}
+    except Exception as e:
+        return {"latitude": lat, "longitude": lng, "error": str(e)[:120]}
+    if not data:
+        return {"latitude": lat, "longitude": lng}
+    return _parse_nominatim_item(data)
+
+
+@api.get("/me/recent-locations")
+async def my_recent_locations(user: dict = Depends(get_current_user), limit: int = 10):
+    """Distinct recent locations from the user's own spots, for one-tap reuse
+    when importing multiple historical photos from the same place.
+    """
+    limit = max(1, min(30, limit))
+    cursor = db.spots.find(
+        {"owner_user_id": user["user_id"]},
+        {"_id": 0, "title": 1, "city": 1, "state": 1, "latitude": 1, "longitude": 1, "created_at": 1, "source_type": 1},
+    ).sort("created_at", -1).limit(80)
+    seen: set = set()
+    out: list = []
+    async for s in cursor:
+        key = (round(s["latitude"], 3), round(s["longitude"], 3), (s.get("city") or "").lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "title": s.get("title"),
+            "city": s.get("city"),
+            "state": s.get("state"),
+            "latitude": s.get("latitude"),
+            "longitude": s.get("longitude"),
+            "source_type": s.get("source_type"),
+            "last_used_at": s.get("created_at"),
+        })
+        if len(out) >= limit:
+            break
+    return {"count": len(out), "items": out}
+
+
+@api.get("/me/drafts")
+async def my_drafts(user: dict = Depends(get_current_user)):
+    """All draft spots for the current user (visibility_status == 'draft')."""
+    drafts = await db.spots.find(
+        {"owner_user_id": user["user_id"], "visibility_status": "draft"},
+        {"_id": 0},
+    ).sort("created_at", -1).to_list(100)
+    return [public_spot_view(s, user) for s in drafts]
+
+
+@api.post("/spots/{spot_id}/publish-draft")
+async def publish_draft(spot_id: str, user: dict = Depends(get_current_user)):
+    """Promote a draft spot to its intended visibility (public → pending_review
+    or approved for verified contributors, private → approved).
+    """
+    spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0})
+    if not spot:
+        raise HTTPException(status_code=404, detail="Not found")
+    if spot.get("owner_user_id") != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Not your draft")
+    if spot.get("visibility_status") != "draft":
+        raise HTTPException(status_code=400, detail="Not a draft")
+    new_status = "pending_review" if spot.get("privacy_mode") in ("public", "premium") else "approved"
+    if user.get("verification_status") == "verified" and spot.get("privacy_mode") in ("public", "premium"):
+        new_status = "approved"
+    await db.spots.update_one(
+        {"spot_id": spot_id},
+        {"$set": {"visibility_status": new_status, "updated_at": utcnow()}},
+    )
+    return {"ok": True, "visibility_status": new_status}
 
 
 @api.get("/me/spots")

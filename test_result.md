@@ -103,14 +103,14 @@
 #====================================================================================================
 
 user_problem_statement: |
-  PhotoScout — Admin Dashboard (Phase 1 of 3)
-  Role hierarchy (user|moderator|support|admin|super_admin), require_role() gate,
-  audit trail, platform settings, admin overview/users/user-detail/spots/reports/
-  analytics/audit/settings screens, with destructive confirmations and role-based
-  visibility. Legacy admin.tsx removed in favor of admin/ directory layout.
+  PhotoScout — Flexible Location Entry for Portfolio Imports
+  Replace rigid GPS-only location entry with 4 methods (Current GPS / Search a
+  place / Drop pin on map / Enter manually), add recent-location quick-pick
+  for bulk portfolio imports, and add Save-as-Draft. Photographers must be able
+  to create spots from past shoots without standing at the location.
 
 backend:
-  - task: "Role hierarchy + require_role() dependency + super_admin promotion on startup"
+  - task: "Spot model — new location-provenance fields (source_type, original_search_query, geocode_confidence, imported_from_bulk_mode, address_line1, postal_code, landmark_notes, save_as_draft)"
     implemented: true
     working: true
     file: "/app/backend/server.py"
@@ -120,12 +120,12 @@ backend:
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "ROLE_LEVELS {user:0, moderator:1, support:1, admin:3, super_admin:4}. require_role(min_role) admits higher levels; always admits super_admin. Existing admin@ account is auto-promoted to super_admin on startup (idempotent)."
+        -comment: "SpotCreateIn gained 8 optional fields. source_type enum (frontend-side): gps|searched_place|dropped_pin|manual_entry|metadata_detected. save_as_draft is NOT persisted — it's stripped from doc and used only to force visibility_status='draft'."
         -working: true
         -agent: "testing"
-        -comment: "Verified. Login as admin@photoscout.app returns role='super_admin' confirming auto-promotion on startup. All require_role() gates returned 403 for sophie (non-admin) across every /admin/* endpoint."
+        -comment: "Verified via POST /api/spots as sophie: source_type='manual_entry' and original_search_query='McAllister' round-trip in the response. save_as_draft is popped (not present on response). All provenance fields persist."
 
-  - task: "audit_log() helper + indexes (created_at, admin_user_id, target_id)"
+  - task: "POST /api/spots — save_as_draft=true forces visibility_status='draft' (owner-only, no moderation)"
     implemented: true
     working: true
     file: "/app/backend/server.py"
@@ -135,12 +135,12 @@ backend:
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Writes one entry per admin write action (approve/reject/update/resolve/notes/settings). Fields: admin_user_id, admin_email, admin_role, action, target_type, target_id, before, after, notes, created_at."
+        -comment: "Drafts bypass moderation regardless of privacy_mode. doc does NOT include save_as_draft (popped). Response includes visibility_status='draft'. Regression: non-draft public posts still enter pending_review (or approved for verified contributors)."
         -working: true
         -agent: "testing"
-        -comment: "Verified. Audit entries appear for user.update (with before.plan/after.plan diff), spot.approve (target_id matches), report.resolve.dismissed, and settings.update. admin_user_id is populated on all entries."
+        -comment: "1A public+draft → visibility_status='draft' ✅. 1B private+draft → 'draft' ✅. 1C public+non-draft (sophie verified pro) → 'approved' ✅. Response has no save_as_draft field."
 
-  - task: "GET /api/admin/overview — dashboard metrics (users, moderation queue, top contributors, trending cities, revenue estimate)"
+  - task: "GET /api/geocode/search?q=&limit=&country= — OSM Nominatim autocomplete proxy (keyless)"
     implemented: true
     working: true
     file: "/app/backend/server.py"
@@ -150,57 +150,12 @@ backend:
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Requires moderator+. Emits users.{total,new_today,active_7d,suspended,by_plan{free/pro/elite}}, moderation.{pending_spots,pending_reports,pending_photos}, top_contributors[:5], top_cities[:5], revenue.monthly_estimate_usd (MOCKED Stripe)."
+        -comment: "q<2 chars returns empty. Clamps limit 1..15. Shapes response as {query, results: [{place_id, display_name, latitude, longitude, name, city, state, country, postcode, type, confidence}]}. Falls back gracefully on Nominatim errors (returns empty with error field, never 5xx)."
         -working: true
         -agent: "testing"
-        -comment: "Shape verified exactly as spec. users.{total,new_today,active_7d,suspended,by_plan.{free,pro,elite}}, moderation.{pending_spots,pending_reports,pending_photos}, top_contributors & top_cities arrays, revenue.monthly_estimate_usd numeric. NOTE: revenue is a MOCKED estimate (pro*9 + elite*19) — Stripe not wired."
+        -comment: "q='' and q='a' → results:[] ✅. q='McAllister Park' → returns first result with lat/lng/city/state/confidence(0..1)/place_id/display_name all populated ✅. limit=20 clamped to <=15 (returned 7) ✅."
 
-  - task: "GET /api/admin/users — paginated/filterable user search"
-    implemented: true
-    working: true
-    file: "/app/backend/server.py"
-    stuck_count: 0
-    priority: "high"
-    needs_retesting: false
-    status_history:
-        -working: "NA"
-        -agent: "main"
-        -comment: "Requires support+. Supports q (regex over email/name/username/user_id), role/plan/status filters, page (default 1), limit (1..100, default 25). Returns {total, page, limit, pages, items[]}. Items enriched with spot_count + open_reports. Never returns password_hash."
-        -working: true
-        -agent: "testing"
-        -comment: "Verified. q='sophie' returns total>=1 and sophie as items[0]. password_hash NOT present. Items carry plan/role/status/spot_count/open_reports. Pagination (page=1, limit=2) produces correct items.length<=2 and pages=ceil(total/limit)."
-
-  - task: "GET /api/admin/users/{id} — full user detail incl. notes + recent audit"
-    implemented: true
-    working: true
-    file: "/app/backend/server.py"
-    stuck_count: 0
-    priority: "high"
-    needs_retesting: false
-    status_history:
-        -working: "NA"
-        -agent: "main"
-        -comment: "Requires support+. Bundles counts, recent 5 spots, last 20 notes, last 20 audit entries. 404 for unknown user_id."
-        -working: true
-        -agent: "testing"
-        -comment: "Verified. Response for sophie_id included notes[], recent_audit[], recent_spots[] as arrays, plus plan/role/status/spot_count/save_count/open_reports all present."
-
-  - task: "PATCH /api/admin/users/{id} — plan/role/status/verification/comp in one call, audit-logged"
-    implemented: true
-    working: true
-    file: "/app/backend/server.py"
-    stuck_count: 0
-    priority: "high"
-    needs_retesting: false
-    status_history:
-        -working: "NA"
-        -agent: "main"
-        -comment: "Requires admin+. Authorization: only super_admin can set role=admin/super_admin. Non-super-admin cannot modify a super_admin user. Admins cannot change their own role. Validates enums for plan/role/status. Returns fresh user. Emits before/after audit log."
-        -working: true
-        -agent: "testing"
-        -comment: "Verified. plan='pro' succeeds (audit user.update before/after diff captured). plan='bogus' → 400. Changing own role (super_admin→admin) → 400. Notes: also verified reason field flows through to audit notes."
-
-  - task: "POST /api/admin/users/{id}/notes — internal per-user notes"
+  - task: "GET /api/geocode/reverse?lat=&lng= — OSM reverse geocode for dropped pins"
     implemented: true
     working: true
     file: "/app/backend/server.py"
@@ -210,12 +165,12 @@ backend:
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Requires support+. 2000-char cap. Creates admin_notes doc with author_user_id + author_email. Emits audit log."
+        -comment: "Returns same shape as search item. Used post-pin-drop to label coordinates with nearest city/state."
         -working: true
         -agent: "testing"
-        -comment: "Verified. POST 'chargeback risk' → 200; subsequent GET /admin/users/{sophie_id} shows that exact note in notes[]."
+        -comment: "reverse(30.2672,-97.7431) → city='Austin', state='Texas', display_name='Downtown, Austin, Travis County, Texas, 78701, United States' ✅."
 
-  - task: "GET /api/admin/audit-logs — paginated audit trail, filter by action/admin/target"
+  - task: "GET /api/me/recent-locations?limit= — distinct recent locations for one-tap reuse"
     implemented: true
     working: true
     file: "/app/backend/server.py"
@@ -225,27 +180,12 @@ backend:
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Requires admin+. Supports action (prefix regex), admin_user_id, target_id filters. page/limit pagination. Sorted DESC by created_at."
+        -comment: "Dedupes by (round(lat,3), round(lng,3), city.lower()). Clamps limit 1..30. Sort: most recent first. Returns {count, items:[{title, city, state, latitude, longitude, source_type, last_used_at}]}."
         -working: true
         -agent: "testing"
-        -comment: "Verified. action='user.update' prefix filter returns entries DESC by created_at. target_id filter returns spot.approve entry for the specific spot_id. admin_user_id populated on every entry."
+        -comment: "Default returns {count, items[]} with title/city/state/latitude/longitude ✅. limit=50 clamped to 30 ✅. Dedup verified: two distinct spots created at lat=30.27,lng=-97.74,city=Austin dedupe to a single items entry (matched=1) ✅."
 
-  - task: "GET /api/admin/analytics — 30-day time-series + most saved leaderboard"
-    implemented: true
-    working: true
-    file: "/app/backend/server.py"
-    stuck_count: 0
-    priority: "high"
-    needs_retesting: false
-    status_history:
-        -working: "NA"
-        -agent: "main"
-        -comment: "Requires moderator+. Days 1..90 (default 30). Series per UTC day: {signups, spots, approvals, rejections}. Totals sum. most_saved[:5] from spot_saves agg."
-        -working: true
-        -agent: "testing"
-        -comment: "Verified. days=30 → series.length=30, totals.signups == sum(series[*].signups), most_saved array returned."
-
-  - task: "GET/PATCH /api/admin/settings — platform settings singleton"
+  - task: "GET /api/me/drafts — owner's draft spots"
     implemented: true
     working: true
     file: "/app/backend/server.py"
@@ -255,137 +195,74 @@ backend:
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "GET requires admin+. PATCH requires super_admin. Fields: app_name, support_email, maintenance_mode, public_registration, auto_approve_verified, require_moderation_spots/_photos, duplicate_radius_m, default_privacy_mode, approximate_radius_km. Stored as singleton {settings_id:'platform_v1'}. Emits audit log on change."
+        -comment: "Returns visibility_status='draft' spots for the caller. Uses public_spot_view so owner sees exact coords."
         -working: true
         -agent: "testing"
-        -comment: "Verified. GET returns app_name/maintenance_mode/public_registration (and more). PATCH support_email='test@photoscout.app' → 200 {ok:true, settings:{...}} and subsequent GET reflects the change. Sophie gets 403 on PATCH as expected."
+        -comment: "Sophie's /me/drafts includes her 1A draft; all returned entries have visibility_status='draft'. Admin's /me/drafts does NOT include sophie's draft (scoped to caller) ✅."
 
-  - task: "Existing admin endpoints — approve/reject/resolve now emit audit logs"
+  - task: "POST /api/spots/{id}/publish-draft — promote draft to pending_review or approved"
     implemented: true
     working: true
     file: "/app/backend/server.py"
-    stuck_count: 1
+    stuck_count: 0
     priority: "medium"
     needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "admin/spots/{id}/approve, reject, reports/{id}/resolve now use require_role('moderator') and record audit_logs with spot.approve/spot.reject/report.resolve.{action}. Spot moderation also sets moderated_by + moderated_at."
-        -working: false
-        -agent: "testing"
-        -comment: "POST /admin/spots/{id}/approve → works for super_admin, audit 'spot.approve' entry created with target_id matching. POST /admin/reports/{id}/resolve {action:'dismissed'} → works, audit 'report.resolve.dismissed' entry exists. BUG: Legacy GET /admin/pending (line ~1296) and GET /admin/reports (line ~1342) STILL use the hardcoded check `user.get('role') != 'admin'` and therefore reject super_admin users with 403. Since admin@ is auto-promoted to super_admin on startup, these endpoints are effectively broken for the default admin account. The review request explicitly required GET /admin/pending to return an array for super_admin. FIX: replace the inline `if user.get('role') != 'admin'` guard with `Depends(require_role('moderator'))` on admin_pending and admin_reports (same pattern already used by admin_approve/admin_reject/admin_resolve_report)."
+        -comment: "403 if not owner, 404 if not found, 400 if already not-draft. Public/premium → pending_review (or approved for verified contributors). Private → approved."
         -working: true
         -agent: "testing"
-        -comment: "Legacy regression retest PASSED. (1) super_admin GET /api/admin/pending → HTTP 200, returns [] (empty array, correct type). (2) super_admin GET /api/admin/reports?status=pending → HTTP 200, returns array of 18 pending reports with proper enrichment (reporter, target). (3) sophie GET /api/admin/pending → HTTP 403 {detail: 'Forbidden'}. (4) sophie GET /api/admin/reports → HTTP 403 {detail: 'Forbidden'}. All 4 expectations met — legacy endpoints now use proper role-based guard."
+        -comment: "Owner publish returned {ok:true, visibility_status:'approved'} (sophie verified) ✅. Re-publish same → 400 'Not a draft' ✅. Admin on sophie's draft → 403 'Not your draft' ✅. nonexistent_id → 404 'Not found' ✅."
 
 frontend:
-  - task: "admin/_layout.tsx — role-guarded layout with scrollable top tabs + role-based tab visibility"
+  - task: "LocationSearchSheet — autocomplete place search with manual-entry fallback"
     implemented: true
     working: "NA"
-    file: "/app/frontend/app/admin/_layout.tsx"
+    file: "/app/frontend/src/components/LocationSearchSheet.tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Hard redirect for non-admin users (gate screen). Tabs: Overview, Users, Spots, Reports, Analytics (moderator+), Audit (admin+), Settings (super_admin only). Exit button returns to Profile."
+        -comment: "Page-sheet modal, debounced 350ms hit to /geocode/search. Empty-state with 'Create custom location manually' CTA. FlatList of results with display_name preview."
 
-  - task: "admin/index.tsx — dashboard overview with KPIs, queue cards, contributors, trending cities"
+  - task: "MapPickerSheet — drop pin with draggable marker + reverse geocode + center-on-me"
     implemented: true
     working: "NA"
-    file: "/app/frontend/app/admin/index.tsx"
+    file: "/app/frontend/src/components/MapPickerSheet.tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Pull-to-refresh. Tappable queue cards route to /admin/spots and /admin/reports."
+        -comment: "Uses react-native-maps (lazy-required so web doesn't choke). Tap-to-drop, drag-to-adjust. Reverse geocodes on each update. Web fallback screen. 'My location' crosshair button (graceful if permission denied)."
 
-  - task: "admin/users.tsx — paginated searchable user table with role/plan/status filters"
+  - task: "ManualLocationSheet — typed entry with optional coordinates"
     implemented: true
     working: "NA"
-    file: "/app/frontend/app/admin/users.tsx"
+    file: "/app/frontend/src/components/ManualLocationSheet.tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Horizontal chip strip of filters. Prev/Next pager. Each row shows plan/role/status pills + open report count. Taps → user detail."
+        -comment: "Required: title, city, state (2-char). Optional: address_line1, postal_code, country, lat, lng, landmark_notes. Pure typed entry — no API calls — so it works without GPS or connectivity."
 
-  - task: "admin/user/[id].tsx — user detail: plan/role/status/verify actions + notes + audit + role confirmation modal"
+  - task: "Add Spot flow — steps reordered (Photos first, Location second) with 4-method picker, recent-locations reuse, save-as-draft"
     implemented: true
     working: "NA"
-    file: "/app/frontend/app/admin/user/[id].tsx"
+    file: "/app/frontend/app/(tabs)/add.tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Typed confirmation modal for role changes (must type exact role name). Plan chips grant immediate override. Suspend/verify toggle buttons. Notes composer + list. Recent admin activity feed."
-
-  - task: "admin/spots.tsx — moderation queue (approve/reject) using new layout"
-    implemented: true
-    working: "NA"
-    file: "/app/frontend/app/admin/spots.tsx"
-    stuck_count: 0
-    priority: "medium"
-    needs_retesting: false
-    status_history:
-        -working: "NA"
-        -agent: "main"
-        -comment: "Ported from legacy admin.tsx. Pull-to-refresh. Uses SpotCard + approve/reject buttons. Empty state when queue is clear."
-
-  - task: "admin/reports.tsx — upgraded to live inside new layout (no duplicate chrome)"
-    implemented: true
-    working: "NA"
-    file: "/app/frontend/app/admin/reports.tsx"
-    stuck_count: 0
-    priority: "medium"
-    needs_retesting: false
-    status_history:
-        -working: "NA"
-        -agent: "main"
-        -comment: "Removed SafeAreaView + back button + role check (layout handles all three). Kept pending/resolved filter chips. resolve actions remain the same."
-
-  - task: "admin/audit.tsx — audit log viewer with action-prefix filter and pagination"
-    implemented: true
-    working: "NA"
-    file: "/app/frontend/app/admin/audit.tsx"
-    stuck_count: 0
-    priority: "high"
-    needs_retesting: false
-    status_history:
-        -working: "NA"
-        -agent: "main"
-        -comment: "Shows action, actor (email + role), target, before/after JSON diff, notes. Filter box does prefix search. Pager for >50 entries."
-
-  - task: "admin/analytics.tsx — 30-day signup/spot/approval SVG charts + most saved leaderboard"
-    implemented: true
-    working: "NA"
-    file: "/app/frontend/app/admin/analytics.tsx"
-    stuck_count: 0
-    priority: "medium"
-    needs_retesting: false
-    status_history:
-        -working: "NA"
-        -agent: "main"
-        -comment: "Three charts using react-native-svg. Totals strip. 'Most saved spots' leaderboard."
-
-  - task: "admin/settings.tsx — platform settings editor (super_admin-only writes)"
-    implemented: true
-    working: "NA"
-    file: "/app/frontend/app/admin/settings.tsx"
-    stuck_count: 0
-    priority: "medium"
-    needs_retesting: false
-    status_history:
-        -working: "NA"
-        -agent: "main"
-        -comment: "View-only banner when not super_admin. Toggles for maintenance/registration/moderation/auto-approve. Text rows save on explicit Save tap after typing changes. Maintenance mode is UI-only today (Phase 2 wires backend enforcement)."
+        -comment: "New STEPS order: Photos → Location → Details → Notes → Privacy → Review. Location step is a 4-card picker (Current GPS / Search / Drop pin / Manual) with a horizontal Recent Locations strip above. Review step now has both Save-draft (outline button) and Publish spot (primary). Removed forced GPS; permission denial is handled gracefully. Duplicate check still runs after location is set."
 
 metadata:
   created_by: "main_agent"
@@ -395,7 +272,13 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Existing admin endpoints — approve/reject/resolve now emit audit logs"
+    - "Spot model — new location-provenance fields (source_type, original_search_query, geocode_confidence, imported_from_bulk_mode, address_line1, postal_code, landmark_notes, save_as_draft)"
+    - "POST /api/spots — save_as_draft=true forces visibility_status='draft' (owner-only, no moderation)"
+    - "GET /api/geocode/search?q=&limit=&country= — OSM Nominatim autocomplete proxy (keyless)"
+    - "GET /api/geocode/reverse?lat=&lng= — OSM reverse geocode for dropped pins"
+    - "GET /api/me/recent-locations?limit= — distinct recent locations for one-tap reuse"
+    - "GET /api/me/drafts — owner's draft spots"
+    - "POST /api/spots/{id}/publish-draft — promote draft to pending_review or approved"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -403,62 +286,49 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      Phase 1 Admin Dashboard backend is live. Please validate in this order:
-      AUTH RULES (critical):
-      - admin@photoscout.app / admin123 is now SUPER_ADMIN on startup (auto-promoted).
-      - Non-admin users (e.g. sophie@photoscout.app / demo123) MUST get 403 from every /admin/* endpoint.
+      Flexible location entry backend is live. Please validate these in order:
       
-      NEW ENDPOINTS (all under /api/admin/*):
-      1) GET /overview — as super_admin, assert shape matches spec (users.total, users.by_plan.{free,pro,elite}, moderation.*, top_contributors[], top_cities[], revenue.monthly_estimate_usd).
-      2) GET /users?q=&role=&plan=&status=&page=&limit= — as super_admin:
-         - q="sophie" returns sophie in items
-         - role="user" filters correctly, each item has plan/role/status/spot_count/open_reports, NEVER password_hash
-         - page=2&limit=1 works (pager math correct)
-      3) GET /users/{id} — returns notes, recent_audit, spot_count, save_count, open_reports arrays.
-      4) PATCH /users/{id} — as super_admin on sophie:
-         - plan="pro" succeeds, audit log entry appears
-         - plan="bogus" returns 400
-         - role="admin" succeeds, audit entry action="user.update" with before.role="user" / after.role="admin"
-         - Then login as a plain admin (create temporarily via direct promotion if needed, or just skip this sub-test)
-           — non-super-admin cannot set role to super_admin (403)
-         - Admins cannot change their own role (400)
-      5) POST /users/{id}/notes — body "chargeback risk", verify note appears in subsequent GET /users/{id}.notes.
-      6) GET /audit-logs?action=user.update — returns the prior update; pagination fields present.
-      7) GET /analytics?days=30 — series length 30, totals match sum(series), most_saved array present.
-      8) GET /settings — returns the singleton with default fields.
-         PATCH /settings {"support_email":"foo@bar.com"} as super_admin — returns {ok:true, settings:{...}}.
-         PATCH /settings as sophie (normal user) — 403.
-         PATCH /settings as a plain 'admin' (non-super) — 403 (super_admin required).
+      Creds: sophie@photoscout.app / demo123 (verified pro user) and admin@photoscout.app / admin123 (super_admin).
       
-      Regression:
-      - POST /admin/spots/{id}/approve and /reject now require moderator+; audit_logs entry with action "spot.approve"/"spot.reject" appears.
-      - POST /admin/reports/{id}/resolve with body {"action":"dismissed"} still works and emits audit "report.resolve.dismissed".
+      1) POST /api/spots with save_as_draft=true:
+         - privacy_mode="public" + save_as_draft=true → visibility_status MUST be "draft" (NOT pending_review)
+         - privacy_mode="private" + save_as_draft=true → visibility_status MUST be "draft"
+         - Regression: save_as_draft=false + privacy_mode="public" → visibility_status ∈ {"pending_review", "approved"} (approved if verified)
+         - Confirm the persisted doc does NOT contain a "save_as_draft" field (only visibility_status)
+         - Confirm source_type/original_search_query/geocode_confidence/address_line1/postal_code/landmark_notes are persisted when provided
       
-      Do NOT run frontend UI tests. Main agent will ask user first.
+      2) GET /api/geocode/search:
+         - q="" → {results: []}
+         - q="a" (1 char) → {results: []}
+         - q="McAllister Park" → results.length ≥ 1; first result has latitude/longitude (non-null), city, state, confidence (0..1), place_id
+         - limit=20 → clamped to 15
+         - Nominatim may be slow; timeout is 8s, on error returns 200 with empty results + error field (not 5xx)
       
-      Revert helper: after testing, please set sophie back to plan="pro" if you changed her plan (role should already be "user").
+      3) GET /api/geocode/reverse?lat=30.2672&lng=-97.7431:
+         - Returns object with city (should contain "Austin"), state ("Texas"), country, display_name
+      
+      4) GET /api/me/recent-locations (auth required, sophie):
+         - Returns {count, items[]} ordered newest first
+         - Dedupes: if sophie has 2 spots at the exact same lat/lng/city, items has only 1 entry
+         - limit=50 clamps to 30
+      
+      5) GET /api/me/drafts:
+         - Create a draft via step 1 then confirm it appears in /me/drafts
+         - Other users' drafts do NOT appear
+      
+      6) POST /api/spots/{draft_id}/publish-draft:
+         - Owner: 200 {ok:true, visibility_status:"pending_review"} for public draft (or "approved" if sophie is verified)
+         - Non-owner: 403
+         - Non-existent id: 404
+         - Re-publishing same draft: 400 "Not a draft"
+      
+      Do NOT run frontend UI tests. Main agent will ask user before invoking UI testing agent.
+
     -agent: "testing"
     -message: |
-      Admin Dashboard Phase 1 backend validation complete — 64/65 checks PASSED.
-
-      ALL NEW ENDPOINTS PASSED:
-      - Auth guards: sophie gets 403 on every /admin/* endpoint in the list (overview, users list, user detail, user PATCH, user notes, audit-logs, analytics, settings GET, settings PATCH).
-      - admin@photoscout.app is auto-promoted to super_admin on startup (verified on login).
-      - GET /admin/overview — shape matches spec exactly (users.*, moderation.*, top_contributors[], top_cities[], revenue.monthly_estimate_usd numeric). revenue is a MOCKED estimate (Stripe not wired).
-      - GET /admin/users — search, filter, pagination, enrichment (spot_count/open_reports), password_hash never exposed.
-      - GET /admin/users/{id} — notes[], recent_audit[], recent_spots[], plus all enrichment fields.
-      - PATCH /admin/users/{id} — plan='pro' succeeds with before/after audit diff; plan='bogus' → 400; self-role-change for super_admin → 400.
-      - POST /admin/users/{id}/notes — note persisted and visible in user detail.
-      - GET /admin/audit-logs — prefix filter on action works; admin_user_id populated on entries.
-      - GET /admin/analytics?days=30 — series.length==30, totals == sum(series), most_saved[] present.
-      - GET /admin/settings / PATCH /admin/settings (super_admin only) — round-trip of support_email confirmed.
-      - POST /admin/spots/{id}/approve and POST /admin/reports/{id}/resolve both emit audit logs with correct action and target_id.
-
-      ONE REGRESSION FAILURE (existing legacy endpoints):
-      - GET /admin/pending returns 403 for super_admin. Root cause: line ~1297 still uses the hardcoded `if user.get('role') != 'admin'` check. Because admin@ is auto-promoted to super_admin on startup, this check now rejects the default admin account.
-      - GET /admin/reports has the identical bug on line ~1343.
-      - FIX: swap those two inline role checks for `Depends(require_role('moderator'))` — the same dependency already used by admin_approve / admin_reject / admin_resolve_report further down. Two-line change. Marked task "Existing admin endpoints — approve/reject/resolve now emit audit logs" as working: false until this is fixed.
-
-      CLEANUP: sophie left on plan='pro' per request.
-
-      Backend test script: /app/backend_test.py
+      Backend validation complete — 29/29 checks PASS across all 7 Flexible Location Entry tasks.
+      Sophie's login confirms verification_status='verified' and plan='pro', so 1C and 6A returned 'approved'
+      (within the allowed set {pending_review, approved}). Nominatim upstream responded within 2s; no
+      graceful-degradation path exercised but error-field handling is wired in. All created spots were
+      cleaned up via DELETE /api/spots/{id}. No critical or minor issues found. Recommend main agent
+      finalize and move on — do not re-test unless new changes land.
