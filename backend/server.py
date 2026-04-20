@@ -3175,8 +3175,9 @@ async def my_support_tickets_LEGACY(user: dict = Depends(get_current_user)):
     return {"count": len(items), "items": items}
 
 
-@api.get("/admin/support/tickets")
-async def admin_list_tickets(
+# MIGRATED to routes/support.py — see REFACTOR_PLAN.md
+# @api.get("/admin/support/tickets")
+async def admin_list_tickets_LEGACY(
     status: Optional[str] = None,
     category: Optional[str] = None,
     limit: int = 50,
@@ -3199,8 +3200,9 @@ async def admin_list_tickets(
     return {"items": items, "counts": counts}
 
 
-@api.post("/admin/support/tickets/{ticket_id}/reply")
-async def admin_reply_ticket(ticket_id: str, body: SupportReplyIn, user: dict = Depends(get_current_user)):
+# MIGRATED to routes/support.py — see REFACTOR_PLAN.md
+# @api.post("/admin/support/tickets/{ticket_id}/reply")
+async def admin_reply_ticket_LEGACY(ticket_id: str, body: SupportReplyIn, user: dict = Depends(get_current_user)):
     if user.get("role") not in ("admin", "super_admin", "support"):
         raise HTTPException(status_code=403, detail="Staff only")
     if not (body.body or "").strip():
@@ -3221,8 +3223,9 @@ async def admin_reply_ticket(ticket_id: str, body: SupportReplyIn, user: dict = 
     return {"ok": True, "reply": reply}
 
 
-@api.post("/admin/support/tickets/{ticket_id}/resolve")
-async def admin_resolve_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
+# MIGRATED to routes/support.py — see REFACTOR_PLAN.md
+# @api.post("/admin/support/tickets/{ticket_id}/resolve")
+async def admin_resolve_ticket_LEGACY(ticket_id: str, user: dict = Depends(get_current_user)):
     if user.get("role") not in ("admin", "super_admin", "support"):
         raise HTTPException(status_code=403, detail="Staff only")
     r = await db.support_tickets.update_one(
@@ -5573,5 +5576,7 @@ async def on_shutdown():
 # from this file without circular-import issues.
 # ----------------------------------------------------------------------------
 from routes import scout_ai as _scout_ai_routes  # noqa: E402
+from routes import support as _support_routes  # noqa: E402
 
 app.include_router(_scout_ai_routes.router)
+app.include_router(_support_routes.router)
