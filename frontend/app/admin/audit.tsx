@@ -58,6 +58,16 @@ const HUMAN: Record<string, (a: Audit) => { title: string; summary: string; Icon
     summary: `${a.admin_email || 'Admin'} removed ${targetLabel(a)}`,
     Icon: MapPin, color: colors.secondary,
   }),
+  'spot.delete_hard': (a) => ({
+    title: 'Spot deleted (super admin)',
+    summary: `${a.admin_email || 'Super admin'} permanently deleted ${a.before?.title ? `"${a.before.title}"` : targetLabel(a)}${a.notes ? ` — ${stripPrefix(a.notes)}` : ''}`,
+    Icon: MapPin, color: colors.secondary,
+  }),
+  'user.delete_soft': (a) => ({
+    title: 'User deleted (super admin)',
+    summary: `${a.admin_email || 'Super admin'} soft-deleted ${a.before?.username ? `@${a.before.username}` : targetLabel(a)}${a.notes ? ` — ${stripPrefix(a.notes)}` : ''}`,
+    Icon: UserIcon, color: colors.secondary,
+  }),
   'post.remove': (a) => ({
     title: 'Post removed',
     summary: `${a.admin_email || 'Admin'} removed community post ${a.target_id}`,
@@ -84,6 +94,11 @@ function targetLabel(a: Audit) {
   if (!a.target_type) return 'item';
   const short = a.target_id ? a.target_id.slice(0, 14) : '';
   return `${a.target_type}${short ? ` · ${short}` : ''}`;
+}
+
+function stripPrefix(notes: string): string {
+  // Audit notes can start with "[SUPER ADMIN] ..." — the tag already shows role, strip it.
+  return notes.replace(/^\[SUPER ADMIN\]\s*/i, '').trim();
 }
 
 function changeSummary(before: any, after: any): string {

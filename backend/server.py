@@ -182,6 +182,8 @@ async def get_current_user(
     user = await db.users.find_one({"user_id": payload["sub"]}, {"_id": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if user.get("deleted") or user.get("status") == "deleted":
+        raise HTTPException(status_code=401, detail="Account has been deleted")
     return user
 
 
@@ -509,6 +511,8 @@ async def login(body: LoginIn):
     email = body.email.lower().strip()
     user = await db.users.find_one({"email": email})
     if not user or not user.get("password_hash"):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    if user.get("deleted") or user.get("status") == "deleted":
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if not verify_password(body.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -5577,6 +5581,8 @@ async def on_shutdown():
 # ----------------------------------------------------------------------------
 from routes import scout_ai as _scout_ai_routes  # noqa: E402
 from routes import support as _support_routes  # noqa: E402
+from routes import super_admin as _super_admin_routes  # noqa: E402
 
 app.include_router(_scout_ai_routes.router)
 app.include_router(_support_routes.router)
+app.include_router(_super_admin_routes.router)

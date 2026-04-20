@@ -18,7 +18,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import {
   ChevronLeft, Bookmark, Share2, Flag, MapPin, Sun, Sunrise, Sunset, Cloud,
   Camera, Car, Accessibility, Users, Shield, DogIcon, BabyIcon, TicketIcon, ClockIcon, CheckCircle,
-  FolderPlus, MessageSquarePlus, Navigation, Wand2, ChevronRight,
+  FolderPlus, MessageSquarePlus, Navigation, Wand2, ChevronRight, Trash2,
 } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
@@ -33,6 +33,7 @@ import FreshnessBadge from '../../src/components/FreshnessBadge';
 import ReportSheet from '../../src/components/ReportSheet';
 import ShotListSheet from '../../src/components/ShotListSheet';
 import ScoutAICard from '../../src/components/ScoutAICard';
+import DeleteConfirmSheet, { SPOT_DELETE_PRESETS } from '../../src/components/DeleteConfirmSheet';
 
 const { width: W } = Dimensions.get('window');
 
@@ -85,6 +86,20 @@ export default function SpotDetail() {
   const onReport = () => {
     if (!user) return router.push('/(auth)/login');
     setReportOpen(true);
+  };
+
+  const submitSuperDelete = async (code: string | null, note: string) => {
+    try {
+      await api.delete(`/admin/spots/${id}`, {
+        reason_code: code || undefined,
+        reason_note: note || undefined,
+      });
+      Alert.alert('Spot deleted', 'The spot has been permanently removed.', [
+        { text: 'OK', onPress: () => router.back() },
+      ]);
+    } catch (e) {
+      throw new Error(formatApiError(e));
+    }
   };
 
   if (loading || !spot) {
@@ -381,6 +396,28 @@ export default function SpotDetail() {
               </ScrollView>
             </>
           )}
+
+          {/* Super-admin destructive controls — not shown to regular admins/users. */}
+          {user?.role === 'super_admin' && (
+            <View style={sadStyles.dangerZone}>
+              <View style={sadStyles.dangerHead}>
+                <Shield size={14} color={colors.secondary} />
+                <Text style={sadStyles.dangerTitle}>Super admin tools</Text>
+              </View>
+              <Text style={sadStyles.dangerBody}>
+                Permanently remove this spot and clean up saves, reviews, check-ins, reports,
+                collection references, and community-post links. A snapshot is kept for audit.
+              </Text>
+              <TouchableOpacity
+                style={sadStyles.dangerBtn}
+                onPress={() => setDeleteOpen(true)}
+                testID="super-delete-spot"
+              >
+                <Trash2 size={14} color="#fff" />
+                <Text style={sadStyles.dangerBtnTxt}>Delete spot permanently</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       </ScrollView>
 
@@ -418,6 +455,18 @@ export default function SpotDetail() {
         onClose={() => setShotListOpen(false)}
         spotId={id}
         spotTitle={spot.title}
+      />
+
+      <DeleteConfirmSheet
+        visible={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        onConfirm={submitSuperDelete}
+        title="Delete this spot?"
+        warning="Hard delete — the spot is removed from feeds, search, and the map. Saves, reviews, check-ins, reports and collection references are cleaned up. A snapshot is archived. Cannot be undone in the app."
+        targetLabel={`${spot.title}  ·  ${spot.city || ''}${spot.state ? ', ' + spot.state : ''}`}
+        confirmPhrase="delete"
+        presets={SPOT_DELETE_PRESETS}
+        destructiveCta="Delete spot permanently"
       />
     </View>
   );
@@ -577,4 +626,24 @@ const styles = StyleSheet.create({
   },
   pendingTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
   pendingBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17, marginTop: 2 },
+});
+
+const sadStyles = StyleSheet.create({
+  dangerZone: {
+    marginTop: space.xl,
+    backgroundColor: 'rgba(255,64,90,0.06)',
+    borderWidth: 1, borderColor: 'rgba(255,64,90,0.35)',
+    borderRadius: radii.lg,
+    padding: space.md,
+    gap: space.sm,
+  },
+  dangerHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  dangerTitle: { color: colors.secondary, fontFamily: font.bodyBold, fontSize: 12, letterSpacing: 0.4, textTransform: 'uppercase' },
+  dangerBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17 },
+  dangerBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    backgroundColor: colors.secondary, paddingVertical: 12, borderRadius: radii.md,
+    alignSelf: 'flex-start', paddingHorizontal: 14,
+  },
+  dangerBtnTxt: { color: '#fff', fontFamily: font.bodyBold, fontSize: 13 },
 });

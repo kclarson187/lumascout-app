@@ -86,8 +86,8 @@ class Api {
   patch(path: string, body?: any) {
     return this.client.patch(path, body).then((r) => r.data);
   }
-  delete(path: string) {
-    return this.client.delete(path).then((r) => r.data);
+  delete(path: string, body?: any) {
+    return this.client.delete(path, body !== undefined ? { data: body } : undefined).then((r) => r.data);
   }
 }
 
