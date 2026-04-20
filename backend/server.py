@@ -2762,6 +2762,9 @@ class CommunityPostIn(BaseModel):
     poll_options: Optional[List[str]] = None  # 2-6 option labels
     # Groups — if set, post is scoped to the group feed.
     group_id: Optional[str] = None
+    # Optional spot this post references (shown as an inline card + kept in
+    # sync with super-admin spot deletes which null this field out).
+    spot_id: Optional[str] = None
 
 
 async def _hydrate_posts(posts: List[dict], viewer: Optional[dict]) -> List[dict]:
@@ -2842,6 +2845,13 @@ async def create_post(body: CommunityPostIn, user: dict = Depends(get_current_us
         if not m:
             raise HTTPException(status_code=403, detail="Join the group to post in it")
         doc["group_id"] = body.group_id
+    # Optional spot reference — validate it exists, then persist. Super-admin
+    # spot-delete will null this field out for cleanup.
+    if body.spot_id:
+        sp = await db.spots.find_one({"spot_id": body.spot_id}, {"_id": 0, "spot_id": 1})
+        if not sp:
+            raise HTTPException(status_code=404, detail="Spot not found")
+        doc["spot_id"] = body.spot_id
     await db.community_posts.insert_one(doc)
     doc.pop("_id", None)
     out = await _hydrate_posts([doc], user)
