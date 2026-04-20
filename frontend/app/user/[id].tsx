@@ -18,8 +18,8 @@ import {
   ShieldCheck,
   MapPin,
   Globe,
-  Instagram,
-  Facebook,
+  Globe2,
+  AtSign,
   Music2,
   Share2,
   UserPlus,
@@ -240,12 +240,12 @@ export default function UserProfile() {
               )}
               {!!profile.instagram && (
                 <TouchableOpacity onPress={() => openUrl(`https://instagram.com/${String(profile.instagram).replace('@', '')}`)} style={styles.linkBtn}>
-                  <Instagram size={14} color={colors.textSecondary} />
+                  <AtSign size={14} color={colors.textSecondary} />
                 </TouchableOpacity>
               )}
               {!!profile.facebook_url && (
                 <TouchableOpacity onPress={() => openUrl(profile.facebook_url)} style={styles.linkBtn}>
-                  <Facebook size={14} color={colors.textSecondary} />
+                  <Globe2 size={14} color={colors.textSecondary} />
                 </TouchableOpacity>
               )}
               {!!profile.tiktok_url && (

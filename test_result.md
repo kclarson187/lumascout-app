@@ -1173,6 +1173,42 @@ agent_communication:
 
       Side-effects from this test run (for main agent awareness):
         - sophie's user doc now has stripe_customer_id set and was toggled plan=pro → past_due → free during the webhook path. She ends on plan='free', billing_status='canceled', payment_failed_at populated. If you want her back to clean state, a quick $unset of stripe/billing fields will do it.
+
+    -agent: "main"
+    -message: |
+      UX Polish #6 (Profile cleanup) implemented + critical pre-existing bug fixed.
+
+      🐛 ROOT CAUSE (pre-existing, not introduced in this session):
+         - Profile tab crashed for EVERY authenticated user with
+           "Element type is invalid ... got: undefined. Check render method of Profile".
+         - Bisected via runtime `typeof` check: `Instagram` and `Facebook` icons DO NOT
+           exist in lucide-react-native@1.8.0 (brand icons were removed, live in
+           `@lucide/lab` / simple-icons now). The named imports silently resolved to
+           `undefined` which killed React render.
+         - Same issue existed in /app/frontend/app/user/[id].tsx (public profile view).
+
+      ✅ FIXES APPLIED:
+         - Replaced `Instagram` → `AtSign` and `Facebook` → `Globe2` in both
+           `/app/frontend/app/(tabs)/profile.tsx` and `/app/frontend/app/user/[id].tsx`.
+         - Profile now renders cleanly for pro user sophie (and any user).
+
+      ✅ UX POLISH #6 CHANGES (PRD "split Profile into 3 zones"):
+         - Added "MY TOOLS" section header with gated cards (only visible if
+           plan!='free' OR isStaff):
+             • Creator Dashboard  (pro/elite only)
+             • Pack Marketplace   (pro/elite only)
+             • Admin Dashboard    (staff only, orange-accented)
+         - Added "ACCOUNT" section header with always-visible cards:
+             • Billing (Manage billing / Upgrade — plan-aware label)
+             • App Settings       (NEW card — was only reachable via banner icon)
+             • Help & Support
+         - Moved "Sign out" to its own de-emphasized row below ACCOUNT so it's no
+           longer one tap away from Admin Dashboard.
+         - Sections use uppercase tracked labels ("MY TOOLS", "ACCOUNT") for
+           clear visual hierarchy.
+
+      No backend changes required for Priority #6.
+
         - One throwaway user was created per run: qa.stripe.fresh.<uuid10>@photoscout.app (password StripeQA!2026). They have a real Stripe Customer attached. Cleanup is optional.
 
       No action items. All 4 new Stripe endpoints are green.
