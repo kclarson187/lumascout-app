@@ -167,11 +167,12 @@ export default function ScoutAIScreen() {
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
+            style={styles.chipRailContainer}
             contentContainerStyle={styles.chipRail}
           >
             {followUps.map((f) => (
               <TouchableOpacity key={f} onPress={() => send(f)} style={styles.chip} testID={`scout-followup-${f.slice(0,16)}`}>
-                <Text style={styles.chipTxt}>{f}</Text>
+                <Text style={styles.chipTxt} numberOfLines={1}>{f}</Text>
               </TouchableOpacity>
             ))}
           </ScrollView>
@@ -251,9 +252,11 @@ const styles = StyleSheet.create({
   bubbleUser: { backgroundColor: colors.primary, borderTopRightRadius: 4 },
   msgTxt: { color: colors.text, fontFamily: font.body, fontSize: 14, lineHeight: 20 },
 
-  chipRail: { paddingHorizontal: space.xl, gap: 6, paddingVertical: 8 },
+  chipRailContainer: { flexGrow: 0, maxHeight: 44 },
+  chipRail: { paddingHorizontal: space.xl, gap: 6, paddingVertical: 8, alignItems: 'center' },
   chip: {
-    paddingHorizontal: 12, paddingVertical: 8, borderRadius: radii.pill,
+    alignSelf: 'center',
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: radii.pill,
     backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
   },
   chipTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },
