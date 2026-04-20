@@ -47,6 +47,7 @@ export default function SpotDetail() {
   const [atcOpen, setAtcOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [shotListOpen, setShotListOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
