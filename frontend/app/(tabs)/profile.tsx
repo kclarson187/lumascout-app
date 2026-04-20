@@ -248,6 +248,12 @@ export default function Profile() {
   const planLabel =
     plan === 'free' ? 'Free' : plan.replace('comp_', 'Comp · ').replace('trial_', 'Trial · ').toUpperCase();
 
+  // PRD priority #6: gate role-based tools by plan + staff flag so we don't
+  // advertise features the user can't actually use.
+  const hasCreatorTools = plan !== 'free'; // Pro / Elite / comp_* / trial_*
+  const hasAdminTools = isStaff;
+  const showRoleSection = hasCreatorTools || hasAdminTools;
+
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
       <KeyboardAvoidingView
@@ -408,16 +414,36 @@ export default function Profile() {
             <StatCell label="Posts"     value={stats.posts_count ?? myPosts.length} />
           </View>
 
-          {/* Action cards (Creator Dash / Marketplace / Upgrade / Admin) */}
+          {/* === ROLE-BASED TOOLS ======================================== */}
+          {showRoleSection && (
+            <>
+              <Text style={styles.sectionLabel}>My tools</Text>
+              <View style={styles.actionsRow}>
+                {hasCreatorTools && (
+                  <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/creator-dashboard')} testID="profile-dashboard">
+                    <BarChart3 size={18} color={colors.primary} />
+                    <Text style={styles.actionTxt}>Creator{'\n'}Dashboard</Text>
+                  </TouchableOpacity>
+                )}
+                {hasCreatorTools && (
+                  <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/marketplace')} testID="profile-marketplace">
+                    <Store size={18} color={colors.primary} />
+                    <Text style={styles.actionTxt}>Pack{'\n'}Marketplace</Text>
+                  </TouchableOpacity>
+                )}
+                {hasAdminTools && (
+                  <TouchableOpacity style={[styles.actionCard, styles.adminCard]} onPress={() => router.push('/admin')} testID="profile-admin">
+                    <Settings size={18} color={colors.textInverse} />
+                    <Text style={[styles.actionTxt, { color: colors.textInverse }]}>Admin{'\n'}Dashboard</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </>
+          )}
+
+          {/* === ACCOUNT ================================================= */}
+          <Text style={styles.sectionLabel}>Account</Text>
           <View style={styles.actionsRow}>
-            <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/creator-dashboard')} testID="profile-dashboard">
-              <BarChart3 size={18} color={colors.primary} />
-              <Text style={styles.actionTxt}>Creator{'\n'}Dashboard</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/marketplace')} testID="profile-marketplace">
-              <Store size={18} color={colors.primary} />
-              <Text style={styles.actionTxt}>Pack{'\n'}Marketplace</Text>
-            </TouchableOpacity>
             <TouchableOpacity style={styles.actionCard} onPress={() => router.push(plan !== 'free' ? '/billing' : '/paywall')} testID="profile-paywall">
               <Crown size={18} color={colors.primary} />
               <Text style={styles.actionTxt}>
@@ -425,21 +451,22 @@ export default function Profile() {
                 {plan !== 'free' ? 'Manage billing' : 'to Pro'}
               </Text>
             </TouchableOpacity>
+            <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/settings')} testID="profile-settings-card">
+              <Settings size={18} color={colors.text} />
+              <Text style={styles.actionTxt}>App{'\n'}Settings</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/support')} testID="profile-support">
               <HelpCircle size={18} color={colors.text} />
               <Text style={styles.actionTxt}>Help &{'\n'}Support</Text>
             </TouchableOpacity>
-            {isStaff && (
-              <TouchableOpacity style={[styles.actionCard, styles.adminCard]} onPress={() => router.push('/admin')} testID="profile-admin">
-                <Settings size={18} color={colors.textInverse} />
-                <Text style={[styles.actionTxt, { color: colors.textInverse }]}>Admin{'\n'}Dashboard</Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity style={styles.actionCard} onPress={logout} testID="profile-logout">
-              <LogOut size={18} color={colors.secondary} />
-              <Text style={[styles.actionTxt, { color: colors.secondary }]}>Sign out</Text>
-            </TouchableOpacity>
           </View>
+
+          {/* Sign-out is visually de-emphasised (separate row, subdued) so it
+              doesn't sit one tap away from Admin — PRD priority #6. */}
+          <TouchableOpacity style={styles.signOutRow} onPress={logout} testID="profile-logout">
+            <LogOut size={14} color={colors.secondary} />
+            <Text style={styles.signOutTxt}>Sign out</Text>
+          </TouchableOpacity>
 
           {/* Edit form */}
           {editMode && (
@@ -756,7 +783,7 @@ const styles = StyleSheet.create({
 
   actionsRow: {
     flexDirection: 'row', flexWrap: 'wrap', gap: 8,
-    paddingHorizontal: space.xl, marginTop: space.lg,
+    paddingHorizontal: space.xl, marginTop: space.sm,
   },
   actionCard: {
     flexBasis: '48%', flexGrow: 1, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
@@ -764,6 +791,16 @@ const styles = StyleSheet.create({
   },
   adminCard: { backgroundColor: colors.primary, borderColor: colors.primary },
   actionTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12, lineHeight: 16 },
+  sectionLabel: {
+    color: colors.textTertiary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.8,
+    textTransform: 'uppercase', paddingHorizontal: space.xl, marginTop: space.xl, marginBottom: space.xs,
+  },
+  signOutRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    marginTop: space.lg, marginHorizontal: space.xl, paddingVertical: 10,
+    borderRadius: radii.md, borderWidth: 1, borderColor: colors.border, backgroundColor: 'transparent',
+  },
+  signOutTxt: { color: colors.secondary, fontFamily: font.bodyBold, fontSize: 12, letterSpacing: 0.3 },
 
   editCard: {
     backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
