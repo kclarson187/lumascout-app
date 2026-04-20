@@ -206,11 +206,27 @@ export default function Saved() {
             </ScrollView>
           )}
           {sortedFavs.length === 0 ? (
-            <EmptyState
-              icon={<Bookmark size={28} color={colors.primary} />}
-              title={savedSpots.length === 0 ? 'Nothing saved yet' : 'No matches'}
-              subtitle={savedSpots.length === 0 ? 'Tap the bookmark on any spot to save it here for later planning.' : 'Try clearing the shoot-type filter.'}
-            />
+            <ScrollView contentContainerStyle={{ padding: space.xl }}>
+              <EmptyState
+                icon={<Bookmark size={28} color={colors.primary} />}
+                title={savedSpots.length === 0 ? 'Nothing saved yet' : 'No matches'}
+                subtitle={savedSpots.length === 0 ? 'Tap the bookmark on any spot to save it here for later planning.' : 'Try clearing the shoot-type filter.'}
+              />
+              {savedSpots.length === 0 && (
+                <TouchableOpacity
+                  style={styles.scoutAiAssist}
+                  onPress={() => router.push('/scout-ai/planner/collection')}
+                  testID="saved-scout-ai-assist"
+                  activeOpacity={0.85}
+                >
+                  <View style={styles.scoutAiBubble}><Sparkles size={16} color={colors.primary} /></View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.scoutAiTitle}>Help me build my first collection</Text>
+                    <Text style={styles.scoutAiBody}>Describe what you love to shoot and Scout AI will assemble 5–10 starter spots.</Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+            </ScrollView>
           ) : (
             <FlatList
               data={sortedFavs}
@@ -336,6 +352,18 @@ export default function Saved() {
 }
 
 const styles = StyleSheet.create({
+  scoutAiAssist: {
+    flexDirection: 'row', gap: 10, alignItems: 'flex-start',
+    marginTop: space.lg,
+    backgroundColor: colors.surface1, borderWidth: 1, borderColor: 'rgba(32,130,255,0.35)',
+    borderRadius: radii.lg, padding: space.md,
+  },
+  scoutAiBubble: {
+    width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(32,130,255,0.12)', borderWidth: 1, borderColor: 'rgba(32,130,255,0.35)',
+  },
+  scoutAiTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
+  scoutAiBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17, marginTop: 3 },
   root: { flex: 1, backgroundColor: colors.bg },
   head: { paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.sm, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
   title: { color: colors.text, fontFamily: font.display, fontSize: 34, letterSpacing: -0.5 },

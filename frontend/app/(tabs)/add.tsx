@@ -16,7 +16,7 @@ import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as Location from 'expo-location';
-import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown, AlertTriangle, Search, Map as MapIcon, Edit3, FileText, Sun, Eye, EyeOff } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown, AlertTriangle, Search, Map as MapIcon, Edit3, FileText, Sun, Eye, EyeOff, Sparkles } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii, SHOOT_TYPES, BEST_TIMES, PRIVACY_MODES } from '../../src/theme';
@@ -126,6 +126,9 @@ export default function AddSpot() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
+  const [aiAssistBusy, setAiAssistBusy] = useState(false);
+  const [aiAssistError, setAiAssistError] = useState('');
+  const [aiAssistTips, setAiAssistTips] = useState<string[]>([]);
   const [recent, setRecent] = useState<any[]>([]);
   // Raw editable string for style tags so the user can freely type commas and
   // spaces. We only split into an array when the input loses focus.
@@ -376,6 +379,37 @@ export default function AddSpot() {
     postal_code: draft.postalCode,
     save_as_draft: asDraft,
   });
+
+  const runAiUploadAssist = async () => {
+    setAiAssistError('');
+    if (!draft.city && !draft.title && !draft.landmark && !draft.description) {
+      setAiAssistError('Add at least a city, landmark, or rough title so Scout AI has something to work from.');
+      return;
+    }
+    setAiAssistBusy(true);
+    try {
+      const resp = await api.post('/ai/assist/upload', {
+        rough_title: draft.title || draft.landmark || undefined,
+        city: draft.city || undefined,
+        state: draft.state || undefined,
+        lat: draft.latitude ?? undefined,
+        lng: draft.longitude ?? undefined,
+        shoot_types: draft.shoot_types?.length ? draft.shoot_types : undefined,
+        notes: draft.description || undefined,
+      });
+      const patch: Partial<Draft> = {};
+      if (resp.title && (!draft.title || draft.title.length < resp.title.length)) patch.title = resp.title;
+      if (resp.summary && (!draft.description || draft.description.length < 40)) patch.description = resp.summary;
+      if (resp.best_time_of_day && resp.best_time_of_day !== 'any') patch.best_time_of_day = resp.best_time_of_day;
+      setDraft((d) => ({ ...d, ...patch }));
+      setAiAssistTips(resp.tips || []);
+    } catch (e) {
+      setAiAssistError(formatApiError(e));
+    } finally {
+      setAiAssistBusy(false);
+    }
+  };
+
 
   const submit = async () => {
     if (!draft.title || !draft.city) {
@@ -639,6 +673,23 @@ export default function AddSpot() {
               />
               <Text style={styles.helper}>If the spot sits inside a park, neighborhood, or known location, add that here.</Text>
 
+              {/* Scout AI direct autofill — generates title+summary+tips from the current draft. */}
+              <TouchableOpacity
+                style={styles.aiAssistBtn}
+                onPress={runAiUploadAssist}
+                disabled={aiAssistBusy}
+                testID="add-ai-assist"
+                activeOpacity={0.85}
+              >
+                {aiAssistBusy
+                  ? <ActivityIndicator size="small" color={colors.primary} />
+                  : <Sparkles size={14} color={colors.primary} />}
+                <Text style={styles.aiAssistTxt}>
+                  {aiAssistBusy ? 'Scout AI is drafting…' : 'Draft this listing with Scout AI'}
+                </Text>
+              </TouchableOpacity>
+              {aiAssistError ? <Text style={styles.aiAssistErr}>{aiAssistError}</Text> : null}
+
               <Input
                 label="Description"
                 value={draft.description}
@@ -649,6 +700,15 @@ export default function AddSpot() {
                 testID="add-description"
               />
               <Text style={styles.helper}>Pros cover: parking hack, best arrival time, composition spots, seasonal gotchas, permits.</Text>
+
+              {aiAssistTips.length > 0 && (
+                <View style={styles.aiTipsBox}>
+                  <Text style={styles.aiTipsLabel}>Scout AI photography tips</Text>
+                  {aiAssistTips.map((t, i) => (
+                    <Text key={i} style={styles.aiTipsItem}>• {t}</Text>
+                  ))}
+                </View>
+              )}
 
               <Text style={styles.subSectionLabel}>Shoot types</Text>
               <View style={styles.chipRow}>
@@ -1088,6 +1148,26 @@ function Toggle({ label, value, onChange }: { label: string; value: boolean; onC
 }
 
 const styles = StyleSheet.create({
+  aiAssistBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    marginTop: -4, marginBottom: space.xs,
+    paddingVertical: 10, paddingHorizontal: 12,
+    backgroundColor: 'rgba(32,130,255,0.08)',
+    borderWidth: 1, borderColor: 'rgba(32,130,255,0.35)',
+    borderRadius: radii.md, alignSelf: 'flex-start',
+  },
+  aiAssistTxt: { color: colors.primary, fontFamily: font.bodySemibold, fontSize: 12.5 },
+  aiAssistErr: { color: colors.secondary, fontFamily: font.body, fontSize: 12, marginTop: 4, marginBottom: space.xs },
+  aiTipsBox: {
+    marginTop: 4, marginBottom: space.md,
+    padding: 10, borderRadius: radii.md,
+    backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
+  },
+  aiTipsLabel: {
+    color: colors.primary, fontFamily: font.bodyBold, fontSize: 11,
+    letterSpacing: 0.4, textTransform: 'uppercase', marginBottom: 4,
+  },
+  aiTipsItem: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12.5, lineHeight: 18 },
   root: { flex: 1, backgroundColor: colors.bg },
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
