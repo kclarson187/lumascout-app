@@ -68,7 +68,7 @@ export default function ScoutAIIntroModal() {
             <ScoutAIAvatar size={64} />
             <Text style={styles.title}>Meet Scout AI</Text>
             <Text style={styles.body}>
-              Your official PhotoScout assistant for finding spots, planning shoots, understanding scores, and getting more out of the app.
+              Your official LumaScout assistant for finding spots, planning shoots, understanding scores, and getting more out of the app.
             </Text>
           </View>
           <View style={{ gap: 8, marginTop: 18 }}>
@@ -86,7 +86,7 @@ export default function ScoutAIIntroModal() {
             <Text style={styles.secondaryTxt}>Maybe later</Text>
           </TouchableOpacity>
           <Text style={styles.disclosure}>
-            Scout AI is an official PhotoScout assistant. Responses are AI-generated and based on available app data.
+            Scout AI is an official LumaScout assistant. Responses are AI-generated and based on available app data.
           </Text>
         </View>
       </View>

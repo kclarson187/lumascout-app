@@ -34,7 +34,7 @@ async def main():
         "role": "user",
         "is_bot": True,
         "verification_status": "verified",
-        "bio": "Official PhotoScout assistant. I help you find spots, plan shoots, explain scores, and answer PhotoScout questions.",
+        "bio": "Official LumaScout assistant. I help you find spots, plan shoots, explain scores, and answer LumaScout questions.",
         "city": None,
         "state": None,
         "specialties": ["Location Scouting", "Planning"],

@@ -104,7 +104,7 @@ export default function UserProfile() {
   const shareProfile = async () => {
     try {
       await Share.share({
-        message: `Check out ${profile?.name}'s photography profile on PhotoScout`,
+        message: `Check out ${profile?.name}'s photography profile on LumaScout`,
       });
     } catch {}
   };

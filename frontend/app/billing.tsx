@@ -190,7 +190,7 @@ export default function Billing() {
           )}
           {isComp && (
             <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 12, textAlign: 'center' }}>
-              You have a complimentary {plan} grant from the PhotoScout team. No billing required.
+              You have a complimentary {plan} grant from the LumaScout team. No billing required.
             </Text>
           )}
         </View>

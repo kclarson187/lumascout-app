@@ -246,7 +246,7 @@ export default function Saved() {
               <Text style={styles.premiumEmptyTitle}>Your private vault</Text>
               <Text style={styles.premiumEmptyBody}>
                 Store exact hidden gems, parking pull-offs, overlooked streets, and personal client-only spots.
-                Only you can see the exact location — nobody else, not even other PhotoScout pros.
+                Only you can see the exact location — nobody else, not even other LumaScout pros.
               </Text>
               <View style={styles.premiumFeatureList}>
                 <FeatureLine icon={<EyeOff size={13} color={colors.primary} />} text="Exact GPS stays off the public map" />

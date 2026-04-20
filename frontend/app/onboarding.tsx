@@ -19,8 +19,8 @@ const { width: W } = Dimensions.get('window');
 
 const slides = [
   {
-    title: 'Welcome to\nPhotoScout',
-    body: 'The photographer’s scouting companion. Log, organize, and discover places worth the shutter.',
+    title: 'Welcome to\nLumaScout',
+    body: 'Discover better light and better locations. LumaScout is your photography scouting companion — find, save, plan, and share places worth shooting.',
     image: 'https://images.unsplash.com/photo-1672285312540-f1786a51a097?w=1200&q=85',
     icon: <Camera size={28} color={colors.primary} />,
   },
@@ -32,13 +32,13 @@ const slides = [
   },
   {
     title: 'Public spots.\nPrivate spots.',
-    body: 'Keep your secret meadow private. Share community gems publicly. You control what stays yours.',
+    body: 'Keep your secret meadow private. Share community gems publicly. You decide what stays yours.',
     image: 'https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=1200&q=85',
     icon: <Lock size={28} color={colors.primary} />,
   },
   {
-    title: 'Discover the\nbest light.',
-    body: 'Browse golden hour favorites, nearby gems, and spots tailored to your shoot type.',
+    title: 'Plan smarter\nwith Scout AI.',
+    body: 'Your official LumaScout assistant. Weekend itineraries, driving routes, theme-matched collections — built from real spots.',
     image: 'https://images.unsplash.com/photo-1682458856875-7bc127399b77?w=1200&q=85',
     icon: <Compass size={28} color={colors.primary} />,
   },

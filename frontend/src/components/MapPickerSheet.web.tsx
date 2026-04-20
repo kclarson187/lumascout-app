@@ -28,7 +28,7 @@ export default function MapPickerSheet({
           </TouchableOpacity>
           <Text style={styles.title}>Map picker unavailable on web</Text>
           <Text style={styles.body}>
-            To drop a pin on the map, please use the PhotoScout mobile app (iOS or Android).
+            To drop a pin on the map, please use the LumaScout mobile app (iOS or Android).
             You can still search for a city, use GPS, or enter an address manually on web.
           </Text>
           <TouchableOpacity style={styles.btn} onPress={onClose}>

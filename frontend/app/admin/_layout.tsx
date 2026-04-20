@@ -51,7 +51,7 @@ export default function AdminLayout() {
         <View style={styles.gate}>
           <ShieldCheck size={28} color={colors.secondary} />
           <Text style={styles.gateTitle}>Access denied</Text>
-          <Text style={styles.gateBody}>This dashboard is for PhotoScout staff only.</Text>
+          <Text style={styles.gateBody}>This dashboard is for LumaScout staff only.</Text>
           <TouchableOpacity style={styles.gateBtn} onPress={() => router.replace('/(tabs)')}>
             <Text style={styles.gateBtnTxt}>Back to app</Text>
           </TouchableOpacity>
@@ -78,7 +78,7 @@ export default function AdminLayout() {
           <ChevronLeft size={22} color={colors.text} />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
-          <Text style={styles.kicker}>PhotoScout · Admin</Text>
+          <Text style={styles.kicker}>LumaScout · Admin</Text>
           <Text style={styles.title}>{user.role === 'super_admin' ? 'Super Admin' : (user.role || 'Staff').replace('_', ' ')}</Text>
         </View>
         <View style={styles.roleBadge}>

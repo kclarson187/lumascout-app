@@ -120,7 +120,7 @@ export default function Paywall() {
         <Text style={styles.title}>Scout smarter.{'\n'}Shoot better.</Text>
         <Text style={styles.sub}>
           {user?.plan && user.plan !== 'free' && !params.reason
-            ? `You're on ${user.plan.toUpperCase()}. Thank you for supporting PhotoScout.`
+            ? `You're on ${user.plan.toUpperCase()}. Thank you for supporting LumaScout.`
             : reasonCopy}
         </Text>
 

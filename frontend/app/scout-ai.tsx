@@ -149,7 +149,7 @@ export default function ScoutAIScreen() {
               <Text style={styles.aiBadgeTxt}>OFFICIAL AI</Text>
             </View>
           </View>
-          <Text style={styles.subtitle} numberOfLines={1}>Official PhotoScout assistant</Text>
+          <Text style={styles.subtitle} numberOfLines={1}>Official LumaScout assistant</Text>
         </View>
         <TouchableOpacity
           onPress={() => router.push('/scout-ai/planner')}

@@ -126,7 +126,7 @@ def check_rate_limit(bucket_key: str, user_id: str):
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
 
-app = FastAPI(title="PhotoScout API")
+app = FastAPI(title="LumaScout API")
 api = APIRouter(prefix="/api")
 security = HTTPBearer(auto_error=False)
 
@@ -1502,7 +1502,7 @@ async def my_saves(user: dict = Depends(get_current_user)):
 # =============================================================================
 NOMINATIM_BASE = "https://nominatim.openstreetmap.org"
 NOMINATIM_HEADERS = {
-    "User-Agent": "PhotoScout/1.0 (support@photoscout.app)",
+    "User-Agent": "LumaScout/1.0 (support@photoscout.app)",
     "Accept-Language": "en",
 }
 
@@ -2028,7 +2028,7 @@ SETTINGS_SINGLETON_ID = "platform_v1"
 
 DEFAULT_SETTINGS = {
     "settings_id": SETTINGS_SINGLETON_ID,
-    "app_name": "PhotoScout",
+    "app_name": "LumaScout",
     "support_email": "support@photoscout.app",
     "maintenance_mode": False,
     "public_registration": True,
@@ -2826,7 +2826,7 @@ async def get_pack(pack_id: str, viewer: Optional[dict] = Depends(get_optional_u
 # ============================================================================
 @api.get("/")
 async def root():
-    return {"app": "PhotoScout", "status": "ok"}
+    return {"app": "LumaScout", "status": "ok"}
 
 
 app.add_middleware(
@@ -3262,7 +3262,7 @@ async def my_reviews_received(limit: int = 50, user: dict = Depends(get_current_
 # SUPPORT HUB — User tickets + admin inbox
 # ============================================================================
 SUPPORT_FAQS = [
-    {"id": "pricing", "q": "How does PhotoScout pricing work?", "a": "Free gives you up to 5 saved spots, community access, and public maps. Pro ($9.99/mo) removes the save limit, unlocks unlimited collections, AI shot lists, and direct messaging. Elite ($19.99/mo) adds verified photographer badge, featured placement in discovery, and mentorship matchmaking priority."},
+    {"id": "pricing", "q": "How does LumaScout pricing work?", "a": "Free gives you up to 5 saved spots, community access, and public maps. Pro ($9.99/mo) removes the save limit, unlocks unlimited collections, AI shot lists, and direct messaging. Elite ($19.99/mo) adds verified photographer badge, featured placement in discovery, and mentorship matchmaking priority."},
     {"id": "cancel", "q": "How do I cancel my subscription?", "a": "Open Profile → Plan card → Manage billing. Stripe's portal lets you cancel any time. You keep access until the end of your current billing period."},
     {"id": "refunds", "q": "Do you offer refunds?", "a": "If something feels off in your first 7 days after upgrading, message us via the Contact form and we'll sort it out."},
     {"id": "verify", "q": "How do I get verified?", "a": "Upload a portfolio of at least 10 high-quality images to your spots, keep your profile complete (bio, specialties, city), and our team reviews verification requests within 3–5 business days."},
@@ -3838,20 +3838,20 @@ async def send_push(user_ids: List[str], title: str, body: str, data: Optional[d
 
 
 # ============================================================================
-# SCOUT AI — Official PhotoScout in-app assistant (Phase 1: stateless chat)
+# SCOUT AI — Official LumaScout in-app assistant (Phase 1: stateless chat)
 # ============================================================================
 # Spec highlights honoured here:
 #   • Official AI product assistant — never impersonates a real photographer.
 #   • Useful first, trustworthy always. Confidence levels in replies.
-#   • Only uses live PhotoScout data (current user plan, nearby/saved spots,
+#   • Only uses live LumaScout data (current user plan, nearby/saved spots,
 #     optional pinned spot) for context — no hallucinated permits/access.
 #   • Stateless per user's Phase-1 decision (no server-side chat history).
 
 SCOUT_AI_SYSTEM_PROMPT = (
-    "You are Scout AI, the official AI assistant inside PhotoScout, a photographer-"
+    "You are Scout AI, the official AI assistant inside LumaScout, a photographer-"
     "focused location discovery, planning, and community app.\n\n"
     "Your job is to help users discover, save, plan, and share great photo locations, "
-    "understand the app, and make better use of PhotoScout's tools.\n\n"
+    "understand the app, and make better use of LumaScout's tools.\n\n"
     "You are NOT a real photographer profile. You are an official AI product assistant. "
     "Never imply you are human or that you personally visited a place.\n\n"
     "Core rules:\n"
@@ -4105,7 +4105,7 @@ async def scout_ai_chat_LEGACY(body: ScoutAIChatIn, user: dict = Depends(get_cur
         "reply": (reply or "").strip(),
         "follow_ups": _scout_ai_follow_ups(body.placement),
         "model": "gpt-5.2",
-        "disclosure": "Scout AI is an official PhotoScout AI assistant. Replies are AI-generated.",
+        "disclosure": "Scout AI is an official LumaScout AI assistant. Replies are AI-generated.",
     }
 
 
@@ -4175,15 +4175,15 @@ async def admin_ai_settings_set_LEGACY(body: ScoutSettingsIn, user: dict = Depen
 
 EDITORIAL_TEMPLATES = [
     ("Strong sunset picks near you",
-     "A short Scout AI shortlist of recently verified PhotoScout spots with strong evening light, ordered by distance and crowd-friendliness."),
+     "A short Scout AI shortlist of recently verified LumaScout spots with strong evening light, ordered by distance and crowd-friendliness."),
     ("Worth scouting this weekend",
      "A Scout AI pick list of spots that match common weekend shoot styles, filtered to ones with recent verification and clear field notes."),
     ("Best for family sessions",
-     "A Scout AI shortlist of family-friendly PhotoScout spots, prioritising easier access, lower friction, and flexible backgrounds."),
+     "A Scout AI shortlist of family-friendly LumaScout spots, prioritising easier access, lower friction, and flexible backgrounds."),
     ("Golden hour favourites",
      "A Scout AI pick list of spots with stronger late-day light and more predictable portrait conditions."),
     ("Recently verified nearby",
-     "A Scout AI-curated list of freshly confirmed PhotoScout spots that look more trustworthy right now."),
+     "A Scout AI-curated list of freshly confirmed LumaScout spots that look more trustworthy right now."),
 ]
 
 
@@ -4253,7 +4253,7 @@ async def admin_ai_generate_editorial_LEGACY(
 
     system = (
         SCOUT_AI_SYSTEM_PROMPT
-        + "\n\nYou are composing a short editorial community post for the PhotoScout feed. "
+        + "\n\nYou are composing a short editorial community post for the LumaScout feed. "
         + "Output plain text only (no markdown headings, no hashtags). Keep it under 140 words. "
         + "Open with the concrete value, name 3-5 spots from CANDIDATE_SPOTS (one per line with a 1-sentence reason). "
         + "End with one short question to invite real-user comments."
@@ -4315,7 +4315,7 @@ async def admin_ai_reply_to_post_LEGACY(post_id: str, user: dict = Depends(requi
 
     system = (
         SCOUT_AI_SYSTEM_PROMPT
-        + "\n\nYou are writing a single helpful reply to a PhotoScout community post. "
+        + "\n\nYou are writing a single helpful reply to a LumaScout community post. "
         + "Plain text only. Under 120 words. Lead with the most practical answer, "
         + "then 2-4 concrete considerations. If the question cannot be answered from "
         + "the data you have, say what would be needed to help further."
@@ -4456,14 +4456,14 @@ async def bootstrap_stripe_products():
     """Idempotently ensure Pro & Elite Products + monthly Prices exist in Stripe.
 
     Safe to call on every startup — uses Stripe's `lookup_key` to dedupe.
-    Prices for PhotoScout: Pro $9.99/mo · Elite $19.99/mo.
+    Prices for LumaScout: Pro $9.99/mo · Elite $19.99/mo.
     """
     if not _stripe_ready():
         print("[stripe] STRIPE_API_KEY not set — billing routes are disabled.")
         return
     plan_catalog = [
-        {"key": "pro",   "name": "PhotoScout Pro",   "amount": 999,  "lookup": "pro_monthly"},
-        {"key": "elite", "name": "PhotoScout Elite", "amount": 1999, "lookup": "elite_monthly"},
+        {"key": "pro",   "name": "LumaScout Pro",   "amount": 999,  "lookup": "pro_monthly"},
+        {"key": "elite", "name": "LumaScout Elite", "amount": 1999, "lookup": "elite_monthly"},
     ]
     try:
         for entry in plan_catalog:
@@ -4878,7 +4878,7 @@ async def seed_admin():
             "user_id": f"user_{uuid.uuid4().hex[:12]}",
             "email": ADMIN_EMAIL,
             "password_hash": hash_password(ADMIN_PASSWORD),
-            "name": "PhotoScout Admin",
+            "name": "LumaScout Admin",
             "username": "admin",
             "avatar_url": None,
             "bio": "Platform administrator",

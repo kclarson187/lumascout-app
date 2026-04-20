@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "PhotoScout",
-    "slug": "photoscout",
+    "name": "LumaScout",
+    "slug": "lumascout",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "photoscout",
+    "scheme": "lumascout",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "ios": {
@@ -41,13 +41,13 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Allow PhotoScout to use your location to find nearby spots."
+          "locationAlwaysAndWhenInUsePermission": "Allow LumaScout to use your location to find nearby spots."
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow PhotoScout to access your photos to upload spot images."
+          "photosPermission": "Allow LumaScout to access your photos to upload spot images."
         }
       ],
       [

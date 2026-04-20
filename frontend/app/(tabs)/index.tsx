@@ -145,7 +145,7 @@ export default function Home() {
         <View style={styles.header}>
           <View style={{ flex: 1 }}>
             <Text style={styles.hello}>Hello{user ? `, ${user.name.split(' ')[0]}` : ''}</Text>
-            <Text style={styles.brand}>PhotoScout</Text>
+            <Text style={styles.brand}>LumaScout</Text>
           </View>
           <TouchableOpacity
             onPress={() => router.push('/messages')}
