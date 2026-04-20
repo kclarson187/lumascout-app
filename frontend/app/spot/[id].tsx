@@ -32,6 +32,7 @@ import VerifiedBadge from '../../src/components/VerifiedBadge';
 import FreshnessBadge from '../../src/components/FreshnessBadge';
 import ReportSheet from '../../src/components/ReportSheet';
 import ShotListSheet from '../../src/components/ShotListSheet';
+import ScoutAICard from '../../src/components/ScoutAICard';
 
 const { width: W } = Dimensions.get('window');
 
@@ -288,6 +289,15 @@ export default function SpotDetail() {
               </View>
               <ChevronRight size={18} color={colors.textSecondary} />
             </TouchableOpacity>
+          )}
+
+          {/* Scout AI — inline helper tied to this spot (PRD Scout AI Phase 1). */}
+          {!!spot.spot_id && (
+            <ScoutAICard
+              placement="spot_detail"
+              spotId={spot.spot_id}
+              subtitle={`Ask about fit, best light, or compare nearby options.`}
+            />
           )}
 
           {/* Scores */}

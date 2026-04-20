@@ -24,6 +24,7 @@ import SpotCardCompact from '../../src/components/SpotCardCompact';
 import { SectionHeader, Chip, EmptyState } from '../../src/components/ui';
 import { SectionSkeleton, SkeletonBox } from '../../src/components/Skeleton';
 import UpgradeBanner from '../../src/components/UpgradeBanner';
+import ScoutAICard from '../../src/components/ScoutAICard';
 
 type Feed = Record<string, any[]>;
 
@@ -206,6 +207,11 @@ export default function Home() {
             cta="Go Pro"
             targetPlan="pro"
           />
+        </View>
+
+        {/* Scout AI — official in-app assistant entry point (PRD Scout AI Phase 1). */}
+        <View style={{ paddingHorizontal: space.xl, marginTop: space.md }}>
+          <ScoutAICard placement="home" />
         </View>
 
         <ScrollView

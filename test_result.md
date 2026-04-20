@@ -1295,6 +1295,53 @@ agent_communication:
 
 
 
+
+    -agent: "main"
+    -message: |
+      SCOUT AI — Phase 1 shipped (stateless chat assistant).
+
+      Backend:
+        - New endpoint: POST /api/ai/chat  (rate-limited, auth-required).
+        - Uses EMERGENT_LLM_KEY + gpt-5.2 via emergentintegrations.llm.chat.LlmChat.
+        - Stateless (no server-side history). Each call builds a fresh session_id
+          and injects a dynamic LIVE APP CONTEXT block into the system prompt
+          containing: viewer plan + specialties + city/state, up to 5 saved-spot
+          summaries, and (if spot_id supplied) the public view of that spot.
+        - System prompt codifies all the trust rules from the Scout AI spec: no
+          human impersonation, no invented permits/safety/access, no fake
+          community sentiment, explicit confidence hedging when data is missing,
+          premium upsells only when directly relevant.
+        - Returns { reply, follow_ups[], model, disclosure }. Follow-ups are
+          deterministic per placement — no extra model round-trip.
+
+      Frontend (all five surfaces from the spec):
+        - /app/frontend/src/components/ScoutAIAvatar.tsx — premium SVG badge
+          (gold radar sweep + dark base, sharp at any size, zero asset load).
+        - /app/frontend/src/components/ScoutAICard.tsx — reusable entry-point
+          with an "OFFICIAL AI" pill. Routes to /scout-ai with placement + spot_id + q.
+        - /app/frontend/app/scout-ai.tsx — full chat screen:
+            * auto-sends prefilled query from entry-point tap
+            * typing indicator, rollback-on-error, scroll-to-end on new message
+            * follow-up chip rail that swaps based on backend response
+            * permanent disclosure footer ("Replies are AI-generated…")
+
+      Placements wired:
+        1. Home  — ScoutAICard between search bar and Upgrade banner.
+        2. Explore  — row variant directly under the search row.
+        3. Saved / Favorites  — row variant above the sort rail (shown when user
+           has ≥1 saved spot, so there's something to plan from).
+        4. Spot detail  — card variant below the AI Shot List button, with
+           spot_id piped through so Scout AI can ground its answer.
+        5. Upload Step 2 (Details)  — row variant at the top of the form, the
+           exact moment a user is writing the description.
+
+      Verified live end-to-end: home tap → chat screen → gpt-5.2 reply arrives
+      in ~5-15s with real Austin suggestions grounded in the spec's rules
+      (named Zilker + Mount Bonnell, asked a clarifying follow-up, no invented
+      permits). Disclosure + "OFFICIAL AI" badge visible on every surface.
+
+      Phase 2/3/4 deferred per user direction.
+
     -agent: "main"
     -message: |
       Phase F — validate 4 new endpoints. Historical items green, do not retest.

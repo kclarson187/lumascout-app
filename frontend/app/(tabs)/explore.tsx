@@ -12,6 +12,7 @@ import { colors, font, space, radii, BEST_TIMES } from '../../src/theme';
 import SpotCard from '../../src/components/SpotCard';
 import { Chip, EmptyState } from '../../src/components/ui';
 import { Button } from '../../src/components/Button';
+import ScoutAICard from '../../src/components/ScoutAICard';
 
 // Native-only map wrapper with web stub (Metro / codegenNativeCommands safety).
 import { MapView, Marker } from '../../src/components/maps-module';
@@ -131,6 +132,11 @@ export default function Explore() {
           <SlidersHorizontal size={18} color={colors.text} />
           {activeCount > 0 && <View style={styles.badgeDot}><Text style={styles.badgeDotTxt}>{activeCount}</Text></View>}
         </TouchableOpacity>
+      </View>
+
+      {/* Scout AI — helper row under the search bar (PRD Scout AI Phase 1). */}
+      <View style={{ paddingHorizontal: space.xl, paddingBottom: space.sm }}>
+        <ScoutAICard placement="explore" variant="row" />
       </View>
 
       {view === 'map' && Platform.OS !== 'web' && MapView ? (
