@@ -462,10 +462,83 @@ metadata:
   run_ui: true
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "UX Polish #5 — /api/me/collections enriched response (cover_image_url, count, cities, last_updated)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+backend_ux_polish_5:
+  - task: "UX Polish #5 — /api/me/collections enriched response (cover_image_url, count, cities, last_updated)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          Validated via /app/backend_test_ux_polish_5.py. 6/9 PASS, 3 FAIL.
+
+          ✅ PASS (core Saved-tab rich-card contract is working):
+            (1) Login as sophie → 200 with token. NOTE: actual endpoint is POST /api/auth/login;
+                review request stated POST /api/login which is NOT registered (returns 404).
+                Used /api/auth/login per backend source.
+            (2) GET /api/me/collections as sophie → 200 JSON array (7 items). Every required
+                key is present on every item with correct type: collection_id (str, prefix 'col_'),
+                name (str), privacy_mode (str), previews (list ≤4 of URL strings), cover_image_url
+                (str|null — equals previews[0] when previews non-empty; null otherwise),
+                count (int ≥ 0, equals len(spot_ids) when spot_ids present), cities (list ≤3 of
+                non-empty strings), last_updated (str|null from updated_at or created_at).
+            (3) No-auth GET /api/me/collections → 401.
+            (4b) Supplementary enrichment proof: added a real sophie-owned spot to one of her
+                collections → refreshed list shows count=1, previews_len=1,
+                cover_image_url==previews[0], cities=['Johnson City']. Cleanup toggle applied.
+                Conclusion: enrichment LOGIC is correct end-to-end.
+            (5) GET /api/feed/home as sophie → 200.
+
+          ❌ FAIL #1 (DATA STATE, not endpoint bug):
+            Assertion 4 — at least one of sophie's collections must have count>0 AND
+            cover_image_url!=null AND cities>=1. None do. All 7 of sophie's collections are
+            empty TEST_* artifacts left behind by prior test runs (names: 'TEST_My Test
+            Collection' ×5, 'TEST_New_Collection' ×1, 'Test Col 1' ×1), each with spot_ids=[].
+            Sophie owns 31 real spots (stats.spots_created=31) but none are in any collection.
+            Other seed users (marco, priya, jordan, lena) all have 0 collections. Endpoint
+            enrichment is correct (4b proves it) — seed/DB state lacks a populated collection.
+            Recommendation for main agent: either (a) add seed logic that puts 2–3 of sophie's
+            existing spots into a real (non-TEST_) collection, or (b) add a cleanup step that
+            removes collections whose name starts with 'TEST_' at startup, plus seed one
+            populated demo collection.
+
+          ❌ FAIL #2 (FRONTEND/BACKEND CONTRACT MISMATCH — regression check):
+            Assertion 5a — feed/home sections. Review spec expects keys
+            {for_you, trending, nearby, from_your_network}. Backend actually returns
+            {hero, nearby, trending, golden_hour, recent, best_for_you, following, seasonal}.
+            Two of the four required section names are MISSING:
+              - 'for_you' is NOT present (closest is 'best_for_you')
+              - 'from_your_network' is NOT present (closest is 'following')
+            'nearby' and 'trending' ARE present as arrays.
+            Recommendation: align naming. Either rename backend keys to match the spec
+            (for_you / from_your_network) or update the review/frontend contract to use the
+            current names (best_for_you / following).
+
+          ❌ FAIL #3 (FRONTEND/BACKEND CONTRACT MISMATCH — regression check):
+            Assertion 6 — POST /api/billing/checkout {plan:'pro', interval:'monthly'}.
+            Status is 200 and the URL value DOES start with 'https://checkout.stripe.com/',
+            but it's returned under key 'url', NOT 'checkout_url' as the review spec
+            requires. Response shape: {url: 'https://checkout.stripe.com/c/pay/cs_test_...',
+            session_id: 'cs_test_...'}. Per backend_test_phase_e.py history this has always
+            been 'url' — the spec note is what changed. Also NOTE: backend source accepts
+            {plan, cycle} (not 'interval') but silently ignores extra fields, so the test
+            call succeeds. Recommendation: backend rename 'url' → 'checkout_url' in the
+            response (or frontend keep reading 'url' if that's the canonical contract) and
+            accept 'interval' as an alias for 'cycle'.
+
+          No critical endpoint bugs — all failures are either data-state pollution (#1) or
+          naming drift between the review spec and the actual backend response shape (#2, #3).
+          Test script saved to /app/backend_test_ux_polish_5.py.
 
   - task: "Phase C — Post moderation: GET /api/admin/posts + DELETE /api/admin/posts/{id} + POST /restore"
     implemented: true
@@ -529,6 +602,48 @@ frontend:
         -comment: "PASS. Login as sophie@photoscout.app / demo123 succeeded. GET /api/auth/me returns top-level stats object: {followers:0, following:2, spots_created:31, reviews_received:8, posts_count:0}. All 5 fields are non-negative ints (bool-excluded); spots_created=31 satisfies >=1 for sophie. All pre-existing fields intact: plan='free', user_id='user_7480271a521f', email='sophie@photoscout.app', limits (dict with saves/private_spots/collections/advanced_filters/sell_packs/creator_analytics), usage={saves:1, private_spots:16, collections:7}. Test script: /app/backend_test_phase_b_stats.py."
 
 agent_communication:
+    -agent: "testing"
+    -message: |
+      UX Polish #5 — Saved-tab rich-card backend contract validated
+      (/app/backend_test_ux_polish_5.py, 6/9 PASS, 3 FAIL).
+
+      ✅ CORE SCHEMA PASSES
+        - /api/me/collections returns a JSON array; every one of sophie's 7 collections has
+          every required rich-card key with correct types: collection_id (prefix 'col_'),
+          name, privacy_mode, previews (≤4 URL strings), cover_image_url (=previews[0] when
+          non-empty, else null), count (int, == len(spot_ids) when present), cities (≤3
+          non-empty strings), last_updated (str|null).
+        - No-auth → 401 correctly.
+        - Supplementary proof: adding a sophie-owned spot to one of her empty collections
+          then re-fetching shows count=1, previews_len=1, cover_image_url==previews[0],
+          cities=['Johnson City']. Enrichment logic is correct end-to-end.
+
+      ❌ 3 FAILURES — main agent, please act:
+
+      1) DATA STATE (not an endpoint bug): sophie has 7 empty TEST_* collections left over
+         from prior test runs, every one with spot_ids=[]. No populated collection exists.
+         Other seed users have 0 collections at all. Fix by either: (a) purge TEST_*
+         collections on startup, or (b) seed one real populated demo collection for sophie
+         using 2–3 of her 31 existing spots.
+
+      2) CONTRACT DRIFT — feed/home section names. Review expected
+         {for_you, trending, nearby, from_your_network}. Backend returns
+         {hero, nearby, trending, golden_hour, recent, best_for_you, following, seasonal}.
+         'for_you' and 'from_your_network' are MISSING — likely renamed to 'best_for_you'
+         and 'following'. Either rename backend keys or update the frontend contract.
+
+      3) CONTRACT DRIFT — /api/billing/checkout response key. Review expected 'checkout_url',
+         backend returns the same URL under 'url'. Value IS a valid stripe checkout URL
+         (https://checkout.stripe.com/c/pay/cs_test_...). Either rename backend → 'checkout_url'
+         or keep the frontend reading 'url'. Also backend accepts {plan, cycle}, not 'interval'
+         — silently ignores 'interval'. Consider accepting both.
+
+      ℹ️ Minor: review said POST /api/login; actual endpoint is POST /api/auth/login.
+      Used /api/auth/login for all logins.
+
+      No regressions in other backend surfaces. Test script saved at
+      /app/backend_test_ux_polish_5.py — can be re-run standalone.
+
     -agent: "main"
     -message: |
       Community Phase 1 backend is live. Please validate:
@@ -1117,3 +1232,30 @@ agent_communication:
          - No auth → 401.
 
       Please create /app/backend_test_phase_f.py for these.
+
+
+    -agent: "main"
+    -message: |
+      UX Polish #5 — please validate the enriched /api/me/collections contract used by the new rich Saved-tab cards:
+
+      Creds: sophie@photoscout.app / demo123 (has several pre-existing collections with spots).
+
+      1) POST /api/login {email:"sophie@photoscout.app", password:"demo123"} → 200, capture token.
+      2) GET /api/me/collections as sophie → 200, array of collections.
+         For each item, verify these fields exist (keys may be null but MUST be present):
+           - collection_id (string, starts with "col_")
+           - name (string)
+           - privacy_mode (string)
+           - previews (array, max 4 items — image URL strings)
+           - cover_image_url (string | null) → equal to previews[0] if previews is non-empty, else null
+           - count (int >= 0) → equal to length of spot_ids
+           - cities (array, max 3 distinct city strings from constituent spots)
+           - last_updated (string | null) → equal to updated_at or created_at
+      3) No-auth GET /api/me/collections → 401.
+      4) Confirm at least one of sophie's collections returns count>0 with a non-null cover_image_url and at least 1 city.
+
+      Regression safety check:
+      5) GET /api/feed/home as sophie → 200, still returns the 4 sections expected (for_you/trending/nearby/from_your_network, empty allowed).
+      6) POST /api/billing/checkout as sophie {plan:"pro", interval:"monthly"} → 200 with a checkout_url starting with "https://checkout.stripe.com/".
+
+      Please create /app/backend_test_ux_polish_5.py for these and report pass/fail per assertion.
