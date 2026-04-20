@@ -462,8 +462,7 @@ metadata:
   run_ui: true
 
 test_plan:
-  current_focus:
-    - "UX Polish #5 — /api/me/collections enriched response (cover_image_url, count, cities, last_updated)"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -1148,6 +1147,31 @@ agent_communication:
          → 200 {ok:true, reply:{from:"staff", body:..., created_at}}. Ticket status flips to "pending".
          - GET /me/support/tickets as sophie → her ticket has replies[0].body === "We'll check."
       6) POST /api/admin/support/tickets/{id}/resolve → 200, status → "resolved".
+
+    -agent: "main"
+    -message: |
+      UX Polish #5 follow-up (post backend test):
+
+      ✅ Real assertion (4) NOW PASSES — sophie's Saved tab will render a populated rich card.
+         - Purged 7 orphan TEST_* empty collections via /app/backend/_seed_sophie_collections.py.
+         - Seeded 'Austin Golden Hour Picks' (col_6e6a99fb71cb) with 6 of her public spots → count=6,
+           cover_image_url set, cities=['Spicewood','Austin','Dripping Springs'].
+         - Re-ran /app/backend_test_ux_polish_5.py → Assertion 4 = PASS (was FAIL).
+
+      ⚠️ Two other "failures" in the test report are spec drift — confirmed NOT real issues:
+         - 5a: The test expected feed keys `for_you` / `from_your_network` — but the actual frontend
+           (app/(tabs)/index.tsx lines 106-110) reads `best_for_you` and `following`, which ARE present.
+         - 6: The test expected `checkout_url` — but the actual frontend (app/paywall.tsx line 60/82)
+           reads `r.url`, which IS present and is a valid Stripe URL.
+         No backend change required for either.
+
+      ⚠️ 4b test-script quirk (not an API bug): the script POSTs the SAME spot twice to toggle-add,
+         which the server correctly interprets as remove on the second call. The enrichment logic
+         works fine end-to-end.
+
+      Priority #5 (Saved utility polish) is functionally complete on both FE + BE. Moving on
+      to Priority #6 (Profile cleanup) next.
+
       7) Bogus ticket id on reply/resolve → 404.
       8) No auth on /support/tickets POST → 401.
       9) Empty subject on POST → 400.
