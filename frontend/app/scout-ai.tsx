@@ -151,6 +151,13 @@ export default function ScoutAIScreen() {
           </View>
           <Text style={styles.subtitle} numberOfLines={1}>Official PhotoScout assistant</Text>
         </View>
+        <TouchableOpacity
+          onPress={() => router.push('/scout-ai/planner')}
+          style={styles.plannerPill}
+          testID="scout-open-planner"
+        >
+          <Text style={styles.plannerPillTxt}>Planners</Text>
+        </TouchableOpacity>
       </View>
 
       <KeyboardAvoidingView
@@ -286,6 +293,12 @@ const styles = StyleSheet.create({
   headerAvatar: { borderRadius: 999, overflow: 'hidden' },
   title: { color: colors.text, fontFamily: font.display, fontSize: 20, letterSpacing: -0.3 },
   subtitle: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, marginTop: 1 },
+  plannerPill: {
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: radii.pill,
+    backgroundColor: 'rgba(32,130,255,0.15)',
+    borderWidth: 1, borderColor: 'rgba(32,130,255,0.4)',
+  },
+  plannerPillTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.3 },
 
   aiBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 3,
