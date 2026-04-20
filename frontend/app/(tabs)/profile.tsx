@@ -28,8 +28,8 @@ import {
   Camera,
   Share2,
   Globe,
-  Instagram,
-  Facebook,
+  Globe2,
+  AtSign,
   Music2,
   ShieldCheck,
   Briefcase,
@@ -47,6 +47,7 @@ import { Button } from '../../src/components/Button';
 import { Input, Chip, EmptyState } from '../../src/components/ui';
 import SpotCard from '../../src/components/SpotCard';
 import VerifiedBadge from '../../src/components/VerifiedBadge';
+
 
 type TabKey = 'posts' | 'spots' | 'photos' | 'reviews' | 'collections' | 'about';
 const TABS: { key: TabKey; label: string }[] = [
@@ -373,12 +374,12 @@ export default function Profile() {
                 )}
                 {!!user.instagram && (
                   <TouchableOpacity onPress={() => openUrl(`https://instagram.com/${user.instagram.replace('@', '')}`)} style={styles.linkBtn}>
-                    <Instagram size={14} color={colors.textSecondary} />
+                    <AtSign size={14} color={colors.textSecondary} />
                   </TouchableOpacity>
                 )}
                 {!!user.facebook_url && (
                   <TouchableOpacity onPress={() => openUrl(user.facebook_url)} style={styles.linkBtn}>
-                    <Facebook size={14} color={colors.textSecondary} />
+                    <Globe2 size={14} color={colors.textSecondary} />
                   </TouchableOpacity>
                 )}
                 {!!user.tiktok_url && (
