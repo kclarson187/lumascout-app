@@ -3131,13 +3131,15 @@ SUPPORT_FAQS = [
 ]
 
 
-@api.get("/support/faqs")
-async def support_faqs():
+# MIGRATED to routes/support.py — see REFACTOR_PLAN.md
+# @api.get("/support/faqs")
+async def support_faqs_LEGACY():
     return {"items": SUPPORT_FAQS}
 
 
-@api.post("/support/tickets")
-async def create_support_ticket(body: SupportTicketIn, user: dict = Depends(get_current_user)):
+# MIGRATED to routes/support.py — see REFACTOR_PLAN.md
+# @api.post("/support/tickets")
+async def create_support_ticket_LEGACY(body: SupportTicketIn, user: dict = Depends(get_current_user)):
     subj = (body.subject or "").strip()
     msg = (body.body or "").strip()
     if not subj or not msg:
@@ -3163,8 +3165,9 @@ async def create_support_ticket(body: SupportTicketIn, user: dict = Depends(get_
     return doc
 
 
-@api.get("/me/support/tickets")
-async def my_support_tickets(user: dict = Depends(get_current_user)):
+# MIGRATED to routes/support.py — see REFACTOR_PLAN.md
+# @api.get("/me/support/tickets")
+async def my_support_tickets_LEGACY(user: dict = Depends(get_current_user)):
     items = await db.support_tickets.find(
         {"user_id": user["user_id"]},
         {"_id": 0},
