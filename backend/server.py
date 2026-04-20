@@ -1562,17 +1562,30 @@ async def create_collection(body: CollectionIn, user: dict = Depends(get_current
 
 @api.get("/me/collections")
 async def list_my_collections(user: dict = Depends(get_current_user)):
-    cols = await db.collections.find({"owner_user_id": user["user_id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
-    # Attach preview images
+    cols = await db.collections.find({"owner_user_id": user["user_id"]}, {"_id": 0}).sort("updated_at", -1).to_list(200)
+    # Attach preview images + city summary for richer list cards.
     for c in cols:
         previews = []
-        for sid in (c.get("spot_ids") or [])[:4]:
-            s = await db.spots.find_one({"spot_id": sid}, {"_id": 0, "images": 1})
-            if s and s.get("images"):
+        cities: List[str] = []
+        for sid in (c.get("spot_ids") or [])[:8]:
+            s = await db.spots.find_one(
+                {"spot_id": sid},
+                {"_id": 0, "images": 1, "city": 1, "state": 1},
+            )
+            if not s:
+                continue
+            if s.get("images"):
                 cover = next((i for i in s["images"] if i.get("is_cover")), s["images"][0])
-                previews.append(cover["image_url"])
-        c["previews"] = previews
+                if cover.get("image_url"):
+                    previews.append(cover["image_url"])
+            if s.get("city") and s["city"] not in cities:
+                cities.append(s["city"])
+        c["previews"] = previews[:4]
+        c["cover_image_url"] = previews[0] if previews else None
         c["count"] = len(c.get("spot_ids") or [])
+        c["cities"] = cities[:3]  # surface up to 3 distinct cities for trip-plan feel
+        # Normalise last_updated so client can render a relative label.
+        c["last_updated"] = c.get("updated_at") or c.get("created_at")
     return cols
 
 
