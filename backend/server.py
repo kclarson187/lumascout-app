@@ -5718,7 +5718,9 @@ async def on_shutdown():
 from routes import scout_ai as _scout_ai_routes  # noqa: E402
 from routes import support as _support_routes  # noqa: E402
 from routes import super_admin as _super_admin_routes  # noqa: E402
+from routes import brand as _brand_routes  # noqa: E402
 
 app.include_router(_scout_ai_routes.router)
 app.include_router(_support_routes.router)
 app.include_router(_super_admin_routes.router)
+app.include_router(_brand_routes.router)
