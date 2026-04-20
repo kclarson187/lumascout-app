@@ -2768,7 +2768,8 @@ async def _hydrate_posts(posts: List[dict], viewer: Optional[dict]) -> List[dict
     users = await db.users.find(
         {"user_id": {"$in": uids}},
         {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
-         "verification_status": 1, "plan": 1, "city": 1, "state": 1},
+         "verification_status": 1, "plan": 1, "city": 1, "state": 1,
+         "is_bot": 1, "is_official": 1, "avatar_kind": 1, "specialties": 1},
     ).to_list(200)
     umap = {u["user_id"]: u for u in users}
     liked_ids: set = set()
@@ -3838,8 +3839,11 @@ class ScoutAIPreferencesIn(BaseModel):
     preferred_time: Optional[str] = None
 
 
-@api.get("/ai/preferences")
-async def scout_ai_get_preferences(user: dict = Depends(get_current_user)):
+# MIGRATED to routes/scout_ai.py — kept here temporarily as dead code during the
+# incremental refactor (see /app/backend/REFACTOR_PLAN.md). Safe to delete once
+# the refactor is verified stable in production.
+# @api.get("/ai/preferences")
+async def scout_ai_get_preferences_LEGACY(user: dict = Depends(get_current_user)):
     prefs = user.get("scout_prefs") or {}
     return {
         "shoots": prefs.get("shoots") or [],
@@ -3850,8 +3854,9 @@ async def scout_ai_get_preferences(user: dict = Depends(get_current_user)):
     }
 
 
-@api.post("/ai/preferences")
-async def scout_ai_set_preferences(body: ScoutAIPreferencesIn, user: dict = Depends(get_current_user)):
+# MIGRATED to routes/scout_ai.py — see REFACTOR_PLAN.md
+# @api.post("/ai/preferences")
+async def scout_ai_set_preferences_LEGACY(body: ScoutAIPreferencesIn, user: dict = Depends(get_current_user)):
     payload = {
         "shoots": (body.shoots or [])[:8],
         "priorities": (body.priorities or [])[:3],
@@ -3902,8 +3907,9 @@ def _scout_ai_follow_ups(placement: Optional[str]) -> List[str]:
     ]
 
 
-@api.post("/ai/chat")
-async def scout_ai_chat(body: ScoutAIChatIn, user: dict = Depends(get_current_user)):
+# MIGRATED to routes/scout_ai.py — see REFACTOR_PLAN.md
+# @api.post("/ai/chat")
+async def scout_ai_chat_LEGACY(body: ScoutAIChatIn, user: dict = Depends(get_current_user)):
     check_rate_limit("scout_ai_chat", user["user_id"])
 
     if not body.messages:
@@ -3955,6 +3961,240 @@ async def scout_ai_chat(body: ScoutAIChatIn, user: dict = Depends(get_current_us
         "model": "gpt-5.2",
         "disclosure": "Scout AI is an official PhotoScout AI assistant. Replies are AI-generated.",
     }
+
+
+# ============================================================================
+# SCOUT AI — Phase 3 (community enhancement): admin toggles + editorial posts +
+# unanswered-Q&A auto-replies. All actions are admin-triggered for MVP; a future
+# scheduler can run _scout_ai_generate_editorial on a cron when the admin
+# enables `editorial_posts_enabled`.
+# ============================================================================
+
+SCOUT_AI_USER_ID = "user_scoutai"
+
+
+async def _get_scout_settings() -> dict:
+    s = await db.app_settings.find_one({"_id": "scout_ai_settings"}) or {}
+    return {
+        "enabled": bool(s.get("enabled", True)),
+        "community_replies_enabled": bool(s.get("community_replies_enabled", False)),
+        "editorial_posts_enabled": bool(s.get("editorial_posts_enabled", False)),
+        "max_posts_per_day": int(s.get("max_posts_per_day", 4)),
+        "unanswered_reply_delay_hours": int(s.get("unanswered_reply_delay_hours", 24)),
+        "updated_at": s.get("updated_at"),
+    }
+
+
+async def _scout_posts_today() -> int:
+    start = utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    return await db.community_posts.count_documents({
+        "author_user_id": SCOUT_AI_USER_ID,
+        "created_at": {"$gte": start},
+    })
+
+
+class ScoutSettingsIn(BaseModel):
+    enabled: Optional[bool] = None
+    community_replies_enabled: Optional[bool] = None
+    editorial_posts_enabled: Optional[bool] = None
+    max_posts_per_day: Optional[int] = None
+    unanswered_reply_delay_hours: Optional[int] = None
+
+
+# MIGRATED to routes/scout_ai.py — see REFACTOR_PLAN.md
+# @api.get("/admin/ai/settings")
+async def admin_ai_settings_get_LEGACY(user: dict = Depends(require_role("moderator"))):
+    s = await _get_scout_settings()
+    s["posts_today"] = await _scout_posts_today()
+    return s
+
+
+# MIGRATED to routes/scout_ai.py — see REFACTOR_PLAN.md
+# @api.post("/admin/ai/settings")
+async def admin_ai_settings_set_LEGACY(body: ScoutSettingsIn, user: dict = Depends(require_role("super_admin"))):
+    patch = {}
+    for k in ("enabled", "community_replies_enabled", "editorial_posts_enabled"):
+        v = getattr(body, k)
+        if v is not None:
+            patch[k] = bool(v)
+    if body.max_posts_per_day is not None:
+        patch["max_posts_per_day"] = max(0, min(20, int(body.max_posts_per_day)))
+    if body.unanswered_reply_delay_hours is not None:
+        patch["unanswered_reply_delay_hours"] = max(1, min(168, int(body.unanswered_reply_delay_hours)))
+    patch["updated_at"] = utcnow()
+    await db.app_settings.update_one({"_id": "scout_ai_settings"}, {"$set": patch}, upsert=True)
+    await audit_log(user, "scout_ai.settings_update", "scout_ai", after=patch)
+    return await _get_scout_settings()
+
+
+EDITORIAL_TEMPLATES = [
+    ("Strong sunset picks near you",
+     "A short Scout AI shortlist of recently verified PhotoScout spots with strong evening light, ordered by distance and crowd-friendliness."),
+    ("Worth scouting this weekend",
+     "A Scout AI pick list of spots that match common weekend shoot styles, filtered to ones with recent verification and clear field notes."),
+    ("Best for family sessions",
+     "A Scout AI shortlist of family-friendly PhotoScout spots, prioritising easier access, lower friction, and flexible backgrounds."),
+    ("Golden hour favourites",
+     "A Scout AI pick list of spots with stronger late-day light and more predictable portrait conditions."),
+    ("Recently verified nearby",
+     "A Scout AI-curated list of freshly confirmed PhotoScout spots that look more trustworthy right now."),
+]
+
+
+async def _scout_llm_compose(system_prompt: str, user_prompt: str, context: str = "") -> str:
+    """Shared helper to call GPT-5.2 with Scout AI guardrails."""
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+    except Exception:
+        raise HTTPException(status_code=500, detail="AI service is not available.")
+    key = os.environ.get("EMERGENT_LLM_KEY")
+    if not key:
+        raise HTTPException(status_code=500, detail="AI service is not configured.")
+    full_sys = system_prompt
+    if context:
+        full_sys = f"{system_prompt}\n\n=== CONTEXT ===\n{context}\n=== END CONTEXT ==="
+    session_id = f"scout_bot:{uuid.uuid4().hex[:8]}"
+    chat = LlmChat(api_key=key, session_id=session_id, system_message=full_sys).with_model("openai", "gpt-5.2")
+    try:
+        out = await chat.send_message(UserMessage(text=user_prompt))
+        return (out or "").strip()
+    except Exception as e:
+        logger.warning("Scout AI compose failed: %s", e)
+        raise HTTPException(status_code=502, detail="Scout AI is briefly unavailable.")
+
+
+# MIGRATED to routes/scout_ai.py — see REFACTOR_PLAN.md
+# @api.post("/admin/ai/generate-editorial")
+async def admin_ai_generate_editorial_LEGACY(
+    city: Optional[str] = None,
+    template_index: Optional[int] = None,
+    user: dict = Depends(require_role("moderator")),
+):
+    """Admin-triggered: Scout AI composes + publishes an editorial post to the
+    community feed authored by @scoutai. Every post is clearly labeled as
+    official AI-generated content by the frontend via the author's is_bot flag.
+    """
+    settings = await _get_scout_settings()
+    if not settings["enabled"]:
+        raise HTTPException(status_code=400, detail="Scout AI is disabled.")
+    if settings["max_posts_per_day"] > 0 and (await _scout_posts_today()) >= settings["max_posts_per_day"]:
+        raise HTTPException(status_code=429, detail="Daily Scout AI post cap reached.")
+
+    idx = template_index if template_index is not None else (datetime.now(timezone.utc).day % len(EDITORIAL_TEMPLATES))
+    idx = max(0, min(idx, len(EDITORIAL_TEMPLATES) - 1))
+    title_stub, brief = EDITORIAL_TEMPLATES[idx]
+
+    # Pull 6-10 recent approved spots (scoped by city when supplied) to ground the post.
+    q: dict = {"privacy_mode": "public"}
+    if city:
+        q["city"] = city
+    spots = await db.spots.find(q, {
+        "_id": 0, "title": 1, "city": 1, "state": 1, "shoot_types": 1,
+        "best_time_of_day": 1, "shoot_score": 1, "updated_at": 1,
+    }).sort("updated_at", -1).limit(10).to_list(10)
+    ctx_lines = [f"EDITORIAL_BRIEF: {brief}"]
+    if city:
+        ctx_lines.append(f"CITY_FOCUS: {city}")
+    if spots:
+        ctx_lines.append("CANDIDATE_SPOTS:")
+        for s in spots:
+            ctx_lines.append(
+                f"  - {s.get('title')} ({s.get('city')}, {s.get('state')}) "
+                f"score={s.get('shoot_score')} best={s.get('best_time_of_day')} "
+                f"shoots={','.join((s.get('shoot_types') or [])[:3])}"
+            )
+    context = "\n".join(ctx_lines)
+
+    system = (
+        SCOUT_AI_SYSTEM_PROMPT
+        + "\n\nYou are composing a short editorial community post for the PhotoScout feed. "
+        + "Output plain text only (no markdown headings, no hashtags). Keep it under 140 words. "
+        + "Open with the concrete value, name 3-5 spots from CANDIDATE_SPOTS (one per line with a 1-sentence reason). "
+        + "End with one short question to invite real-user comments."
+    )
+    body_text = await _scout_llm_compose(
+        system,
+        f"Write the post body for the editorial '{title_stub}'.",
+        context,
+    )
+
+    post_id = f"pst_{uuid.uuid4().hex[:12]}"
+    doc = {
+        "post_id": post_id,
+        "author_user_id": SCOUT_AI_USER_ID,
+        "category": "guide",
+        "title": title_stub,
+        "body": body_text[:2000],
+        "image_url": None,
+        "city": city,
+        "state": None,
+        "like_count": 0,
+        "comment_count": 0,
+        "status": "active",
+        "ai_generated": True,
+        "ai_template_index": idx,
+        "created_at": utcnow(),
+        "updated_at": utcnow(),
+    }
+    await db.community_posts.insert_one(doc)
+    await audit_log(user, "scout_ai.editorial_post", "community_post", post_id, after={"title": title_stub, "city": city})
+    return {"ok": True, "post_id": post_id, "title": title_stub, "body": body_text}
+
+
+# MIGRATED to routes/scout_ai.py — see REFACTOR_PLAN.md
+# @api.post("/admin/ai/reply-to-post/{post_id}")
+async def admin_ai_reply_to_post_LEGACY(post_id: str, user: dict = Depends(require_role("moderator"))):
+    """Admin-triggered: Scout AI drafts and publishes a reply comment on a
+    specific community post (for MVP usage on unanswered Q&A threads)."""
+    settings = await _get_scout_settings()
+    if not settings["enabled"]:
+        raise HTTPException(status_code=400, detail="Scout AI is disabled.")
+
+    post = await db.community_posts.find_one({"post_id": post_id})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    # Build grounding context: the post title/body, author city/state, and any
+    # prior comments so Scout AI doesn't repeat itself.
+    prior = await db.community_comments.find({"post_id": post_id}, {"_id": 0, "body": 1, "author_user_id": 1}).limit(20).to_list(20)
+    ctx_lines = [
+        f"POST_TITLE: {post.get('title')}",
+        f"POST_CATEGORY: {post.get('category')}",
+        f"POST_BODY: {(post.get('body') or '')[:1200]}",
+    ]
+    if post.get("city"):
+        ctx_lines.append(f"POST_CITY: {post['city']}, {post.get('state') or ''}")
+    if prior:
+        ctx_lines.append(f"PRIOR_COMMENTS: {len(prior)} existing — do not repeat obvious points.")
+
+    system = (
+        SCOUT_AI_SYSTEM_PROMPT
+        + "\n\nYou are writing a single helpful reply to a PhotoScout community post. "
+        + "Plain text only. Under 120 words. Lead with the most practical answer, "
+        + "then 2-4 concrete considerations. If the question cannot be answered from "
+        + "the data you have, say what would be needed to help further."
+    )
+    reply_txt = await _scout_llm_compose(
+        system,
+        "Write the reply comment body now.",
+        "\n".join(ctx_lines),
+    )
+
+    comment = {
+        "comment_id": f"cmt_{uuid.uuid4().hex[:12]}",
+        "post_id": post_id,
+        "author_user_id": SCOUT_AI_USER_ID,
+        "body": reply_txt[:2000],
+        "ai_generated": True,
+        "status": "active",
+        "created_at": utcnow(),
+    }
+    await db.community_comments.insert_one(comment)
+    await db.community_posts.update_one({"post_id": post_id}, {"$inc": {"comment_count": 1}})
+    await audit_log(user, "scout_ai.reply", "community_post", post_id, after={"comment_id": comment["comment_id"]})
+    return {"ok": True, "comment_id": comment["comment_id"], "body": reply_txt}
+
+
 
 
 
@@ -5322,3 +5562,13 @@ async def backfill_country_fields():
 @app.on_event("shutdown")
 async def on_shutdown():
     client.close()
+
+
+# ----------------------------------------------------------------------------
+# Per-domain routers (see /app/backend/REFACTOR_PLAN.md).
+# Mounted AFTER every server.py definition so route modules can import helpers
+# from this file without circular-import issues.
+# ----------------------------------------------------------------------------
+from routes import scout_ai as _scout_ai_routes  # noqa: E402
+
+app.include_router(_scout_ai_routes.router)

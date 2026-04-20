@@ -8,6 +8,7 @@ import { useAuth } from '../src/auth';
 import { colors, font, space, radii } from '../src/theme';
 import VerifiedBadge from '../src/components/VerifiedBadge';
 import PollCard from '../src/components/PollCard';
+import ScoutAIAvatar from '../src/components/ScoutAIAvatar';
 
 // Small helper so every card shows a humanized relative timestamp instead of
 // "4/20/2026" which is useless for feed scanning.
@@ -201,22 +202,32 @@ function PostCard({ post, onLike, meId }: { post: any; onLike: () => void; meId?
 
   // Pull up to 2 specialties for the author chip row.
   const topSpecs: string[] = (post.author?.specialties || []).slice(0, 2);
+  const isBot = !!(post.author?.is_bot || post.author?.is_official || post.author?.avatar_kind === 'scout_ai');
 
   return (
     <Pressable
       onPress={() => router.push(`/community/post/${post.post_id}` as any)}
-      style={({ pressed }) => [styles.card, pressed && { opacity: 0.9 }]}
+      style={({ pressed }) => [styles.card, isBot && styles.cardBot, pressed && { opacity: 0.9 }]}
       testID={`post-${post.post_id}`}
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-        {post.author?.avatar_url
+        {isBot ? (
+          <View style={styles.avatar}><ScoutAIAvatar size={34} /></View>
+        ) : post.author?.avatar_url
           ? <Image source={{ uri: post.author.avatar_url }} style={styles.avatar} />
           : <View style={[styles.avatar, { backgroundColor: colors.surface2 }]} />}
         <View style={{ flex: 1 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
             <Text style={styles.authorName}>{post.author?.name || 'Someone'}</Text>
-            <VerifiedBadge status={post.author?.verification_status} variant="inline" size={12} />
-            {topSpecs.map((s) => (
+            {isBot ? (
+              <View style={[styles.specChip, { flexDirection: 'row', alignItems: 'center', gap: 2 }]}>
+                <Sparkles size={9} color={colors.primary} />
+                <Text style={styles.specChipTxt}>OFFICIAL AI</Text>
+              </View>
+            ) : (
+              <VerifiedBadge status={post.author?.verification_status} variant="inline" size={12} />
+            )}
+            {!isBot && topSpecs.map((s) => (
               <View key={s} style={styles.specChip}>
                 <Text style={styles.specChipTxt}>{s}</Text>
               </View>
@@ -312,6 +323,7 @@ const styles = StyleSheet.create({
   emptyBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 10, borderRadius: radii.md, backgroundColor: colors.primary, marginTop: 10 },
   emptyBtnTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 13 },
   card: { backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1, padding: space.md, borderRadius: radii.lg, gap: 10 },
+  cardBot: { borderColor: colors.primary, backgroundColor: 'rgba(245,166,35,0.04)' },
   avatar: { width: 34, height: 34, borderRadius: 17 },
   authorName: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
   authorMeta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11 },

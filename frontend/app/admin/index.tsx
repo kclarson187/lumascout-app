@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl, Image } from 'react-native';
 import { router } from 'expo-router';
-import { Users as UsersIcon, Crown, AlertTriangle, Map, TrendingUp, ChevronRight } from 'lucide-react-native';
+import { Users as UsersIcon, Crown, AlertTriangle, Map, TrendingUp, ChevronRight, Sparkles } from 'lucide-react-native';
 import { api } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
 import VerifiedBadge from '../../src/components/VerifiedBadge';
@@ -82,6 +82,18 @@ export default function AdminOverview() {
           <ChevronRight size={16} color={colors.textSecondary} style={{ position: 'absolute', top: 14, right: 14 }} />
         </TouchableOpacity>
       </View>
+
+      {/* PRD Scout AI Phase 3 — Admin controls shortcut */}
+      <TouchableOpacity
+        style={[styles.queueCard, { borderColor: colors.primary, backgroundColor: 'rgba(245,166,35,0.08)' }]}
+        onPress={() => router.push('/admin/ai-controls' as any)}
+        testID="overview-go-ai-controls"
+      >
+        <Sparkles size={18} color={colors.primary} />
+        <Text style={[styles.queueLabel, { color: colors.primary, fontFamily: font.bodyBold, marginTop: 6 }]}>Scout AI controls</Text>
+        <Text style={[styles.queueLabel, { marginTop: 2 }]}>Cadence, editorial posts, AI replies</Text>
+        <ChevronRight size={16} color={colors.primary} style={{ position: 'absolute', top: 14, right: 14 }} />
+      </TouchableOpacity>
 
       {data.top_contributors?.length > 0 && (
         <View style={styles.card}>

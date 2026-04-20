@@ -1403,6 +1403,76 @@ agent_communication:
          - As sophie: POST /posts {category:"poll",title:"Fav lens?",poll_options:["35mm","50mm","85mm"]} → 200 with poll={options:[3x{index,text,votes:0}], total_votes:0}
 
     -agent: "main"
+
+    -agent: "main"
+    -message: |
+      SCOUT AI Phase 3 + Backend refactor kickoff.
+
+      ═══ SCOUT AI PHASE 3 — Community enhancement ═══
+
+      Backend:
+        • Seeded @scoutai bot user (user_id=user_scoutai, is_bot=true, is_official=true,
+          avatar_kind=scout_ai, plan=elite) via /app/backend/_seed_scout_ai.py. Idempotent.
+        • Added app_settings doc "scout_ai_settings" storing cadence toggles + daily cap +
+          unanswered-Q&A delay. Defaults: enabled ON, community replies OFF, editorial posts
+          OFF — admins must opt in.
+        • New endpoints:
+            GET  /api/admin/ai/settings                   — moderator
+            POST /api/admin/ai/settings                   — super_admin (audit-logged)
+            POST /api/admin/ai/generate-editorial         — moderator (title + AI body)
+            POST /api/admin/ai/reply-to-post/{post_id}    — moderator (AI comment body)
+          Each uses a shared `_scout_llm_compose` helper that calls GPT-5.2 with guardrails.
+          Editorial posts rotate through 5 templates (sunset picks / weekend / family /
+          golden hour / recently verified); post bodies are grounded in 10 recent
+          approved public spots (optionally filtered by city).
+          Hard daily cap enforced from settings.max_posts_per_day.
+        • users hydration in /api/posts now exposes is_bot + is_official + avatar_kind +
+          specialties so the community UI can show the OFFICIAL AI badge.
+
+      Frontend:
+        • New admin screen /admin/ai-controls.tsx:
+            - Cadence toggles (enabled / community replies / editorial posts)
+            - Daily post cap + unanswered-Q reply delay steppers
+            - "Generate & publish editorial" action (optional city focus)
+            - "Draft Scout AI reply" action (paste a post_id)
+            - Live "Posts today: X/Y" counter
+        • Admin home /admin/index.tsx gains a gold-bordered "Scout AI controls" entry card.
+        • community.tsx PostCard detects bot/official posts and renders:
+            - ScoutAIAvatar SVG in the author slot
+            - Orange "✨ OFFICIAL AI" pill next to the name
+            - Subtle orange-tinted card border (cardBot style)
+
+      Verified end-to-end:
+        ✅ Admin enabled editorial_posts → POST /admin/ai/generate-editorial?city=Austin
+           returned a real GPT-5.2-composed body. Screenshot shows the new Scout AI post
+           at the top of /community with proper avatar + OFFICIAL AI badge + gold border.
+
+      ═══ BACKEND REFACTOR — Proof of concept executed ═══
+
+      Files:
+        /app/backend/REFACTOR_PLAN.md           — full migration order + pattern doc
+        /app/backend/routes/__init__.py         — package docstring
+        /app/backend/routes/scout_ai.py         — FIRST extracted domain (all 7 AI routes)
+
+      Approach:
+        • routes/scout_ai.py owns its own APIRouter and imports shared primitives (db,
+          get_current_user, require_role, audit_log, utcnow, check_rate_limit, logger,
+          system prompt, helpers, Pydantic models) FROM server.py at module-top.
+        • server.py mounts the router at the very bottom (`app.include_router(...)`) so
+          every symbol exists before the import fires — no circular issues.
+        • Duplicated route functions in server.py were renamed with a _LEGACY suffix and
+          their @api decorators commented out ("MIGRATED to routes/scout_ai.py — see
+          REFACTOR_PLAN.md"). Kept as harmless dead code for one cycle for safety; can be
+          deleted once the refactor is verified stable.
+        • Verified live: curl to /api/auth/login (200), /api/ai/preferences (200),
+          /api/ai/chat (200, real GPT-5.2 reply). Admin /api/admin/ai/* also 200 per earlier logs.
+
+      Next extractions (in order, per REFACTOR_PLAN.md):
+        routes/billing.py → routes/support.py → routes/groups.py → routes/mentors.py →
+        routes/messages.py → routes/collections.py → routes/community.py → routes/feed.py →
+        routes/spots.py → routes/admin.py → routes/auth.py
+      Each extraction should be its own test-and-validate cycle to avoid regression.
+
     -message: |
       Phase G — validate 2 new groups of endpoints (Support Hub + Local Groups).
       Historical items green, skip.
