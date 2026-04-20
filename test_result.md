@@ -18,7 +18,72 @@ user_problem_statement: |
   profile fields. Home gains a community tab strip; new /community feed,
   /community/compose, /community/post/[id], /messages inbox and thread.
 
+  ---
+  LATEST TASK (June 2025): Super-admin destructive actions — DELETE
+  /api/admin/spots/{id} (hard delete + archive) and DELETE /api/admin/users/{id}
+  (soft delete + anonymize), plus comprehensive QA pass. See tasks below.
+
 backend:
+  - task: "Super-admin DELETE /api/admin/spots/{spot_id} — hard delete + archive + cascade"
+    implemented: true
+    working: true
+    file: "/app/backend/routes/super_admin.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "New endpoint. super_admin only. Accepts body {reason_code?, reason_note?}. Archives full spot snapshot into deleted_spots, then cascades: deletes from spot_saves, spot_reviews, spot_checkins, reports(target_type=spot), pulls from collections.spot_ids, nulls community_posts.spot_id, pulls from spot_packs.spot_ids. Deletes the spot. Writes audit_logs with human-readable notes '[SUPER ADMIN] Hard-deleted spot ... — <reason>'. Regular admin role → 403 (gated by require_role('super_admin')). Smoke tested: sophie 403, admin bogus id 404."
+        -working: true
+        -agent: "testing"
+        -comment: "FULL VALIDATION PASS (backend_test_super_admin.py). (a) sophie (role=user) → 403 Forbidden. (b) super_admin bogus spot_id → 404. (c) Real disposable spot delete by super_admin → 200 with ok=true, spot_id echoed, archive_id prefixed 'delspot_', strategy='hard_delete_with_archive'. cascade dict has all 7 keys: spot_saves, spot_reviews, spot_checkins, reports, collections_updated, posts_unlinked, packs_updated. Verified cascade.spot_saves>=2 (sophie+marco saves deleted), spot_reviews>=1 (marco's review deleted), collections_updated>=1 (pulled from sophie's test collection). After: GET /spots/{id} → 404; deleted_spots archive grew by 1; archive_id present in /admin/deleted-spots listing. (d) Invalid reason_code ('totally_bogus_reason') coerces to 'other' (not 422). (e) A freshly PATCHed role='admin' user gets 403 on this endpoint — super-admin-only gate confirmed. Minor: cascade.posts_unlinked exercised as int>=0 only because the /api/posts create endpoint does not persist spot_id from input body; the cascade code is structurally correct and would unlink any community_posts that do carry spot_id (e.g. Scout AI editorial posts)."
+
+  - task: "Super-admin DELETE /api/admin/users/{user_id} — soft delete + anonymize"
+    implemented: true
+    working: true
+    file: "/app/backend/routes/super_admin.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "New endpoint. super_admin only. Soft-deletes user: anonymizes email/username/name/bio/avatar/phone/city/state, wipes password_hash, sets deleted=true + deleted_at + deleted_by + delete_reason + status='deleted', downgrades role/plan, cancels Stripe subscription (best-effort), archives original PII to deleted_users, cleans push_tokens + follows (both sides) + group_members + spot_saves + poll_votes + post_likes. Public content (spots/community_posts/comments) REMAINS but will display as 'Deleted user' via existing author hydration. Safety rails: cannot delete self (400), cannot delete another super_admin (400), cannot re-delete (400). Login + get_current_user now reject deleted users → 401."
+        -working: true
+        -agent: "testing"
+        -comment: "FULL VALIDATION PASS (backend_test_super_admin.py). (a) sophie → 403. (b) bogus user_id → 404. (c) super_admin deleting SELF → 400 'You cannot delete your own account'. (d) Deleting another super_admin → 400 'Cannot delete another super_admin — demote first' (tested by promoting a fresh user to super_admin then attempting delete). (e) Throwaway signup → DELETE with {reason_code:'spam_network', reason_note:'QA'} → 200 with ok=true, archive_id prefixed 'deluser_', strategy='soft_delete_anonymize', stripe_cancelled flag present, cascade dict. After: GET /users/{id} shows deleted=true, status='deleted', email starts 'deleted+', username starts 'deleted_user_', name='Deleted user', avatar_url=null, password_hash absent. (f) Re-delete same user → 400 'User is already deleted'. (g) Role='admin' token → 403 on this endpoint."
+
+  - task: "Super-admin archives — GET /api/admin/deleted-spots and /api/admin/deleted-users"
+    implemented: true
+    working: true
+    file: "/app/backend/routes/super_admin.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Read-only listings of archived deletions. super_admin only. deleted-spots omits the full snapshot payload for compact listing; deleted-users returns original PII (email/username/name) for audit. Both 403 for non-super-admin."
+        -working: true
+        -agent: "testing"
+        -comment: "PASS. GET /admin/deleted-spots as super_admin → 200 with items[] list. As sophie (user) → 403. As role='admin' → 403 (super-admin-only, confirmed). GET /admin/deleted-users as super_admin → 200; sophie/role=admin → 403. After super-admin deletes run in steps 1+2, both archives grew by the expected amount and the new archive_id values were visible in the listings (deleted_users items include original_email + original_username for audit). Archives grow, not shrink."
+
+  - task: "Auth gate rejects deleted users (POST /api/auth/login and get_current_user dependency)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Added `if user.get('deleted') or user.get('status') == 'deleted': raise 401` in both login() and get_current_user(). Keeps deleted accounts fully locked out even if a stale token is presented."
+        -working: true
+        -agent: "testing"
+        -comment: "PASS. After soft-deleting a throwaway user: (1) POST /api/auth/login with the original email+password → 401 'Invalid credentials'. (2) The previously-issued JWT hitting GET /api/auth/me → 401 'Account has been deleted' — the deleted-user gate in get_current_user correctly rejects stale tokens. Regression check: admin/sophie/marco login + /auth/me all still return 200 with valid tokens (no false positive on active accounts)."
+
   - task: "Support Hub — /api/support/faqs, /api/support/tickets, /api/me/support/tickets, admin reply/resolve (REFACTORED to routes/support.py)"
     implemented: true
     working: true
@@ -1672,3 +1737,235 @@ agent_communication:
       No behaviour changes are expected. Failure here indicates the refactor broke
       something (import error, missing helper, path mismatch). Please report any
       regression with the exact endpoint + assertion that failed.
+
+    -agent: "main"
+    -message: |
+      COMPREHENSIVE BACKEND QA PASS — launch-readiness validation.
+
+      Scope: validate the entire backend surface end-to-end, not a shallow smoke.
+      Everything below is in scope. Focus especially on the NEW super-admin
+      destructive endpoints and full permission boundaries between roles.
+
+      Credentials (see /app/memory/test_credentials.md):
+        - admin@photoscout.app / admin123       (role=super_admin, plan=elite)
+        - sophie@photoscout.app / demo123        (role=user, plan=pro, verified)
+        - marco@photoscout.app / demo123         (role=user, plan=free)
+        - priya, jordan, lena @ / demo123       (role=user)
+        - emily.toronto / noah.vancouver / etc. (Canadian + Mexican demo users)
+
+      NOTE: the only seeded "admin" today is actually `super_admin`. To test the
+      "regular admin CANNOT use super-admin-only actions" path, please PROMOTE
+      a fresh signup to role='admin' via PATCH /api/admin/users/{id} {role:'admin'}
+      using the super_admin token, then test the forbidden DELETE paths with
+      THAT token. The endpoint you want to hit is super_admin-gated, so role='admin'
+      must return 403.
+
+      ============================================================
+      TEST PLAN
+      ============================================================
+
+      1) SUPER-ADMIN SPOT DELETE — DELETE /api/admin/spots/{spot_id}
+         (a) As sophie (user)       → 403 Forbidden
+         (b) As super_admin, bogus  → 404 Not Found
+         (c) As super_admin, real spot owned by sophie (e.g. first item of GET /api/spots):
+             Body: {"reason_code":"spam","reason_note":"QA test"}
+             Before: capture counts of spot_saves, spot_reviews, spot_checkins,
+                     reports(target_type=spot,target_id=spot), collections that
+                     contain this spot_id, community_posts with this spot_id.
+             Expected 200 {ok:true, spot_id, archive_id starts 'delspot_',
+                           cascade:{spot_saves,spot_reviews,spot_checkins,reports,
+                                    collections_updated,posts_unlinked,packs_updated},
+                           strategy:"hard_delete_with_archive"}
+             After:  GET /api/spots/{spot_id} → 404
+                     deleted_spots now contains archive_id
+                     all cascade collections reduced as reported
+                     collections.spot_ids no longer contain the id
+                     community_posts.spot_id == null for affected posts
+                     audit_logs has entry action='spot.delete_hard',
+                     notes starts with '[SUPER ADMIN] Hard-deleted spot ...'
+         (d) Invalid reason_code coerces to 'other' (not 422).
+         (e) Promote a test user to role='admin' and retry — should 403.
+
+      2) SUPER-ADMIN USER DELETE — DELETE /api/admin/users/{user_id}
+         (a) As sophie (user)       → 403
+         (b) As super_admin, bogus  → 404
+         (c) As super_admin, self   → 400 'You cannot delete your own account'
+         (d) As super_admin, another super_admin → 400
+            (create one temporarily via PATCH role='super_admin' on a fresh user,
+             then attempt delete, expect 400, then PATCH back to 'user')
+         (e) As super_admin, sign-up a fresh throwaway user (name 'QA DeleteMe',
+             email qa_delete_<ts>@example.com / password demo123), then hit
+             DELETE /api/admin/users/{new_id} body {"reason_code":"spam_network"}
+             Expected 200 {ok:true, user_id, archive_id starts 'deluser_',
+                           strategy:"soft_delete_anonymize",
+                           stripe_cancelled:false, cascade:{...}}.
+             After:
+                GET /api/users/{new_id} → user doc has deleted=true, status='deleted',
+                                          email starts 'deleted+', username starts
+                                          'deleted_user_', name='Deleted user',
+                                          avatar_url=null, password_hash=null (or absent).
+                POST /api/auth/login with original credentials → 401 'Invalid credentials'
+                GET /api/admin/deleted-users → archive_id listed with original email/username.
+                audit_logs has 'user.delete_soft' entry, notes starts with
+                '[SUPER ADMIN] Soft-deleted user @...'.
+         (f) Attempting to re-delete the same user → 400 'already deleted'.
+         (g) Promote a test user to role='admin' and retry — should 403.
+
+      3) ARCHIVES
+         GET /api/admin/deleted-spots → super_admin 200; sophie 403.
+         GET /api/admin/deleted-users → super_admin 200; sophie 403.
+
+      4) AUTH GATES (regression after the deleted-user rejection change)
+         Regular login flows for sophie/marco/admin still work (200 + valid token).
+         GET /api/auth/me works for all three roles.
+
+      5) REGRESSION SWEEP — confirm nothing else broke. Hit each of:
+         - POST /api/auth/signup (new random user) → 200
+         - POST /api/auth/login (sophie) → 200
+         - GET /api/spots?limit=10 → 200 with items
+         - GET /api/spots/{id} → 200 for an active spot
+         - POST /api/spots/{id}/save → 200 (and toggle off)
+         - GET /api/me/collections → 200
+         - GET /api/feed/home → 200 (for_you/trending/nearby/from_your_network)
+         - GET /api/community/posts → 200
+         - POST /api/community/posts (short body) → 200
+         - GET /api/support/faqs → 200 (public)
+         - POST /api/support/tickets → 200
+         - GET /api/admin/overview as super_admin → 200
+         - GET /api/admin/pending as super_admin → 200
+         - GET /api/admin/reports as super_admin → 200
+         - GET /api/admin/audit-logs as super_admin → 200
+         - GET /api/admin/users as super_admin → 200
+         - POST /api/ai/chat as sophie → 200 (Scout AI still works)
+         - POST /api/billing/checkout as sophie {plan:"pro", interval:"monthly"} → 200
+           with checkout_url starting 'https://checkout.stripe.com/'
+         - GET /api/billing/status as sophie → 200
+
+      6) PERMISSION MATRIX
+         Verify these 403 cases specifically (with appropriate token):
+         - sophie (user) → POST /api/admin/spots/{id}/approve
+         - sophie (user) → DELETE /api/admin/spots/{id}
+         - sophie (user) → DELETE /api/admin/users/{id}
+         - sophie (user) → POST /api/admin/users/{id} (patch role) — already returns 403
+         - a freshly promoted role='admin' user → DELETE /api/admin/spots/{id}  (super only)
+         - a freshly promoted role='admin' user → DELETE /api/admin/users/{id}  (super only)
+         - a freshly promoted role='admin' user → GET /api/admin/deleted-spots  (super only)
+         - a freshly promoted role='admin' user → GET /api/admin/deleted-users  (super only)
+         - role='admin' CAN still: GET /admin/overview, /admin/pending, /admin/reports,
+           /admin/audit-logs, /admin/users (these should NOT regress).
+
+      7) AUDIT LOG READABILITY
+         After the super-admin deletes in steps 1 and 2, fetch:
+           GET /api/admin/audit-logs?action=spot.delete_hard  → has entries
+           GET /api/admin/audit-logs?action=user.delete_soft  → has entries
+         Verify that each entry has:
+           - admin_email populated
+           - admin_role == 'super_admin'
+           - target_type + target_id populated
+           - notes string starts with '[SUPER ADMIN] Hard-deleted spot'
+             or '[SUPER ADMIN] Soft-deleted user @'
+           - before/after present (before has title/username, after has archive_id + cascade)
+
+      Please create /app/backend_test_super_admin.py with these assertions and
+      report pass/fail per assertion. Keep the existing Phase G suite passing
+      too — a clean run of /app/backend_test_phase_g.py is also expected.
+
+
+
+    -agent: "testing"
+    -message: |
+      COMPREHENSIVE BACKEND QA + SUPER-ADMIN DELETE VALIDATION COMPLETE.
+
+      Two suites executed — both 100% green against the public backend
+      (https://photo-finder-60.preview.emergentagent.com/api):
+
+        1) /app/backend_test_super_admin.py  →  PASS=138  FAIL=0
+        2) /app/backend_test_phase_g.py       →  PASS=46   FAIL=0  (regression)
+
+      ✅ 1. DELETE /api/admin/spots/{spot_id}
+         - sophie(user) → 403; super_admin bogus → 404.
+         - Real disposable spot owned by sophie: 200 with
+           {ok:true, spot_id, archive_id:'delspot_*', strategy:'hard_delete_with_archive',
+            cascade:{spot_saves, spot_reviews, spot_checkins, reports, collections_updated,
+                     posts_unlinked, packs_updated}}.
+         - After: GET /spots/{id} → 404; archive shows up in /admin/deleted-spots with
+           a fresh archive_id (count grew by exactly 1); sophie's test collection had
+           the spot pulled out; audit_logs has a 'spot.delete_hard' row with
+           admin_role='super_admin', target_type='spot', target_id, before={title,...},
+           after={archive_id, cascade}, notes starts '[SUPER ADMIN] Hard-deleted spot'.
+         - Invalid reason_code ('totally_bogus_reason') coerces to 'other' (not 422).
+         - A freshly promoted role='admin' user gets 403 — super-admin gate confirmed.
+         - Minor (not a backend bug): the /api/posts create endpoint does NOT persist
+           spot_id from the input body (create_post in server.py writes image_url/city/
+           state/etc but not spot_id). So I could not exercise the cascade.posts_unlinked
+           counter through the public API — I could only confirm the key is present as
+           an int >= 0. The cascade code itself is correct and would unlink posts that
+           do carry spot_id (e.g. Scout AI editorial posts).
+
+      ✅ 2. DELETE /api/admin/users/{user_id}
+         - sophie → 403; bogus id → 404; self-delete → 400; deleting another super_admin
+           → 400 (tested by promoting a throwaway user to super_admin first).
+         - Throwaway signup → DELETE with {reason_code:'spam_network'} → 200 with
+           {ok, user_id, archive_id:'deluser_*', strategy:'soft_delete_anonymize',
+            stripe_cancelled:false, cascade:{...}}.
+         - After: GET /users/{id} shows deleted=true, status='deleted',
+           email starts 'deleted+', username starts 'deleted_user_', name='Deleted user',
+           avatar_url=null, password_hash absent.
+         - Original credentials → POST /auth/login = 401 'Invalid credentials'.
+         - Original JWT still in hand → GET /auth/me = 401 (get_current_user rejects
+           deleted users even with stale tokens).
+         - Re-delete same user → 400 'User is already deleted'.
+         - role='admin' → 403 (super-admin gate).
+         - /admin/deleted-users archive grew by exactly 1; archive has original_email
+           + original_username (PII preserved for audit).
+
+      ✅ 3. Archives
+         - GET /admin/deleted-spots: super_admin 200, sophie 403, role=admin 403.
+         - GET /admin/deleted-users: super_admin 200, sophie 403, role=admin 403.
+         - Both listings grew (not shrank) across the run.
+
+      ✅ 4. Auth gate regression
+         - admin/sophie/marco login + /auth/me all still 200 — deleted-user rejection
+           doesn't false-positive on active accounts.
+
+      ✅ 5. Regression sweep (all 200)
+         - POST /api/auth/register (note: endpoint is /auth/register, not /auth/signup),
+           POST /auth/login, GET /spots?limit=10, GET /spots/{id}, POST /spots/{id}/save
+           toggle on+off, GET /me/collections, GET /feed/home,
+           GET /posts (community feed; endpoint is /api/posts, NOT /api/community/posts),
+           POST /posts create + cleanup, GET /support/faqs (public),
+           POST /support/tickets, GET /admin/overview|pending|reports|audit-logs|users,
+           POST /ai/chat (Scout AI real gpt-5.2 round-trip),
+           POST /billing/checkout (real Stripe test_mode URL returned under 'url'),
+           GET /billing/status.
+
+      ✅ 6. Permission matrix
+         - sophie (user) → 403 on POST /admin/spots/{id}/approve, DELETE /admin/spots,
+           DELETE /admin/users, PATCH /admin/users.
+         - role='admin' (freshly promoted) → 403 on DELETE /admin/spots, DELETE
+           /admin/users, GET /admin/deleted-spots, GET /admin/deleted-users.
+         - role='admin' → 200 on GET /admin/overview, /admin/pending, /admin/reports,
+           /admin/audit-logs, /admin/users — shared endpoints do NOT regress.
+
+      ✅ 7. Audit log readability
+         - /admin/audit-logs?action=spot.delete_hard → entries with
+           admin_email populated, admin_role='super_admin', target_type='spot',
+           target_id, notes starting '[SUPER ADMIN] Hard-deleted spot',
+           before has title, after has archive_id.
+         - /admin/audit-logs?action=user.delete_soft → entries with
+           notes starting '[SUPER ADMIN] Soft-deleted user @',
+           before has username, after has archive_id.
+
+      ℹ️ NAMING NOTES for main agent (not regressions, just call-site clarifications):
+         - The review plan referenced POST /api/auth/signup; the actual endpoint is
+           POST /api/auth/register. Used the correct one.
+         - The review plan referenced /api/community/posts; the actual endpoints are
+           /api/posts (GET and POST). Used the correct one.
+         - billing/checkout returns the URL under key 'url' (not 'checkout_url').
+           The test accepted either; value is a real https://checkout.stripe.com/ URL.
+
+      No critical issues. The new super-admin destructive endpoints are launch-ready.
+      Test scripts persisted for re-runs:
+         - /app/backend_test_super_admin.py
+         - /app/backend_test_phase_g.py
+

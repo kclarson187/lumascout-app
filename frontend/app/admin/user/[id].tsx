@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Alert, ActivityIndicator, RefreshControl, Modal, Pressable, KeyboardAvoidingView, Platform } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ShieldCheck, Crown, UserX, Sparkles, MessageSquarePlus, X, AlertTriangle, History } from 'lucide-react-native';
+import { ShieldCheck, Crown, UserX, Sparkles, MessageSquarePlus, X, AlertTriangle, History, Trash2 } from 'lucide-react-native';
 import { api, formatApiError } from '../../../src/api';
 import { useAuth } from '../../../src/auth';
 import { colors, font, space, radii } from '../../../src/theme';
 import VerifiedBadge from '../../../src/components/VerifiedBadge';
+import DeleteConfirmSheet, { USER_DELETE_PRESETS } from '../../../src/components/DeleteConfirmSheet';
 
 const PLAN_OPTIONS = ['free', 'pro', 'elite', 'comp_pro', 'comp_elite', 'trial_pro', 'trial_elite'];
 const ROLE_OPTIONS = ['user', 'moderator', 'support', 'admin', 'super_admin'];
@@ -18,6 +19,7 @@ export default function AdminUserDetail() {
   const [noteDraft, setNoteDraft] = useState('');
   const [roleModal, setRoleModal] = useState<null | string>(null);
   const [roleConfirm, setRoleConfirm] = useState('');
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -143,6 +145,22 @@ export default function AdminUserDetail() {
       await load();
     } catch (e) {
       Alert.alert('Could not add note', formatApiError(e));
+    }
+  };
+
+  const submitDelete = async (code: string | null, note: string) => {
+    try {
+      const res = await api.delete(`/admin/users/${u.user_id}`, {
+        reason_code: code || undefined,
+        reason_note: note || undefined,
+      });
+      Alert.alert(
+        'User deleted',
+        `@${u.username || u.user_id} has been soft-deleted. Stripe cancelled: ${res.stripe_cancelled ? 'yes' : 'no'}.`,
+        [{ text: 'OK', onPress: () => router.back() }],
+      );
+    } catch (e) {
+      throw new Error(formatApiError(e));
     }
   };
 
@@ -305,6 +323,35 @@ export default function AdminUserDetail() {
             </View>
           ))}
         </Section>
+
+        {/* Danger zone — super_admin only */}
+        {isSuperAdmin && !isSelf && u.status !== 'deleted' && (
+          <View style={styles.dangerZone}>
+            <View style={styles.dangerHead}>
+              <AlertTriangle size={14} color={colors.secondary} />
+              <Text style={styles.dangerTitle}>Danger zone — super admin</Text>
+            </View>
+            <Text style={styles.dangerBody}>
+              Permanently soft-deletes the account. Public content (spots, community posts, comments)
+              will remain but be attributed to “Deleted user”. Login is blocked, PII is wiped, and the
+              active Stripe subscription (if any) is cancelled. This action cannot be undone from the app.
+            </Text>
+            <TouchableOpacity
+              style={styles.dangerBtn}
+              onPress={() => setDeleteOpen(true)}
+              testID="super-delete-user"
+            >
+              <Trash2 size={14} color="#fff" />
+              <Text style={styles.dangerBtnTxt}>Delete user account</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        {u.status === 'deleted' && (
+          <View style={styles.deletedBadge}>
+            <Trash2 size={14} color={colors.textTertiary} />
+            <Text style={styles.deletedTxt}>Account already deleted.</Text>
+          </View>
+        )}
       </ScrollView>
 
       {/* Role change confirmation modal */}
@@ -343,6 +390,18 @@ export default function AdminUserDetail() {
           </TouchableOpacity>
         </View>
       </Modal>
+
+      <DeleteConfirmSheet
+        visible={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        onConfirm={submitDelete}
+        title="Delete user account?"
+        warning="This soft-deletes the account: PII is wiped, login is blocked, Stripe subscription is cancelled, and public content is re-attributed to 'Deleted user'. Cannot be undone in the app."
+        targetLabel={`${u.name}  ·  @${u.username || u.user_id}  ·  ${u.email}`}
+        confirmPhrase="delete"
+        presets={USER_DELETE_PRESETS}
+        destructiveCta="Delete this account"
+      />
     </KeyboardAvoidingView>
   );
 }
