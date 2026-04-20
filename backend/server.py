@@ -604,8 +604,8 @@ async def reset_password(body: ResetPasswordIn):
     pw = body.new_password or ""
     if not token:
         raise HTTPException(status_code=400, detail="Reset token is required")
-    if len(pw) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if len(pw) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
 
     reset = await db.password_resets.find_one({"token": token})
     if not reset:

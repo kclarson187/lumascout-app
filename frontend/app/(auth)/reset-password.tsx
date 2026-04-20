@@ -25,7 +25,7 @@ export default function ResetPassword() {
 
   const onSubmit = async () => {
     setError('');
-    if (pw.length < 8) { setError('Password must be at least 8 characters.'); return; }
+    if (pw.length < 6) { setError('Password must be at least 6 characters.'); return; }
     if (pw !== pw2)   { setError('Passwords do not match.'); return; }
     setLoading(true);
     try {
@@ -52,7 +52,7 @@ export default function ResetPassword() {
                 <KeyRound color={colors.primary} size={22} />
               </View>
               <Text style={styles.head}>Create a new password</Text>
-              <Text style={styles.sub}>Must be at least 8 characters. Pick something you'll remember.</Text>
+              <Text style={styles.sub}>Must be at least 6 characters. Pick something you'll remember.</Text>
 
               <View style={{ gap: space.lg, marginTop: space.xxl }}>
                 {!params.token && (
