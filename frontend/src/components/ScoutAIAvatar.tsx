@@ -18,7 +18,7 @@ export default function ScoutAIAvatar({ size = 40, testID }: Props) {
   //   · radar-sweep sphere  → "scout"
   //   · center map pin dot  → "location"
   //   · subtle spark arc    → "AI"
-  // Gold #F5A623 on near-black #0F0F12 — PhotoScout's premium palette.
+  // Gold #F5A623 on near-black #0F0F12 — LumaScout's premium palette.
   const s = size;
   return (
     <View testID={testID} style={{ width: s, height: s }}>

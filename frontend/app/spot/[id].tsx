@@ -80,7 +80,7 @@ export default function SpotDetail() {
 
   const onShare = async () => {
     try {
-      await Share.share({ message: `${spot.title} — ${spot.city}, ${spot.state} on PhotoScout` });
+      await Share.share({ message: `${spot.title} — ${spot.city}, ${spot.state} on LumaScout` });
     } catch {}
   };
 
@@ -255,7 +255,7 @@ export default function SpotDetail() {
                 // Give Apple/Google Maps a human-friendly destination label so
                 // the dropped pin doesn't reverse-geocode to a random ZIP.
                 const labelRaw = cityPart ? `${spot.title} · ${cityPart}` : spot.title;
-                const label = encodeURIComponent(labelRaw || 'PhotoScout spot');
+                const label = encodeURIComponent(labelRaw || 'LumaScout spot');
                 const iosUrl = `maps://?q=${label}&ll=${lat},${lng}&daddr=${lat},${lng}&dirflg=d`;
                 const iosFallback = `http://maps.apple.com/?q=${label}&ll=${lat},${lng}&daddr=${lat},${lng}&dirflg=d`;
                 // Android: geo: scheme with labeled pin

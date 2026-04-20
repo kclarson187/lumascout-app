@@ -107,7 +107,7 @@ async def scout_ai_chat(body: ScoutAIChatIn, user: dict = Depends(get_current_us
         "reply": (reply or "").strip(),
         "follow_ups": _scout_ai_follow_ups(body.placement),
         "model": "gpt-5.2",
-        "disclosure": "Scout AI is an official PhotoScout AI assistant. Replies are AI-generated.",
+        "disclosure": "Scout AI is an official LumaScout AI assistant. Replies are AI-generated.",
     }
 
 
@@ -207,7 +207,7 @@ async def admin_ai_generate_editorial(
 
     system = (
         SCOUT_AI_SYSTEM_PROMPT
-        + "\n\nYou are composing a short editorial community post for the PhotoScout feed. "
+        + "\n\nYou are composing a short editorial community post for the LumaScout feed. "
         + "Output plain text only (no markdown headings, no hashtags). Keep it under 140 words. "
         + "Open with the concrete value, name 3-5 spots from CANDIDATE_SPOTS (one per line with a 1-sentence reason). "
         + "End with one short question to invite real-user comments."
@@ -264,7 +264,7 @@ async def admin_ai_reply_to_post(post_id: str, user: dict = Depends(require_role
 
     system = (
         SCOUT_AI_SYSTEM_PROMPT
-        + "\n\nYou are writing a single helpful reply to a PhotoScout community post. "
+        + "\n\nYou are writing a single helpful reply to a LumaScout community post. "
         + "Plain text only. Under 120 words. Lead with the most practical answer, "
         + "then 2-4 concrete considerations. If the question cannot be answered from "
         + "the data you have, say what would be needed to help further."
@@ -439,7 +439,7 @@ async def scout_plan_collection(body: CollectionPlanIn, user: dict = Depends(get
     context = "\n".join(ctx_lines)
     system = (
         SCOUT_AI_SYSTEM_PROMPT
-        + "\n\nYou are building a named PhotoScout collection. "
+        + "\n\nYou are building a named LumaScout collection. "
         + "Respond with ONLY a valid JSON object (no prose, no markdown fences) shaped as:\n"
         + '{"name": str, "description": str (1-2 short sentences), '
         + '"spots": [{"spot_id": str, "reason": str (max 14 words)}]}\n'
@@ -694,7 +694,7 @@ async def scout_assist_upload(body: UploadAssistIn, user: dict = Depends(get_cur
 
     system = (
         SCOUT_AI_SYSTEM_PROMPT
-        + "\n\nYou are helping a photographer describe a new PhotoScout location. "
+        + "\n\nYou are helping a photographer describe a new LumaScout location. "
         + "Output ONLY valid JSON:\n"
         + '{"title": str (<= 60 chars), '
         + '"summary": str (2-3 sentences, <= 280 chars, concrete, no hype), '

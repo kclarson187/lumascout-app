@@ -50,7 +50,7 @@ class TestHealth:
         response = api_client.get(f"{BASE_URL}/api/")
         assert response.status_code == 200
         data = response.json()
-        assert data["app"] == "PhotoScout"
+        assert data["app"] == "LumaScout"
         assert data["status"] == "ok"
         print("✓ Health check passed")
 
