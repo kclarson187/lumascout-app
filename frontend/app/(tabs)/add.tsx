@@ -695,7 +695,7 @@ export default function AddSpot() {
                         style={styles.tagPillClose}
                         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                       >
-                        <X size={12} color={colors.textMuted} />
+                        <X size={12} color={colors.textSecondary} />
                       </TouchableOpacity>
                     </View>
                   ))}
