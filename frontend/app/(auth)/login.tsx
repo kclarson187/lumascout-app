@@ -96,6 +96,13 @@ export default function Login() {
             />
             {error ? <Text style={styles.error}>{error}</Text> : null}
             <Button title="Sign in" onPress={onSubmit} loading={loading} testID="login-submit" />
+            <TouchableOpacity
+              onPress={() => router.push('/(auth)/forgot-password')}
+              style={{ alignSelf: 'center', marginTop: -space.xs }}
+              testID="login-forgot"
+            >
+              <Text style={styles.footerLink}>Forgot password?</Text>
+            </TouchableOpacity>
             <View style={styles.divider}>
               <View style={styles.divLine} />
               <Text style={styles.divText}>OR</Text>

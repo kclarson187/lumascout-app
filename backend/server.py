@@ -520,6 +520,132 @@ async def login(body: LoginIn):
     return {"token": token, "user": clean_doc(user)}
 
 
+# ============================================================================
+# Forgot / reset password — dev-mode (on-screen reset link). The outbound email
+# hook is a stub; swap `send_password_reset_email` to Resend/SendGrid later.
+# ============================================================================
+class ForgotPasswordIn(BaseModel):
+    email: str
+
+
+class ResetPasswordIn(BaseModel):
+    token: str
+    new_password: str
+
+
+async def send_password_reset_email(email: str, reset_link: str) -> None:
+    """Stub: logs the link for now. Replace with Resend/SendGrid in production."""
+    logger.info("[email.stub] password reset link for %s → %s", email, reset_link)
+
+
+@api.post("/auth/forgot-password")
+async def forgot_password(body: ForgotPasswordIn, request: Request):
+    """
+    Generates a 30-minute single-use reset token. ALWAYS responds `ok:true` so
+    we don't leak which emails are registered (no enumeration).
+
+    In dev mode, also returns `reset_token` + `reset_link` so the frontend can
+    display the link on-screen. Remove these from the response once a real
+    email provider is wired.
+    """
+    email = (body.email or "").lower().strip()
+    generic_resp: Dict[str, Any] = {
+        "ok": True,
+        "message": "If an account with that email exists, we've sent a reset link.",
+    }
+    if not email or "@" not in email:
+        return generic_resp
+
+    user = await db.users.find_one({"email": email})
+    if not user or user.get("deleted") or user.get("status") == "deleted" or not user.get("password_hash"):
+        # silently succeed to avoid user-enumeration
+        return generic_resp
+
+    # Invalidate any prior unused tokens for this user
+    await db.password_resets.update_many(
+        {"user_id": user["user_id"], "used": False},
+        {"$set": {"used": True, "superseded_at": utcnow()}},
+    )
+
+    token = uuid.uuid4().hex + uuid.uuid4().hex  # 64-char random
+    reset_doc = {
+        "reset_id": f"pwr_{uuid.uuid4().hex[:12]}",
+        "user_id": user["user_id"],
+        "email": email,
+        "token": token,
+        "expires_at": utcnow() + timedelta(minutes=30),
+        "used": False,
+        "created_at": utcnow(),
+        "ip": (request.client.host if request.client else None),
+    }
+    await db.password_resets.insert_one(reset_doc)
+
+    # Build a link the FE can open. Uses the app's auth reset screen.
+    reset_link = f"/reset-password?token={token}"
+    try:
+        await send_password_reset_email(email, reset_link)
+    except Exception as exc:  # pragma: no cover — never block the response
+        logger.warning("email dispatch failed for %s: %s", email, exc)
+
+    # DEV MODE: include token + link so FE can show them on-screen.
+    # Remove these two fields once a real email provider is wired.
+    return {
+        **generic_resp,
+        "dev_mode": True,
+        "reset_token": token,
+        "reset_link": reset_link,
+        "expires_at": reset_doc["expires_at"].isoformat(),
+    }
+
+
+@api.post("/auth/reset-password")
+async def reset_password(body: ResetPasswordIn):
+    token = (body.token or "").strip()
+    pw = body.new_password or ""
+    if not token:
+        raise HTTPException(status_code=400, detail="Reset token is required")
+    if len(pw) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    reset = await db.password_resets.find_one({"token": token})
+    if not reset:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+    if reset.get("used"):
+        raise HTTPException(status_code=400, detail="This reset link has already been used")
+    if reset.get("expires_at"):
+        exp = reset["expires_at"]
+        now = utcnow()
+        # Mongo returns naïve UTC datetimes; align tz-awareness for comparison
+        if exp.tzinfo is None and now.tzinfo is not None:
+            exp = exp.replace(tzinfo=now.tzinfo)
+        elif exp.tzinfo is not None and now.tzinfo is None:
+            now = now.replace(tzinfo=exp.tzinfo)
+        if exp < now:
+            raise HTTPException(status_code=400, detail="Reset link has expired — request a new one")
+
+    user = await db.users.find_one({"user_id": reset["user_id"]})
+    if not user or user.get("deleted") or user.get("status") == "deleted":
+        raise HTTPException(status_code=400, detail="Account unavailable")
+
+    new_hash = hash_password(pw)
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"password_hash": new_hash, "password_updated_at": utcnow()}},
+    )
+    await db.password_resets.update_one(
+        {"reset_id": reset["reset_id"]},
+        {"$set": {"used": True, "used_at": utcnow()}},
+    )
+    # Invalidate any other outstanding tokens for this user
+    await db.password_resets.update_many(
+        {"user_id": user["user_id"], "used": False},
+        {"$set": {"used": True, "superseded_at": utcnow()}},
+    )
+    return {"ok": True, "message": "Password updated — please sign in with your new password."}
+
+
+
+
 @api.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
     user["plan"] = plan_of(user)
