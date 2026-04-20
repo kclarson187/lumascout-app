@@ -19,10 +19,10 @@ user_problem_statement: |
   /community/compose, /community/post/[id], /messages inbox and thread.
 
 backend:
-  - task: "Support Hub — /api/support/faqs, /api/support/tickets, /api/me/support/tickets, admin reply/resolve"
+  - task: "Support Hub — /api/support/faqs, /api/support/tickets, /api/me/support/tickets, admin reply/resolve (REFACTORED to routes/support.py)"
     implemented: true
     working: true
-    file: "/app/backend/server.py"
+    file: "/app/backend/routes/support.py"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
@@ -33,6 +33,9 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "ALL 23 Support Hub assertions PASS (backend_test_phase_g.py). (1) GET /api/support/faqs public → 200 with items[] each {id,q,a}; works with or without auth header. (2) POST /api/support/tickets as sophie {subject:'Can\\'t upgrade to Pro from iOS', body, category:'billing'} → 200 with ticket_id starting sup_, status='open', user_id=sophie, replies=[]. (3) Empty subject/body → 400. (4) Invalid category coerces to 'general' (per impl). (5) No auth → 401. (6) GET /api/me/support/tickets as sophie includes new ticket; no-auth → 401; marco's inbox does NOT leak sophie's ticket (per-user scoping OK). (7) GET /api/admin/support/tickets as admin → 200 with items[] + counts{open,pending,resolved,closed}; ?category=billing filter returns only billing tickets. (8) sophie (non-staff) → 403; no-auth → 401. (9) POST /admin/support/tickets/{id}/reply → 200 {ok:true, reply:{from:'staff',...}}; ticket.status flips to 'pending' with 1 reply appended. Sophie → 403 on reply; empty body → 400; bogus ticket_id → 404. (10) POST /admin/support/tickets/{id}/resolve → 200; ticket.status='resolved' verified from user's inbox. Bogus id → 404; sophie (non-staff) → 403."
+        -working: true
+        -agent: "testing"
+        -comment: "REGRESSION RETEST after refactor (endpoints extracted from server.py → routes/support.py, mounted via app.include_router(_support_routes.router) at bottom of server.py, legacy handlers renamed to *_LEGACY and decorators commented out): ALL 23 Support Hub assertions STILL PASS — zero regression. Full rerun of /app/backend_test_phase_g.py test_support() block: login sophie/marco/admin OK; (1-3) FAQs public with/without bogus token, correct {id,q,a} shape. (4) Ticket create 200 with sup_* id, status=open, user_id=sophie, empty replies. (5) Empty subject/body→400. (6) Invalid category coerced to 'general'. (7) Unauth POST→401. (8-10) /me/support/tickets returns new ticket, 401 unauth, no cross-user leak to marco. (11-14) /admin/support/tickets staff list with counts{open,pending,resolved,closed}, ?category=billing filter, non-staff 403, unauth 401. (15-19) Staff reply 200 with from='staff', ticket flips to status=pending with 1 reply appended, sophie reply→403, empty body→400, bogus ticket→404. (20-23) Staff resolve 200 and status=resolved confirmed from user inbox, bogus→404, non-staff→403. Refactor is clean — behaviour identical to pre-refactor baseline."
 
   - task: "Local Groups — create/list/get, join/leave, members, posts, group-scoped posts"
     implemented: true
@@ -1629,3 +1632,43 @@ agent_communication:
       6) POST /api/billing/checkout as sophie {plan:"pro", interval:"monthly"} → 200 with a checkout_url starting with "https://checkout.stripe.com/".
 
       Please create /app/backend_test_ux_polish_5.py for these and report pass/fail per assertion.
+
+
+    -agent: "main"
+    -message: |
+      BACKEND REFACTOR VALIDATION — Support Hub moved to routes/support.py
+
+      All 6 support endpoints have been extracted from the monolithic server.py
+      into /app/backend/routes/support.py. The old @api.* decorators in server.py
+      have been commented out and functions renamed to *_LEGACY (dead code).
+      The new router is mounted at the bottom of server.py via:
+        from routes import support as _support_routes
+        app.include_router(_support_routes.router)
+
+      Please re-run the EXACT same Phase G Support Hub assertions that previously
+      passed (23 assertions, backend_test_phase_g.py) to confirm zero regression:
+
+      Endpoints to hit (all prefixed with /api):
+        - GET  /support/faqs (public)
+        - POST /support/tickets (auth)
+        - GET  /me/support/tickets (auth; per-user scoping)
+        - GET  /admin/support/tickets (staff only; supports ?status, ?category, ?limit)
+        - POST /admin/support/tickets/{ticket_id}/reply (staff only)
+        - POST /admin/support/tickets/{ticket_id}/resolve (staff only)
+
+      Credentials: admin@photoscout.app / demo123, sophie@photoscout.app / demo123,
+      marco@photoscout.app / demo123 (see /app/memory/test_credentials.md).
+
+      Expected behaviour (unchanged from previous run):
+        - /support/faqs: 200 with items[]; works with or without auth header.
+        - /support/tickets POST: ticket_id starts 'sup_', status='open', replies=[].
+        - Empty subject/body → 400; missing auth → 401; invalid category coerces to 'general'.
+        - /me/support/tickets: user sees only their tickets; no cross-user leakage.
+        - /admin/support/tickets: counts{open,pending,resolved,closed}; ?category=billing filters.
+        - Non-staff on /admin/* → 403.
+        - Reply flips status to 'pending'; bogus ticket_id → 404.
+        - Resolve sets status='resolved'; bogus ticket_id → 404; non-staff → 403.
+
+      No behaviour changes are expected. Failure here indicates the refactor broke
+      something (import error, missing helper, path mismatch). Please report any
+      regression with the exact endpoint + assertion that failed.
