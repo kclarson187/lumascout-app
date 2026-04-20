@@ -16,7 +16,7 @@ import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as Location from 'expo-location';
-import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown, AlertTriangle, Search, Map as MapIcon, Edit3, FileText } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown, AlertTriangle, Search, Map as MapIcon, Edit3, FileText, Sun, Eye, EyeOff } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii, SHOOT_TYPES, BEST_TIMES, PRIVACY_MODES } from '../../src/theme';
@@ -38,6 +38,7 @@ type Draft = {
   addressLine1?: string;
   postalCode?: string;
   landmarkNotes?: string;
+  landmark: string;  // Step 3 user-entered "Park / landmark / area" (surfaced separately)
   images: { image_url: string; caption?: string; is_cover: boolean }[];
   title: string;
   city: string;
@@ -54,6 +55,9 @@ type Draft = {
   variety_rating: number;
   crowd_level: number;
   safety_rating: number;
+  parking_rating: number;   // 1-5 ease of parking (higher = easier)
+  walk_rating: number;      // 1-5 walking distance (lower = easier)
+  composition_flex: number; // 1-5 compositional flexibility
   dog_friendly: boolean;
   kid_friendly: boolean;
   accessible: boolean;
@@ -62,6 +66,7 @@ type Draft = {
   fee_required: boolean;
   parking_notes: string;
   lens_recommendations: string;
+  best_lens_range: string;  // e.g. "35-85mm"
   privacy_mode: string;
   location_display_mode: string;
 };
@@ -81,6 +86,7 @@ const initialDraft: Draft = {
   title: '',
   city: '',
   state: 'TX',
+  landmark: '',
   description: '',
   shoot_types: [],
   style_tags: [],
@@ -92,6 +98,9 @@ const initialDraft: Draft = {
   variety_rating: 4,
   crowd_level: 3,
   safety_rating: 4,
+  parking_rating: 3,
+  walk_rating: 2,
+  composition_flex: 3,
   dog_friendly: false,
   kid_friendly: true,
   accessible: false,
@@ -100,6 +109,7 @@ const initialDraft: Draft = {
   fee_required: false,
   parking_notes: '',
   lens_recommendations: '',
+  best_lens_range: '',
   privacy_mode: 'public',
   location_display_mode: 'exact',
 };
@@ -350,6 +360,11 @@ export default function AddSpot() {
     fee_required: draft.fee_required,
     parking_notes: draft.parking_notes,
     lens_recommendations: draft.lens_recommendations,
+    best_lens_range: draft.best_lens_range,
+    parking_rating: draft.parking_rating,
+    walk_rating: draft.walk_rating,
+    composition_flex: draft.composition_flex,
+    landmark_notes: draft.landmark || draft.landmarkNotes || '',
     best_months: [],
     images: draft.images,
     // Location provenance (new)
@@ -358,7 +373,6 @@ export default function AddSpot() {
     geocode_confidence: draft.geocodeConfidence,
     address_line1: draft.addressLine1,
     postal_code: draft.postalCode,
-    landmark_notes: draft.landmarkNotes,
     save_as_draft: asDraft,
   });
 
@@ -497,8 +511,20 @@ export default function AddSpot() {
                     </View>
                   )}
 
-                  {/* 4 methods */}
+                  {/* 4 methods — order matches user preference hierarchy:
+                    1. Search (most common, autocomplete-powered)
+                    2. Current location (live scouting)
+                    3. Drop a pin (trails / offline)
+                    4. Manual entry (portfolio imports, historical shoots) */}
                   <View style={{ gap: 10 }}>
+                    <MethodCard
+                      icon={<Search size={20} color={colors.primary} />}
+                      title="Search a place"
+                      body="Park, landmark, business, or address. Autocomplete-powered — the fastest way for most spots."
+                      onPress={() => setSearchOpen(true)}
+                      testID="method-search"
+                      featured
+                    />
                     <MethodCard
                       icon={<MapPin size={20} color={colors.primary} />}
                       title="Use current location"
@@ -507,16 +533,9 @@ export default function AddSpot() {
                       testID="method-gps"
                     />
                     <MethodCard
-                      icon={<Search size={20} color={colors.primary} />}
-                      title="Search a place"
-                      body="Park, landmark, business, or address. Autocomplete-powered."
-                      onPress={() => setSearchOpen(true)}
-                      testID="method-search"
-                    />
-                    <MethodCard
                       icon={<MapIcon size={20} color={colors.primary} />}
                       title="Drop a pin on the map"
-                      body="Perfect for trails, hidden fields, or custom spots."
+                      body="Perfect for trails, hidden fields, pull-offs, or custom spots without an address."
                       onPress={() => setMapOpen(true)}
                       testID="method-pin"
                     />
@@ -595,24 +614,38 @@ export default function AddSpot() {
           {step === 2 && (
             <View style={{ gap: space.lg }}>
               <Text style={styles.heading}>Basic details</Text>
-              <Input label="Spot title" value={draft.title} onChangeText={(t) => setDraft({ ...draft, title: t })} placeholder="e.g. Bluebonnet Fields at Muleshoe Bend" testID="add-title" />
+              <Text style={styles.sub}>Name it clearly. City, state, and any park or landmark help other photographers find it.</Text>
+
+              <Input label="Spot name" value={draft.title} onChangeText={(t) => setDraft({ ...draft, title: t })} placeholder="e.g. Bluebonnet Fields at Muleshoe Bend" testID="add-title" />
               <View style={{ flexDirection: 'row', gap: space.md }}>
                 <View style={{ flex: 2 }}>
-                  <Input label="City" value={draft.city} onChangeText={(t) => setDraft({ ...draft, city: t })} placeholder="Austin" testID="add-city" />
+                  <Input label="City" value={draft.city} onChangeText={(t) => setDraft({ ...draft, city: t })} placeholder="Austin — not county" testID="add-city" />
+                  <Text style={styles.helper}>Use the actual city/town name, not a county or region.</Text>
                 </View>
                 <View style={{ flex: 1 }}>
                   <Input label="State" value={draft.state} onChangeText={(t) => setDraft({ ...draft, state: t.toUpperCase().slice(0, 2) })} placeholder="TX" testID="add-state" />
                 </View>
               </View>
               <Input
+                label="Park / landmark / area (optional)"
+                value={draft.landmark}
+                onChangeText={(t) => setDraft({ ...draft, landmark: t })}
+                placeholder="e.g. McKinney Falls State Park · Zilker"
+                testID="add-landmark"
+              />
+              <Text style={styles.helper}>If the spot sits inside a park, neighborhood, or known location, add that here.</Text>
+
+              <Input
                 label="Description"
                 value={draft.description}
                 onChangeText={(t) => setDraft({ ...draft, description: t })}
                 multiline
-                placeholder="What makes this spot great? Any quirks to know?"
-                style={{ minHeight: 100, textAlignVertical: 'top' }}
+                placeholder="What makes this spot great? Parking, access, best angles, background variety, crowd timing, permit notes, pro tips…"
+                style={{ minHeight: 120, textAlignVertical: 'top' }}
                 testID="add-description"
               />
+              <Text style={styles.helper}>Pros cover: parking hack, best arrival time, composition spots, seasonal gotchas, permits.</Text>
+
               <Text style={styles.subSectionLabel}>Shoot types</Text>
               <View style={styles.chipRow}>
                 {SHOOT_TYPES.map((t) => (
@@ -632,7 +665,6 @@ export default function AddSpot() {
                 onChangeText={setTagsText}
                 onBlur={() => {
                   const tags = tagsText.split(',').map((x) => x.trim()).filter(Boolean);
-                  // De-duplicate while preserving order
                   const seen = new Set<string>();
                   const unique: string[] = [];
                   for (const t of tags) {
@@ -643,7 +675,6 @@ export default function AddSpot() {
                     }
                   }
                   setDraft({ ...draft, style_tags: unique });
-                  // Reflect the cleaned-up version back to the input
                   setTagsText(unique.join(', '));
                 }}
                 autoCapitalize="none"
@@ -676,8 +707,9 @@ export default function AddSpot() {
           {step === 3 && (
             <View style={{ gap: space.lg }}>
               <Text style={styles.heading}>Photographer notes</Text>
-              <Text style={styles.sub}>Rate the real conditions so others can plan better.</Text>
+              <Text style={styles.sub}>Rate the real conditions so others can plan accurately.</Text>
 
+              {/* ---- Best time of day ---- */}
               <Text style={styles.subSectionLabel}>Best time of day</Text>
               <View style={styles.chipRow}>
                 {BEST_TIMES.map((t) => (
@@ -690,20 +722,54 @@ export default function AddSpot() {
                 ))}
               </View>
 
-              <Rating label="Sunrise quality" value={draft.sunrise_rating} onChange={(v) => setDraft({ ...draft, sunrise_rating: v })} />
-              <Rating label="Sunset quality" value={draft.sunset_rating} onChange={(v) => setDraft({ ...draft, sunset_rating: v })} />
-              <Rating label="Morning golden hour" value={draft.morning_golden_hour_rating} onChange={(v) => setDraft({ ...draft, morning_golden_hour_rating: v })} />
-              <Rating label="Evening golden hour" value={draft.evening_golden_hour_rating} onChange={(v) => setDraft({ ...draft, evening_golden_hour_rating: v })} />
-              <Rating label="Shade availability" value={draft.shade_rating} onChange={(v) => setDraft({ ...draft, shade_rating: v })} />
-              <Rating label="Background variety" value={draft.variety_rating} onChange={(v) => setDraft({ ...draft, variety_rating: v })} />
-              <Rating label="Crowd level (5 = very crowded)" value={draft.crowd_level} onChange={(v) => setDraft({ ...draft, crowd_level: v })} />
-              <Rating label="Safety" value={draft.safety_rating} onChange={(v) => setDraft({ ...draft, safety_rating: v })} />
+              {/* ---- Group 1: Light ---- */}
+              <View style={styles.groupCard}>
+                <View style={styles.groupHead}>
+                  <Sun size={14} color={colors.primary} />
+                  <Text style={styles.groupLabel}>Light</Text>
+                </View>
+                <Rating label="Sunrise quality" value={draft.sunrise_rating} onChange={(v) => setDraft({ ...draft, sunrise_rating: v })} />
+                <Rating label="Sunset quality" value={draft.sunset_rating} onChange={(v) => setDraft({ ...draft, sunset_rating: v })} />
+                <Rating label="Morning golden hour" value={draft.morning_golden_hour_rating} onChange={(v) => setDraft({ ...draft, morning_golden_hour_rating: v })} />
+                <Rating label="Evening golden hour" value={draft.evening_golden_hour_rating} onChange={(v) => setDraft({ ...draft, evening_golden_hour_rating: v })} />
+              </View>
 
-              <View style={{ gap: space.md, marginTop: space.md }}>
+              {/* ---- Group 2: Logistics ---- */}
+              <View style={styles.groupCard}>
+                <View style={styles.groupHead}>
+                  <MapPin size={14} color={colors.primary} />
+                  <Text style={styles.groupLabel}>Logistics</Text>
+                </View>
+                <Rating label="Shade availability" value={draft.shade_rating} onChange={(v) => setDraft({ ...draft, shade_rating: v })} />
+                <Rating label="Crowd level (5 = very crowded)" value={draft.crowd_level} onChange={(v) => setDraft({ ...draft, crowd_level: v })} />
+                <Rating label="Parking ease (5 = easy)" value={draft.parking_rating} onChange={(v) => setDraft({ ...draft, parking_rating: v })} />
+                <Rating label="Walking distance (1 = trailhead, 5 = long hike)" value={draft.walk_rating} onChange={(v) => setDraft({ ...draft, walk_rating: v })} />
+              </View>
+
+              {/* ---- Group 3: Creative ---- */}
+              <View style={styles.groupCard}>
+                <View style={styles.groupHead}>
+                  <Edit3 size={14} color={colors.primary} />
+                  <Text style={styles.groupLabel}>Creative</Text>
+                </View>
+                <Rating label="Background variety" value={draft.variety_rating} onChange={(v) => setDraft({ ...draft, variety_rating: v })} />
+                <Rating label="Composition flexibility" value={draft.composition_flex} onChange={(v) => setDraft({ ...draft, composition_flex: v })} />
+                <Input
+                  label="Best lens range"
+                  value={draft.best_lens_range}
+                  onChangeText={(t) => setDraft({ ...draft, best_lens_range: t })}
+                  placeholder="e.g. 35-85mm"
+                  testID="add-lens-range"
+                />
+              </View>
+
+              {/* ---- Binary flags ---- */}
+              <Text style={styles.subSectionLabel}>Access & rules</Text>
+              <View style={{ gap: space.md }}>
                 <Toggle label="Dog friendly" value={draft.dog_friendly} onChange={(v) => setDraft({ ...draft, dog_friendly: v })} />
                 <Toggle label="Kid friendly" value={draft.kid_friendly} onChange={(v) => setDraft({ ...draft, kid_friendly: v })} />
                 <Toggle label="Wheelchair accessible" value={draft.accessible} onChange={(v) => setDraft({ ...draft, accessible: v })} />
-                <Toggle label="Indoor" value={draft.indoor} onChange={(v) => setDraft({ ...draft, indoor: v })} />
+                <Toggle label="Indoor option" value={draft.indoor} onChange={(v) => setDraft({ ...draft, indoor: v })} />
                 <Toggle label="Permit required" value={draft.permit_required} onChange={(v) => setDraft({ ...draft, permit_required: v })} />
                 <Toggle label="Fee required" value={draft.fee_required} onChange={(v) => setDraft({ ...draft, fee_required: v })} />
               </View>
@@ -717,10 +783,10 @@ export default function AddSpot() {
                 testID="add-parking"
               />
               <Input
-                label="Lens recommendations"
+                label="Lens recommendations (free-form)"
                 value={draft.lens_recommendations}
                 onChangeText={(t) => setDraft({ ...draft, lens_recommendations: t })}
-                placeholder="35mm for wide, 85mm for portraits"
+                placeholder="35mm for wide shots, 85mm for portraits"
                 testID="add-lens"
               />
             </View>
@@ -799,20 +865,95 @@ export default function AddSpot() {
                   />
                 ))}
               </View>
+              <Text style={styles.helper}>
+                Hidden & Approximate modes still show the city and state so other photographers
+                can plan trips — only the exact pin is redacted. Use Approximate for fragile
+                environments (bluebonnet fields, nesting grounds, fragile overlooks).
+              </Text>
             </View>
           )}
 
-          {step === 5 && (
-            <View style={{ gap: space.md }}>
-              <Text style={styles.heading}>Review & submit</Text>
-              <View style={styles.reviewRow}><Text style={styles.reviewK}>Title</Text><Text style={styles.reviewV}>{draft.title || '—'}</Text></View>
-              <View style={styles.reviewRow}><Text style={styles.reviewK}>Location</Text><Text style={styles.reviewV}>{draft.locationLabel || '—'}</Text></View>
-              <View style={styles.reviewRow}><Text style={styles.reviewK}>City</Text><Text style={styles.reviewV}>{draft.city}, {draft.state}</Text></View>
-              <View style={styles.reviewRow}><Text style={styles.reviewK}>Photos</Text><Text style={styles.reviewV}>{draft.images.length}</Text></View>
-              <View style={styles.reviewRow}><Text style={styles.reviewK}>Shoot types</Text><Text style={styles.reviewV}>{draft.shoot_types.join(', ') || '—'}</Text></View>
-              <View style={styles.reviewRow}><Text style={styles.reviewK}>Privacy</Text><Text style={styles.reviewV}>{draft.privacy_mode}</Text></View>
-            </View>
-          )}
+          {step === 5 && (() => {
+            const photosOk = draft.images.length >= 1 || draft.privacy_mode === 'private';
+            const titleOk = draft.title.trim().length >= 3;
+            const locationOk = draft.latitude != null && draft.longitude != null;
+            const cityOk = draft.city.trim().length >= 2;
+            const shootTypesOk = draft.shoot_types.length > 0;
+            const descOk = draft.description.trim().length >= 20;
+            const lightRated = draft.sunrise_rating + draft.sunset_rating + draft.morning_golden_hour_rating + draft.evening_golden_hour_rating > 4;
+            const logisticsRated = draft.parking_rating > 0 && draft.walk_rating > 0;
+            const cover = draft.images.find((i) => i.is_cover) || draft.images[0];
+            const allOk = photosOk && titleOk && locationOk && cityOk && shootTypesOk;
+            return (
+              <View style={{ gap: space.lg }}>
+                <Text style={styles.heading}>Review & submit</Text>
+                <Text style={styles.sub}>One last look before we {draft.privacy_mode === 'private' ? 'publish privately' : 'send to review'}.</Text>
+
+                {/* Preview card */}
+                <View style={styles.reviewCard}>
+                  {cover?.image_url
+                    ? <Image source={{ uri: cover.image_url }} style={styles.reviewCover} />
+                    : <View style={[styles.reviewCover, { backgroundColor: colors.surface2, alignItems: 'center', justifyContent: 'center' }]}><ImageIcon size={28} color={colors.textTertiary} /></View>}
+                  <View style={{ padding: space.md }}>
+                    <Text style={styles.reviewCardTitle}>{draft.title || 'Untitled spot'}</Text>
+                    <Text style={styles.reviewCardCity}>
+                      {[draft.city, draft.state].filter(Boolean).join(', ') || '—'}
+                      {draft.landmark ? ` · ${draft.landmark}` : ''}
+                    </Text>
+                    {draft.shoot_types.length > 0 && (
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+                        {draft.shoot_types.map((st) => (
+                          <View key={st} style={styles.chipMini}>
+                            <Text style={styles.chipMiniTxt}>{st}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                  </View>
+                </View>
+
+                {/* Validation checklist */}
+                <View style={styles.checklist}>
+                  <Text style={styles.subSectionLabel}>Checklist</Text>
+                  <CheckRow ok={photosOk} label={draft.privacy_mode === 'private' ? 'Photos (optional for private)' : `Photos attached (${draft.images.length})`} />
+                  <CheckRow ok={titleOk} label="Spot name (3+ characters)" />
+                  <CheckRow ok={cityOk} label="City filled in (not county)" />
+                  <CheckRow ok={locationOk} label="Map coordinates" />
+                  <CheckRow ok={shootTypesOk} label={`Shoot types (${draft.shoot_types.length})`} />
+                  <CheckRow ok={descOk} label="Description (20+ chars)" soft />
+                  <CheckRow ok={lightRated} label="Light ratings added" soft />
+                  <CheckRow ok={logisticsRated} label="Parking & walking rated" soft />
+                </View>
+
+                {/* What happens next */}
+                <View style={styles.nextBox}>
+                  <Text style={styles.nextTitle}>What happens next</Text>
+                  {draft.privacy_mode === 'private' ? (
+                    <Text style={styles.nextBody}>
+                      <Text style={{ color: colors.primary, fontFamily: font.bodyBold }}>Instant publish.</Text>{' '}
+                      Private spots appear in your Saved tab right away. Only you can see the exact location.
+                    </Text>
+                  ) : draft.privacy_mode === 'followers' ? (
+                    <Text style={styles.nextBody}>
+                      Goes live to your followers after a quick review (usually under 2 hours). You'll get a push when approved.
+                    </Text>
+                  ) : (
+                    <Text style={styles.nextBody}>
+                      Goes through community review — typically approved within 24h. We check for accuracy, safety, and duplicate spots. You'll get a push when approved.
+                    </Text>
+                  )}
+                  <Text style={styles.nextBody}>You can edit anything later from the spot detail page.</Text>
+                </View>
+
+                {!allOk && (
+                  <View style={[styles.nextBox, { borderColor: colors.secondary, backgroundColor: 'rgba(208,72,72,0.06)' }]}>
+                    <Text style={[styles.nextTitle, { color: colors.secondary }]}>Fix required items before submitting</Text>
+                    <Text style={styles.nextBody}>Tap back and complete anything red above.</Text>
+                  </View>
+                )}
+              </View>
+            );
+          })()}
         </ScrollView>
 
         <View style={styles.footer}>
@@ -874,16 +1015,39 @@ export default function AddSpot() {
   );
 }
 
+function CheckRow({ ok, label, soft }: { ok: boolean; label: string; soft?: boolean }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 }}>
+      {ok
+        ? <Check size={14} color={colors.success} />
+        : <X size={14} color={soft ? colors.textTertiary : colors.secondary} />}
+      <Text style={{ color: ok ? colors.text : (soft ? colors.textTertiary : colors.secondary), fontFamily: font.bodyMedium, fontSize: 13 }}>
+        {label}{!ok && soft ? '  (recommended)' : ''}
+      </Text>
+    </View>
+  );
+}
+
+
 function MethodCard({
-  icon, title, body, onPress, testID,
+  icon, title, body, onPress, testID, featured,
 }: {
-  icon: React.ReactNode; title: string; body: string; onPress: () => void; testID?: string;
+  icon: React.ReactNode; title: string; body: string; onPress: () => void; testID?: string; featured?: boolean;
 }) {
   return (
-    <TouchableOpacity style={styles.methodCard} onPress={onPress} testID={testID}>
-      <View style={styles.methodIcon}>{icon}</View>
+    <TouchableOpacity
+      style={[styles.methodCard, featured && styles.methodCardFeatured]}
+      onPress={onPress}
+      testID={testID}
+    >
+      <View style={[styles.methodIcon, featured && { backgroundColor: 'rgba(245,166,35,0.18)' }]}>{icon}</View>
       <View style={{ flex: 1 }}>
-        <Text style={styles.methodTitle}>{title}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <Text style={styles.methodTitle}>{title}</Text>
+          {featured && (
+            <View style={styles.recommendedBadge}><Text style={styles.recommendedBadgeTxt}>RECOMMENDED</Text></View>
+          )}
+        </View>
         <Text style={styles.methodBody}>{body}</Text>
       </View>
       <ChevronRight size={18} color={colors.textSecondary} />
@@ -990,6 +1154,23 @@ const styles = StyleSheet.create({
   },
   methodTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 15 },
   methodBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2, lineHeight: 16 },
+  methodCardFeatured: { borderColor: colors.primary, backgroundColor: 'rgba(245,166,35,0.04)' },
+  recommendedBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: colors.primary },
+  recommendedBadgeTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.4 },
+  helper: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, lineHeight: 15, marginTop: -4, marginBottom: 4 },
+  groupCard: { backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1, borderRadius: radii.md, padding: space.md, gap: 10 },
+  groupHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  groupLabel: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13, letterSpacing: 0.3, textTransform: 'uppercase' },
+  reviewCard: { backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1, borderRadius: radii.lg, overflow: 'hidden' },
+  reviewCover: { width: '100%', aspectRatio: 16 / 9 },
+  reviewCardTitle: { color: colors.text, fontFamily: font.display, fontSize: 22, letterSpacing: -0.3 },
+  reviewCardCity: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, marginTop: 4 },
+  chipMini: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: radii.pill, backgroundColor: colors.surface2 },
+  chipMiniTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
+  checklist: { backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1, borderRadius: radii.md, padding: space.md, gap: 2 },
+  nextBox: { backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1, borderRadius: radii.md, padding: space.md, gap: 8 },
+  nextTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13, letterSpacing: 0.4, textTransform: 'uppercase' },
+  nextBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 20 },
   selectedCard: {
     backgroundColor: 'rgba(245,166,35,0.06)', borderColor: colors.primary, borderWidth: 1,
     padding: space.md, borderRadius: radii.md, gap: 4, position: 'relative',
