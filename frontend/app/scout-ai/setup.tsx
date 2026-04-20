@@ -67,11 +67,11 @@ export default function ScoutAISetup() {
       const topShoots = shoots.slice(0, 2).join(' + ') || 'your style';
       const topPris = priorities.slice(0, 2).join(', ').toLowerCase() || 'what matters most to you';
       const opener = skip
-        ? 'Best spots near me'
-        : `Got it — I'll prioritize ${topShoots}, with an emphasis on ${topPris}. Suggest a few great starter spots.`;
+        ? ''
+        : `Prioritise ${topShoots} with an emphasis on ${topPris}. Suggest a few starter spots.`;
       router.replace({
         pathname: '/scout-ai',
-        params: { placement: 'home', q: opener },
+        params: opener ? { placement: 'home', q: opener } : { placement: 'home' },
       } as any);
     } catch (e) {
       Alert.alert('Scout AI', formatApiError(e));

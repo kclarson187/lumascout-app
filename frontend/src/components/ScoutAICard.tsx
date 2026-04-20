@@ -61,7 +61,8 @@ export default function ScoutAICard({
   const go = () => {
     const params: Record<string, string> = { placement };
     if (spotId) params.spot_id = spotId;
-    if (prompt || copy.prompt) params.q = prompt || copy.prompt;
+    // PRD UX rule: do NOT seed a query — let the user type their own.
+    // Entry cards just deep-link into the Scout AI screen on the right surface.
     router.push({ pathname: '/scout-ai', params } as any);
   };
   return (
