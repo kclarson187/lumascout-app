@@ -21,6 +21,7 @@ import SpotCard from '../../src/components/SpotCard';
 import { EmptyState, Chip } from '../../src/components/ui';
 import { Button } from '../../src/components/Button';
 import UpgradeBanner from '../../src/components/UpgradeBanner';
+import ScoutAICard from '../../src/components/ScoutAICard';
 
 type SortKey = 'recent' | 'score' | 'distance' | 'city' | 'shoot_type';
 const SORT_LABELS: Record<SortKey, string> = {
@@ -160,6 +161,12 @@ export default function Saved() {
 
       {tab === 'favorites' && (
         <>
+          {/* Scout AI planning helper — only shown when user has saved spots to plan from. */}
+          {savedSpots.length > 0 && (
+            <View style={{ paddingHorizontal: space.xl, marginBottom: 8 }}>
+              <ScoutAICard placement="saved" variant="row" />
+            </View>
+          )}
           {/* PRD #9 — contextual upsell after user has invested some effort
               saving favourites (triggers at 5+) rather than pestering them
               the moment they open the tab. */}

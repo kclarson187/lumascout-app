@@ -25,6 +25,7 @@ import LocationSearchSheet, { PlaceResult } from '../../src/components/LocationS
 import MapPickerSheet from '../../src/components/MapPickerSheet';
 import ManualLocationSheet, { ManualLocation } from '../../src/components/ManualLocationSheet';
 import { Input, Chip } from '../../src/components/ui';
+import ScoutAICard from '../../src/components/ScoutAICard';
 
 const STEPS = ['Photos', 'Location', 'Details', 'Notes', 'Privacy', 'Review'];
 
@@ -615,6 +616,9 @@ export default function AddSpot() {
             <View style={{ gap: space.lg }}>
               <Text style={styles.heading}>Basic details</Text>
               <Text style={styles.sub}>Name it clearly. City, state, and any park or landmark help other photographers find it.</Text>
+
+              {/* Scout AI helper — only on the Details step where writing help matters most. */}
+              <ScoutAICard placement="upload" variant="row" />
 
               <Input label="Spot name" value={draft.title} onChangeText={(t) => setDraft({ ...draft, title: t })} placeholder="e.g. Bluebonnet Fields at Muleshoe Bend" testID="add-title" />
               <View style={{ flexDirection: 'row', gap: space.md }}>

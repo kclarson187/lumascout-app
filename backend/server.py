@@ -3689,6 +3689,218 @@ async def send_push(user_ids: List[str], title: str, body: str, data: Optional[d
         logger.warning("Push delivery failed: %s", e)
 
 
+
+# ============================================================================
+# SCOUT AI — Official PhotoScout in-app assistant (Phase 1: stateless chat)
+# ============================================================================
+# Spec highlights honoured here:
+#   • Official AI product assistant — never impersonates a real photographer.
+#   • Useful first, trustworthy always. Confidence levels in replies.
+#   • Only uses live PhotoScout data (current user plan, nearby/saved spots,
+#     optional pinned spot) for context — no hallucinated permits/access.
+#   • Stateless per user's Phase-1 decision (no server-side chat history).
+
+SCOUT_AI_SYSTEM_PROMPT = (
+    "You are Scout AI, the official AI assistant inside PhotoScout, a photographer-"
+    "focused location discovery, planning, and community app.\n\n"
+    "Your job is to help users discover, save, plan, and share great photo locations, "
+    "understand the app, and make better use of PhotoScout's tools.\n\n"
+    "You are NOT a real photographer profile. You are an official AI product assistant. "
+    "Never imply you are human or that you personally visited a place.\n\n"
+    "Core rules:\n"
+    "- Be useful, concise, and trustworthy.\n"
+    "- Use only available app data, user context, and clearly supported metadata.\n"
+    "- Do not invent spot details, permit rules, safety claims, or personal experience.\n"
+    "- Distinguish clearly between known information and suggestions.\n"
+    "- Optimise for real field usefulness: light, access, parking, crowd, background "
+    "variety, distance, and fit for shoot type.\n"
+    "- Recommend premium features (Pro / Elite) only when directly relevant to the "
+    "user's intent. Never spam upsells.\n"
+    "- Encourage verification when conditions may change (weather, bloom, crowds).\n"
+    "- Help users choose, compare, upload, and understand locations.\n"
+    "- If data is missing, say so clearly and provide the next best action.\n\n"
+    "Style:\n"
+    "- Lead with the recommendation or answer.\n"
+    "- Follow with 2-4 practical reasons.\n"
+    "- Mention uncertainty when needed.\n"
+    "- Keep the tone premium and creator-focused. Short paragraphs, no emoji spam.\n"
+    "- Under 180 words unless the user clearly wants depth."
+)
+
+
+async def _build_scout_ai_context(
+    user: dict,
+    spot_id: Optional[str],
+    placement: Optional[str],
+) -> str:
+    """Compile a compact, factual block the model can ground its reply in.
+
+    Only real data from the database — no invented fields. Surfaces the
+    viewer's plan, a few saved-spot titles, and the pinned spot's public
+    metadata if one was provided.
+    """
+    lines: List[str] = []
+    plan = user.get("plan") or "free"
+    lines.append(
+        f"VIEWER: name={user.get('name') or 'user'} "
+        f"plan={plan} "
+        f"city={user.get('city') or '?'} "
+        f"state={user.get('state') or '?'}"
+    )
+    specs = user.get("specialties") or []
+    if specs:
+        lines.append("VIEWER_SPECIALTIES: " + ", ".join(specs[:4]))
+    if placement:
+        lines.append(f"PLACEMENT: {placement}  (surface where the user opened Scout AI)")
+
+    # Up to 5 recently-saved spot titles for "choose between saved" prompts.
+    try:
+        saved_ids = user.get("saved_spot_ids") or []
+        if saved_ids:
+            saved = await db.spots.find(
+                {"spot_id": {"$in": saved_ids[:20]}},
+                {"_id": 0, "spot_id": 1, "title": 1, "city": 1, "state": 1,
+                 "shoot_types": 1, "best_time_of_day": 1, "shoot_score": 1},
+            ).limit(5).to_list(5)
+            if saved:
+                lines.append("VIEWER_SAVED_SPOTS:")
+                for s in saved:
+                    lines.append(
+                        f"  - {s.get('title')} ({s.get('city')}, {s.get('state')}) "
+                        f"score={s.get('shoot_score')} "
+                        f"best={s.get('best_time_of_day')} "
+                        f"shoots={','.join((s.get('shoot_types') or [])[:3])}"
+                    )
+    except Exception as e:
+        logger.debug("Scout AI saved-spot context failed: %s", e)
+
+    # Pinned spot (if the user opened Scout AI from the Spot detail page).
+    if spot_id:
+        try:
+            s = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0})
+            if s:
+                v = public_spot_view(s, user) or {}
+                lines.append(
+                    "CURRENT_SPOT:\n"
+                    f"  title={v.get('title')}\n"
+                    f"  city={v.get('city')}, {v.get('state')}\n"
+                    f"  shoot_types={','.join(v.get('shoot_types') or [])}\n"
+                    f"  style_tags={','.join(v.get('style_tags') or [])}\n"
+                    f"  best_time_of_day={v.get('best_time_of_day')}\n"
+                    f"  shoot_score={v.get('shoot_score')}\n"
+                    f"  parking_rating={v.get('parking_rating')}\n"
+                    f"  walk_rating={v.get('walk_rating')}\n"
+                    f"  crowd_level={v.get('crowd_level')}\n"
+                    f"  privacy_mode={v.get('privacy_mode')}"
+                )
+        except Exception as e:
+            logger.debug("Scout AI current-spot context failed: %s", e)
+
+    return "\n".join(lines) if lines else "(no additional context available)"
+
+
+class ScoutAIMessageIn(BaseModel):
+    role: str
+    content: str
+
+
+class ScoutAIChatIn(BaseModel):
+    messages: List[ScoutAIMessageIn]
+    spot_id: Optional[str] = None
+    placement: Optional[str] = None
+
+
+def _scout_ai_follow_ups(placement: Optional[str]) -> List[str]:
+    """Deterministic follow-up chips (no extra model round-trip)."""
+    p = (placement or "").lower()
+    if p == "upload":
+        return [
+            "Help me write this description",
+            "Should this be public or private?",
+            "What notes should I include?",
+        ]
+    if p == "saved":
+        return [
+            "Which saved spot fits tonight's golden hour?",
+            "Compare my saved portrait spots",
+            "Best saved spot for a branding shoot",
+        ]
+    if p == "spot_detail":
+        return [
+            "Does this fit a family session?",
+            "Compare this with similar spots nearby",
+            "Best light here",
+        ]
+    if p == "explore":
+        return [
+            "Hidden gems nearby",
+            "Dog-friendly sunset spots",
+            "Places good for branding sessions",
+        ]
+    return [
+        "Where should I shoot this weekend?",
+        "Best sunset portrait spots near me",
+        "Explain my Shoot Score",
+    ]
+
+
+@api.post("/ai/chat")
+async def scout_ai_chat(body: ScoutAIChatIn, user: dict = Depends(get_current_user)):
+    """Scout AI stateless chat. Returns a single reply plus follow-up chips."""
+    check_rate_limit("scout_ai_chat", user["user_id"])
+
+    if not body.messages:
+        raise HTTPException(status_code=400, detail="No messages supplied.")
+    last_user = None
+    for m in reversed(body.messages):
+        if m.role == "user" and (m.content or "").strip():
+            last_user = m.content.strip()
+            break
+    if not last_user:
+        raise HTTPException(status_code=400, detail="Empty user message.")
+
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+    except Exception:
+        raise HTTPException(status_code=500, detail="AI service is not available.")
+
+    key = os.environ.get("EMERGENT_LLM_KEY")
+    if not key:
+        raise HTTPException(status_code=500, detail="AI service is not configured.")
+
+    context_block = await _build_scout_ai_context(user, body.spot_id, body.placement)
+    sys_msg = (
+        f"{SCOUT_AI_SYSTEM_PROMPT}\n\n"
+        "=== LIVE APP CONTEXT (this session only - do not quote verbatim) ===\n"
+        f"{context_block}\n"
+        "=== END CONTEXT ==="
+    )
+
+    session_id = f"scout:{user['user_id']}:{uuid.uuid4().hex[:8]}"
+    chat = LlmChat(
+        api_key=key,
+        session_id=session_id,
+        system_message=sys_msg,
+    ).with_model("openai", "gpt-5.2")
+
+    try:
+        reply = await chat.send_message(UserMessage(text=last_user))
+    except Exception as e:
+        logger.warning("Scout AI chat failed: %s", e)
+        raise HTTPException(
+            status_code=502,
+            detail="Scout AI is briefly unavailable. Please try again in a moment.",
+        )
+
+    return {
+        "reply": (reply or "").strip(),
+        "follow_ups": _scout_ai_follow_ups(body.placement),
+        "model": "gpt-5.2",
+        "disclosure": "Scout AI is an official PhotoScout AI assistant. Replies are AI-generated.",
+    }
+
+
+
 # ----------------------------------------------------------------------------
 # AI shot list — emergentintegrations / GPT (cached per spot for 7 days)
 # ----------------------------------------------------------------------------
