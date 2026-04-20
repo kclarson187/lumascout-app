@@ -20,6 +20,7 @@ import { colors, font, space, radii } from '../../src/theme';
 import SpotCard from '../../src/components/SpotCard';
 import { EmptyState, Chip } from '../../src/components/ui';
 import { Button } from '../../src/components/Button';
+import UpgradeBanner from '../../src/components/UpgradeBanner';
 
 type SortKey = 'recent' | 'score' | 'distance' | 'city' | 'shoot_type';
 const SORT_LABELS: Record<SortKey, string> = {
@@ -159,6 +160,18 @@ export default function Saved() {
 
       {tab === 'favorites' && (
         <>
+          {/* PRD #9 — contextual upsell after user has invested some effort
+              saving favourites (triggers at 5+) rather than pestering them
+              the moment they open the tab. */}
+          {savedSpots.length >= 5 && (
+            <View style={{ paddingHorizontal: space.xl, marginBottom: 8 }}>
+              <UpgradeBanner
+                placement="saved-favorites"
+                title="You've saved a lot — go Pro to get more out of them"
+                subtitle="Group saves into themed collections, export a shoot-day itinerary, and see weather on the map."
+              />
+            </View>
+          )}
           <View style={styles.sortRail}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: space.xl, gap: 6 }}>
               {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (

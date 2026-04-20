@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import Svg, { Path, Circle, Line, Text as SvgText } from 'react-native-svg';
-import { ChevronLeft, Eye, Bookmark, Users, Sparkles, TrendingUp, Package, DollarSign, Plus } from 'lucide-react-native';
+import { ChevronLeft, Eye, Bookmark, Users, Sparkles, TrendingUp, Package, Plus } from 'lucide-react-native';
 import { api } from '../src/api';
 import { useAuth } from '../src/auth';
 import { colors, font, space, radii } from '../src/theme';
@@ -71,12 +71,6 @@ export default function CreatorDashboard() {
               <Text style={styles.tileLabel}>{t.label}</Text>
             </View>
           ))}
-          <View style={[styles.tile, styles.earningsTile]}>
-            <View style={styles.tileIcon}><DollarSign size={18} color={colors.primary} /></View>
-            <Text style={styles.tileVal}>$0</Text>
-            <Text style={styles.tileLabel}>Earnings</Text>
-            <Text style={styles.comingSoonBadge}>COMING SOON</Text>
-          </View>
         </View>
 
         <View style={styles.ctaRow}>
@@ -195,12 +189,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border, borderWidth: 1,
     padding: space.lg, borderRadius: radii.lg, gap: 6,
   },
-  earningsTile: { borderColor: colors.primary, position: 'relative', overflow: 'hidden' },
-  comingSoonBadge: {
-    position: 'absolute', top: 10, right: 10,
-    color: colors.primary, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.5,
-    backgroundColor: 'rgba(245,166,35,0.12)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.sm,
-  },
+  earningsTile: { borderColor: colors.primary, position: 'relative', overflow: 'hidden' }, // reserved for future
   tileIcon: {
     width: 36, height: 36, borderRadius: 18,
     backgroundColor: 'rgba(245,166,35,0.12)',

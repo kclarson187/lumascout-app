@@ -1929,6 +1929,24 @@ async def admin_pending(user: dict = Depends(require_role("moderator"))):
     return [public_spot_view(s, user) for s in pending]
 
 
+@api.get("/admin/stats/recent-approvals")
+async def admin_recent_approvals(
+    days: int = 7,
+    user: dict = Depends(require_role("moderator")),
+):
+    """PRD UX Polish #8 — feed the celebratory empty state on /admin/spots with a
+    real "X approved in the last N days" number rather than a placeholder stat.
+    """
+    safe_days = max(1, min(days, 90))
+    since = datetime.now(timezone.utc) - timedelta(days=safe_days)
+    count = await db.spots.count_documents({
+        "visibility_status": "approved",
+        "reviewed_at": {"$gte": since.isoformat()},
+    })
+    return {"count": count, "days": safe_days}
+
+
+
 @api.get("/admin/posts")
 async def admin_list_posts(
     status: Optional[str] = None,

@@ -1243,6 +1243,54 @@ agent_communication:
 
         - One throwaway user was created per run: qa.stripe.fresh.<uuid10>@photoscout.app (password StripeQA!2026). They have a real Stripe Customer attached. Cleanup is optional.
 
+
+    -agent: "main"
+    -message: |
+      UX Polish #8, #9, and #10 — shipped together.
+
+      ### PRIORITY #8 — Admin moderation + audit upgrades
+        Files: /app/frontend/app/admin/reports.tsx, /app/frontend/app/admin/spots.tsx
+        Backend:  /app/backend/server.py (new endpoint GET /api/admin/stats/recent-approvals)
+
+        - Fixed pre-existing missing `router` import in admin/reports.tsx (spot-detail link was crashing).
+        - Filter chips now show live counts: "Pending (3)" / "Resolved (12)" — fetches both buckets in parallel.
+        - Each report card now shows a relative-time chip (2h ago / 3d ago) using a new `timeAgo` helper.
+        - Celebratory empty states on both screens with large green ShieldCheck icon, warm copy,
+          and a stats chip "X approved in the last 7 days" (fed by the new endpoint).
+        - Pending-spots cards now show "Submitted 2h ago" so admins can prioritize fresh-first.
+
+      ### PRIORITY #9 — Contextual monetization upsells
+        New: /app/frontend/src/components/UpgradeBanner.tsx
+        Files: /app/frontend/app/(tabs)/index.tsx, /app/frontend/app/(tabs)/saved.tsx
+
+        Built a reusable `<UpgradeBanner>` that:
+          - Only renders for free-plan authenticated users (premium users never see it).
+          - Is dismissible; dismissal persists per-placement for 7 days via existing
+            web-safe storage helpers (SecureStore on native, localStorage on web) so no new
+            runtime dependency was added.
+          - Routes to /paywall with the target plan as a query param.
+
+        Placements:
+          1. Home feed, between search bar and quick filters — "Unlock the full photographer
+             network. Pro members save unlimited spots, get AI shot lists, and message anyone."
+          2. Saved → Favorites, above the sort rail — only after the free user has saved 5+
+             spots (natural context point, not immediate nagging).
+
+        Verified: FREE user (marco@photoscout.app) sees the Home banner; PRO user (sophie) does not.
+
+      ### PRIORITY #10 — Content quality + trust
+        File: /app/frontend/app/creator-dashboard.tsx
+
+        - Removed the placeholder "$0 Earnings — COMING SOON" tile from the Creator Dashboard grid.
+          Placeholder metrics erode trust; the tile now simply doesn't appear until real
+          payout backing lands. Cleaned up orphaned `earningsTile` / `comingSoonBadge` styles
+          and unused `DollarSign` import.
+        - Duplicate-spot prevention audit: confirmed backend `/api/spots/check-duplicates`
+          exists AND the frontend `/add` flow already debounces a call and shows candidate
+          matches in a dedicated step (lines 225-235 of add.tsx). No change required.
+
+      No regressions expected. All screens verified to bundle and render cleanly on 390×844.
+
       No action items. All 4 new Stripe endpoints are green.
 
 
