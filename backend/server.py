@@ -31,7 +31,7 @@ logger = logging.getLogger("photoscout")
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 JWT_SECRET = os.environ["JWT_SECRET"]
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@photoscout.app")
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@lumascout.app")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 JWT_ALGO = "HS256"
 ACCESS_TOKEN_DAYS = 30
@@ -1502,7 +1502,7 @@ async def my_saves(user: dict = Depends(get_current_user)):
 # =============================================================================
 NOMINATIM_BASE = "https://nominatim.openstreetmap.org"
 NOMINATIM_HEADERS = {
-    "User-Agent": "LumaScout/1.0 (support@photoscout.app)",
+    "User-Agent": "LumaScout/1.0 (support@lumascout.app)",
     "Accept-Language": "en",
 }
 
@@ -2029,7 +2029,7 @@ SETTINGS_SINGLETON_ID = "platform_v1"
 DEFAULT_SETTINGS = {
     "settings_id": SETTINGS_SINGLETON_ID,
     "app_name": "LumaScout",
-    "support_email": "support@photoscout.app",
+    "support_email": "support@lumascout.app",
     "maintenance_mode": False,
     "public_registration": True,
     "auto_approve_verified": True,
@@ -4595,7 +4595,7 @@ async def billing_portal(user: dict = Depends(get_current_user)):
     try:
         session = _stripe.billing_portal.Session.create(
             customer=customer_id,
-            return_url="https://photoscout.app/billing",
+            return_url="https://lumascout.app/billing",
         )
     except _stripe.error.StripeError as e:  # type: ignore
         raise HTTPException(status_code=400, detail=f"Stripe error: {e.user_message or str(e)}")
@@ -4902,23 +4902,23 @@ async def seed_admin():
 # Demo content
 # ----------------------------------------------------------------------------
 DEMO_PHOTOGRAPHERS = [
-    {"email": "sophie@photoscout.app", "name": "Sophie Reyes", "username": "sophiereyes",
+    {"email": "sophie@lumascout.app", "name": "Sophie Reyes", "username": "sophiereyes",
      "avatar_url": "https://images.unsplash.com/photo-1697063882499-f7fca7d2d713?w=400&q=80",
      "bio": "Family & senior photographer — hill country golden hour specialist.",
      "city": "Austin", "state": "TX", "specialties": ["Family", "Seniors"], "verification_status": "verified"},
-    {"email": "marco@photoscout.app", "name": "Marco Alvarez", "username": "marcoalvarez",
+    {"email": "marco@lumascout.app", "name": "Marco Alvarez", "username": "marcoalvarez",
      "avatar_url": "https://images.unsplash.com/photo-1582070595814-fe36a8d39532?w=400&q=80",
      "bio": "Wedding + engagement. Chasing light across Texas since 2014.",
      "city": "San Antonio", "state": "TX", "specialties": ["Wedding", "Portrait"], "verification_status": "verified"},
-    {"email": "priya@photoscout.app", "name": "Priya Chen", "username": "priyachen",
+    {"email": "priya@lumascout.app", "name": "Priya Chen", "username": "priyachen",
      "avatar_url": "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=400&q=80",
      "bio": "Pet photography. Yes, your dog IS the moment.",
      "city": "Dallas", "state": "TX", "specialties": ["Pet", "Lifestyle"], "verification_status": "verified"},
-    {"email": "jordan@photoscout.app", "name": "Jordan Blake", "username": "jordanblake",
+    {"email": "jordan@lumascout.app", "name": "Jordan Blake", "username": "jordanblake",
      "avatar_url": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400&q=80",
      "bio": "Urban and editorial. Shadows > sunshine.",
      "city": "Houston", "state": "TX", "specialties": ["Urban", "Branding"], "verification_status": "unverified"},
-    {"email": "lena@photoscout.app", "name": "Lena Okafor", "username": "lenaokafor",
+    {"email": "lena@lumascout.app", "name": "Lena Okafor", "username": "lenaokafor",
      "avatar_url": "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=400&q=80",
      "bio": "Nature, wildflowers, and slow photography.",
      "city": "Fredericksburg", "state": "TX", "specialties": ["Nature", "Portrait"], "verification_status": "verified"},
@@ -5276,7 +5276,7 @@ DEMO_SPOTS = [
 
 async def seed_demo_content():
     # Only seed if no demo photographers exist
-    count = await db.users.count_documents({"email": {"$regex": "@photoscout.app$"}})
+    count = await db.users.count_documents({"email": {"$regex": "@lumascout.app$"}})
     if count >= len(DEMO_PHOTOGRAPHERS):
         # Demo users already present — still make sure NA content is seeded on
         # previously-bootstrapped databases.
@@ -5421,31 +5421,31 @@ async def seed_demo_content():
 # Idempotent: only fires when no non-US seed data exists yet.
 # -----------------------------------------------------------------------------
 NA_PHOTOGRAPHERS = [
-    {"email": "emily.toronto@photoscout.app", "username": "emilytoronto", "name": "Emily Chen",
+    {"email": "emily.toronto@lumascout.app", "username": "emilytoronto", "name": "Emily Chen",
      "bio": "Urban portraits across the GTA.", "city": "Toronto", "state": "Ontario",
      "country_code": "CA", "country_name": "Canada", "timezone": "America/Toronto", "language_hint": "en",
      "specialties": ["Urban", "Portrait"], "avatar_url": None},
-    {"email": "noah.vancouver@photoscout.app", "username": "noahvancouver", "name": "Noah Kim",
+    {"email": "noah.vancouver@lumascout.app", "username": "noahvancouver", "name": "Noah Kim",
      "bio": "PNW landscapes + wedding work.", "city": "Vancouver", "state": "British Columbia",
      "country_code": "CA", "country_name": "Canada", "timezone": "America/Vancouver", "language_hint": "en",
      "specialties": ["Nature", "Wedding"], "avatar_url": None},
-    {"email": "diego.cdmx@photoscout.app", "username": "diegocdmx", "name": "Diego Ramírez",
+    {"email": "diego.cdmx@lumascout.app", "username": "diegocdmx", "name": "Diego Ramírez",
      "bio": "Fotógrafo de bodas en Ciudad de México.", "city": "Mexico City", "state": "CDMX",
      "country_code": "MX", "country_name": "Mexico", "timezone": "America/Mexico_City", "language_hint": "es",
      "specialties": ["Wedding", "Portrait"], "avatar_url": None},
-    {"email": "valeria.gdl@photoscout.app", "username": "valeriagdl", "name": "Valeria Morales",
+    {"email": "valeria.gdl@lumascout.app", "username": "valeriagdl", "name": "Valeria Morales",
      "bio": "Retratos de familia en Guadalajara.", "city": "Guadalajara", "state": "Jalisco",
      "country_code": "MX", "country_name": "Mexico", "timezone": "America/Mexico_City", "language_hint": "es",
      "specialties": ["Family", "Lifestyle"], "avatar_url": None},
-    {"email": "alex.la@photoscout.app", "username": "alexla", "name": "Alex Rivera",
+    {"email": "alex.la@lumascout.app", "username": "alexla", "name": "Alex Rivera",
      "bio": "LA creative + brand shooter.", "city": "Los Angeles", "state": "CA",
      "country_code": "US", "country_name": "United States", "timezone": "America/Los_Angeles", "language_hint": "en",
      "specialties": ["Branding", "Urban"], "avatar_url": None},
-    {"email": "sophie.montreal@photoscout.app", "username": "sophiemontreal", "name": "Sophie Tremblay",
+    {"email": "sophie.montreal@lumascout.app", "username": "sophiemontreal", "name": "Sophie Tremblay",
      "bio": "Photographe de mariage à Montréal.", "city": "Montréal", "state": "Québec",
      "country_code": "CA", "country_name": "Canada", "timezone": "America/Montreal", "language_hint": "fr",
      "specialties": ["Wedding", "Portrait"], "avatar_url": None},
-    {"email": "luis.monterrey@photoscout.app", "username": "luismonterrey", "name": "Luis Hernández",
+    {"email": "luis.monterrey@lumascout.app", "username": "luismonterrey", "name": "Luis Hernández",
      "bio": "Fotógrafo editorial en Monterrey.", "city": "Monterrey", "state": "Nuevo León",
      "country_code": "MX", "country_name": "Mexico", "timezone": "America/Monterrey", "language_hint": "es",
      "specialties": ["Urban", "Branding"], "avatar_url": None},
@@ -5464,7 +5464,7 @@ NA_SPOTS = [
         "shade_rating": 3, "variety_rating": 4, "crowd_level": 4, "safety_rating": 5,
         "best_months": ["May", "June", "September", "October"], "fee_required": False,
         "permit_required": False,
-        "owner_email": "emily.toronto@photoscout.app",
+        "owner_email": "emily.toronto@lumascout.app",
         "images": ["https://images.unsplash.com/photo-1517935706615-2717063c2225?w=1200&q=85"],
     },
     {
@@ -5479,7 +5479,7 @@ NA_SPOTS = [
         "shade_rating": 4, "variety_rating": 5, "crowd_level": 3, "safety_rating": 5,
         "best_months": ["April", "May", "September", "October"], "fee_required": False,
         "permit_required": True, "permit_notes": "Park board permit for weddings.",
-        "owner_email": "noah.vancouver@photoscout.app",
+        "owner_email": "noah.vancouver@lumascout.app",
         "images": ["https://images.unsplash.com/photo-1609825488888-3a766db05542?w=1200&q=85"],
     },
     {
@@ -5494,7 +5494,7 @@ NA_SPOTS = [
         "shade_rating": 4, "variety_rating": 5, "crowd_level": 4, "safety_rating": 4,
         "best_months": ["November", "December", "January", "February", "March"], "fee_required": False,
         "permit_required": False,
-        "owner_email": "diego.cdmx@photoscout.app",
+        "owner_email": "diego.cdmx@lumascout.app",
         "images": ["https://images.unsplash.com/photo-1518659526054-190340b61bee?w=1200&q=85"],
     },
     {
@@ -5509,7 +5509,7 @@ NA_SPOTS = [
         "shade_rating": 3, "variety_rating": 5, "crowd_level": 4, "safety_rating": 4,
         "best_months": ["October", "November", "February", "March"], "fee_required": False,
         "permit_required": False,
-        "owner_email": "valeria.gdl@photoscout.app",
+        "owner_email": "valeria.gdl@lumascout.app",
         "images": ["https://images.unsplash.com/photo-1585975406140-f2b8e7f1f472?w=1200&q=85"],
     },
     {
@@ -5524,7 +5524,7 @@ NA_SPOTS = [
         "shade_rating": 2, "variety_rating": 4, "crowd_level": 5, "safety_rating": 4,
         "best_months": ["March", "April", "October", "November"], "fee_required": False,
         "permit_required": True, "permit_notes": "Tripod permit for commercial work.",
-        "owner_email": "alex.la@photoscout.app",
+        "owner_email": "alex.la@lumascout.app",
         "images": ["https://images.unsplash.com/photo-1503891617560-5b8c2e28cbbf?w=1200&q=85"],
     },
     {
@@ -5539,7 +5539,7 @@ NA_SPOTS = [
         "shade_rating": 2, "variety_rating": 5, "crowd_level": 3, "safety_rating": 4,
         "best_months": ["May", "June", "September", "October"], "fee_required": False,
         "permit_required": True, "permit_notes": "Commercial photo permit via Denver Arts & Venues.",
-        "owner_email": "maya.denver@photoscout.app",
+        "owner_email": "maya.denver@lumascout.app",
         "images": ["https://images.unsplash.com/photo-1509316785289-025f5b846b35?w=1200&q=85"],
     },
     {
@@ -5554,7 +5554,7 @@ NA_SPOTS = [
         "shade_rating": 4, "variety_rating": 5, "crowd_level": 4, "safety_rating": 5,
         "best_months": ["May", "June", "September", "October"], "fee_required": False,
         "permit_required": False,
-        "owner_email": "sophie.montreal@photoscout.app",
+        "owner_email": "sophie.montreal@lumascout.app",
         "images": ["https://images.unsplash.com/photo-1519178614-68673b201f36?w=1200&q=85"],
     },
     {
@@ -5569,7 +5569,7 @@ NA_SPOTS = [
         "shade_rating": 2, "variety_rating": 4, "crowd_level": 2, "safety_rating": 4,
         "best_months": ["November", "December", "February", "March"], "fee_required": False,
         "permit_required": False,
-        "owner_email": "luis.monterrey@photoscout.app",
+        "owner_email": "luis.monterrey@lumascout.app",
         "images": ["https://images.unsplash.com/photo-1518659526054-190340b61bee?w=1200&q=85"],
     },
 ]

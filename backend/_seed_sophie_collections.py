@@ -32,9 +32,9 @@ async def main():
     client = AsyncIOMotorClient(MONGO_URL)
     db = client[DB_NAME]
 
-    sophie = await db.users.find_one({"email": "sophie@photoscout.app"})
+    sophie = await db.users.find_one({"email": "sophie@lumascout.app"})
     if not sophie:
-        print("sophie@photoscout.app not found; abort.")
+        print("sophie@lumascout.app not found; abort.")
         return
 
     uid = sophie["user_id"]

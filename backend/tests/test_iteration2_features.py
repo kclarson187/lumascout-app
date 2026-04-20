@@ -23,7 +23,7 @@ def api_client():
 def admin_token(api_client):
     """Get admin JWT token"""
     response = api_client.post(f"{BASE_URL}/api/auth/login", json={
-        "email": "admin@photoscout.app",
+        "email": "admin@lumascout.app",
         "password": "admin123"
     })
     if response.status_code != 200:
@@ -33,9 +33,9 @@ def admin_token(api_client):
 
 @pytest.fixture
 def demo_user_token(api_client):
-    """Get demo user JWT token (sophie@photoscout.app)"""
+    """Get demo user JWT token (sophie@lumascout.app)"""
     response = api_client.post(f"{BASE_URL}/api/auth/login", json={
-        "email": "sophie@photoscout.app",
+        "email": "sophie@lumascout.app",
         "password": "demo123"
     })
     if response.status_code != 200:

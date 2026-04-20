@@ -23,7 +23,7 @@ def api_client():
 def admin_token(api_client):
     """Get admin JWT token"""
     response = api_client.post(f"{BASE_URL}/api/auth/login", json={
-        "email": "admin@photoscout.app",
+        "email": "admin@lumascout.app",
         "password": "admin123"
     })
     if response.status_code != 200:
@@ -35,7 +35,7 @@ def admin_token(api_client):
 def demo_user_token(api_client):
     """Get demo user JWT token"""
     response = api_client.post(f"{BASE_URL}/api/auth/login", json={
-        "email": "sophie@photoscout.app",
+        "email": "sophie@lumascout.app",
         "password": "demo123"
     })
     if response.status_code != 200:
@@ -84,7 +84,7 @@ class TestAuth:
     def test_login_admin_returns_token_and_role(self, api_client):
         """POST /api/auth/login with admin credentials returns token + user with role admin"""
         response = api_client.post(f"{BASE_URL}/api/auth/login", json={
-            "email": "admin@photoscout.app",
+            "email": "admin@lumascout.app",
             "password": "admin123"
         })
         assert response.status_code == 200, f"Admin login failed: {response.text}"
@@ -108,7 +108,7 @@ class TestAuth:
         assert response.status_code == 200, f"GET /auth/me failed: {response.text}"
         
         user = response.json()
-        assert user["email"] == "admin@photoscout.app"
+        assert user["email"] == "admin@lumascout.app"
         assert user["role"] == "admin"
         assert "_id" not in user
         assert "password_hash" not in user
@@ -395,7 +395,7 @@ class TestFollows:
         """POST /api/users/{id}/follow toggles follow"""
         # Get another user to follow (admin)
         login_response = api_client.post(f"{BASE_URL}/api/auth/login", json={
-            "email": "admin@photoscout.app",
+            "email": "admin@lumascout.app",
             "password": "admin123"
         })
         admin_user = login_response.json()["user"]
