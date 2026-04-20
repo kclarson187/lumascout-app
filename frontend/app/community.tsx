@@ -2,12 +2,30 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Image, RefreshControl, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ChevronLeft, Plus, MessageCircle, Heart, Users, Sparkles, Coffee, Camera, HandHeart, Wrench, Eye, BookOpen, Briefcase, Star, GraduationCap } from 'lucide-react-native';
+import { ChevronLeft, Plus, MessageCircle, Heart, Users, Sparkles, Coffee, Camera, HandHeart, Wrench, Eye, BookOpen, Briefcase, Star, GraduationCap, MapPin, Clock, Flame, PenLine } from 'lucide-react-native';
 import { api } from '../src/api';
 import { useAuth } from '../src/auth';
 import { colors, font, space, radii } from '../src/theme';
 import VerifiedBadge from '../src/components/VerifiedBadge';
 import PollCard from '../src/components/PollCard';
+
+// Small helper so every card shows a humanized relative timestamp instead of
+// "4/20/2026" which is useless for feed scanning.
+function timeAgo(iso?: string): string {
+  if (!iso) return '';
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const diffSec = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (diffSec < 60) return 'just now';
+  const m = Math.floor(diffSec / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d}d ago`;
+  if (d < 30) return `${Math.floor(d / 7)}w ago`;
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
 
 const TABS = [
   { k: 'all',       label: 'All' },
@@ -107,6 +125,29 @@ export default function Community() {
           contentContainerStyle={{ padding: space.xl, gap: 10, paddingBottom: 100 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.primary} />}
         >
+          {/* Composer prompt — always visible nudge to post (PRD #7).
+              Tappable preview input with viewer's avatar. */}
+          {user && (
+            <TouchableOpacity
+              onPress={() => router.push('/community/compose')}
+              style={styles.composerPrompt}
+              testID="community-composer-prompt"
+            >
+              {user.avatar_image_url || user.avatar_url
+                ? <Image source={{ uri: user.avatar_image_url || user.avatar_url }} style={styles.composerAvatar} />
+                : <View style={[styles.composerAvatar, { backgroundColor: colors.surface2 }]} />}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.composerHint} numberOfLines={1}>
+                  Share a win, ask a question, drop a tip…
+                </Text>
+              </View>
+              <View style={styles.composerCta}>
+                <PenLine size={14} color={colors.textInverse} />
+                <Text style={styles.composerCtaTxt}>Post</Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
           {items.length === 0 && (
             <View style={styles.emptyWrap}>
               <Users size={28} color={colors.primary} />
@@ -134,6 +175,17 @@ function PostCard({ post, onLike, meId }: { post: any; onLike: () => void; meId?
   const Cat = CATEGORY_ICONS[post.category] || BookOpen;
   const color = CATEGORY_COLORS[post.category] || colors.primary;
 
+  // PRD #7: derive interaction prompt label so every card invites engagement.
+  const commentCount = post.comment_count || 0;
+  const isFresh = post.created_at && (Date.now() - new Date(post.created_at).getTime()) < 3600_000; // < 1h
+  const isPopular = likeCount >= 5 || commentCount >= 3;
+  const prompt =
+    likeCount === 0 && commentCount === 0
+      ? { text: 'Be the first to react', emoji: '✨' }
+      : commentCount === 0
+        ? { text: 'Start the conversation', emoji: '💬' }
+        : null;
+
   const toggleLike = async () => {
     const next = !liked;
     setLiked(next);
@@ -147,6 +199,9 @@ function PostCard({ post, onLike, meId }: { post: any; onLike: () => void; meId?
     }
   };
 
+  // Pull up to 2 specialties for the author chip row.
+  const topSpecs: string[] = (post.author?.specialties || []).slice(0, 2);
+
   return (
     <Pressable
       onPress={() => router.push(`/community/post/${post.post_id}` as any)}
@@ -158,13 +213,45 @@ function PostCard({ post, onLike, meId }: { post: any; onLike: () => void; meId?
           ? <Image source={{ uri: post.author.avatar_url }} style={styles.avatar} />
           : <View style={[styles.avatar, { backgroundColor: colors.surface2 }]} />}
         <View style={{ flex: 1 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
             <Text style={styles.authorName}>{post.author?.name || 'Someone'}</Text>
             <VerifiedBadge status={post.author?.verification_status} variant="inline" size={12} />
+            {topSpecs.map((s) => (
+              <View key={s} style={styles.specChip}>
+                <Text style={styles.specChipTxt}>{s}</Text>
+              </View>
+            ))}
           </View>
-          <Text style={styles.authorMeta}>
-            {post.city ? `${post.city}${post.state ? `, ${post.state}` : ''} · ` : ''}{new Date(post.created_at).toLocaleDateString()}
-          </Text>
+          {/* PRD #7: context chip row — location, relative time, group, new/popular */}
+          <View style={styles.contextRow}>
+            {!!post.city && (
+              <View style={styles.ctxChip}>
+                <MapPin size={10} color={colors.textTertiary} />
+                <Text style={styles.ctxTxt}>{post.city}{post.state ? `, ${post.state}` : ''}</Text>
+              </View>
+            )}
+            <View style={styles.ctxChip}>
+              <Clock size={10} color={colors.textTertiary} />
+              <Text style={styles.ctxTxt}>{timeAgo(post.created_at)}</Text>
+            </View>
+            {!!post.group?.name && (
+              <View style={[styles.ctxChip, { borderColor: colors.primary, backgroundColor: 'rgba(245,166,35,0.1)' }]}>
+                <Users size={10} color={colors.primary} />
+                <Text style={[styles.ctxTxt, { color: colors.primary }]} numberOfLines={1}>{post.group.name}</Text>
+              </View>
+            )}
+            {isFresh && (
+              <View style={[styles.ctxChip, { borderColor: colors.success, backgroundColor: 'rgba(46,204,113,0.12)' }]}>
+                <Text style={[styles.ctxTxt, { color: colors.success, fontFamily: font.bodyBold }]}>NEW</Text>
+              </View>
+            )}
+            {isPopular && (
+              <View style={[styles.ctxChip, { borderColor: colors.secondary, backgroundColor: 'rgba(231,76,60,0.12)' }]}>
+                <Flame size={10} color={colors.secondary} />
+                <Text style={[styles.ctxTxt, { color: colors.secondary, fontFamily: font.bodyBold }]}>POPULAR</Text>
+              </View>
+            )}
+          </View>
         </View>
         <View style={[styles.catBadge, { borderColor: color, backgroundColor: color + '22' }]}>
           <Cat size={11} color={color} />
@@ -186,8 +273,13 @@ function PostCard({ post, onLike, meId }: { post: any; onLike: () => void; meId?
         </TouchableOpacity>
         <View style={styles.action}>
           <MessageCircle size={15} color={colors.textSecondary} />
-          <Text style={styles.actionTxt}>{post.comment_count || 0}</Text>
+          <Text style={styles.actionTxt}>{commentCount}</Text>
         </View>
+        {prompt && (
+          <Text style={styles.promptTxt} numberOfLines={1}>
+            {prompt.emoji} {prompt.text}
+          </Text>
+        )}
         {post.author && meId && post.author.user_id !== meId && (
           <TouchableOpacity
             onPress={(e) => { e.stopPropagation?.(); router.push(`/messages/new?user=${post.author.user_id}` as any); }}
@@ -232,4 +324,35 @@ const styles = StyleSheet.create({
   action: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   actionTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
   dmBtn: { marginLeft: 'auto', paddingHorizontal: 10, paddingVertical: 5, borderRadius: radii.pill, backgroundColor: 'rgba(245,166,35,0.10)', borderWidth: 1, borderColor: colors.primary },
+
+  // PRD #7 — Composer prompt (tap-to-post preview) at top of feed.
+  composerPrompt: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
+    borderRadius: radii.pill, paddingLeft: 6, paddingRight: 6, paddingVertical: 6,
+  },
+  composerAvatar: { width: 32, height: 32, borderRadius: 16 },
+  composerHint: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13 },
+  composerCta: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: radii.pill,
+    backgroundColor: colors.primary,
+  },
+  composerCtaTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 12, letterSpacing: 0.2 },
+
+  // PRD #7 — Context chip row + author specialty chips + engagement prompt.
+  contextRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 3 },
+  ctxChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.pill,
+    backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border,
+    maxWidth: 140,
+  },
+  ctxTxt: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 10, letterSpacing: 0.2 },
+  specChip: {
+    paddingHorizontal: 6, paddingVertical: 1, borderRadius: radii.pill,
+    backgroundColor: 'rgba(245,166,35,0.10)', borderWidth: 1, borderColor: colors.primary,
+  },
+  specChipTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.4, textTransform: 'uppercase' },
+  promptTxt: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 11, fontStyle: 'italic', flex: 1, marginLeft: 4 },
 });

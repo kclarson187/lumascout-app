@@ -1209,6 +1209,38 @@ agent_communication:
 
       No backend changes required for Priority #6.
 
+    -agent: "main"
+    -message: |
+      UX Polish #7 (Community engagement improvements) implemented — pure frontend.
+
+      Changes to `/app/frontend/app/community.tsx`:
+
+      1. Composer prompt row (tap-to-post preview) at top of every feed — viewer's
+         avatar + "Share a win, ask a question, drop a tip…" + orange Post CTA.
+         Matches the Facebook/Instagram pattern that drives the highest post volume.
+         Hidden if user is signed out.
+
+      2. Context chip row under author on every post card:
+           - City, State  (if post has a location)
+           - Relative time via new `timeAgo()` helper — replaces "4/20/2026"
+             with "2h ago" / "3d ago" / "just now"
+           - Group name (orange-accented) if post is group-scoped
+           - NEW badge (green) if created in the last hour
+           - POPULAR badge (red) if likes≥5 OR comments≥3
+
+      3. Author specialty chips inline next to name (up to 2) — e.g. "FAMILY" "PETS".
+         Draws from post.author.specialties array that the API already hydrates.
+
+      4. Engagement prompt in the actions row:
+           - "✨ Be the first to react" when likes==0 AND comments==0
+           - "💬 Start the conversation" when likes>0 AND comments==0
+
+      5. Removed stale `authorMeta` date-only string in favor of the richer chip row.
+
+      No backend changes required — every new field is already exposed by
+      /api/posts (author.specialties, city, state, group, created_at).
+
+
         - One throwaway user was created per run: qa.stripe.fresh.<uuid10>@photoscout.app (password StripeQA!2026). They have a real Stripe Customer attached. Cleanup is optional.
 
       No action items. All 4 new Stripe endpoints are green.
