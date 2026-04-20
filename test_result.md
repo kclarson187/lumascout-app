@@ -1351,6 +1351,55 @@ agent_communication:
         marco@photoscout.app / demo123   (looking_for_mentor=true)
 
       1) POST /api/posts (poll) + POST/DELETE /api/posts/{id}/vote
+
+    -agent: "main"
+    -message: |
+      SCOUT AI — Phase 2 shipped (onboarding + personalization + chip bug fix).
+
+      🐛 Critical UX bug fix (from user screenshot):
+        - Follow-up chip rail was rendering as HUGE stretched ovals because the
+          horizontal ScrollView lacked `flexGrow: 0` — on React Native Web the
+          ScrollView was absorbing all remaining vertical space and forcing each
+          chip to full height. Added `chipRailContainer: { flexGrow: 0, maxHeight: 44 }`
+          + `alignSelf: 'center'` on each chip + `numberOfLines={1}` on the text.
+          Chips now look like tight premium pills that sit right above the input.
+
+      Backend (/app/backend/server.py):
+        - New endpoints:
+            GET  /api/ai/preferences   → read persisted Scout AI prefs
+            POST /api/ai/preferences   → save { shoots[], priorities[], max_distance, preferred_time }
+          (Size-clamped + written to users.scout_prefs sub-doc.)
+        - `_build_scout_ai_context()` now emits a VIEWER_PREFERENCES block so every
+          chat reply is grounded in the user's shoot style + top-3 priorities +
+          drive radius + preferred time of day.
+
+      Frontend:
+        - /app/frontend/src/components/ScoutAIIntroModal.tsx
+            FLOW 1 verbatim: "Meet Scout AI" headline, 4 benefit bullets with
+            green checkmarks, "Try Scout AI" CTA → /scout-ai/setup, "Maybe later"
+            dismiss, small disclosure footer. Dismissal persisted per-user via
+            SecureStore (native) / localStorage (web).
+        - /app/frontend/app/scout-ai/setup.tsx
+            FLOW 2 verbatim: 4-question screen with multi-select chips, "up to 3"
+            cap on priorities, single-select on distance and time, sticky footer
+            with Skip + "See my recommendations". Submits to /api/ai/preferences
+            then routes to /scout-ai with a personalized opener ("Got it — I'll
+            prioritize <top shoots>, with an emphasis on <top priorities>…").
+        - Home tab mounts <ScoutAIIntroModal /> so new users see the modal on
+          first open.
+
+      Verified end-to-end (screenshots captured):
+        ✅ Intro modal renders correctly for a first-time user (marco, free plan).
+        ✅ Setup screen renders all 4 questions with proper chip layout.
+        ✅ Chat follow-up chips now render as compact pills (bug fixed).
+        ✅ GPT-5.2 reply now cites user preferences when available (Austin sunset
+           spots reply in screenshot mentioned family/pets + west-facing overlooks
+           — grounded in the context block).
+
+      Deferred to Phase 3 (per user direction):
+        - Scout AI posting in community feed (editorial cards, unanswered-Q&A
+          auto-replies, admin cadence controls).
+
          - As sophie: POST /posts {category:"poll",title:"Fav lens?",poll_options:["35mm","50mm","85mm"]} → 200 with poll={options:[3x{index,text,votes:0}], total_votes:0}
 
     -agent: "main"

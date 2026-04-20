@@ -3750,6 +3750,25 @@ async def _build_scout_ai_context(
     specs = user.get("specialties") or []
     if specs:
         lines.append("VIEWER_SPECIALTIES: " + ", ".join(specs[:4]))
+
+    # PRD Phase 2 — Scout AI onboarding preferences (set via /api/ai/preferences).
+    prefs = user.get("scout_prefs") or {}
+    if prefs:
+        shoots = prefs.get("shoots") or []
+        pris = prefs.get("priorities") or []
+        dist = prefs.get("max_distance")
+        ptime = prefs.get("preferred_time")
+        if shoots or pris or dist or ptime:
+            lines.append("VIEWER_PREFERENCES:")
+            if shoots:
+                lines.append("  shoots: " + ", ".join(shoots[:6]))
+            if pris:
+                lines.append("  priorities: " + ", ".join(pris[:3]))
+            if dist:
+                lines.append(f"  max_distance_miles: {dist}")
+            if ptime:
+                lines.append(f"  preferred_time: {ptime}")
+
     if placement:
         lines.append(f"PLACEMENT: {placement}  (surface where the user opened Scout AI)")
 
@@ -3810,6 +3829,45 @@ class ScoutAIChatIn(BaseModel):
     placement: Optional[str] = None
 
 
+class ScoutAIPreferencesIn(BaseModel):
+    """PRD Phase 2: persist user's Scout AI onboarding preferences so every
+    chat reply can be grounded in their shoot style + priorities + drive radius."""
+    shoots: List[str] = []
+    priorities: List[str] = []
+    max_distance: Optional[str] = None
+    preferred_time: Optional[str] = None
+
+
+@api.get("/ai/preferences")
+async def scout_ai_get_preferences(user: dict = Depends(get_current_user)):
+    prefs = user.get("scout_prefs") or {}
+    return {
+        "shoots": prefs.get("shoots") or [],
+        "priorities": prefs.get("priorities") or [],
+        "max_distance": prefs.get("max_distance"),
+        "preferred_time": prefs.get("preferred_time"),
+        "completed_at": prefs.get("completed_at"),
+    }
+
+
+@api.post("/ai/preferences")
+async def scout_ai_set_preferences(body: ScoutAIPreferencesIn, user: dict = Depends(get_current_user)):
+    payload = {
+        "shoots": (body.shoots or [])[:8],
+        "priorities": (body.priorities or [])[:3],
+        "max_distance": body.max_distance,
+        "preferred_time": body.preferred_time,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"scout_prefs": payload}},
+    )
+    return {"ok": True, **payload}
+
+
+
+
 def _scout_ai_follow_ups(placement: Optional[str]) -> List[str]:
     """Deterministic follow-up chips (no extra model round-trip)."""
     p = (placement or "").lower()
@@ -3846,7 +3904,6 @@ def _scout_ai_follow_ups(placement: Optional[str]) -> List[str]:
 
 @api.post("/ai/chat")
 async def scout_ai_chat(body: ScoutAIChatIn, user: dict = Depends(get_current_user)):
-    """Scout AI stateless chat. Returns a single reply plus follow-up chips."""
     check_rate_limit("scout_ai_chat", user["user_id"])
 
     if not body.messages:

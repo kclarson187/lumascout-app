@@ -25,6 +25,7 @@ import { SectionHeader, Chip, EmptyState } from '../../src/components/ui';
 import { SectionSkeleton, SkeletonBox } from '../../src/components/Skeleton';
 import UpgradeBanner from '../../src/components/UpgradeBanner';
 import ScoutAICard from '../../src/components/ScoutAICard';
+import ScoutAIIntroModal from '../../src/components/ScoutAIIntroModal';
 
 type Feed = Record<string, any[]>;
 
@@ -135,6 +136,7 @@ export default function Home() {
 
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
+      <ScoutAIIntroModal />
       <ScrollView
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.primary} />}
