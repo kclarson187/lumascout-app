@@ -23,6 +23,7 @@ import SpotCard from '../../src/components/SpotCard';
 import SpotCardCompact from '../../src/components/SpotCardCompact';
 import { SectionHeader, Chip, EmptyState } from '../../src/components/ui';
 import { SectionSkeleton, SkeletonBox } from '../../src/components/Skeleton';
+import UpgradeBanner from '../../src/components/UpgradeBanner';
 
 type Feed = Record<string, any[]>;
 
@@ -194,6 +195,18 @@ export default function Home() {
           <Search size={18} color={colors.textSecondary} />
           <Text style={styles.searchPlaceholder}>Search cities, spots, or tags…</Text>
         </TouchableOpacity>
+
+        {/* PRD #9 — Contextual monetisation: dismissible Pro upsell shown only
+            to free users at the top of their For-You feed. */}
+        <View style={{ paddingHorizontal: space.xl, marginTop: space.md }}>
+          <UpgradeBanner
+            placement="home-feed"
+            title="Unlock the full photographer network"
+            subtitle="Pro members save unlimited spots, get AI shot lists, and message anyone."
+            cta="Go Pro"
+            targetPlan="pro"
+          />
+        </View>
 
         <ScrollView
           horizontal
