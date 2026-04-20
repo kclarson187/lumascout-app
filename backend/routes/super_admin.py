@@ -205,7 +205,7 @@ async def super_delete_user(
     reason = _compose_reason(code, body.reason_note)
 
     short = uuid.uuid4().hex[:8]
-    anon_email = f"deleted+{short}@photoscout.app"
+    anon_email = f"deleted+{short}@lumascout.app"
     anon_username = f"deleted_user_{short}"
 
     # ---- Archive original PII --------------------------------------------

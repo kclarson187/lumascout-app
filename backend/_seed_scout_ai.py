@@ -28,7 +28,7 @@ async def main():
     now = datetime.now(timezone.utc).isoformat()
     scout_doc = {
         "user_id": SCOUT_USER_ID,
-        "email": "scoutai@photoscout.app",
+        "email": "scoutai@lumascout.app",
         "name": "Scout AI",
         "handle": "scoutai",
         "role": "user",
