@@ -24,6 +24,44 @@ user_problem_statement: |
   (soft delete + anonymize), plus comprehensive QA pass. See tasks below.
 
 backend:
+  - task: "Commit 7 — Super-admin handle rename (admin → keith), posts_count query fix, RESERVED_USERNAMES blocking"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          COMMIT 7 FOCUSED REGRESSION — 26/26 subtests PASS. Test script: /app/backend_test_commit7.py.
+          Backend: http://localhost:8001/api via python-requests. Auth: admin@lumascout.app / admin123 per /app/memory/test_credentials.md.
+
+          (1) Handle rename — PASS (5/5):
+             • POST /api/auth/login → 200 with token.
+             • GET /api/auth/me → 200. username='keith' (not 'admin'), name='Keith Larson', role='super_admin'. Rename migration confirmed live.
+
+          (2) posts_count / spots_created query fix (Bug B) — PASS (5/5):
+             • /auth/me stats = {followers:1, following:0, spots_created:5, reviews_received:5, posts_count:1}. Both posts_count≥1 and spots_created≥5 satisfied (pre-fix was always 0).
+             • GET /api/users/{admin_user_id} public profile → 200, stats={spots:5, spots_created:5, followers:1, following:0, posts_count:1, reviews_received:5}. Note the public-profile stats dict exposes the spot count under keys 'spots' AND 'spots_created' (both =5); there is NO 'spots_count' key. If the frontend was written against 'spots_count' it will read undefined — either add the alias or update the client to read 'spots'/'spots_created'. Counts themselves are correct.
+
+          (3) Reserved username blocking — PASS (6/6):
+             • Non-reserved baseline localpart 'tryadmin' → 200, user.username='tryadmin' (returned as-is).
+             • Reserved localparts 'admin', 'support', 'root', 'scout', 'lumascout' each → 200 with username suffixed: 'admin_d41d', 'support_218e', 'root_f93a', 'scout_0e4f', 'lumascout_01a1'. All suffixes are 4-char lowercase hex per spec. None equal the reserved literal. RESERVED_USERNAMES guard at server.py:500–506 is working as designed.
+             • Review stipulated domain 'example.test' — that TLD is a reserved special-use name and is rejected by pydantic EmailStr validation (422). Used 'qa<hex>.example.com' instead (unique domain per run, localpart preserved exactly) to exercise the same code path. Behaviour of RESERVED_USERNAMES is identical regardless of domain.
+
+          (4) Cleanup — PASS (6/6):
+             • All 6 QA test accounts soft-deleted via DELETE /api/admin/users/{user_id} as super_admin. Each returned {ok:true, archive_id:'deluser_*', strategy:'soft_delete_anonymize'}. No residue in users collection under original handles.
+
+          (5) Non-regression smoke — PASS (3/3):
+             • GET /api/admin/users?page=1&limit=10 → 200, total=27 users, paginated shape intact.
+             • GET /api/feed/home → 200.
+             • GET /api/spots?limit=5 → 200, count=5 spots returned.
+
+          VERDICT: Commit 7 backend changes are launch-ready. No critical or minor issues beyond the stats-key shape heads-up in (2), which is a naming-alias question rather than a count-correctness bug.
+
+
   - task: "Commit 6 — Polish bundle (6a Review gating / 6b tab-bar hide / 6c composer gate+counters / 6d Saved counts)"
     implemented: true
     working: true
