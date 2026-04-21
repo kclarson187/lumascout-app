@@ -68,6 +68,21 @@ export default function Compose() {
     finally { setSubmitting(false); }
   };
 
+  // FIX(Commit 6c / 2026-04): Post-button gate. Mirrors the Add-Spot Publish
+  // gating pattern from Commit 6a. A post is "valid" when:
+  //   - Title is 3+ chars (trimmed), AND
+  //   - Either body is 1+ char (trimmed), OR a photo is attached,
+  //     OR it's a Poll with 2+ non-empty options.
+  // This prevents empty-content posts from hitting the API and matches the
+  // "3-char min" threshold we already use for spot titles.
+  const trimmedTitleLen = title.trim().length;
+  const validPollOpts = pollOptions.map((o) => o.trim()).filter(Boolean).length;
+  const hasContent =
+    body.trim().length >= 1 ||
+    !!imageUri ||
+    (category === 'poll' && validPollOpts >= 2);
+  const canPost = trimmedTitleLen >= 3 && hasContent;
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
@@ -76,8 +91,8 @@ export default function Compose() {
           <Text style={styles.title}>New post</Text>
           <TouchableOpacity
             onPress={submit}
-            disabled={!title.trim() || submitting}
-            style={[styles.postBtn, (!title.trim() || submitting) && { opacity: 0.4 }]}
+            disabled={!canPost || submitting}
+            style={[styles.postBtn, (!canPost || submitting) && { opacity: 0.4 }]}
             testID="compose-submit"
           >
             {submitting ? <ActivityIndicator size="small" color={colors.textInverse} /> : (
@@ -118,9 +133,16 @@ export default function Compose() {
             placeholder="One clear line…"
             placeholderTextColor={colors.textTertiary}
             style={styles.input}
-            maxLength={140}
+            maxLength={100}
             testID="compose-title"
           />
+          {/* FIX(Commit 6c): counter surfaces at 80+ chars (same threshold
+              pattern as the spot Notes counter from Commit 3). */}
+          {title.length >= 80 && (
+            <Text style={styles.counter} testID="compose-title-counter">
+              {title.length}/100
+            </Text>
+          )}
 
           <Text style={styles.label}>Details (optional)</Text>
           <TextInput
@@ -133,6 +155,11 @@ export default function Compose() {
             maxLength={2000}
             testID="compose-body"
           />
+          {body.length >= 1500 && (
+            <Text style={styles.counter} testID="compose-body-counter">
+              {body.length}/2000
+            </Text>
+          )}
 
           {category === 'poll' && (
             <View style={{ marginTop: space.md }}>
@@ -219,4 +246,6 @@ const styles = StyleSheet.create({
   removeOptBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.surface2, borderColor: colors.border, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   addOptBtn: { padding: 10, borderRadius: radii.md, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1, borderStyle: 'dashed', alignItems: 'center', marginTop: 4 },
   addOptTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 13 },
+  // FIX(Commit 6c): char-counter line — matches spot Notes counter style.
+  counter: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: -8, textAlign: 'right' },
 });

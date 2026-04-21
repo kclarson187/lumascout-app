@@ -24,6 +24,18 @@ user_problem_statement: |
   (soft delete + anonymize), plus comprehensive QA pass. See tasks below.
 
 backend:
+  - task: "Commit 6 — Polish bundle (6a Review gating / 6b tab-bar hide / 6c composer gate+counters / 6d Saved counts)"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/(tabs)/add.tsx, /app/frontend/app/(tabs)/_layout.tsx, /app/frontend/app/community/compose.tsx, /app/frontend/app/(tabs)/saved.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "Purely client-side polish bundle, no API or model changes. 6a: CheckRow now renders a neutral grey Circle for incomplete items (not red X) with bold label for REQUIRED items; heading changed from 'Checklist' → 'Complete these to publish:'; removed the red warning box; lifted canPublishFromReview derivation to component scope and wired it to disable the Publish button until all required items (photos/title/city/coords/shoot_types) pass. 6b: Added tabBarStyle:{display:'none'} to the 'add' Tabs.Screen options so the bottom tab bar (and its center '+' FAB) disappears across every Add Spot step. 6c: Composer Post button now gated on canPost = (title.trim().length >= 3) && (body.trim().length >= 1 || imageUri || poll.options >= 2); Title maxLength tightened 140 → 100; live char counters added below Title (shown at >= 80 chars) and Details (shown at >= 1500 chars) using the same muted-right-aligned style as the Commit 3 spot Notes counter. 6d: Saved sub-tab pills now display counts pulled from existing loaded state (savedSpots.length / collections.length / privateSpots.length) with the count hidden when 0 — zero new API calls. Also added /app/scripts/audit-hooks-order.sh as launch insurance (codifies the scan pattern that caught the Commit 5 P0). Temp ?devStep/?devPrefill screenshot hack added and fully reverted — grep confirms no leftover markers. Backend sanity: no code touched; live admin API logs during capture (/me/spots, /me/collections, /me/saved, /feed/home) all returned 200. Skipping the backend test suite for token efficiency since the change surface is 100% client-side, matching the Commit 5 rationale."
+
   - task: "Commit 5 — P0 admin layout hooks-order hotfix (frontend-only; backend sanity check)"
     implemented: true
     working: true

@@ -54,6 +54,11 @@ export default function TabsLayout() {
           ),
           tabBarButtonTestID: 'tab-add',
           tabBarLabel: () => null,
+          // FIX(Commit 6b): hide the tab bar entirely while the Add Spot flow
+          // is active. The center "+" FAB is redundant once you're already in
+          // the flow, and the whole bar is visual noise. Users exit via the
+          // in-flow back chevron or by publishing.
+          tabBarStyle: { display: 'none' },
         }}
       />
       <Tabs.Screen

@@ -16,7 +16,7 @@ import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as Location from 'expo-location';
-import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown, AlertTriangle, Search, Map as MapIcon, Edit3, FileText, Sun, Eye, EyeOff, Sparkles } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown, AlertTriangle, Search, Map as MapIcon, Edit3, FileText, Sun, Eye, EyeOff, Sparkles, Circle } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii, SHOOT_TYPES, BEST_TIMES, PRIVACY_MODES } from '../../src/theme';
@@ -338,6 +338,17 @@ export default function AddSpot() {
     if (step === 2) return draft.title.trim() && draft.city.trim();
     return true;
   };
+
+  // FIX(Commit 6a): Publish-button gate — required-only checklist derivation,
+  // lifted to component scope so the footer button (rendered outside the
+  // step-5 IIFE) can reference it. Mirrors the required-items list in the
+  // Review checklist. Soft items (description / ratings) are not required.
+  const canPublishFromReview =
+    (draft.images.length >= 1 || draft.privacy_mode === 'private') &&
+    draft.title.trim().length >= 3 &&
+    draft.city.trim().length >= 2 &&
+    draft.latitude != null && draft.longitude != null &&
+    draft.shoot_types.length > 0;
 
   const buildPayload = (asDraft: boolean) => ({
     title: draft.title,
@@ -985,7 +996,7 @@ export default function AddSpot() {
 
                 {/* Validation checklist */}
                 <View style={styles.checklist}>
-                  <Text style={styles.subSectionLabel}>Checklist</Text>
+                  <Text style={styles.subSectionLabel}>Complete these to publish:</Text>
                   <CheckRow ok={photosOk} label={draft.privacy_mode === 'private' ? 'Photos (optional for private)' : `Photos attached (${draft.images.length})`} />
                   <CheckRow ok={titleOk} label="Spot name (3+ characters)" />
                   <CheckRow ok={cityOk} label="City filled in (not county)" />
@@ -1015,13 +1026,9 @@ export default function AddSpot() {
                   )}
                   <Text style={styles.nextBody}>You can edit anything later from the spot detail page.</Text>
                 </View>
-
-                {!allOk && (
-                  <View style={[styles.nextBox, { borderColor: colors.secondary, backgroundColor: 'rgba(208,72,72,0.06)' }]}>
-                    <Text style={[styles.nextTitle, { color: colors.secondary }]}>Fix required items before submitting</Text>
-                    <Text style={styles.nextBody}>Tap back and complete anything red above.</Text>
-                  </View>
-                )}
+                {/* FIX(Commit 6a): removed the red "Fix required items" warning
+                    box — the disabled Publish button already signals blockers
+                    via the checklist above. */}
               </View>
             );
           })()}
@@ -1048,7 +1055,10 @@ export default function AddSpot() {
                 <Text style={styles.draftBtnTxt}>Save draft</Text>
               </TouchableOpacity>
               <View style={{ flex: 1.4 }}>
-                <Button title="Publish spot" onPress={submit} loading={submitting} testID="add-submit" />
+                {/* FIX(Commit 6a): Publish gated on all REQUIRED items passing
+                    (photos/title/city/coords/shoot_types). Soft items remain
+                    "recommended" and don't block. */}
+                <Button title="Publish spot" onPress={submit} loading={submitting} disabled={!canPublishFromReview} testID="add-submit" />
               </View>
             </View>
           )}
@@ -1087,12 +1097,26 @@ export default function AddSpot() {
 }
 
 function CheckRow({ ok, label, soft }: { ok: boolean; label: string; soft?: boolean }) {
+  // FIX(Commit 6a / 2026-04): softened visuals. Incomplete items now render a
+  // neutral grey ring (not a red X), so the checklist reads as "steps to complete"
+  // not "errors you made". Required items stay bold when incomplete so users can
+  // see at a glance what's actually blocking Publish; soft (recommended) items
+  // stay regular weight with the "(recommended)" suffix.
+  const iconColor = ok ? colors.success : colors.textTertiary;
+  const textColor = ok ? colors.text : (soft ? colors.textTertiary : colors.textSecondary);
+  const required = !soft;
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 }}>
       {ok
-        ? <Check size={14} color={colors.success} />
-        : <X size={14} color={soft ? colors.textTertiary : colors.secondary} />}
-      <Text style={{ color: ok ? colors.text : (soft ? colors.textTertiary : colors.secondary), fontFamily: font.bodyMedium, fontSize: 13 }}>
+        ? <Check size={14} color={iconColor} />
+        : <Circle size={14} color={iconColor} />}
+      <Text
+        style={{
+          color: textColor,
+          fontFamily: (required && !ok) ? font.bodyBold : font.bodyMedium,
+          fontSize: 13,
+        }}
+      >
         {label}{!ok && soft ? '  (recommended)' : ''}
       </Text>
     </View>

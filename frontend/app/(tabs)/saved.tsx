@@ -142,10 +142,12 @@ export default function Saved() {
         </TouchableOpacity>
       )}
       <View style={styles.tabs}>
+        {/* FIX(Commit 6d): pull counts from already-loaded state (no new queries).
+            Hide the count when 0 — empty tab just shows the label. */}
         {[
-          { k: 'favorites', l: 'Favorites', icon: <Bookmark size={14} color={tab === 'favorites' ? colors.textInverse : colors.text} /> },
-          { k: 'collections', l: 'Collections', icon: <FolderPlus size={14} color={tab === 'collections' ? colors.textInverse : colors.text} /> },
-          { k: 'private', l: 'Private', icon: <Lock size={14} color={tab === 'private' ? colors.textInverse : colors.text} /> },
+          { k: 'favorites',   l: 'Favorites',   n: savedSpots.length,   icon: <Bookmark size={14} color={tab === 'favorites' ? colors.textInverse : colors.text} /> },
+          { k: 'collections', l: 'Collections', n: collections.length,  icon: <FolderPlus size={14} color={tab === 'collections' ? colors.textInverse : colors.text} /> },
+          { k: 'private',     l: 'Private',     n: privateSpots.length, icon: <Lock size={14} color={tab === 'private' ? colors.textInverse : colors.text} /> },
         ].map((t) => (
           <TouchableOpacity
             key={t.k}
@@ -154,7 +156,9 @@ export default function Saved() {
             onPress={() => setTab(t.k as any)}
           >
             {t.icon}
-            <Text style={[styles.tabText, tab === t.k && { color: colors.textInverse }]}>{t.l}</Text>
+            <Text style={[styles.tabText, tab === t.k && { color: colors.textInverse }]}>
+              {t.l}{t.n > 0 ? ` (${t.n})` : ''}
+            </Text>
           </TouchableOpacity>
         ))}
       </View>
