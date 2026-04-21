@@ -27,7 +27,7 @@ import ManualLocationSheet, { ManualLocation } from '../../src/components/Manual
 import { Input, Chip } from '../../src/components/ui';
 import ScoutAICard from '../../src/components/ScoutAICard';
 
-const STEPS = ['Photos', 'Location', 'Details', 'Notes', 'Privacy', 'Review'];
+const STEPS = ['Photos', 'Location', 'Details', 'Ratings', 'Privacy', 'Review'];
 
 type Draft = {
   latitude?: number;
@@ -792,7 +792,7 @@ export default function AddSpot() {
                   <Sun size={14} color={colors.primary} />
                   <Text style={styles.groupLabel}>Light</Text>
                 </View>
-                <Rating label="Sunrise quality" value={draft.sunrise_rating} onChange={(v) => setDraft({ ...draft, sunrise_rating: v })} />
+                <Rating label="Sunrise quality" value={draft.sunrise_rating} onChange={(v) => setDraft({ ...draft, sunrise_rating: v })} showHint />
                 <Rating label="Sunset quality" value={draft.sunset_rating} onChange={(v) => setDraft({ ...draft, sunset_rating: v })} />
                 <Rating label="Morning golden hour" value={draft.morning_golden_hour_rating} onChange={(v) => setDraft({ ...draft, morning_golden_hour_rating: v })} />
                 <Rating label="Evening golden hour" value={draft.evening_golden_hour_rating} onChange={(v) => setDraft({ ...draft, evening_golden_hour_rating: v })} />
@@ -858,8 +858,11 @@ export default function AddSpot() {
 
           {step === 4 && (
             <View style={{ gap: space.lg }}>
-              <Text style={styles.heading}>Privacy & sharing</Text>
-              <Text style={styles.sub}>Control who can see this spot.</Text>
+              {/* FIX(2026-04): [1.1] removed duplicate 'Privacy & sharing' heading
+                  (top bar already shows 'Privacy'). Subtitle expanded for context. */}
+              <Text style={styles.sub}>
+                Choose who can see this spot. Public spots go into community review — private and followers-only spots post instantly.
+              </Text>
               {PRIVACY_MODES.map((p) => {
                 const isPremiumOption = p.key === 'premium';
                 const canPickPremium = user?.plan === 'elite';
@@ -1119,21 +1122,30 @@ function MethodCard({
   );
 }
 
-function Rating({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
+function Rating({ label, value, onChange, showHint }: { label: string; value: number; onChange: (v: number) => void; showHint?: boolean }) {
+  // FIX(2026-04): [1.2] single-select pills — only the chosen value is amber-filled.
   return (
     <View>
       <Text style={styles.subSectionLabel}>{label}</Text>
       <View style={{ flexDirection: 'row', gap: 8 }}>
-        {[1, 2, 3, 4, 5].map((v) => (
-          <TouchableOpacity
-            key={v}
-            onPress={() => onChange(v)}
-            style={[styles.ratingDot, value >= v && { backgroundColor: colors.primary, borderColor: colors.primary }]}
-          >
-            <Text style={{ color: value >= v ? colors.textInverse : colors.textSecondary, fontFamily: font.bodyBold }}>{v}</Text>
-          </TouchableOpacity>
-        ))}
+        {[1, 2, 3, 4, 5].map((v) => {
+          const selected = value === v;
+          return (
+            <TouchableOpacity
+              key={v}
+              onPress={() => onChange(selected ? 0 : v)}
+              style={[styles.ratingDot, selected && { backgroundColor: colors.primary, borderColor: colors.primary }]}
+            >
+              <Text style={{ color: selected ? colors.textInverse : colors.textSecondary, fontFamily: font.bodyBold }}>{v}</Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
+      {showHint && (
+        <Text style={{ color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 4 }}>
+          Tap to rate — tap again to clear.
+        </Text>
+      )}
     </View>
   );
 }

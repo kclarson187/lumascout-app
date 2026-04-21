@@ -405,6 +405,8 @@ class SpotCreateIn(BaseModel):
     address_line1: Optional[str] = None
     postal_code: Optional[str] = None
     landmark_notes: Optional[str] = None
+    # FIX(2026-04): [1.2] freeform photographer notes captured on the Ratings step.
+    personal_notes: Optional[str] = None
     # --- North America scalability ------------------------------------------
     country_code: Optional[str] = None     # ISO alpha-2: "US", "CA", "MX"
     country_name: Optional[str] = None     # "United States", "Canada", "Mexico"
@@ -908,7 +910,7 @@ async def check_duplicates(
     radius_km = max(0.05, min(2.0, radius_m / 1000.0))
     candidates = []
     async for s in db.spots.find(
-        {"privacy_mode": {"$in": ["public", "premium"]}, "visibility_status": "approved"},
+        {"privacy_mode": {"$in": ["public", "premium"]}, "visibility_status": "approved", "is_test_data": {"$ne": True}},
         {"_id": 0},
     ):
         d_km = haversine_km(latitude, longitude, s["latitude"], s["longitude"])
@@ -1087,6 +1089,7 @@ async def list_spots(
     query: dict = {
         "privacy_mode": {"$in": ["public", "premium"]},
         "visibility_status": "approved",
+        "is_test_data": {"$ne": True},  # FIX(2026-04): [5.1/7.2]
     }
     if shoot_type:
         query["shoot_types"] = shoot_type
@@ -1176,7 +1179,7 @@ async def nearby(
     limit: int = 40,
     viewer: Optional[dict] = Depends(get_optional_user),
 ):
-    query = {"privacy_mode": {"$in": ["public", "premium"]}, "visibility_status": "approved"}
+    query = {"privacy_mode": {"$in": ["public", "premium"]}, "visibility_status": "approved", "is_test_data": {"$ne": True}}
     spots = await db.spots.find(query, {"_id": 0}).to_list(500)
     out = []
     for s in spots:
@@ -1216,7 +1219,7 @@ async def home_feed(
       - no single spot duplicated within one section
       - hero and bucket-to-bucket repetition is smoothed client-side
     """
-    base_query = {"privacy_mode": {"$in": ["public", "premium"]}, "visibility_status": "approved"}
+    base_query = {"privacy_mode": {"$in": ["public", "premium"]}, "visibility_status": "approved", "is_test_data": {"$ne": True}}
     all_spots = await db.spots.find(base_query, {"_id": 0}).to_list(800)
     scored = []
     for s in all_spots:
@@ -2320,6 +2323,7 @@ async def admin_users(
     role: Optional[str] = None,
     plan: Optional[str] = None,
     status: Optional[str] = None,
+    include_test: bool = False,  # FIX(2026-04): [7.2] default-exclude QA accounts
     page: int = 1,
     limit: int = 25,
     user: dict = Depends(require_role("support")),
@@ -2328,6 +2332,8 @@ async def admin_users(
     limit = max(1, min(100, limit))
     page = max(1, page)
     query: dict = {}
+    if not include_test:
+        query["is_test_account"] = {"$ne": True}
     if q:
         # Case-insensitive partial match across multiple identifying fields
         rgx = {"$regex": q, "$options": "i"}
@@ -2995,7 +3001,7 @@ async def list_posts(
 ):
     limit = max(1, min(50, limit))
     page = max(1, page)
-    q: dict = {"status": "active"}
+    q: dict = {"status": "active", "is_test_data": {"$ne": True}}
     if category and category != "all":
         q["category"] = category
     if city:
@@ -3535,7 +3541,7 @@ async def photographers_nearby(
     """List photographers in a city (defaults to viewer's city)."""
     limit = max(1, min(50, limit))
     target_city = (city or viewer.get("city") or "").strip()
-    q: dict = {"user_id": {"$ne": viewer["user_id"]}, "status": {"$ne": "suspended"}}
+    q: dict = {"user_id": {"$ne": viewer["user_id"]}, "status": {"$ne": "suspended"}, "is_test_account": {"$ne": True}, "deleted": {"$ne": True}}
     if target_city:
         q["city"] = {"$regex": f"^{target_city}$", "$options": "i"}
     if specialty:
