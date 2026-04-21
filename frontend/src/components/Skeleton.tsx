@@ -22,7 +22,7 @@ export function SkeletonBox({ style }: { style?: ViewStyle | ViewStyle[] }) {
   return <Animated.View style={[styles.box, style, { opacity }]} />;
 }
 
-export function SpotCardSkeleton({ width = 240 }: { width?: number | '100%' }) {
+export function SpotCardSkeleton({ width = 260 }: { width?: number | '100%' }) {
   return (
     <View style={[styles.card, { width } as any]}>
       <SkeletonBox style={{ width: '100%', aspectRatio: 4 / 5 } as any} />
