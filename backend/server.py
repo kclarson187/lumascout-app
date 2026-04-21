@@ -417,9 +417,41 @@ class SpotCreateIn(BaseModel):
     address_line1: Optional[str] = None
     postal_code: Optional[str] = None
     landmark_notes: Optional[str] = None
+    # FIX(Commit 7.5 / 2026-04): location-integrity fields.
+    # `original_address_input` captures the raw text the user typed
+    # (e.g. "716 FM 289, Comfort, TX 78013") so if the later geocode is
+    # wrong we can re-run it or let an admin fix it. `geocode_status` is
+    # one of: 'success' | 'failed' | 'low_confidence' | 'skipped'.
+    original_address_input: Optional[str] = None
+    geocode_status: Optional[str] = None
     # FIX(2026-04): [1.2] freeform photographer notes captured on the Ratings step.
     # Max 2000 chars, stripped, stored as null if empty after strip.
     notes: Optional[str] = None
+
+    @field_validator("latitude")
+    @classmethod
+    def _validate_lat(cls, v: float) -> float:
+        # FIX(Commit 7.5): hard-reject the "Null Island" ocean bug. Any spot
+        # submitted with exactly (0, 0) is almost certainly a failed geocode
+        # being silently coerced. Also reject out-of-range values.
+        if v is None:
+            raise ValueError("Latitude is required. Drop a pin or search for a place.")
+        if not (-90.0 <= v <= 90.0):
+            raise ValueError("Latitude must be between -90 and 90.")
+        if v == 0.0:
+            raise ValueError("Could not determine a valid location. Please refine the address or drop a pin manually.")
+        return v
+
+    @field_validator("longitude")
+    @classmethod
+    def _validate_lng(cls, v: float) -> float:
+        if v is None:
+            raise ValueError("Longitude is required. Drop a pin or search for a place.")
+        if not (-180.0 <= v <= 180.0):
+            raise ValueError("Longitude must be between -180 and 180.")
+        if v == 0.0:
+            raise ValueError("Could not determine a valid location. Please refine the address or drop a pin manually.")
+        return v
 
     @field_validator("notes")
     @classmethod
@@ -1591,11 +1623,29 @@ def _parse_nominatim_item(it: dict) -> dict:
 
 @api.get("/geocode/search")
 async def geocode_search(q: str, limit: int = 8, country: Optional[str] = None):
-    """Autocomplete-style place search via OSM Nominatim. Keyless."""
+    """Autocomplete-style place search via OSM Nominatim. Keyless.
+
+    FIX(Commit 7.5 / 2026-04): cached to shield us from Nominatim's strict
+    1 req/s rate limit and their willingness to IP-ban abusive clients. A
+    24-hour TTL on (q, country, limit) is more than enough for the Add Spot
+    flow where the same user types the same place multiple times while
+    iterating. Cache is keyed by exact query string, so minor typing
+    variations still hit the network.
+    """
     q = (q or "").strip()
     if len(q) < 2:
         return {"query": q, "results": []}
     limit = max(1, min(15, limit))
+    cache_key = f"search::{country or '*'}::{limit}::{q.lower()}"
+    cached = await db.geocode_cache.find_one({"key": cache_key})
+    # Motor strips tzinfo on read — normalize both sides to naive UTC for subtraction.
+    if cached:
+        ts = cached["created_at"]
+        if ts.tzinfo is not None:
+            ts = ts.replace(tzinfo=None)
+        age_s = (utcnow().replace(tzinfo=None) - ts).total_seconds()
+        if age_s < 86400:
+            return {"query": q, "results": cached["results"], "cached": True}
     params: dict = {
         "q": q,
         "format": "jsonv2",
@@ -1610,9 +1660,20 @@ async def geocode_search(q: str, limit: int = 8, country: Optional[str] = None):
             r.raise_for_status()
             items = r.json() or []
     except Exception as e:
-        # Graceful degradation — empty results, not 5xx.
+        # Graceful degradation — empty results, not 5xx. Serve stale cache
+        # entries (past 24h) if we have them, so a temporary ban doesn't
+        # break the flow entirely.
+        if cached:
+            return {"query": q, "results": cached["results"], "cached": True, "stale": True}
         return {"query": q, "results": [], "error": str(e)[:120]}
-    return {"query": q, "results": [_parse_nominatim_item(it) for it in items]}
+    results = [_parse_nominatim_item(it) for it in items]
+    # Upsert cache.
+    await db.geocode_cache.update_one(
+        {"key": cache_key},
+        {"$set": {"key": cache_key, "results": results, "created_at": utcnow()}},
+        upsert=True,
+    )
+    return {"query": q, "results": results}
 
 
 @api.get("/geocode/reverse")

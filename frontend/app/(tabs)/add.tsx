@@ -39,6 +39,9 @@ type Draft = {
   addressLine1?: string;
   postalCode?: string;
   landmarkNotes?: string;
+  // FIX(Commit 7.5 / 2026-04): location-integrity provenance fields.
+  originalAddressInput?: string;
+  geocodeStatus?: 'success' | 'failed' | 'low_confidence' | 'skipped';
   landmark: string;  // Step 3 user-entered "Park / landmark / area" (surfaced separately)
   images: { image_url: string; caption?: string; is_cover: boolean }[];
   title: string;
@@ -214,6 +217,10 @@ export default function AddSpot() {
       title: draft.title || loc.title,
       city: loc.city,
       state: (loc.state || '').slice(0, 2).toUpperCase(),
+      // FIX(Commit 7.5): carry the raw user input + geocode resolution forward.
+      originalAddressInput: loc.original_address_input,
+      geocodeStatus: loc.geocode_status,
+      geocodeConfidence: loc.geocode_confidence ?? draft.geocodeConfidence,
     });
   };
 
@@ -334,27 +341,37 @@ export default function AddSpot() {
   const canProceed = () => {
     // New step order: 0=Photos, 1=Location, 2=Details, 3=Notes, 4=Privacy, 5=Review
     if (step === 0) return draft.privacy_mode !== 'public' || draft.images.length >= 1;
-    if (step === 1) return !!(draft.city && draft.state && (draft.latitude != null || draft.locationSource === 'manual_entry'));
+    // FIX(Commit 7.5 / 2026-04): require REAL coordinates. Previously we let
+    // manual_entry through with lat==null which downstream coerced to 0,
+    // saving the spot at (0, 0) in the Atlantic Ocean. That's gone now — you
+    // cannot leave the Location step without a geocoded address or a dropped pin.
+    if (step === 1) return !!(draft.city && draft.state
+      && draft.latitude != null && draft.longitude != null
+      && !(draft.latitude === 0 && draft.longitude === 0));
     if (step === 2) return draft.title.trim() && draft.city.trim();
     return true;
   };
 
-  // FIX(Commit 6a): Publish-button gate — required-only checklist derivation,
-  // lifted to component scope so the footer button (rendered outside the
-  // step-5 IIFE) can reference it. Mirrors the required-items list in the
-  // Review checklist. Soft items (description / ratings) are not required.
+  // FIX(Commit 7.5): Publish gate now requires valid, non-zero coordinates.
   const canPublishFromReview =
     (draft.images.length >= 1 || draft.privacy_mode === 'private') &&
     draft.title.trim().length >= 3 &&
     draft.city.trim().length >= 2 &&
     draft.latitude != null && draft.longitude != null &&
+    !(draft.latitude === 0 && draft.longitude === 0) &&
     draft.shoot_types.length > 0;
 
   const buildPayload = (asDraft: boolean) => ({
     title: draft.title,
     description: draft.description,
-    latitude: draft.latitude || 0,
-    longitude: draft.longitude || 0,
+    // FIX(Commit 7.5 / 2026-04): DO NOT coerce lat/lng with `|| 0`. That's
+    // how the "save to the ocean" bug happened — a null lat/lng was silently
+    // replaced with 0 and the spot landed at (0, 0) in the Atlantic.
+    // Null values now propagate to the backend, where the SpotCreateIn
+    // pydantic validator will reject them with a 422 and a user-friendly
+    // message. Upstream guards stop the submit before it ever gets here.
+    latitude: draft.latitude,
+    longitude: draft.longitude,
     city: draft.city,
     state: draft.state,
     privacy_mode: draft.privacy_mode,
@@ -392,6 +409,9 @@ export default function AddSpot() {
     geocode_confidence: draft.geocodeConfidence,
     address_line1: draft.addressLine1,
     postal_code: draft.postalCode,
+    // FIX(Commit 7.5): carry provenance so admins can audit / replay geocodes.
+    original_address_input: draft.originalAddressInput,
+    geocode_status: draft.geocodeStatus,
     save_as_draft: asDraft,
   });
 
@@ -431,8 +451,14 @@ export default function AddSpot() {
       Alert.alert('Missing fields', 'Please add a title and city before publishing.');
       return;
     }
-    if (draft.latitude == null && draft.locationSource !== 'manual_entry') {
-      Alert.alert('Location required', 'Use Current Location, Search, Drop a Pin, or Enter Manually.');
+    if (draft.latitude == null || draft.longitude == null
+        || (draft.latitude === 0 && draft.longitude === 0)) {
+      // FIX(Commit 7.5 / 2026-04): hard location gate — no more "manual_entry"
+      // bypass that let (0, 0) land in the DB. Copy matches the product spec.
+      Alert.alert(
+        'Location required',
+        'Could not find this address. Please refine the address or drop a pin manually.'
+      );
       return;
     }
     setSubmitting(true);
