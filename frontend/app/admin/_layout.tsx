@@ -29,6 +29,20 @@ export default function AdminLayout() {
   const { user } = useAuth();
   const pathname = usePathname();
 
+  // --- FIX(Commit 5 / 2026-04): All hooks MUST run on every render in the
+  // same order (React Rules of Hooks). Previously `visibleTabs = useMemo(...)`
+  // was called AFTER the auth-gate early returns below, which crashed the
+  // dashboard on any cold-cache render where `user` hydrated between renders
+  // (render 1 = no hooks past `usePathname`, render 2 = extra `useMemo` →
+  // "Rendered more hooks than during the previous render"). Computing rank
+  // and visibleTabs unconditionally up front, with a null-safe fallback,
+  // makes the hook count stable across all render paths.
+  const myRank = ROLE_RANK[(user && user.role) || 'user'] || 0;
+  const visibleTabs = useMemo(
+    () => TABS.filter((t) => !t.minRole || myRank >= (ROLE_RANK[t.minRole] || 99)),
+    [myRank]
+  );
+
   // Role guard — never render admin UI for regular users.
   const allowed = !!user && ADMIN_ROLES.includes(user.role || '');
   if (!user) {
@@ -59,12 +73,6 @@ export default function AdminLayout() {
       </SafeAreaView>
     );
   }
-
-  const myRank = ROLE_RANK[user.role || 'user'] || 0;
-  const visibleTabs = useMemo(
-    () => TABS.filter((t) => !t.minRole || myRank >= (ROLE_RANK[t.minRole] || 99)),
-    [myRank]
-  );
 
   const active = (t: typeof TABS[number]) => {
     if (t.path === '/admin') return pathname === '/admin' || pathname === '/admin/';

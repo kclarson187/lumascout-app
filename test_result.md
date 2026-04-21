@@ -24,6 +24,21 @@ user_problem_statement: |
   (soft delete + anonymize), plus comprehensive QA pass. See tasks below.
 
 backend:
+  - task: "Commit 5 — P0 admin layout hooks-order hotfix (frontend-only; backend sanity check)"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/admin/_layout.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Purely frontend fix — moved `myRank` + `visibleTabs = useMemo(...)` ABOVE the two auth-gate early returns in `app/admin/_layout.tsx` so the hook count is identical across render 1 (user=null) and render 2+ (user hydrated). This unblocks all 8 admin routes (Overview / Users / Spots / Posts / Reports / Analytics / Audit / Settings) which previously crashed with 'Rendered more hooks than during the previous render' on any cold-cache render where user hydrated between renders. Also audited (tabs)/_layout.tsx and root _layout.tsx and all admin/*.tsx sub-pages — only this one file had the bug pattern. Backend smoke check: GET /api/ → {status:'ok'} and POST /api/auth/login with admin@lumascout.app → 200 with token. No backend changes. No retest needed — frontend-only patch."
+        -working: true
+        -agent: "main"
+        -comment: "Verified live via Playwright: all 8 admin routes now render the full admin layout (LUMASCOUT · ADMIN header, Super Admin title, tab strip, content) without the red error banner. Overview, Users, Spots (Queue cleared empty state), Reports (4 spam items with Dismiss/Warn/Remove), and Analytics (charts with 50 signups / 69 spots / 66 approvals) all captured and confirmed clean."
+
   - task: "SpotCreateIn.notes — freeform photographer notes field (Commit 3 / Bucket A)"
     implemented: true
     working: true
