@@ -60,6 +60,19 @@ backend:
              • GET /api/spots?limit=5 → 200, count=5 spots returned.
 
           VERDICT: Commit 7 backend changes are launch-ready. No critical or minor issues beyond the stats-key shape heads-up in (2), which is a naming-alias question rather than a count-correctness bug.
+  - task: "Commit 7.5 — P0 geocoding safety net (no-save-to-(0,0)) + keyboard Android adjustResize"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py, /app/frontend/src/components/ManualLocationSheet.tsx, /app/frontend/app/(tabs)/add.tsx, /app/frontend/app.json"
+    stuck_count: 0
+    priority: "critical"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "User-reported critical: spots saving at (0, 0) in the Atlantic; keyboard hiding inputs on Android. RCA: add.tsx:356 coerced `draft.latitude || 0` — a null lat/lng from the manual-entry path was silently replaced with 0, saving to 'Null Island'. The manual_entry flow let users progress and submit without geocoding their typed address. DB had 0 bad rows at time of fix — caught before corruption spread. Fix: (a) Added pydantic field_validators to SpotCreateIn rejecting latitude/longitude that are None, exactly 0.0, or out-of-range, returning user-facing copy 'Could not determine a valid location. Please refine the address or drop a pin manually.' (b) Added `original_address_input` + `geocode_status` persistence fields. (c) Removed `|| 0` coercion in buildPayload. (d) Removed manual_entry bypass from canProceed, canPublishFromReview, and submit — all paths now require valid non-zero coords. (e) ManualLocationSheet now auto-geocodes via /api/geocode/search when coords aren't hand-entered; distinguishes 'not found' vs 'rate-limit / temp error' messaging. (f) Added MongoDB-backed 24h geocode cache — shields the Nominatim 1-req/s limit (we proved this in-session when aggressive testing triggered a Nominatim IP ban; cached Joshua Springs lookup returned lat=29.9636 lng=-98.9069 in Comfort, TX bypassing the network). (g) app.json: added `android.softwareKeyboardLayoutMode: 'resize'` — universal Android fix for forms being hidden by the keyboard (was defaulting to adjustPan). Backend live-verified: POST /api/spots with (0,0) → 422 with exact copy; POST with valid coords → 200. Cache layer live-verified: Joshua Springs query returns real coords from cache with `cached: true`. 5th-thing flag (not fixing): Metro file-map disk cache deserialization warnings on every Expo restart in this env — already on backlog per Commit 6 note. v1.1 deferred (flagged to user, not this commit): inline autocomplete dropdown on manual-entry field, confidence-threshold confirmation prompt, on-screen map preview step, keyboard wrapping for 7 pure-filter screens (search/admin-users/admin-audit/groups/mentors/saved/creator-packs) — they're filter boxes, not form submissions, covered by the global adjustResize fix."
+
+
   - task: "Commit 7 — Profile cleanup (7a stats fix+reattribution / 7b @keith handle / 7c Admin card relocation / 7d cover-pill scrim / TX-prefill check)"
     implemented: true
     working: true
