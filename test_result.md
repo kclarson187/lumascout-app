@@ -2160,3 +2160,8 @@ agent_communication:
 
       No other failures, no 429 rate limits hit on the LLM endpoints during this
       run. Phase 4 launch is green.
+
+
+agent_communication:
+    -agent: "main"
+    -message: "Bucket A — Commits 3 & 4 shipped. Commit 3 (Ratings & Notes): backend adds validated `notes` field (trim + null-if-empty + 2000-char cap) to SpotCreateIn; persisted via body.dict() and surfaced on public_spot_view passthrough. Testing sub-agent confirmed all 6 subtests green (see task at top of file). Frontend: Add Spot Step 4 renamed to 'Ratings & Notes', dropped legacy parking_notes + lens_recommendations TextInputs in favor of a single 4-row multiline TextInput (maxLength=2000) with live char counter; 'Tap to rate — tap again to clear' hint stays only under the first Rating row per user's spec; the Rating component itself was already single-select amber-fill (prior commit). Commit 4 (Home feed polish): added `isHydrated` guard (cover + title required) to SpotCard — APPROX/PREMIUM/PRIVATE/FOLLOWERS/save button and bottom overlay (score/freshness/golden) now only render on hydrated cards; SpotCardSkeleton width bumped 240→260 so no horizontal layout shift when data lands. Live screenshots verified empty-rail hide logic is working (`From photographers you follow` is entirely absent for Keith, not rendered as a blank header). Backend restarted cleanly. Paused per user instruction — awaiting sign-off before starting Bucket D (screenshot tour)."
