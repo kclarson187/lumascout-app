@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { ChevronLeft, ChevronRight, CreditCard, User, Bell, Shield, Crown, LogOut, Store, PackageOpen } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, CreditCard, User, Bell, Shield, Crown, LogOut, Store, PackageOpen, ShieldCheck } from 'lucide-react-native';
 import { useAuth } from '../src/auth';
 import { colors, font, space, radii } from '../src/theme';
 
@@ -12,6 +12,12 @@ export default function Settings() {
 
   const planLabel = (user.plan || 'free').toUpperCase();
   const planColor = user.plan === 'elite' ? colors.primary : user.plan === 'pro' ? colors.info : colors.textSecondary;
+
+  // FIX(Commit 7c / 2026-04): Staff Tools subsection gated to admin roles.
+  // Relocated here from the profile scroll so the consumer surface stays
+  // consumer-first.
+  const STAFF_ROLES = ['admin', 'super_admin', 'moderator'];
+  const isStaff = STAFF_ROLES.includes(user.role || '');
 
   const rows: Array<{
     key: string; icon: React.ReactNode; title: string; subtitle?: string; onPress: () => void; accent?: string;
@@ -60,6 +66,23 @@ export default function Settings() {
           ))}
         </View>
 
+        {/* FIX(Commit 7c): Staff Tools — only rendered for admin / super_admin / moderator. */}
+        {isStaff && (
+          <>
+            <Text style={styles.staffHeader}>Staff tools</Text>
+            <View style={{ gap: 8 }}>
+              <TouchableOpacity style={styles.row} onPress={() => router.push('/admin')} testID="settings-staff-admin">
+                <View style={styles.rowIcon}><ShieldCheck size={20} color={colors.primary} /></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.rowTitle}>Admin dashboard</Text>
+                  <Text style={styles.rowSub}>Users, spots, reports, audit & analytics</Text>
+                </View>
+                <ChevronRight size={18} color={colors.textTertiary} />
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
+
         <TouchableOpacity
           style={[styles.row, { marginTop: space.xl, borderColor: colors.secondary }]}
           onPress={() => {
@@ -95,6 +118,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   planCtaTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 12 },
+  staffHeader: {
+    color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11,
+    textTransform: 'uppercase', letterSpacing: 0.8,
+    marginTop: space.xl, marginBottom: space.sm,
+  },
   row: {
     flexDirection: 'row', alignItems: 'center', gap: 14,
     padding: space.lg, backgroundColor: colors.surface1,

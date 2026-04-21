@@ -33,6 +33,18 @@ DB_NAME = os.environ["DB_NAME"]
 JWT_SECRET = os.environ["JWT_SECRET"]
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@lumascout.app")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+
+# FIX(Commit 7b / 2026-04): Reserved handles. These literals are blocked from
+# new registration so they can't be squatted by end-users. `admin` is reserved
+# because we used to assign it to the super-admin account — that account is
+# now `@keith`, and `@admin` must never be reclaimable. `support`, `help`,
+# `staff`, `lumascout`, `scout`, `scout_ai` are reserved for brand/product use.
+RESERVED_USERNAMES = {
+    "admin", "administrator", "root", "sysop",
+    "staff", "support", "help", "mod", "moderator",
+    "lumascout", "luma", "scout", "scout_ai", "scoutai",
+    "official", "team", "security", "billing",
+}
 JWT_ALGO = "HS256"
 ACCESS_TOKEN_DAYS = 30
 
@@ -485,7 +497,17 @@ async def register(body: RegisterIn):
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     user_id = f"user_{uuid.uuid4().hex[:12]}"
+    # FIX(Commit 7b / 2026-04): Reserve handles that map to staff, brand, or
+    # system entities so end-users can't register them. If the derived
+    # username collides with a reserved name, suffix it with a short uuid
+    # slug so the user still gets a valid handle but not the reserved one.
     username = email.split("@")[0]
+    if username.lower() in RESERVED_USERNAMES:
+        username = f"{username}_{uuid.uuid4().hex[:4]}"
+    # Belt-and-suspenders: a user whose handle *would* collide with an existing
+    # user also gets the same suffix treatment.
+    if await db.users.find_one({"username": username}):
+        username = f"{username}_{uuid.uuid4().hex[:4]}"
     doc = {
         "user_id": user_id,
         "email": email,
@@ -683,7 +705,7 @@ async def me(user: dict = Depends(get_current_user)):
         "reviews_received": await db.spot_reviews.count_documents({
             "spot_id": {"$in": [s["spot_id"] async for s in db.spots.find({"owner_user_id": uid}, {"spot_id": 1, "_id": 0})]},
         }),
-        "posts_count": await db.community_posts.count_documents({"author_id": uid}),
+        "posts_count": await db.community_posts.count_documents({"author_user_id": uid}),
     }
     return user
 
@@ -865,7 +887,7 @@ async def get_user(user_id: str, viewer: Optional[dict] = Depends(get_optional_u
     spots_count = await db.spots.count_documents({"owner_user_id": user_id, "privacy_mode": {"$in": ["public", "premium"]}})
     followers = await db.follows.count_documents({"followed_user_id": user_id})
     following = await db.follows.count_documents({"follower_user_id": user_id})
-    posts_count = await db.community_posts.count_documents({"author_id": user_id})
+    posts_count = await db.community_posts.count_documents({"author_user_id": user_id})
     reviews_received = await db.spot_reviews.count_documents({
         "spot_id": {"$in": [s["spot_id"] async for s in db.spots.find({"owner_user_id": user_id}, {"spot_id": 1, "_id": 0})]},
     })
@@ -4897,8 +4919,12 @@ async def seed_admin():
             "user_id": f"user_{uuid.uuid4().hex[:12]}",
             "email": ADMIN_EMAIL,
             "password_hash": hash_password(ADMIN_PASSWORD),
-            "name": "LumaScout Admin",
-            "username": "admin",
+            "name": "Keith Larson",
+            # FIX(Commit 7b / 2026-04): seed with a real-looking handle instead
+            # of the generic 'admin' literal so screenshots and public-profile
+            # views don't leak staff-ness. The 'admin' handle is now reserved
+            # and blocked from new registrations.
+            "username": "keith",
             "avatar_url": None,
             "bio": "Platform administrator",
             "city": "Austin",
@@ -4915,6 +4941,15 @@ async def seed_admin():
         logger.info("Seeded admin user")
     elif not verify_password(ADMIN_PASSWORD, existing.get("password_hash", "")):
         await db.users.update_one({"email": ADMIN_EMAIL}, {"$set": {"password_hash": hash_password(ADMIN_PASSWORD), "role": "admin"}})
+    # FIX(Commit 7b / 2026-04): auto-migrate any legacy "admin" handle on the
+    # super-admin account to the new "keith" handle. Safe to run on every
+    # boot; idempotent after first fix.
+    if existing and existing.get("username") == "admin":
+        await db.users.update_one(
+            {"email": ADMIN_EMAIL},
+            {"$set": {"username": "keith", "name": "Keith Larson"}},
+        )
+        logger.info("Migrated super-admin handle 'admin' → 'keith'")
 
 
 # ----------------------------------------------------------------------------
@@ -5336,8 +5371,20 @@ async def seed_demo_content():
     if spots_count > 0:
         return
 
+    # FIX(Commit 7 / 2026-04): Include the admin account in the round-robin so
+    # future re-seeds give the staff account a lived-in share of spots instead
+    # of 0. Historically DEMO_PHOTOGRAPHERS excluded admin, which meant a
+    # freshly-seeded DB always left the LumaScout admin profile looking empty —
+    # confusing in demos and for launch screenshots. Admin participates as an
+    # ordinary rotation slot (same weighting as a demo photographer). If no
+    # admin is found, fall back to photographer-only rotation. See
+    # /app/memory/_audit_reattribution_2026_04.md for the one-off backfill
+    # that corrected the existing seeded DB.
+    admin_user = await db.users.find_one({"email": ADMIN_EMAIL}, {"user_id": 1, "_id": 0})
+    owner_rotation = ([admin_user["user_id"]] if admin_user else []) + photographer_ids
+
     for i, sp in enumerate(DEMO_SPOTS):
-        owner = photographer_ids[i % len(photographer_ids)]
+        owner = owner_rotation[i % len(owner_rotation)] if owner_rotation else photographer_ids[i % len(photographer_ids)]
         images = []
         for j, url in enumerate(sp["images"]):
             images.append({

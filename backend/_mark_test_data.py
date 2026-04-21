@@ -20,7 +20,7 @@ load_dotenv()
 # Demo / seeded usernames that MUST NEVER be marked as test.
 PRESERVE_USERNAMES = {
     "scoutai",     # Scout AI assistant bot
-    "admin",       # super admin
+    "keith",       # super admin (FIX Commit 7b: renamed from 'admin')
     "sophie", "marco", "priya", "jordan", "lena",
     "emily.toronto", "noah.vancouver", "aiden.seattle",
     "ben.chicago", "sara.sf", "david.miami", "lucas.cdmx",

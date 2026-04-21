@@ -253,7 +253,12 @@ export default function Profile() {
   // advertise features the user can't actually use.
   const hasCreatorTools = plan !== 'free'; // Pro / Elite / comp_* / trial_*
   const hasAdminTools = isStaff;
-  const showRoleSection = hasCreatorTools || hasAdminTools;
+  // FIX(Commit 7c / 2026-04): Profile is a consumer surface first, a tools
+  // surface second. Admin Dashboard was relocated to Settings > Staff Tools
+  // so it no longer dominates the main scroll with an amber card. The
+  // Creator Dashboard / Pack Marketplace tiles stay here — they're Elite-tier
+  // monetization surfaces for end users, not staff tooling.
+  const showRoleSection = hasCreatorTools;
 
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
@@ -432,12 +437,10 @@ export default function Profile() {
                     <Text style={styles.actionTxt}>Pack{'\n'}Marketplace</Text>
                   </TouchableOpacity>
                 )}
-                {hasAdminTools && (
-                  <TouchableOpacity style={[styles.actionCard, styles.adminCard]} onPress={() => router.push('/admin')} testID="profile-admin">
-                    <Settings size={18} color={colors.textInverse} />
-                    <Text style={[styles.actionTxt, { color: colors.textInverse }]}>Admin{'\n'}Dashboard</Text>
-                  </TouchableOpacity>
-                )}
+                {/* FIX(Commit 7c): Admin Dashboard card removed from profile.
+                    Relocated to Settings > Staff Tools (only visible to admin /
+                    super_admin / moderator). Profile now reads as a consumer
+                    surface first. */}
               </View>
             </>
           )}
@@ -713,11 +716,21 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.25)',
   },
   bannerEdit: {
+    // FIX(Commit 7d / 2026-04): 60% black scrim + thin white hairline border
+    // for premium frosted-glass look. Previously 55% scrim only — pill got
+    // lost over bright covers (bluebonnet/sunset shots). White text guaranteed.
     position: 'absolute', bottom: 48, left: space.xl,
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: radii.pill,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+    borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.35)',
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: radii.pill,
+    // iOS-only shadow for lift over bright imagery.
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+      android: { elevation: 2 },
+    }),
   },
-  bannerEditTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.3 },
+  bannerEditTxt: { color: '#FFFFFF', fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.3 },
   bannerTopRight: {
     position: 'absolute', top: space.md, right: space.xl, flexDirection: 'row', gap: 8,
   },
@@ -734,9 +747,15 @@ const styles = StyleSheet.create({
     borderWidth: 4, borderColor: colors.bg, backgroundColor: colors.surface2,
   },
   avatarEditBadge: {
-    position: 'absolute', right: 4, bottom: 4, width: 26, height: 26, borderRadius: 13,
+    // FIX(Commit 7d): bump size 26→28 and add subtle shadow so it reads as
+    // tappable over any avatar colour, not just light-skinned ones.
+    position: 'absolute', right: 4, bottom: 4, width: 28, height: 28, borderRadius: 14,
     backgroundColor: colors.primary, borderColor: colors.bg, borderWidth: 2,
     alignItems: 'center', justifyContent: 'center',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 4, shadowOffset: { width: 0, height: 1 } },
+      android: { elevation: 3 },
+    }),
   },
 
   headerText: { paddingHorizontal: space.xl, paddingTop: space.md, alignItems: 'center' },
