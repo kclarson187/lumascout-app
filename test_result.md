@@ -60,6 +60,19 @@ backend:
              • GET /api/spots?limit=5 → 200, count=5 spots returned.
 
           VERDICT: Commit 7 backend changes are launch-ready. No critical or minor issues beyond the stats-key shape heads-up in (2), which is a naming-alias question rather than a count-correctness bug.
+  - task: "Commit 7 — Profile cleanup (7a stats fix+reattribution / 7b @keith handle / 7c Admin card relocation / 7d cover-pill scrim / TX-prefill check)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py, /app/frontend/app/(tabs)/profile.tsx, /app/frontend/app/settings.tsx, /app/backend/_mark_test_data.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "Investigation-first found BOTH causes: (A) seed attribution skew (admin owned 0 spots; sophie owned 30 = 50% of real data) AND (B) query mismatch (`author_id` vs `author_user_id` on server.py:686 and :868 — always returned 0). 7a Bug B: renamed fields. 7a Bug A: 5 TX spots reattributed sophie→admin (sophie 30→25, admin 0→5). Seed root cause patched: seed_demo_content owner_rotation now includes admin as a round-robin slot. Audit log at /app/memory/_audit_reattribution_2026_04.md (spot_ids, before/after, rollback). 7b: RESERVED_USERNAMES set; /auth/register suffixes reserved-localpart signups with 4-char hex; seed_admin uses 'keith'; auto-migration flips legacy username='admin' on boot; _mark_test_data.PRESERVE_USERNAMES updated. 7c: removed Admin Dashboard card from profile; added Settings > Staff Tools gated on role ∈ {admin, super_admin, moderator}. 7d: cover pill 62% scrim + hairline white border + iOS shadow; avatar badge 26→28px with shadow. TX-prefill: State field fully editable (add.tsx:679). Backend regression (deep_testing_backend_v2): 26/26 pass. 5th-thing flag (not fixing): public /api/users/{id}.stats lacks a `spots_count` alias but frontend's `stats.spots_created ?? stats.spots` fallback handles it — v1.1 backlog."
+
+
 
 
   - task: "Commit 6 — Polish bundle (6a Review gating / 6b tab-bar hide / 6c composer gate+counters / 6d Saved counts)"
