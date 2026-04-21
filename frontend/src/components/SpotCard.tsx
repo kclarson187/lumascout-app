@@ -34,6 +34,11 @@ export default function SpotCard({
 }) {
   const cover = (spot.images && (spot.images.find((i: any) => i.is_cover) || spot.images[0]))?.image_url;
   const isPremium = spot.privacy_mode === 'premium';
+  // FIX(2026-04): [Commit 4] Don't render badges (APPROX / PREMIUM / freshness / etc.)
+  // until the card has actually hydrated with both a cover image and a title.
+  // This prevents floating badges on blank placeholder cards when the feed is
+  // still resolving sparse rows.
+  const isHydrated = !!(cover && spot?.title);
 
   const handlePress = () => {
     if (onPress) return onPress();
@@ -57,49 +62,53 @@ export default function SpotCard({
           <View style={[styles.image, { backgroundColor: colors.surface2 }]} />
         )}
         <View style={styles.overlayTop}>
-          {isPremium && (
+          {isHydrated && isPremium && (
             <View style={styles.premiumBadge}>
               <Text style={styles.premiumText}>PREMIUM</Text>
             </View>
           )}
-          {spot.privacy_mode === 'private' && (
+          {isHydrated && spot.privacy_mode === 'private' && (
             <View style={[styles.premiumBadge, { backgroundColor: 'rgba(10,10,10,0.8)', flexDirection: 'row', alignItems: 'center', gap: 4 }]}>
               <Lock size={9} color="#fff" />
               <Text style={[styles.premiumText, { color: '#fff' }]}>PRIVATE</Text>
             </View>
           )}
-          {spot.privacy_mode === 'followers' && (
+          {isHydrated && spot.privacy_mode === 'followers' && (
             <View style={[styles.premiumBadge, { backgroundColor: 'rgba(10,10,10,0.8)' }]}>
               <Text style={[styles.premiumText, { color: '#fff' }]}>FOLLOWERS</Text>
             </View>
           )}
-          {spot.location_display_mode === 'approximate' && spot.privacy_mode !== 'private' && (
+          {isHydrated && spot.location_display_mode === 'approximate' && spot.privacy_mode !== 'private' && (
             <View style={[styles.premiumBadge, { backgroundColor: 'rgba(96,165,250,0.9)', flexDirection: 'row', alignItems: 'center', gap: 4 }]}>
               <MapPin size={9} color="#fff" />
               <Text style={[styles.premiumText, { color: '#fff' }]}>APPROX</Text>
             </View>
           )}
           <View style={{ flex: 1 }} />
-          <TouchableOpacity
-            onPress={handleSave}
-            style={styles.saveBtn}
-            testID={testID ? `${testID}-save` : undefined}
-          >
-            <Bookmark size={18} color={spot.is_saved ? colors.primary : '#fff'} fill={spot.is_saved ? colors.primary : 'transparent'} />
-          </TouchableOpacity>
-        </View>
-        <View style={styles.overlayBottom}>
-          <ScoreBadge score={spot.shoot_score || 0} />
-          <FreshnessBadge freshness={spot.freshness} label={spot.freshness_label} variant="compact" />
-          {!!goldenHourLabel(spot.latitude, spot.longitude) && (
-            <View style={styles.goldenPill}>
-              <Sun size={10} color={colors.primary} />
-              <Text style={styles.goldenPillTxt} numberOfLines={1}>
-                {goldenHourLabel(spot.latitude, spot.longitude)}
-              </Text>
-            </View>
+          {isHydrated && (
+            <TouchableOpacity
+              onPress={handleSave}
+              style={styles.saveBtn}
+              testID={testID ? `${testID}-save` : undefined}
+            >
+              <Bookmark size={18} color={spot.is_saved ? colors.primary : '#fff'} fill={spot.is_saved ? colors.primary : 'transparent'} />
+            </TouchableOpacity>
           )}
         </View>
+        {isHydrated && (
+          <View style={styles.overlayBottom}>
+            <ScoreBadge score={spot.shoot_score || 0} />
+            <FreshnessBadge freshness={spot.freshness} label={spot.freshness_label} variant="compact" />
+            {!!goldenHourLabel(spot.latitude, spot.longitude) && (
+              <View style={styles.goldenPill}>
+                <Sun size={10} color={colors.primary} />
+                <Text style={styles.goldenPillTxt} numberOfLines={1}>
+                  {goldenHourLabel(spot.latitude, spot.longitude)}
+                </Text>
+              </View>
+            )}
+          </View>
+        )}
       </View>
 
       <View style={styles.info}>

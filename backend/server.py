@@ -20,7 +20,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import DocumentTooLarge
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, field_validator
 
 # ============================================================================
 # Setup
@@ -406,7 +406,20 @@ class SpotCreateIn(BaseModel):
     postal_code: Optional[str] = None
     landmark_notes: Optional[str] = None
     # FIX(2026-04): [1.2] freeform photographer notes captured on the Ratings step.
-    personal_notes: Optional[str] = None
+    # Max 2000 chars, stripped, stored as null if empty after strip.
+    notes: Optional[str] = None
+
+    @field_validator("notes")
+    @classmethod
+    def _validate_notes(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        stripped = v.strip()
+        if not stripped:
+            return None
+        if len(stripped) > 2000:
+            raise ValueError("Notes must be 2000 characters or fewer.")
+        return stripped
     # --- North America scalability ------------------------------------------
     country_code: Optional[str] = None     # ISO alpha-2: "US", "CA", "MX"
     country_name: Optional[str] = None     # "United States", "Canada", "Mexico"

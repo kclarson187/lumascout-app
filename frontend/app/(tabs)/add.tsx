@@ -68,6 +68,8 @@ type Draft = {
   parking_notes: string;
   lens_recommendations: string;
   best_lens_range: string;  // e.g. "35-85mm"
+  // FIX(2026-04): [1.2] Consolidated free-form notes captured on Ratings & Notes step.
+  notes: string;
   privacy_mode: string;
   location_display_mode: string;
 };
@@ -111,6 +113,7 @@ const initialDraft: Draft = {
   parking_notes: '',
   lens_recommendations: '',
   best_lens_range: '',
+  notes: '',
   privacy_mode: 'public',
   location_display_mode: 'exact',
 };
@@ -369,6 +372,7 @@ export default function AddSpot() {
     walk_rating: draft.walk_rating,
     composition_flex: draft.composition_flex,
     landmark_notes: draft.landmark || draft.landmarkNotes || '',
+    notes: draft.notes,
     best_months: [],
     images: draft.images,
     // Location provenance (new)
@@ -770,8 +774,8 @@ export default function AddSpot() {
 
           {step === 3 && (
             <View style={{ gap: space.lg }}>
-              <Text style={styles.heading}>Photographer notes</Text>
-              <Text style={styles.sub}>Rate the real conditions so others can plan accurately.</Text>
+              <Text style={styles.heading}>Ratings & Notes</Text>
+              <Text style={styles.sub}>Rate real conditions, then jot anything future-you would want to know.</Text>
 
               {/* ---- Best time of day ---- */}
               <Text style={styles.subSectionLabel}>Best time of day</Text>
@@ -839,20 +843,20 @@ export default function AddSpot() {
               </View>
 
               <Input
-                label="Parking notes"
-                value={draft.parking_notes}
-                onChangeText={(t) => setDraft({ ...draft, parking_notes: t })}
-                placeholder="Gravel lot, fills up on weekends"
+                label="Notes (for future-you)"
+                value={draft.notes}
+                onChangeText={(t) => setDraft({ ...draft, notes: t.slice(0, 2000) })}
+                placeholder="Parking, gate codes, permit info, gotchas — anything future-you would want to know."
                 multiline
-                testID="add-parking"
+                numberOfLines={4}
+                maxLength={2000}
+                textAlignVertical="top"
+                style={{ minHeight: 110, paddingTop: 12 }}
+                testID="add-notes"
               />
-              <Input
-                label="Lens recommendations (free-form)"
-                value={draft.lens_recommendations}
-                onChangeText={(t) => setDraft({ ...draft, lens_recommendations: t })}
-                placeholder="35mm for wide shots, 85mm for portraits"
-                testID="add-lens"
-              />
+              <Text style={{ color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: -8, textAlign: 'right' }}>
+                {(draft.notes || '').length}/2000
+              </Text>
             </View>
           )}
 

@@ -24,6 +24,30 @@ user_problem_statement: |
   (soft delete + anonymize), plus comprehensive QA pass. See tasks below.
 
 backend:
+  - task: "SpotCreateIn.notes — freeform photographer notes field (Commit 3 / Bucket A)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Added 'notes: Optional[str] = None' to SpotCreateIn with a pydantic v2 field_validator that: strips whitespace, returns None if empty, and raises ValueError if length > 2000 chars. Field is persisted via body.dict() during spot creation and surfaced on GET /spots/{id} via public_spot_view passthrough. Please verify: (1) POST /spots with notes='  valid text  ' saves and reads back as 'valid text'. (2) POST /spots with notes='' or notes='   ' persists as null (not empty string). (3) POST /spots without notes field at all still succeeds and reads back notes=null. (4) POST /spots with notes 2001+ chars returns 422 validation error. (5) GET /spots/{id} returns the notes field in the response body. Auth: admin@lumascout.app / admin123 (check /app/memory/test_credentials.md)."
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ALL 7 subtests PASS — /app/backend_test_notes_field.py. Auth: admin@lumascout.app / admin123 (super_admin). Backend tested internally at http://localhost:8001/api via python-requests.
+          (1) POST /api/spots with notes='  Parking fills up by 7am. Gate code 1234.  ' → 200; GET /api/spots/{id} returns notes='Parking fills up by 7am. Gate code 1234.' — leading/trailing whitespace stripped exactly as spec'd.
+          (2) POST with notes='' → 200; GET returns notes=None (field present as null). Empty-string coerced to null correctly.
+          (3) POST with notes='   \n\t  ' → 200; GET returns notes=None. Whitespace-only → null.
+          (4) POST WITHOUT the notes key at all → 200; GET returns notes=None. Backward compatibility confirmed.
+          (5a) POST with notes='x'*2001 → 422 with pydantic v2 detail {"type":"value_error","loc":["body","notes"],"msg":"Value error, Notes must be 2000 characters or fewer."} — message present exactly as required.
+          (5b) POST with notes='x'*2000 → 200; GET returns notes string of length 2000. Boundary (exactly 2000 chars) is allowed.
+          (6) Surfacing on GET: every populated notes value was echoed back by GET /api/spots/{id} verbatim.
+          Cleanup: all 6 spots created for the test were hard-deleted via DELETE /api/admin/spots/{id} (super_admin) → all 200. No residue left in DB. Implementation at /app/backend/server.py lines 410-422 (validator) and line 991 (body.dict() persistence) + public_spot_view passthrough is correct end-to-end.
+
   - task: "Super-admin DELETE /api/admin/spots/{spot_id} — hard delete + archive + cascade"
     implemented: true
     working: true
