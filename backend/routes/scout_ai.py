@@ -185,7 +185,7 @@ async def admin_ai_generate_editorial(
     idx = max(0, min(idx, len(EDITORIAL_TEMPLATES) - 1))
     title_stub, brief = EDITORIAL_TEMPLATES[idx]
 
-    q: dict = {"privacy_mode": "public"}
+    q: dict = {"privacy_mode": "public", "is_test_data": {"$ne": True}}
     if city:
         q["city"] = city
     spots = await db.spots.find(q, {

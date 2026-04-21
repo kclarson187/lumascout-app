@@ -24,6 +24,7 @@ export default function AdminUsers() {
   const [role, setRole] = useState('all');
   const [plan, setPlan] = useState('all');
   const [status, setStatus] = useState('all');
+  const [includeTest, setIncludeTest] = useState(false); // FIX(2026-04): [7.2]
   const [page, setPage] = useState(1);
   const [data, setData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
@@ -36,9 +37,10 @@ export default function AdminUsers() {
       if (role !== 'all') params.role = role;
       if (plan !== 'all') params.plan = plan;
       if (status !== 'all') params.status = status;
+      if (includeTest) params.include_test = true;
       setData(await api.get('/admin/users', params));
     } finally { setLoading(false); }
-  }, [q, role, plan, status, page]);
+  }, [q, role, plan, status, includeTest, page]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -63,6 +65,8 @@ export default function AdminUsers() {
         {ROLE_FILTERS.map((r) => <Chip key={`role-${r}`} label={`role: ${r}`} active={role === r} onPress={() => { setPage(1); setRole(r); }} />)}
         {PLAN_FILTERS.map((p) => <Chip key={`plan-${p}`} label={`plan: ${p}`} active={plan === p} onPress={() => { setPage(1); setPlan(p); }} />)}
         {STATUS_FILTERS.map((s) => <Chip key={`status-${s}`} label={`status: ${s}`} active={status === s} onPress={() => { setPage(1); setStatus(s); }} />)}
+        {/* FIX(2026-04): [7.2] show test/QA accounts on demand */}
+        <Chip key="include-test" label={includeTest ? 'Test accounts: shown' : 'Hide test accounts'} active={includeTest} onPress={() => { setPage(1); setIncludeTest(v => !v); }} />
       </ScrollView>
 
       {loading ? (
