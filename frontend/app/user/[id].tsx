@@ -87,15 +87,24 @@ export default function UserProfile() {
     }
   };
 
-  const messageUser = async () => {
+  const messageUser = async (kind?: 'message' | 'refer' | 'collab') => {
     if (!me) return router.push('/(auth)/login');
     if (busy) return;
     setBusy(true);
     try {
-      const convo = await api.post('/conversations', { participant_user_id: id });
-      router.push(`/messages/${convo.conversation_id}` as any);
-    } catch (e) {
-      Alert.alert('Could not open message', formatApiError(e));
+      // Phase A DM system: /dm/threads/start returns thread_id and handles
+      // message_request gating for non-followers.
+      const body: any = { user_id: id, kind: kind || 'message' };
+      if (kind === 'refer') body.opening_body = 'Hey — I may have a client to refer to you. Are you available?';
+      if (kind === 'collab') body.opening_body = 'Loved your work. Would you be open to a collab shoot?';
+      const r = await api.post('/dm/threads/start', body);
+      router.push(`/inbox/${r.thread_id}` as any);
+    } catch (e: any) {
+      if (e?.message?.includes('429')) {
+        Alert.alert('Slow down', 'You\'ve sent too many new requests in the last hour. Try again soon.');
+      } else {
+        Alert.alert('Could not open message', formatApiError(e));
+      }
     } finally {
       setBusy(false);
     }
@@ -256,27 +265,47 @@ export default function UserProfile() {
             </View>
           )}
 
-          {/* CTA row */}
+          {/* CTA row — Network Phase A: Follow / Message / Refer / Invite */}
           {!isSelf && (
-            <View style={styles.ctaRow}>
-              <Button
-                title={isFollowing ? 'Following' : 'Follow'}
-                variant={isFollowing ? 'secondary' : 'primary'}
-                onPress={toggleFollow}
-                loading={busy}
-                icon={isFollowing ? <UserMinus size={14} color={colors.text} /> : <UserPlus size={14} color={colors.textInverse} />}
-                style={{ flex: 1 }}
-                testID="user-follow"
-              />
-              <Button
-                title="Message"
-                variant="secondary"
-                onPress={messageUser}
-                icon={<MessageCircle size={14} color={colors.text} />}
-                style={{ flex: 1 }}
-                testID="user-message"
-              />
-            </View>
+            <>
+              <View style={styles.ctaRow}>
+                <Button
+                  title={isFollowing ? 'Following' : 'Follow'}
+                  variant={isFollowing ? 'secondary' : 'primary'}
+                  onPress={toggleFollow}
+                  loading={busy}
+                  icon={isFollowing ? <UserMinus size={14} color={colors.text} /> : <UserPlus size={14} color={colors.textInverse} />}
+                  style={{ flex: 1 }}
+                  testID="user-follow"
+                />
+                <Button
+                  title="Message"
+                  variant="secondary"
+                  onPress={() => messageUser('message')}
+                  icon={<MessageCircle size={14} color={colors.text} />}
+                  style={{ flex: 1 }}
+                  testID="user-message"
+                />
+              </View>
+              <View style={styles.ctaRow}>
+                <Button
+                  title="Refer"
+                  variant="secondary"
+                  onPress={() => messageUser('refer')}
+                  icon={<Handshake size={14} color={colors.text} />}
+                  style={{ flex: 1 }}
+                  testID="user-refer"
+                />
+                <Button
+                  title="Invite to Collab"
+                  variant="secondary"
+                  onPress={() => messageUser('collab')}
+                  icon={<UserPlus size={14} color={colors.text} />}
+                  style={{ flex: 1 }}
+                  testID="user-collab"
+                />
+              </View>
+            </>
           )}
           {isSelf && (
             <View style={styles.selfNotice}>
