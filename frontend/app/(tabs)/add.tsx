@@ -25,6 +25,7 @@ import { Button } from '../../src/components/Button';
 import LocationSearchSheet, { PlaceResult } from '../../src/components/LocationSearchSheet';
 import MapPickerSheet from '../../src/components/MapPickerSheet';
 import ManualLocationSheet, { ManualLocation } from '../../src/components/ManualLocationSheet';
+import MapPreviewCard from '../../src/components/MapPreviewCard';
 import { Input, Chip } from '../../src/components/ui';
 import ScoutAICard from '../../src/components/ScoutAICard';
 
@@ -187,8 +188,10 @@ export default function AddSpot() {
       locationSource: 'searched_place',
       originalSearchQuery: p.name || p.display_name,
       geocodeConfidence: p.confidence,
+      geocodeStatus: 'success',
       city: p.city || draft.city,
       state: (p.state || draft.state || '').slice(0, 2).toUpperCase() || draft.state,
+      postalCode: (p as any).postcode || draft.postalCode,
       title: draft.title || p.name || '',
     });
   };
@@ -558,10 +561,25 @@ export default function AddSpot() {
                        draft.locationSource === 'dropped_pin' ? 'Dropped pin' :
                        draft.locationSource === 'manual_entry' ? 'Manual entry' : 'Location'}
                     </Text>
+                    {draft.geocodeConfidence != null && draft.geocodeStatus === 'success' && (
+                      <View style={styles.confChip}>
+                        <Check size={10} color={colors.success} />
+                        <Text style={styles.confChipTxt}>
+                          {draft.geocodeConfidence >= 0.8 ? 'Verified' :
+                           draft.geocodeConfidence >= 0.5 ? 'Matched' : 'Approximate'}
+                        </Text>
+                      </View>
+                    )}
                   </View>
                   <Text style={styles.selectedLabel} numberOfLines={2}>{draft.locationLabel}</Text>
                   {draft.latitude != null && draft.longitude != null && (
-                    <Text style={styles.selectedCoords}>{draft.latitude.toFixed(5)}, {draft.longitude.toFixed(5)}</Text>
+                    <MapPreviewCard
+                      latitude={draft.latitude}
+                      longitude={draft.longitude}
+                      label={draft.locationLabel}
+                      height={160}
+                      testID="add-map-preview"
+                    />
                   )}
                   <TouchableOpacity
                     onPress={() => setDraft({ ...draft, latitude: undefined, longitude: undefined, locationLabel: undefined, locationSource: undefined })}
@@ -1337,6 +1355,8 @@ const styles = StyleSheet.create({
   selectedKicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase' },
   selectedLabel: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14, lineHeight: 19, marginTop: 4 },
   selectedCoords: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 2 },
+  confChip: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.pill, backgroundColor: 'rgba(34,197,94,0.12)', borderWidth: 1, borderColor: 'rgba(34,197,94,0.3)', marginLeft: 'auto' },
+  confChipTxt: { color: colors.success, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.3, textTransform: 'uppercase' },
   changeBtn: { position: 'absolute', top: space.md, right: space.md, paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.pill, backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border },
   changeBtnTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
   recentWrap: { gap: 6 },

@@ -117,19 +117,44 @@ export default function LocationSearchSheet({
           keyExtractor={(r) => r.place_id}
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ paddingHorizontal: space.xl, paddingBottom: 40 }}
-          renderItem={({ item }) => (
-            <Pressable
-              onPress={() => { onPick(item); onClose(); }}
-              style={({ pressed }) => [styles.row, pressed && { backgroundColor: colors.surface2 }]}
-              testID={`place-result-${item.place_id}`}
-            >
-              <View style={styles.pinWrap}><MapPin size={16} color={colors.primary} /></View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.rowName} numberOfLines={1}>{item.name || item.display_name.split(',')[0]}</Text>
-                <Text style={styles.rowMeta} numberOfLines={1}>{item.display_name}</Text>
-              </View>
-            </Pressable>
-          )}
+          renderItem={({ item }) => {
+            const ftype = (item.type || '').toLowerCase();
+            const badgeLabel =
+              ftype === 'poi' ? 'Landmark' :
+              ftype === 'address' ? 'Address' :
+              ftype === 'neighborhood' ? 'Area' :
+              ftype === 'locality' || ftype === 'place' ? 'Place' :
+              ftype === 'street' ? 'Street' : null;
+            const zipStateLine = [
+              item.city,
+              item.state,
+              item.postcode,
+            ].filter(Boolean).join(', ');
+            return (
+              <Pressable
+                onPress={() => { onPick(item); onClose(); }}
+                style={({ pressed }) => [styles.row, pressed && { backgroundColor: colors.surface2 }]}
+                testID={`place-result-${item.place_id}`}
+              >
+                <View style={styles.pinWrap}><MapPin size={16} color={colors.primary} /></View>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={styles.rowName} numberOfLines={1}>
+                      {item.name || item.display_name.split(',')[0]}
+                    </Text>
+                    {badgeLabel && (
+                      <View style={styles.typeBadge}>
+                        <Text style={styles.typeBadgeTxt}>{badgeLabel}</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.rowMeta} numberOfLines={1}>
+                    {zipStateLine || item.display_name}
+                  </Text>
+                </View>
+              </Pressable>
+            );
+          }}
           ItemSeparatorComponent={() => <View style={styles.sep} />}
         />
       </KeyboardAvoidingView>
@@ -167,5 +192,7 @@ const styles = StyleSheet.create({
   },
   rowName: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
   rowMeta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2 },
+  typeBadge: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: radii.pill, backgroundColor: 'rgba(245,166,35,0.12)', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(245,166,35,0.4)' },
+  typeBadgeTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.4, textTransform: 'uppercase' },
   sep: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
 });
