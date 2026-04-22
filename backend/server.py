@@ -4562,6 +4562,430 @@ async def admin_restore_post(
     return {"ok": True, "post_id": post_id, "status": "active"}
 
 
+# ============================================================================
+# Super Admin Community Control Center
+# Unified moderation layer for community posts / polls / comments.
+# Actions available (tier-gated):
+#   moderator : hide, restore, lock, unlock, pin, unpin, feature, unfeature,
+#               mark_spam, clear_spam, soft_delete
+#   admin     : all of the above + user warn / suspend
+#   super_admin : all of the above + hard_delete + user ban
+# ============================================================================
+
+ALLOWED_MOD_ACTIONS = {
+    "soft_delete", "hard_delete", "hide", "restore",
+    "pin", "unpin", "feature", "unfeature",
+    "lock", "unlock", "mark_spam", "clear_spam",
+}
+SUPER_ADMIN_ONLY_ACTIONS = {"hard_delete"}
+CONTENT_COLLECTIONS = {
+    "post": ("community_posts", "post_id"),
+    "poll": ("community_polls", "poll_id"),
+    "comment": ("community_comments", "comment_id"),
+}
+
+
+async def _apply_moderation(
+    actor: dict,
+    kind: str,
+    target_id: str,
+    action: str,
+    reason: Optional[str] = None,
+) -> dict:
+    """Apply one moderation action + write an audit log. Returns the updated
+    document (minus _id / cursor fields) or raises HTTPException on error."""
+    if kind not in CONTENT_COLLECTIONS:
+        raise HTTPException(status_code=400, detail=f"Unknown target kind '{kind}'")
+    if action not in ALLOWED_MOD_ACTIONS:
+        raise HTTPException(status_code=400, detail=f"Unknown action '{action}'")
+    if action in SUPER_ADMIN_ONLY_ACTIONS and actor.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin only")
+
+    coll_name, id_field = CONTENT_COLLECTIONS[kind]
+    coll = getattr(db, coll_name)
+    doc = await coll.find_one({id_field: target_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"{kind} not found")
+
+    now = utcnow()
+    before = {
+        "status": doc.get("status", "active"),
+        "hidden": bool(doc.get("hidden")),
+        "pinned": bool(doc.get("pinned")),
+        "featured": bool(doc.get("featured")),
+        "locked": bool(doc.get("locked")),
+        "spam": bool(doc.get("spam")),
+    }
+    patch: Dict[str, Any] = {"moderated_by": actor["user_id"], "moderated_at": now}
+    unset: Dict[str, Any] = {}
+
+    if action == "soft_delete":
+        patch.update({
+            "status": "removed", "removed_by": actor["user_id"], "removed_at": now,
+            "removal_reason": reason or "admin removal",
+        })
+    elif action == "hard_delete":
+        # super-admin only — physically removes the doc
+        await coll.delete_one({id_field: target_id})
+        await audit_log(
+            actor, f"{kind}.hard_delete", kind, target_id,
+            before=before, after={"status": "deleted"},
+            notes=reason or "hard delete (super admin)",
+        )
+        # Also auto-resolve any reports referencing this target
+        await db.reports.update_many(
+            {"target_type": kind, "target_id": target_id, "status": "pending"},
+            {"$set": {"status": "resolved", "resolved_by": actor["user_id"],
+                      "resolved_at": now, "resolution_note": "hard-deleted"}},
+        )
+        return {"ok": True, "action": "hard_delete", "target_id": target_id}
+    elif action == "hide":
+        patch.update({"hidden": True, "hidden_by": actor["user_id"], "hidden_at": now})
+    elif action == "restore":
+        patch.update({"status": "active", "hidden": False,
+                      "restored_by": actor["user_id"], "restored_at": now})
+        unset.update({"removed_by": "", "removed_at": "", "removal_reason": "",
+                      "hidden_by": "", "hidden_at": "", "spam": ""})
+    elif action == "pin":
+        patch.update({"pinned": True, "pinned_by": actor["user_id"], "pinned_at": now})
+    elif action == "unpin":
+        patch.update({"pinned": False})
+        unset.update({"pinned_by": "", "pinned_at": ""})
+    elif action == "feature":
+        patch.update({"featured": True, "featured_by": actor["user_id"], "featured_at": now})
+    elif action == "unfeature":
+        patch.update({"featured": False})
+        unset.update({"featured_by": "", "featured_at": ""})
+    elif action == "lock":
+        patch.update({"locked": True, "locked_by": actor["user_id"], "locked_at": now,
+                      "lock_reason": reason})
+    elif action == "unlock":
+        patch.update({"locked": False})
+        unset.update({"locked_by": "", "locked_at": "", "lock_reason": ""})
+    elif action == "mark_spam":
+        patch.update({"spam": True, "status": "removed",
+                      "removed_by": actor["user_id"], "removed_at": now,
+                      "removal_reason": reason or "spam"})
+    elif action == "clear_spam":
+        patch.update({"status": "active", "spam": False})
+        unset.update({"removed_by": "", "removed_at": "", "removal_reason": ""})
+
+    update_doc: Dict[str, Any] = {"$set": patch}
+    if unset:
+        update_doc["$unset"] = unset
+
+    await coll.update_one({id_field: target_id}, update_doc)
+
+    # If content was removed/hidden/marked-spam, auto-resolve pending reports.
+    if action in ("soft_delete", "hide", "mark_spam"):
+        await db.reports.update_many(
+            {"target_type": kind, "target_id": target_id, "status": "pending"},
+            {"$set": {"status": "resolved", "resolved_by": actor["user_id"],
+                      "resolved_at": now, "resolution_note": f"{kind} {action}"}},
+        )
+
+    after = {**before, **{k: patch[k] for k in patch if k in before}}
+    await audit_log(
+        actor, f"{kind}.{action}", kind, target_id,
+        before=before, after=after,
+        notes=reason,
+    )
+    updated = await coll.find_one({id_field: target_id}, {"_id": 0})
+    return {"ok": True, "action": action, "target": updated}
+
+
+class ModerationActionIn(BaseModel):
+    type: str              # post | poll | comment
+    id: str
+    action: str            # see ALLOWED_MOD_ACTIONS
+    reason: Optional[str] = None
+
+
+class BulkModerationIn(BaseModel):
+    type: str
+    ids: List[str]
+    action: str
+    reason: Optional[str] = None
+
+
+@api.post("/admin/community/moderate")
+async def admin_community_moderate(
+    body: ModerationActionIn,
+    me: dict = Depends(require_role("moderator")),
+):
+    return await _apply_moderation(me, body.type, body.id, body.action, body.reason)
+
+
+@api.post("/admin/community/bulk-moderate")
+async def admin_community_bulk_moderate(
+    body: BulkModerationIn,
+    me: dict = Depends(require_role("admin")),
+):
+    """Apply the same moderation action to many items. Reports actor errors
+    per-item without aborting the whole batch."""
+    if len(body.ids) == 0:
+        raise HTTPException(status_code=400, detail="No ids provided")
+    if len(body.ids) > 200:
+        raise HTTPException(status_code=400, detail="Max 200 items per bulk action")
+    if body.action in SUPER_ADMIN_ONLY_ACTIONS and me.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin only for hard_delete")
+    results = {"applied": 0, "failed": 0, "items": []}
+    for tid in body.ids:
+        try:
+            r = await _apply_moderation(me, body.type, tid, body.action, body.reason)
+            results["applied"] += 1
+            results["items"].append({"id": tid, "ok": True, "action": r.get("action")})
+        except HTTPException as e:
+            results["failed"] += 1
+            results["items"].append({"id": tid, "ok": False, "error": e.detail})
+    return results
+
+
+@api.get("/admin/community/content")
+async def admin_community_content(
+    type: str = "post",
+    status: Optional[str] = None,        # active | removed | hidden | spam | pinned | featured
+    reported: Optional[bool] = None,     # only items with pending reports
+    q: Optional[str] = None,
+    limit: int = 50,
+    skip: int = 0,
+    me: dict = Depends(require_role("moderator")),
+):
+    if type not in CONTENT_COLLECTIONS:
+        raise HTTPException(status_code=400, detail="Unknown type")
+    coll_name, id_field = CONTENT_COLLECTIONS[type]
+    coll = getattr(db, coll_name)
+    filt: dict = {}
+    if status == "active":
+        filt["$and"] = [
+            {"status": {"$ne": "removed"}},
+            {"$or": [{"hidden": {"$exists": False}}, {"hidden": False}]},
+        ]
+    elif status == "removed":
+        filt["status"] = "removed"
+    elif status == "hidden":
+        filt["hidden"] = True
+    elif status == "spam":
+        filt["spam"] = True
+    elif status == "pinned":
+        filt["pinned"] = True
+    elif status == "featured":
+        filt["featured"] = True
+    if q:
+        filt["$or"] = [
+            {"title": {"$regex": q, "$options": "i"}},
+            {"body": {"$regex": q, "$options": "i"}},
+        ]
+    if reported:
+        # Intersect with ids that have pending reports
+        report_cur = db.reports.find(
+            {"target_type": type, "status": "pending"},
+            {"target_id": 1, "_id": 0},
+        )
+        ids = list({r["target_id"] async for r in report_cur})
+        filt[id_field] = {"$in": ids}
+
+    limit = max(1, min(limit, 200))
+    skip = max(0, skip)
+    total = await coll.count_documents(filt)
+    cursor = coll.find(filt, {"_id": 0}).sort([("pinned", -1), ("created_at", -1)]).skip(skip).limit(limit)
+    items = await cursor.to_list(limit)
+
+    # Hydrate author info for each item (name/avatar)
+    author_ids = list({i.get("author_user_id") for i in items if i.get("author_user_id")})
+    authors = {}
+    if author_ids:
+        async for u in db.users.find({"user_id": {"$in": author_ids}},
+                                     {"_id": 0, "user_id": 1, "name": 1, "username": 1,
+                                      "avatar_url": 1, "plan": 1, "role": 1}):
+            authors[u["user_id"]] = u
+    for i in items:
+        i["_author"] = authors.get(i.get("author_user_id"))
+        # Each item annotates pending report count for the dashboard
+        i["_report_count"] = await db.reports.count_documents({
+            "target_type": type, "target_id": i.get(id_field), "status": "pending",
+        })
+    return {"items": items, "total": total, "type": type}
+
+
+@api.get("/admin/community/summary")
+async def admin_community_summary(me: dict = Depends(require_role("moderator"))):
+    """Counts for the Community Control Center dashboard badges."""
+    async def _counts(coll_name: str) -> dict:
+        coll = getattr(db, coll_name)
+        return {
+            "active": await coll.count_documents({"status": {"$ne": "removed"}}),
+            "removed": await coll.count_documents({"status": "removed"}),
+            "hidden": await coll.count_documents({"hidden": True}),
+            "spam": await coll.count_documents({"spam": True}),
+            "pinned": await coll.count_documents({"pinned": True}),
+            "featured": await coll.count_documents({"featured": True}),
+        }
+    return {
+        "posts": await _counts("community_posts"),
+        "polls": await _counts("community_polls"),
+        "comments": await _counts("community_comments"),
+        "reports": {
+            "pending": await db.reports.count_documents({"status": "pending"}),
+            "resolved": await db.reports.count_documents({"status": "resolved"}),
+            "total": await db.reports.count_documents({}),
+        },
+        "sanctions": {
+            "active_warnings": await db.user_sanctions.count_documents({"type": "warn", "active": True}),
+            "active_suspensions": await db.user_sanctions.count_documents({"type": "suspend", "active": True}),
+            "active_bans": await db.user_sanctions.count_documents({"type": "ban", "active": True}),
+        },
+    }
+
+
+# ------ Public report endpoint (any user can report content) ---------------
+class PublicReportIn(BaseModel):
+    target_type: str   # post | poll | comment | user
+    target_id: str
+    reason: str        # spam | harassment | fake_giveaway | abusive_poll | stolen | offensive | other
+    detail: Optional[str] = None
+
+
+@api.post("/report")
+async def create_report(body: PublicReportIn, user: dict = Depends(get_current_user)):
+    if body.target_type not in ("post", "poll", "comment", "user"):
+        raise HTTPException(status_code=400, detail="Invalid target_type")
+    if len(body.reason) > 40 or not body.reason.strip():
+        raise HTTPException(status_code=400, detail="Invalid reason")
+    # Dedupe: same reporter, same target, pending → update detail, don't duplicate
+    existing = await db.reports.find_one({
+        "reporter_user_id": user["user_id"],
+        "target_type": body.target_type, "target_id": body.target_id,
+        "status": "pending",
+    })
+    if existing:
+        await db.reports.update_one(
+            {"report_id": existing["report_id"]},
+            {"$set": {"reason": body.reason, "detail": body.detail, "updated_at": utcnow()}},
+        )
+        return {"ok": True, "report_id": existing["report_id"], "deduped": True}
+    rid = f"rpt_{uuid.uuid4().hex[:12]}"
+    await db.reports.insert_one({
+        "report_id": rid,
+        "reporter_user_id": user["user_id"],
+        "reporter_email": user.get("email"),
+        "target_type": body.target_type,
+        "target_id": body.target_id,
+        "reason": body.reason,
+        "detail": (body.detail or "")[:1000],
+        "status": "pending",
+        "created_at": utcnow(),
+    })
+    return {"ok": True, "report_id": rid}
+
+
+# ------ User sanction endpoints --------------------------------------------
+class UserSanctionIn(BaseModel):
+    type: str                # warn | suspend | ban
+    reason: str
+    duration_days: Optional[int] = None   # only for suspend; ban is permanent by default
+
+
+@api.post("/admin/users/{user_id}/sanction")
+async def admin_sanction_user(
+    user_id: str, body: UserSanctionIn,
+    me: dict = Depends(require_role("admin")),
+):
+    if body.type not in ("warn", "suspend", "ban"):
+        raise HTTPException(status_code=400, detail="type must be warn|suspend|ban")
+    if body.type == "ban" and me.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Only super admin can ban users")
+    target = await db.users.find_one({"user_id": user_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    now = utcnow()
+    expires_at: Optional[datetime] = None
+    if body.type == "suspend":
+        dd = max(1, min(int(body.duration_days or 7), 365))
+        expires_at = now + timedelta(days=dd)
+
+    sanction_id = f"san_{uuid.uuid4().hex[:12]}"
+    await db.user_sanctions.insert_one({
+        "sanction_id": sanction_id,
+        "user_id": user_id,
+        "type": body.type,
+        "reason": body.reason,
+        "issued_by": me["user_id"],
+        "issued_at": now,
+        "expires_at": expires_at,
+        "active": True,
+    })
+    # Flip user flags for auth guards
+    user_patch: Dict[str, Any] = {}
+    if body.type == "suspend":
+        user_patch["suspended_until"] = expires_at
+        user_patch["status"] = "suspended"
+    elif body.type == "ban":
+        user_patch["status"] = "banned"
+        user_patch["banned_at"] = now
+    if user_patch:
+        await db.users.update_one({"user_id": user_id}, {"$set": user_patch})
+
+    # Fire a notification to the sanctioned user
+    try:
+        await _emit_notification(
+            user_id,
+            f"user_sanction_{body.type}",
+            {
+                "warn": "You received a warning",
+                "suspend": "Your account has been suspended",
+                "ban": "Your account has been banned",
+            }[body.type],
+            body.reason[:140],
+        )
+    except Exception:
+        pass
+
+    await audit_log(
+        me, f"user.{body.type}", "user", user_id,
+        after={"type": body.type, "reason": body.reason, "expires_at": expires_at},
+        notes=body.reason,
+    )
+    return {"ok": True, "sanction_id": sanction_id, "expires_at": expires_at}
+
+
+@api.post("/admin/users/{user_id}/unsanction")
+async def admin_unsanction_user(
+    user_id: str,
+    me: dict = Depends(require_role("admin")),
+):
+    """Revoke the most-recent active sanction on this user."""
+    san = await db.user_sanctions.find_one(
+        {"user_id": user_id, "active": True}, sort=[("issued_at", -1)],
+    )
+    if not san:
+        raise HTTPException(status_code=404, detail="No active sanction")
+    await db.user_sanctions.update_one(
+        {"sanction_id": san["sanction_id"]},
+        {"$set": {"active": False, "revoked_by": me["user_id"], "revoked_at": utcnow()}},
+    )
+    await db.users.update_one(
+        {"user_id": user_id},
+        {"$set": {"status": "active"},
+         "$unset": {"suspended_until": "", "banned_at": ""}},
+    )
+    await audit_log(me, "user.unsanction", "user", user_id,
+                    before={"sanction_type": san.get("type")}, after={"status": "active"})
+    return {"ok": True, "revoked_sanction_id": san["sanction_id"]}
+
+
+@api.get("/admin/users/{user_id}/sanctions")
+async def admin_user_sanctions(
+    user_id: str,
+    me: dict = Depends(require_role("moderator")),
+):
+    items = await db.user_sanctions.find(
+        {"user_id": user_id}, {"_id": 0}
+    ).sort("issued_at", -1).limit(200).to_list(200)
+    return {"items": items, "count": len(items)}
+
+
 @api.post("/admin/spots/{spot_id}/approve")
 async def admin_approve(spot_id: str, user: dict = Depends(require_role("moderator"))):
     before = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "visibility_status": 1})
@@ -7809,6 +8233,13 @@ async def on_startup():
     await db.referral_applications.create_index("app_id", unique=True)
     await db.referral_applications.create_index([("need_id", 1), ("applicant_user_id", 1)], unique=True)
     await db.referral_applications.create_index("applicant_user_id")
+    # Super Admin Community Control Center
+    await db.reports.create_index([("status", 1), ("created_at", -1)])
+    await db.reports.create_index([("target_type", 1), ("target_id", 1), ("status", 1)])
+    await db.user_sanctions.create_index([("user_id", 1), ("issued_at", -1)])
+    await db.user_sanctions.create_index([("active", 1), ("type", 1)])
+    await db.community_posts.create_index([("pinned", -1), ("created_at", -1)])
+    await db.community_posts.create_index([("status", 1), ("created_at", -1)])
     await seed_admin()
     # Promote the seeded admin to super_admin for Phase 1 — creates a usable
     # platform owner. Idempotent: skipped if already super_admin.
