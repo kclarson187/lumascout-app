@@ -3658,6 +3658,259 @@ backend:
             - marco (free) viewing admin → recorded; admin sees marco;
               admin (elite) gets analytics: top_cities=[San Antonio,
               Austin], top_specialties=[Wedding, Portrait, Family,
+
+#====================================================================================================
+# Phase B.2 — Referral Marketplace (2026-04)
+#====================================================================================================
+
+backend:
+  - task: "Phase B.2 — Referral Marketplace (needs, rails, applications, accept/reject, DM auto-thread)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          FULL PHASE B.2 VALIDATION PASS — 69/69 assertions across 24
+          scenarios (/app/backend_test_phase_b2.py). Backend at
+          http://localhost:8001/api. Logins: admin (super_admin/elite),
+          sophie (pro/verified), marco (free), priya (free). DB wiped
+          clean of referral_needs + referral_applications at test start.
+
+          [1] Clean slate — PASS.
+          [2] CREATE happy (sophie, Austin, budget 400-800, urgent,
+              event 2026-05-10) → 200, need_id=need_bf7e26428191,
+              status=open, poster.username=sophiereyes, poster.plan=pro,
+              is_featured=False, urgency=urgent, applicant_count=0. No
+              password_hash/email leaks.
+          [3] CREATE elite (admin) → is_featured=True. PASS.
+          [4] Validation:
+              (a) title len=3 → 422.
+              (b) gig_type='bogus' → 422.
+              (c) 5 reference_images → 422.
+              (d) urgency='URGENT' → normalized to 'urgent'; urgency='medium'
+                  → normalized to 'normal'.
+              (e) expires_in_days=999 → clamped to 90 (exact delta 90d).
+          [5] BROWSE default — 5 items, all status=open, featured-first
+              (admin's elite post appears before sophie's). No leaks.
+          [6] Filters all PASS:
+              ?city=austin (case-insensitive) → 5 austin items.
+              ?gig_type=full_session_referral → 4 filtered items.
+              ?urgent=true → 2 urgent items.
+              ?q=austin → finds sophie's austin-titled need.
+          [7] RAILS shape — exactly 6 keys {urgent, nearby, wedding, pet,
+              second_shooter, new_today}, each a list. Every rail item
+              carries {need_id, title, poster, applicant_count, is_mine,
+              my_application}. No leaks anywhere.
+          [8] RAILS bucketing — pet/wedding/second_shooter needs each
+              appear in their proper rail; all 3 fresh needs appear in
+              new_today. PASS.
+          [9] Poster detail — sophie sees applications=[] initially;
+              is_mine=True. PASS.
+          [10] Non-poster detail — marco sees NO 'applications' field;
+              is_mine=False; my_application=None (before apply). No leaks.
+          [11] APPLY happy (marco→sophie) → 200 {app_id=app_9ef6cafea8f2,
+              thread_id=dm_8d426fa5d368, status=pending}. need.status
+              flipped 'open'→'reviewing'. Sophie received
+              new_referral_applicant notification (2 rows — one at apply
+              time + one from the DM insert, both kind='new_referral_applicant'
+              and kind='new_message' respectively). DM thread persisted
+              in db.dm_threads. Poster detail now shows
+              applications[1].applicant.username='marcoalvarez'. Marco
+              detail shows my_application={app_id, status=pending}.
+          [12] Duplicate apply → 409. PASS.
+          [13] Self-apply → 400. PASS.
+          [14] After sophie PATCH status='closed', priya apply → 400
+              'no longer accepting applicants'. PASS.
+          [15] FREE-tier cap (marco, 5/mo): pre-cleared marco's same-month
+              apps, then created 6 fresh sophie needs. Apps 1–5 all 200;
+              6th → 402 {detail:"Free plan limit: 5 applications per
+              month. Upgrade to Pro for unlimited."} — exact copy matches
+              spec. PASS.
+          [16] ACCEPT cascade — priya+marco both apply; sophie accepts
+              marco → accept 200; need.status='filled';
+              accepted_user_id=marco; marco app.status='accepted'; priya
+              app auto-flipped to 'rejected'. Marco received
+              referral_application_accepted notification. PASS.
+          [17] Non-poster accept (marco on sophie's need) → 403. PASS.
+          [18] Reject → app.status='rejected'. PASS.
+          [19] PATCH — marco on sophie's need → 403; sophie on own →
+              200, notes + urgency round-trip. PASS.
+          [20] DELETE cascade — priya applied; sophie DELETE → 200;
+              0 applications remain for that need; need deleted. PASS.
+          [21] /me/referrals — sophie → count=14 (>=2 as required). PASS.
+          [22] /me/applications — marco → count=1 with items[0].need
+              fully shaped (title='Cascade-test need — multi-applicant
+              accept'). No leaks. PASS.
+          [23] AUTO-EXPIRE — created a need, force-aged expires_at 2d
+              into the past via Mongo, hit GET /referrals → sweep flips
+              status→'expired'; detail shows status='expired';
+              default (open) listing omits the expired need. PASS.
+          [24] Global leak scan across /referrals, /referrals/rails,
+              /me/referrals, /me/applications → zero password_hash or
+              email fields. PASS.
+
+          Monetization gates verified: elite is_featured flag (scenario
+          3, 5), free-tier 5-app/month cap (scenario 15), upgrade copy
+          present in 402 detail. Auto-expire sweep runs on every list/
+          rails hit per spec. No 500s observed. No schema deviations.
+          Phase B.2 Referral Marketplace backend is launch-ready.
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          NEW COLLECTIONS:
+            - referral_needs: {need_id, poster_user_id, poster_plan, title,
+              shoot_type, gig_type, city, state, country, event_date,
+              duration_hours, budget_min, budget_max, budget_currency,
+              notes, reference_images, urgency, status, accepted_user_id,
+              posted_at, updated_at, expires_at, is_featured}
+            - referral_applications: {app_id, need_id, applicant_user_id,
+              pitch, status (pending|accepted|rejected), thread_id,
+              created_at, updated_at}
+
+          INDEXES:
+            referral_needs: need_id unique, (status, posted_at -1),
+              (city, status), poster_user_id
+            referral_applications: app_id unique,
+              (need_id, applicant_user_id) unique, applicant_user_id
+
+          ENDPOINTS:
+            POST   /api/referrals            — create need (poster)
+            GET    /api/referrals            — browse w/ filters +
+              auto-expire sweep. Defaults to status='open'. Featured-first.
+            GET    /api/referrals/rails      — 6 rails for Network tab
+              (urgent, nearby, wedding, pet, second_shooter, new_today)
+            GET    /api/referrals/{id}       — detail. Poster gets
+              `applications[...]` with hydrated applicants.
+            PATCH  /api/referrals/{id}       — poster-only update
+              (status, notes, urgency)
+            DELETE /api/referrals/{id}       — poster-only delete
+              (cascades apps)
+            POST   /api/referrals/{id}/apply — apply w/ pitch; auto-opens
+              DM thread + seeds intro message; flips need to
+              'reviewing'; fires notification to poster
+            POST   /api/referrals/{id}/applications/{app_id}/accept
+              — accept one, auto-rejects siblings, flips to 'filled',
+              notifies applicant
+            POST   /api/referrals/{id}/applications/{app_id}/reject
+              — single-applicant rejection
+            GET    /api/me/referrals         — poster's posts
+            GET    /api/me/applications      — applicant's applied-to
+              posts (joined w/ need details)
+
+          MONETIZATION GATES (stub for now):
+            - Free tier: 5 applications/month (402 with upgrade prompt)
+            - Pro tier: unlimited applications
+            - Elite tier: `is_featured=True` on their posts — first in
+              every rail + list sort
+
+          VALIDATION GUARDS:
+            - title 4..140 chars
+            - gig_type must be one of 7 allowed
+            - urgency normalized to "urgent"|"normal"
+            - reference_images capped at 4
+            - expires_in_days clamped 1..90
+            - duplicate apply → 409
+            - self-apply → 400
+            - apply to filled/closed/expired → 400
+            - accept/reject by non-poster → 403
+            - soft expire: opens past expires_at auto-marked 'expired'
+              on every list/rails hit
+
+          LIVE-VERIFIED END-TO-END (Python requests):
+            - sophie creates urgent family need (Austin)
+            - marco creates 2nd-shooter wedding need (San Antonio)
+            - /referrals returns 2 items; rails returns all 6 keys with
+              correct bucketing (urgent:1, wedding:1, 2nd_shooter:1,
+              new_today:2, nearby:depends)
+            - marco applies → 200 + app_id + thread_id
+            - marco duplicate apply → 409
+            - sophie self-apply → 400
+            - sophie detail returns applications[1] with hydrated applicant
+            - sophie accepts marco → need.status=filled,
+              accepted_user_id=marco, marco app.status=accepted
+            - marco /me/applications returns 1 with status=accepted
+            - DM thread created between them; intro message seeded
+            - Delete cascades applications
+
+frontend:
+  - task: "Phase B.2 — Referral Marketplace screens + Network tab entry"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app/referrals/index.tsx (browse feed w/ 6 rails + FAB)
+      /app/frontend/app/referrals/new.tsx (post-a-need form)
+      /app/frontend/app/referrals/[id].tsx (detail + apply/manage/accept)
+      /app/frontend/app/me-referrals.tsx (Posted / Applied tab switch)
+      /app/frontend/src/components/ReferralCard.tsx (premium card)
+      /app/frontend/app/(tabs)/network.tsx (added "Gigs" pill)
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          NEW SCREENS:
+            /referrals            — intro card, 6 horizontal rails (Urgent,
+              Nearby, New Today, Wedding, Pet, 2nd Shooter), all-open-needs
+              list, floating "Post a Need" FAB, top-right My Referrals
+              icon
+            /referrals/new        — form: Title (required 4..140), Gig
+              type (7 chips), Shoot type (SHOOT_TYPES), City/State,
+              event date, duration, budget min/max, notes, reference
+              images (up to 4, expo-image-picker + manipulator, base64),
+              urgent toggle, submit → /referrals/{id}
+            /referrals/[id]       — hero with badges (gig / URGENT /
+              FEATURED / status), title, meta (city, date, duration,
+              budget), notes card, poster card (tap → profile), applicant
+              list (poster only) with Accept/Reject per row, pitch
+              composer for applicants, 402 upgrade alert for free users
+              past monthly cap, Message poster CTA on existing threads
+            /me-referrals         — 2-tab (Posted / Applied), per-tab
+              empty states with primary CTAs, cards linking to detail
+
+          NETWORK TAB:
+            Added "Gigs" pill next to Viewers/Messages (Briefcase icon,
+            orange accent).
+
+          PREMIUM UX DETAILS:
+            - Cards show: gig pill, URGENT flash pill, FEATURED pill for
+              Elite posters, status pill, city/date/budget meta, poster
+              avatar + applicant count + relative time, my_application
+              footer ("✓ accepted" / "pending" / "not selected")
+            - Empty states have contextual CTA buttons
+            - Soft-expire handled on backend; UI just reads status
+            - Image picker: base64, 1200-wide max, 0.7 quality
+
+          TESTIDS ADDED:
+            - referrals-back, referrals-my, referrals-post-fab
+            - referral-{need_id}, referral-back, referral-apply
+            - referrals-new-back, ref-title, ref-city, ref-gig-{type},
+              ref-add-img, ref-submit
+            - me-ref-tab-posted, me-ref-tab-applied
+            - network-referrals
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Phase B.2 "Referral Marketplace" shipped. Backend + frontend live.
+      Backend end-to-end verified via direct Python requests test
+      (create, rails, apply, duplicate/self-apply guards, accept →
+      cascading reject + need filled, notifications, DM thread
+      auto-created, my posts, my applications, delete cascade).
+      Playwright confirmed empty-state renders for /referrals,
+      /referrals/new, /me-referrals on fresh Mongo.
+
+      Priority for testing-agent: HIGH. Do NOT mock — real Mongo.
+      Test monetization gates (402 on 6th apply for free tier) +
+      application dedupe + accept-auto-rejects-siblings + auto-expire
+      sweep + poster-only guards on PATCH/DELETE/accept/reject.
+
+      Credentials per /app/memory/test_credentials.md.
+
               Pets], repeat_viewers=0, trend_7d=7 bars.
             - admin viewing admin (self) → NOT recorded.
             - marco fetching /me/viewers (free) → viewers=[], teaser
@@ -3790,3 +4043,71 @@ agent_communication:
            state, composer w/ image attach + text, send message → bubble
            appears.
         7. Logout + session persistence test.
+
+
+#====================================================================================================
+# Phase B.2 — Referral Marketplace Backend QA (2026-04)
+#====================================================================================================
+
+agent_communication:
+    -agent: "testing"
+    -message: |
+      PHASE B.2 REFERRAL MARKETPLACE — BACKEND QA COMPLETE ✅
+
+      69/69 assertions across 24 scenarios green. Full test at
+      /app/backend_test_phase_b2.py. Backend: http://localhost:8001/api.
+      Creds: admin (super_admin/elite), sophie (pro), marco/priya (free).
+
+      EVERY REVIEW-REQUEST SCENARIO VERIFIED:
+        1  Clean slate (direct Mongo wipe of referral_needs + referral_applications)
+        2  POST /api/referrals happy (sophie → 200, fields correct, no leaks)
+        3  POST /api/referrals as elite admin → is_featured=True
+        4  Validation: title len=3 → 422; gig_type='bogus' → 422;
+           5 reference_images → 422; urgency 'URGENT' → 'urgent' and
+           'medium' → 'normal'; expires_in_days=999 → clamped to 90
+        5  GET /api/referrals default → only open, featured-first
+        6  Filters: ?city (case-insensitive), ?gig_type, ?urgent=true,
+           ?q= (matches title/notes/shoot_type/city) all correct
+        7  GET /api/referrals/rails → exactly 6 keys {urgent,nearby,
+           wedding,pet,second_shooter,new_today}, ≤10 each, items carry
+           {need_id,title,poster,applicant_count,is_mine,my_application}
+        8  Rail bucketing: pet/wedding/second_shooter needs route to
+           their rails; all <24h needs appear in new_today
+        9  Poster detail → applications[] field present (empty initially)
+       10  Non-poster detail → NO applications field; is_mine=False;
+           my_application=None pre-apply; populated post-apply
+       11  POST /apply happy → 200 {app_id, thread_id, status=pending};
+           need.status 'open'→'reviewing'; poster gets
+           'new_referral_applicant' notification; DM thread persisted
+           with intro message
+       12  Duplicate apply → 409
+       13  Self-apply → 400
+       14  Apply to closed → 400
+       15  Free-tier cap: marco (free) apps 1–5 succeed, 6th → 402
+           with exact copy 'Free plan limit: 5 applications per month.
+           Upgrade to Pro for unlimited.'
+       16  Accept cascades: marco accepted, priya auto-rejected,
+           need.status=filled, accepted_user_id=marco, marco gets
+           'referral_application_accepted' notification
+       17  Non-poster accept → 403
+       18  Reject → app.status=rejected
+       19  PATCH non-poster → 403; poster → 200 w/ notes+urgency update
+       20  DELETE cascade: applications removed, need removed
+       21  /me/referrals → count≥2 with shaped items
+       22  /me/applications → items[0].need fully hydrated
+       23  Auto-expire sweep: force-aged expires_at into past → next
+           GET /referrals flips status→'expired'; excluded from default
+           open listing
+       24  Global leak scan across all endpoints → 0 password_hash,
+           0 email fields leaked
+
+      Monetization gates verified end-to-end: elite is_featured flag,
+      free-tier monthly cap with proper 402 + upgrade copy.
+      Auto-expire sweep runs on every list/rails call per spec.
+      No 500s. No schema deviations. No security leaks.
+
+      test_result.md updated: Phase B.2 backend task is now
+      working:true, needs_retesting:false.
+
+      Note for main agent: FOR THE FRONTEND PHASE B.2 SCREENS QA,
+      YOU MUST ASK USER BEFORE DOING FRONTEND TESTING.
