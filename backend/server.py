@@ -1582,15 +1582,29 @@ NOMINATIM_HEADERS = {
 # enterprise stack — Mapbox handles business names, POIs, rural TX FM roads,
 # and park/preserve names much more reliably than Nominatim alone.
 MAPBOX_TOKEN = os.environ.get("MAPBOX_TOKEN", "").strip()
+# Search Box API — the good one for POIs, parks, businesses, landmarks.
+# Handles "Joshua Springs Preserve", "Pearl District", "McAllister Park".
+MAPBOX_SEARCHBOX_BASE = "https://api.mapbox.com/search/searchbox/v1"
+# v6 Geocoding API — used for reverse geocode and as a secondary signal.
 MAPBOX_BASE = "https://api.mapbox.com/search/geocode/v6"
 
 
 def _parse_mapbox_feature(f: dict) -> dict:
-    """Shape a Mapbox v6 feature to the LumaScout geocode result format."""
+    """Shape a Mapbox feature (Search Box v1 OR Geocoding v6) into our format.
+
+    Both APIs return GeoJSON features with a similar `properties.context`
+    structure, so this parser handles both. Differences we normalize:
+      - Search Box returns `feature_type: poi` with POI categories
+      - v6 returns `feature_type: address` and a `match_code.confidence` string
+    """
     props = f.get("properties", {}) or {}
     ctx = props.get("context", {}) or {}
     geom = f.get("geometry", {}) or {}
     coords = geom.get("coordinates") or [None, None]
+    # Search Box sometimes nests coords in properties.coordinates too.
+    if (coords[0] is None or coords[1] is None) and isinstance(props.get("coordinates"), dict):
+        pc = props["coordinates"]
+        coords = [pc.get("longitude"), pc.get("latitude")]
     # Prefer place (municipality) over region (state) for the city field.
     place = ctx.get("place", {}) or {}
     locality = ctx.get("locality", {}) or {}
@@ -1598,18 +1612,38 @@ def _parse_mapbox_feature(f: dict) -> dict:
     postcode = ctx.get("postcode", {}) or {}
     country = ctx.get("country", {}) or {}
     district = ctx.get("district", {}) or {}
-    city = place.get("name") or locality.get("name") or district.get("name") or ""
+    neighborhood = ctx.get("neighborhood", {}) or {}
+    city = (
+        place.get("name")
+        or locality.get("name")
+        or district.get("name")
+        or neighborhood.get("name")
+        or ""
+    )
     state_full = region.get("name") or ""
     state_abbr = (region.get("region_code") or "").upper() or state_full[:2].upper()
     country_code = (country.get("country_code") or "").upper() or None
-    # Mapbox returns a match_code with a granular confidence string — map to 0..1.
+    # v6 returns a match_code with confidence; Search Box does not. Fall back
+    # to a POI/place heuristic for Search Box results.
     mc = props.get("match_code", {}) or {}
     confidence_map = {"exact": 0.95, "high": 0.85, "medium": 0.65, "low": 0.35, "plausible": 0.25}
     conf_str = (mc.get("confidence") or "").lower()
-    confidence = confidence_map.get(conf_str, 0.6)
+    feature_type = (props.get("feature_type") or "").lower()
+    if conf_str:
+        confidence = confidence_map.get(conf_str, 0.6)
+    else:
+        # Search Box heuristic: POIs and full addresses are strong, streets/places weaker.
+        confidence = {"poi": 0.9, "address": 0.85, "street": 0.55, "place": 0.5,
+                      "locality": 0.5, "neighborhood": 0.55, "district": 0.4}.get(feature_type, 0.6)
+    display_name = props.get("full_address") or props.get("place_formatted") or props.get("name") or ""
+    # Prepend POI name to the formatted address when feature is a POI — so the
+    # UI shows "Joshua Springs Preserve — 716 FM 289, Comfort, TX" rather than
+    # just the street.
+    if feature_type == "poi" and props.get("name") and display_name and props["name"] not in display_name:
+        display_name = f"{props['name']}, {display_name}"
     return {
         "place_id": props.get("mapbox_id") or "",
-        "display_name": props.get("full_address") or props.get("name") or "",
+        "display_name": display_name,
         "latitude": float(coords[1]) if coords[1] is not None else None,
         "longitude": float(coords[0]) if coords[0] is not None else None,
         "name": props.get("name") or "",
@@ -1621,39 +1655,41 @@ def _parse_mapbox_feature(f: dict) -> dict:
         "country_name": country.get("name") or "",
         "country_code": country_code,
         "postcode": postcode.get("name") or "",
-        "type": props.get("feature_type") or "",
+        "type": feature_type,
         "confidence": confidence,
         "language_hint": "en",
-        # Launch-grade provenance so admins can audit / replay failed geocodes.
         "source_provider": "mapbox",
-        "formatted_address": props.get("full_address") or props.get("name") or "",
+        "formatted_address": display_name,
+        "poi_category": props.get("poi_category") or [],
     }
 
 
 async def _mapbox_search(q: str, limit: int, country: Optional[str], proximity: Optional[str]) -> list:
-    """Query Mapbox Geocoding v6. Returns [] on any error (graceful degrade)."""
+    """Query Mapbox Search Box API v1 (POI-capable). Returns [] on error.
+
+    Search Box handles parks, preserves, businesses, neighborhoods, and
+    landmarks far better than the v6 Geocoding API (which rejects `poi` as
+    a type entirely). This is the launch-grade primary provider.
+    """
     if not MAPBOX_TOKEN:
         return []
     params: dict = {
         "q": q,
         "access_token": MAPBOX_TOKEN,
-        "limit": str(limit),
-        # Prefer POI / address / place types for LumaScout's use case
-        # (parks, businesses, landmarks, street addresses).
-        "types": "poi,address,place,locality,neighborhood,street",
+        "limit": str(max(1, min(10, limit))),
         "language": "en",
     }
     if country:
         params["country"] = country
     else:
-        # Default country bias matches where the app has the most traction.
-        # Keeps "Pearl District" anchored to San Antonio, TX and not Peru.
+        # Default bias to where the app has traction. Keeps "Pearl District"
+        # anchored to San Antonio, TX and not Peru.
         params["country"] = "us,ca,mx"
     if proximity:
         params["proximity"] = proximity  # "lng,lat"
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            r = await client.get(f"{MAPBOX_BASE}/forward", params=params)
+            r = await client.get(f"{MAPBOX_SEARCHBOX_BASE}/forward", params=params)
             if r.status_code != 200:
                 return []
             data = r.json() or {}
@@ -1665,19 +1701,29 @@ async def _mapbox_search(q: str, limit: int, country: Optional[str], proximity: 
 def _progressive_query_variants(q: str) -> list:
     """Generate fallback query variants of decreasing specificity.
 
-    Example: "Joshua Springs Preserve 716 FM 289 Comfort TX 78013" yields
-    ["…78013", "…Comfort TX", "Joshua Springs Preserve Comfort TX",
-     "Joshua Springs Preserve TX", "Joshua Springs Preserve"].
+    Examples:
+      "Joshua Springs Preserve 716 FM 289 Comfort TX 78013" →
+        ["…78013", "…Comfort TX", "Joshua Springs Preserve Comfort TX",
+         "Joshua Springs Preserve TX", "Joshua Springs Preserve"]
+      "McAllister Park San Antonio" →
+        ["McAllister Park San Antonio", "McAllister Park San",
+         "McAllister Park", "McAllister"]
 
     We strip ZIP first (Nominatim hates mismatched ZIPs), then street
-    numbers + FM-road prefixes (often wrong in the DB), then city, then
-    state. The original query is always index 0.
+    numbers + FM-road prefixes (often wrong in the DB), then comma
+    chunks, then trailing space-separated tokens. The original query is
+    always index 0.
     """
     q = (q or "").strip()
     if not q:
         return []
     variants = [q]
     import re as _re
+    _STATE_ABBR = {"AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID",
+                   "IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS",
+                   "MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK",
+                   "OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV",
+                   "WI","WY","USA"}
     # Drop trailing ZIP
     no_zip = _re.sub(r'\s+\b\d{5}(?:-\d{4})?\b\s*,?\s*$', '', q).strip().rstrip(",")
     if no_zip and no_zip != q:
@@ -1688,6 +1734,7 @@ def _progressive_query_variants(q: str) -> list:
         '', no_zip or q, flags=_re.IGNORECASE).strip().rstrip(",").strip()
     # Also drop plain leading street numbers like "716 Main St"
     no_street = _re.sub(r'^\d+\s+', '', no_street).strip()
+    no_street = _re.sub(r'\s{2,}', ' ', no_street).strip()
     if no_street and no_street not in variants:
         variants.append(no_street)
     # Keep only first 3 comma-separated chunks (title, city, state)
@@ -1699,6 +1746,26 @@ def _progressive_query_variants(q: str) -> list:
     # Just the title (first chunk)
     if chunks and chunks[0] not in variants and len(chunks[0]) >= 3:
         variants.append(chunks[0])
+
+    # Space-separated token trimming — rescues queries like
+    # "McAllister Park San Antonio" that have no ZIP/street/commas.
+    # Strategy: progressively drop trailing tokens from the right, stopping
+    # when we hit 2 tokens or the trimmed form still has ≥1 non-state word.
+    base = chunks[0] if chunks else (no_street or q)
+    tokens = base.split()
+    if len(tokens) >= 3:
+        # 1. Drop trailing state abbreviation (e.g. "... TX")
+        if tokens[-1].upper() in _STATE_ABBR:
+            tail_state = " ".join(tokens[:-1]).strip()
+            if tail_state and tail_state not in variants:
+                variants.append(tail_state)
+            tokens = tokens[:-1]
+        # 2. Drop trailing 1 token at a time down to 2 tokens (keeps POI name core)
+        while len(tokens) > 2:
+            tokens = tokens[:-1]
+            form = " ".join(tokens).strip()
+            if form and form not in variants:
+                variants.append(form)
     return variants
 
 
@@ -1746,16 +1813,121 @@ def _parse_nominatim_item(it: dict) -> dict:
     }
 
 
-@api.get("/geocode/search")
-async def geocode_search(q: str, limit: int = 8, country: Optional[str] = None):
-    """Autocomplete-style place search via OSM Nominatim. Keyless.
+async def _nominatim_search(q: str, limit: int, country: Optional[str], proximity: Optional[str]) -> list:
+    """Provider adapter: Nominatim forward search. Returns parsed results or []."""
+    params: dict = {
+        "q": q,
+        "format": "jsonv2",
+        "addressdetails": 1,
+        "limit": str(limit),
+    }
+    if country:
+        params["countrycodes"] = country
+    else:
+        # Default to where the app has traction. Keeps "Pearl District" in TX
+        # and not Peru. Comma-separated lower-case codes per Nominatim spec.
+        params["countrycodes"] = "us,ca,mx"
+    try:
+        async with httpx.AsyncClient(timeout=8.0, headers=NOMINATIM_HEADERS) as client:
+            r = await client.get(f"{NOMINATIM_BASE}/search", params=params)
+            if r.status_code != 200:
+                return []
+            items = r.json() or []
+        parsed = []
+        for it in items:
+            if not it:
+                continue
+            p = _parse_nominatim_item(it)
+            p["source_provider"] = "nominatim"
+            parsed.append(p)
+        return parsed
+    except Exception:
+        return []
 
-    FIX(Commit 7.5 / 2026-04): cached to shield us from Nominatim's strict
-    1 req/s rate limit and their willingness to IP-ban abusive clients. A
-    24-hour TTL on (q, country, limit) is more than enough for the Add Spot
-    flow where the same user types the same place multiple times while
-    iterating. Cache is keyed by exact query string, so minor typing
-    variations still hit the network.
+
+async def _nominatim_reverse(lat: float, lng: float) -> Optional[dict]:
+    """Provider adapter: Nominatim reverse geocode."""
+    params = {"lat": lat, "lon": lng, "format": "jsonv2", "addressdetails": 1, "zoom": 14}
+    try:
+        async with httpx.AsyncClient(timeout=8.0, headers=NOMINATIM_HEADERS) as client:
+            r = await client.get(f"{NOMINATIM_BASE}/reverse", params=params)
+            if r.status_code != 200:
+                return None
+            data = r.json() or {}
+        if not data:
+            return None
+        p = _parse_nominatim_item(data)
+        p["source_provider"] = "nominatim"
+        return p
+    except Exception:
+        return None
+
+
+async def _mapbox_reverse(lat: float, lng: float) -> Optional[dict]:
+    """Provider adapter: Mapbox v6 reverse geocode."""
+    if not MAPBOX_TOKEN:
+        return None
+    params = {
+        "longitude": str(lng),
+        "latitude": str(lat),
+        "access_token": MAPBOX_TOKEN,
+        "limit": "1",
+        "language": "en",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(f"{MAPBOX_BASE}/reverse", params=params)
+            if r.status_code != 200:
+                return None
+            data = r.json() or {}
+        feats = data.get("features") or []
+        if not feats:
+            return None
+        return _parse_mapbox_feature(feats[0])
+    except Exception:
+        return None
+
+
+# =============================================================================
+# Geocoding provider stack — adapters registered in priority order.
+# To add Google or Apple later: write an async adapter with the same signature
+# and slot it at the front of the list. No other code changes required.
+# Forward adapter signature: (q: str, limit: int, country, proximity) -> list[dict]
+# Reverse adapter signature: (lat: float, lng: float) -> Optional[dict]
+# =============================================================================
+GEOCODE_FORWARD_PROVIDERS: list = [
+    # ("google", _google_search),   # future
+    # ("apple", _apple_search),     # future
+    ("mapbox", _mapbox_search),
+    ("nominatim", _nominatim_search),
+]
+
+GEOCODE_REVERSE_PROVIDERS: list = [
+    ("mapbox", _mapbox_reverse),
+    ("nominatim", _nominatim_reverse),
+]
+
+
+@api.get("/geocode/search")
+async def geocode_search(
+    q: str,
+    limit: int = 8,
+    country: Optional[str] = None,
+    proximity: Optional[str] = None,
+    debug: int = 0,
+):
+    """Enterprise multi-provider geocoding search.
+
+    Pipeline:
+      1. Cache lookup (24h TTL on (q, country, limit)).
+      2. Generate a query-variant ladder (full → no-ZIP → no-street → title-only).
+      3. Walk providers in priority order (Mapbox → Nominatim). For each
+         provider, try every variant in sequence until one returns results.
+      4. Cache the first successful (provider, variant) result set.
+      5. On total failure, fall back to stale cache if available; else
+         return empty `results` with a human-readable `error`.
+
+    Never returns 5xx — frontend treats empty results as "no match".
     """
     q = (q or "").strip()
     if len(q) < 2:
@@ -1763,58 +1935,178 @@ async def geocode_search(q: str, limit: int = 8, country: Optional[str] = None):
     limit = max(1, min(15, limit))
     cache_key = f"search::{country or '*'}::{limit}::{q.lower()}"
     cached = await db.geocode_cache.find_one({"key": cache_key})
-    # Motor strips tzinfo on read — normalize both sides to naive UTC for subtraction.
     if cached:
         ts = cached["created_at"]
         if ts.tzinfo is not None:
             ts = ts.replace(tzinfo=None)
         age_s = (utcnow().replace(tzinfo=None) - ts).total_seconds()
-        if age_s < 86400:
-            return {"query": q, "results": cached["results"], "cached": True}
-    params: dict = {
-        "q": q,
-        "format": "jsonv2",
-        "addressdetails": 1,
-        "limit": limit,
+        if age_s < 86400 and cached.get("results"):
+            out = {
+                "query": q,
+                "results": cached["results"],
+                "cached": True,
+                "provider": cached.get("provider"),
+            }
+            if debug:
+                out["matched_query"] = cached.get("matched_query")
+            return out
+
+    variants = _progressive_query_variants(q) or [q]
+    attempted: list = []
+    # Extract meaningful query tokens (3+ chars) so we can score how well a
+    # candidate name actually matches what the user typed. This is what
+    # rescues "McAllister Park San Antonio" — variant 0 returns SA Missions
+    # NHP, variant 2 returns McAllister Park. Both end up in the merged
+    # pool and the ranker promotes the real match.
+    import re as _re
+    _STOP = {"the", "and", "city", "county", "saint", "north", "south",
+             "east", "west", "new", "old", "street", "road", "ave", "avenue",
+             "drive", "lane", "blvd", "boulevard", "district", "downtown"}
+    # US state abbreviations — stopword them so they don't dominate scoring.
+    _STATES = {"al","ak","az","ar","ca","co","ct","de","fl","ga","hi","id",
+               "il","in","ia","ks","ky","la","me","md","ma","mi","mn","ms",
+               "mo","mt","ne","nv","nh","nj","nm","ny","nc","nd","oh","ok",
+               "or","pa","ri","sc","sd","tn","tx","ut","vt","va","wa","wv",
+               "wi","wy","usa","us","tex","texas","tejas"}
+    raw_tokens = [t.lower() for t in _re.findall(r"[A-Za-z]{2,}", q)]
+    query_tokens = {t for t in raw_tokens if t not in _STOP and t not in _STATES and len(t) >= 3}
+    # Head-name = first 1-3 meaningful words of the query. This is almost
+    # always the POI/landmark proper-noun. If the candidate's `name` field
+    # includes the head-name, it's a strong exact-intent match.
+    head_tokens = []
+    for t in raw_tokens:
+        if t in _STATES or t in {"the", "and"}:
+            continue
+        head_tokens.append(t)
+        if len(head_tokens) >= 3:
+            break
+    head_name = " ".join(head_tokens).strip()
+
+    def _name_score(r: dict, variant: str, variant_idx: int) -> float:
+        """Score a candidate: head-name match + token overlap + confidence + type."""
+        name_only = (r.get("name") or "").lower()
+        display = (r.get("display_name") or "").lower()
+        combined = f"{name_only} {display}"
+        # Token overlap ratio (light signal).
+        overlap = sum(1 for t in query_tokens if t in combined)
+        token_ratio = (overlap / max(1, len(query_tokens))) if query_tokens else 0
+        conf = float(r.get("confidence") or 0.5)
+        ftype = (r.get("type") or "").lower()
+        type_boost = {"poi": 0.10, "address": 0.08, "neighborhood": 0.06,
+                      "locality": 0.05, "place": 0.04, "street": 0.02,
+                      "district": 0.04}.get(ftype, 0.0)
+        # HEAD-NAME BOOST: the strongest signal. If the POI/landmark name
+        # (first ~2 words of query) appears IN the candidate's name field,
+        # this is almost certainly what the user meant.
+        head_boost = 0.0
+        if head_name:
+            if head_name in name_only:
+                head_boost = 0.45  # exact head match in the short name
+            elif head_name in display:
+                head_boost = 0.15  # head appears only in long address
+            else:
+                # Partial head match: e.g. "mcallister park" → "mcallister" in name
+                head_parts = head_name.split()
+                if head_parts and head_parts[0] in name_only and len(head_parts[0]) >= 4:
+                    head_boost = 0.25
+        # Commercial-listing penalty: rental/condo/hotel POI listings often
+        # contain the user's entire query in their name (e.g. "Luxury Condo
+        # Downtown Austin, TX") and would otherwise hijack neighborhood
+        # queries. We demote these so the neighborhood/landmark wins.
+        listing_words = ("condo", "apartment", "apartments", "airbnb", "vrbo",
+                         "rental", "rentals", "for sale", "for rent",
+                         "suites", "luxury suite", "bed and breakfast",
+                         "listing")
+        listing_penalty = 0.0
+        if any(w in name_only for w in listing_words):
+            listing_penalty = 0.25
+        # Earlier variant = fuller query context = slightly preferred when tied.
+        variant_penalty = variant_idx * 0.02
+        return head_boost + (token_ratio * 0.25) + (conf * 0.20) + type_boost - variant_penalty - listing_penalty
+
+    for provider_name, provider_fn in GEOCODE_FORWARD_PROVIDERS:
+        merged: dict = {}  # place_id -> best-scored result
+        for idx, variant in enumerate(variants):
+            try:
+                results = await provider_fn(variant, limit, country, proximity)
+            except Exception as ex:
+                attempted.append({"provider": provider_name, "q": variant, "error": str(ex)[:80]})
+                continue
+            attempted.append({"provider": provider_name, "q": variant, "count": len(results)})
+            for r in results:
+                lat = r.get("latitude")
+                lng = r.get("longitude")
+                if lat is None or lng is None:
+                    continue
+                # Filter (0,0) and near-null island coords — never let the ocean leak.
+                if abs(float(lat)) < 1e-4 and abs(float(lng)) < 1e-4:
+                    continue
+                key = r.get("place_id") or f"{round(float(lat), 5)},{round(float(lng), 5)}"
+                r.setdefault("source_provider", provider_name)
+                r["matched_query"] = variant
+                r["matched_variant_index"] = idx
+                r["_score"] = _name_score(r, variant, idx)
+                # Keep the highest-scoring version of each dedup key.
+                if key not in merged or r["_score"] > merged[key]["_score"]:
+                    merged[key] = r
+
+        if not merged:
+            continue
+        clean = sorted(merged.values(), key=lambda x: x["_score"], reverse=True)[:limit]
+        for r in clean:
+            r.pop("_score", None)
+        await db.geocode_cache.update_one(
+            {"key": cache_key},
+            {"$set": {
+                "key": cache_key,
+                "results": clean,
+                "provider": provider_name,
+                "created_at": utcnow(),
+            }},
+            upsert=True,
+        )
+        out = {
+            "query": q,
+            "results": clean,
+            "provider": provider_name,
+            "matched_query": clean[0].get("matched_query"),
+            "variant_index": clean[0].get("matched_variant_index"),
+        }
+        if debug:
+            out["attempted"] = attempted
+        return out
+
+    # All providers + variants failed — serve stale cache if we have it.
+    if cached and cached.get("results"):
+        return {
+            "query": q,
+            "results": cached["results"],
+            "cached": True,
+            "stale": True,
+            "provider": cached.get("provider"),
+        }
+    out = {
+        "query": q,
+        "results": [],
+        "error": "No results found. Try a simpler query (e.g. place name + city).",
     }
-    if country:
-        params["countrycodes"] = country
-    try:
-        async with httpx.AsyncClient(timeout=8.0, headers=NOMINATIM_HEADERS) as client:
-            r = await client.get(f"{NOMINATIM_BASE}/search", params=params)
-            r.raise_for_status()
-            items = r.json() or []
-    except Exception as e:
-        # Graceful degradation — empty results, not 5xx. Serve stale cache
-        # entries (past 24h) if we have them, so a temporary ban doesn't
-        # break the flow entirely.
-        if cached:
-            return {"query": q, "results": cached["results"], "cached": True, "stale": True}
-        return {"query": q, "results": [], "error": str(e)[:120]}
-    results = [_parse_nominatim_item(it) for it in items]
-    # Upsert cache.
-    await db.geocode_cache.update_one(
-        {"key": cache_key},
-        {"$set": {"key": cache_key, "results": results, "created_at": utcnow()}},
-        upsert=True,
-    )
-    return {"query": q, "results": results}
+    if debug:
+        out["attempted"] = attempted
+    return out
 
 
 @api.get("/geocode/reverse")
 async def geocode_reverse(lat: float, lng: float):
-    """Reverse geocode a coordinate pair. Used after dropping a pin on the map."""
-    params = {"lat": lat, "lon": lng, "format": "jsonv2", "addressdetails": 1, "zoom": 14}
-    try:
-        async with httpx.AsyncClient(timeout=8.0, headers=NOMINATIM_HEADERS) as client:
-            r = await client.get(f"{NOMINATIM_BASE}/reverse", params=params)
-            r.raise_for_status()
-            data = r.json() or {}
-    except Exception as e:
-        return {"latitude": lat, "longitude": lng, "error": str(e)[:120]}
-    if not data:
-        return {"latitude": lat, "longitude": lng}
-    return _parse_nominatim_item(data)
+    """Reverse geocode via the provider stack (Mapbox → Nominatim)."""
+    for provider_name, provider_fn in GEOCODE_REVERSE_PROVIDERS:
+        try:
+            result = await provider_fn(lat, lng)
+        except Exception:
+            continue
+        if result:
+            result.setdefault("source_provider", provider_name)
+            return result
+    return {"latitude": lat, "longitude": lng, "error": "No reverse result"}
 
 
 @api.get("/me/recent-locations")
