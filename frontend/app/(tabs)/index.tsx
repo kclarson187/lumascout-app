@@ -167,24 +167,27 @@ export default function Home() {
           )}
         </View>
 
-        {/* Community tab strip — single source of social navigation */}
+        {/* Community tab strip — nav-pill style. No amber active state:
+            "For You" IS the home screen, so the strip is purely a
+            quick-jump bar to sibling views. Subtle font-weight emphasis
+            tells the user where they are without the loud primary fill. */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, flexShrink: 0, maxHeight: 48 }} contentContainerStyle={styles.communityStrip}>
-          <View style={[styles.cTab, styles.cTabActive]}>
-            <Text style={[styles.cTabTxt, { color: colors.textInverse }]}>For You</Text>
+          <View style={[styles.cTab, styles.cTabHere]} testID="home-tab-foryou">
+            <Text style={[styles.cTabTxt, styles.cTabTxtHere]}>For You</Text>
           </View>
           <TouchableOpacity style={styles.cTab} onPress={() => router.push('/community')} testID="home-tab-community">
-            <Users size={12} color={colors.text} />
+            <Users size={12} color={colors.textSecondary} />
             <Text style={styles.cTabTxt}>Community</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.cTab} onPress={() => router.push({ pathname: '/community', params: { cat: 'all' } })} testID="home-tab-local">
             <Text style={styles.cTabTxt}>Local</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.cTab} onPress={() => router.push({ pathname: '/community', params: { cat: 'referral' } })} testID="home-tab-opps">
-            <HandHeart size={12} color={colors.text} />
+            <HandHeart size={12} color={colors.textSecondary} />
             <Text style={styles.cTabTxt}>Opportunities</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.cTab} onPress={() => router.push({ pathname: '/community', params: { cat: 'tip' } })} testID="home-tab-learn">
-            <BookOpen size={12} color={colors.text} />
+            <BookOpen size={12} color={colors.textSecondary} />
             <Text style={styles.cTabTxt}>Learn</Text>
           </TouchableOpacity>
         </ScrollView>
@@ -346,8 +349,12 @@ const styles = StyleSheet.create({
   topIconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
   communityStrip: { paddingHorizontal: space.xl, paddingBottom: space.sm, gap: 6, alignItems: 'center' },
   cTab: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1 },
-  cTabActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  cTabTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },
+  // Subtle "you are here" — no primary fill. Just a darker surface and
+  // slightly bolder typography so the current tab is distinguishable
+  // without shouting. (Commit 8b / 2026-04)
+  cTabHere: { backgroundColor: colors.surface2, borderColor: colors.borderStrong || colors.border },
+  cTabTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
+  cTabTxtHere: { color: colors.text, fontFamily: font.bodySemibold },
   hello: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13 },
   brand: { color: colors.text, fontFamily: font.display, fontSize: 30, letterSpacing: -0.5 },
   avatar: { width: 44, height: 44, borderRadius: 22 },

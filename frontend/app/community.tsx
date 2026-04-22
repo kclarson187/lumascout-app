@@ -277,6 +277,36 @@ function PostCard({ post, onLike, meId }: { post: any; onLike: () => void; meId?
         </View>
       ) : null}
       {post.image_url ? <Image source={{ uri: post.image_url }} style={styles.postImg} /> : null}
+      {/* Spot attachment (Commit 8c / 2026-04): when a post references a
+          spot, render the cover as an inline attachment so the community
+          feed isn't a wall of text. Tap routes to the spot. */}
+      {post.spot_ref ? (
+        <Pressable
+          onPress={(e) => { e.stopPropagation?.(); router.push(`/spot/${post.spot_ref.spot_id}` as any); }}
+          style={styles.spotAttach}
+          testID={`post-spot-${post.post_id}`}
+        >
+          {post.spot_ref.cover_image_url ? (
+            <Image source={{ uri: post.spot_ref.cover_image_url }} style={styles.spotAttachCover} />
+          ) : (
+            <View style={[styles.spotAttachCover, { backgroundColor: colors.surface2, alignItems: 'center', justifyContent: 'center' }]}>
+              <MapPin size={18} color={colors.textTertiary} />
+            </View>
+          )}
+          <View style={styles.spotAttachOverlay}>
+            <View style={styles.spotAttachKickerWrap}>
+              <MapPin size={10} color={colors.primary} />
+              <Text style={styles.spotAttachKicker}>SPOT</Text>
+            </View>
+            <Text style={styles.spotAttachTitle} numberOfLines={1}>{post.spot_ref.title || 'Untitled spot'}</Text>
+            {(post.spot_ref.city || post.spot_ref.state) ? (
+              <Text style={styles.spotAttachLoc} numberOfLines={1}>
+                {[post.spot_ref.city, post.spot_ref.state].filter(Boolean).join(', ')}
+              </Text>
+            ) : null}
+          </View>
+        </Pressable>
+      ) : null}
       <View style={styles.actions}>
         <TouchableOpacity onPress={toggleLike} style={styles.action} testID={`post-like-${post.post_id}`}>
           <Heart size={15} color={liked ? colors.secondary : colors.textSecondary} fill={liked ? colors.secondary : 'transparent'} />
@@ -332,6 +362,16 @@ const styles = StyleSheet.create({
   postTitle: { color: colors.text, fontFamily: font.display, fontSize: 18, letterSpacing: -0.3, lineHeight: 22 },
   postBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 19 },
   postImg: { width: '100%', aspectRatio: 16 / 10, borderRadius: radii.md },
+  // Spot attachment card — inline mini-card that renders the referenced
+  // spot's cover + title. Tapping routes to the spot detail page.
+  // (Commit 8c / 2026-04)
+  spotAttach: { position: 'relative', borderRadius: radii.md, overflow: 'hidden', backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border },
+  spotAttachCover: { width: '100%', aspectRatio: 16 / 9 },
+  spotAttachOverlay: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 10, backgroundColor: 'rgba(0,0,0,0.55)' },
+  spotAttachKickerWrap: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 2 },
+  spotAttachKicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.6 },
+  spotAttachTitle: { color: '#fff', fontFamily: font.bodySemibold, fontSize: 13 },
+  spotAttachLoc: { color: 'rgba(255,255,255,0.8)', fontFamily: font.body, fontSize: 11, marginTop: 1 },
   actions: { flexDirection: 'row', gap: 18, alignItems: 'center', marginTop: 4 },
   action: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   actionTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },

@@ -3413,7 +3413,14 @@ class CommunityPostIn(BaseModel):
 
 
 async def _hydrate_posts(posts: List[dict], viewer: Optional[dict]) -> List[dict]:
-    """Attach author (name, avatar, verification, plan) + viewer's liked flag."""
+    """Attach author (name, avatar, verification, plan) + viewer's liked flag.
+
+    FIX(Commit 8c / 2026-04): also hydrate a minimal `spot_ref` preview
+    ({spot_id, title, city, state, cover_image_url}) when the post
+    references a spot. Without this, the community feed renders as
+    walls of text — since few posts carry their own images, the spot
+    cover becomes the richest media signal on most cards.
+    """
     if not posts:
         return posts
     uids = list({p.get("author_user_id") for p in posts})
@@ -3442,11 +3449,43 @@ async def _hydrate_posts(posts: List[dict], viewer: Optional[dict]) -> List[dict
                 {"_id": 0, "post_id": 1, "option_index": 1},
             ).to_list(500)
             poll_votes = {v["post_id"]: v["option_index"] for v in pv}
+    # Spot-ref hydration — minimal preview so the card can render the cover
+    # as an inline attachment. Filters out test data + deleted spots.
+    spot_ids = list({p["spot_id"] for p in posts if p.get("spot_id")})
+    smap: Dict[str, dict] = {}
+    if spot_ids:
+        spot_rows = await db.spots.find(
+            {"spot_id": {"$in": spot_ids},
+             "is_test_data": {"$ne": True},
+             "visibility_status": {"$ne": "deleted"}},
+            {"_id": 0, "spot_id": 1, "title": 1, "city": 1, "state": 1,
+             "images": 1, "privacy_mode": 1},
+        ).to_list(len(spot_ids))
+        for s in spot_rows:
+            imgs = s.get("images") or []
+            cover = None
+            for img in imgs:
+                if isinstance(img, dict) and img.get("is_cover") and img.get("image_url"):
+                    cover = img["image_url"]
+                    break
+            if not cover and imgs and isinstance(imgs[0], dict):
+                cover = imgs[0].get("image_url")
+            smap[s["spot_id"]] = {
+                "spot_id": s["spot_id"],
+                "title": s.get("title"),
+                "city": s.get("city"),
+                "state": s.get("state"),
+                "cover_image_url": cover,
+                "privacy_mode": s.get("privacy_mode"),
+            }
     for p in posts:
         p["author"] = umap.get(p.get("author_user_id"))
         p["liked_by_me"] = p["post_id"] in liked_ids
         if p.get("poll"):
             p["poll"]["my_vote_index"] = poll_votes.get(p["post_id"])
+        sid = p.get("spot_id")
+        if sid and sid in smap:
+            p["spot_ref"] = smap[sid]
     return posts
 
 

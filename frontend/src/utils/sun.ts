@@ -1,17 +1,50 @@
 import SunCalc from 'suncalc';
+import tzlookup from 'tz-lookup';
 
 /**
- * Returns a compact "Golden hour 6:47 PM" label for a spot's lat/lng for
- * today in the device's local timezone. Null if the spot has no coords or the
- * sun never rises/sets at this latitude on this date (polar regions).
+ * Returns a compact "Golden 6:47 PM–7:14 PM" label for a spot's lat/lng for
+ * today in the SPOT'S local timezone (not the viewer's). This is the
+ * map-product-correct behaviour: a photographer in NYC planning a shoot
+ * at Enchanted Rock, TX should see Central Time golden hour, not Eastern.
  *
- * Uses the `suncalc` package — pure math, no network. The label prefers the
- * evening golden hour (most photographer work); falls back to morning if the
- * day's evening window is already past.
+ * Implementation:
+ *   1. Look up IANA timezone from lat/lng via `tz-lookup` (offline, ~45KB).
+ *   2. Compute SunCalc times (returns UTC Date objects).
+ *   3. Format via Intl.DateTimeFormat({ timeZone }) so SSR/Expo-Web
+ *      (which runs in UTC) still produces correct local times.
+ *
+ * Returns null if the spot has no coords, or if the sun never rises/sets at
+ * this latitude on this date (polar regions).
+ *
+ * FIX(Commit 8a / 2026-04): previously used toLocaleTimeString(undefined,…)
+ * which renders in the runtime TZ. Container TZ=UTC leaked as "12:35 AM"
+ * for Enchanted Rock's evening golden hour when viewed via Expo Web.
  */
 export function goldenHourLabel(lat?: number, lng?: number, now: Date = new Date()): string | null {
   if (lat == null || lng == null) return null;
   try {
+    // Resolve IANA zone (e.g. "America/Chicago") for the spot. Falls back to
+    // UTC if the lookup throws (e.g. lat/lng out of bounds).
+    let zone: string | undefined;
+    try {
+      zone = tzlookup(lat, lng);
+    } catch {
+      zone = undefined;
+    }
+
+    const fmt = (d: Date) => {
+      try {
+        return new Intl.DateTimeFormat(undefined, {
+          hour: 'numeric',
+          minute: '2-digit',
+          timeZone: zone,
+        }).format(d);
+      } catch {
+        // Super defensive: fall back to device-local formatting.
+        return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      }
+    };
+
     const t = SunCalc.getTimes(now, lat, lng);
     // `goldenHour` in suncalc is the moment evening golden hour starts
     // (sun at +6°). `goldenHourEnd` is the morning golden hour end.
@@ -20,16 +53,13 @@ export function goldenHourLabel(lat?: number, lng?: number, now: Date = new Date
     const morningStart = t.sunriseEnd || t.sunrise;
     const morningEnd = t.goldenHourEnd;
 
-    const fmt = (d: Date) =>
-      d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-
     // If evening window is still in the future today, prefer it.
-    if (eveningStart && now < eveningEnd) {
+    if (eveningStart && eveningEnd && now < eveningEnd) {
       return `Golden ${fmt(eveningStart)}–${fmt(eveningEnd)}`;
     }
     // Otherwise, if morning window still in future today (rare after noon),
     // show it; else show tomorrow's evening.
-    if (morningStart && now < morningEnd) {
+    if (morningStart && morningEnd && now < morningEnd) {
       return `Golden ${fmt(morningStart)}–${fmt(morningEnd)}`;
     }
     const tomorrow = new Date(now.getTime() + 24 * 3600 * 1000);
