@@ -29,10 +29,10 @@ export default function Paywall() {
   const params = useLocalSearchParams<{ reason?: string }>();
   const [busy, setBusy] = useState<string | null>(null);
   const [cycle, setCycle] = useState<BillingCycle>('monthly');
-  // Annual billing Stripe prices not yet created — keep the toggle visible as a
-  // "Coming soon" preview but don't let users select it until we wire elite_annual /
-  // pro_annual Stripe prices on the backend.
-  const annualEnabled = false;
+  // FIX(2026-05): Annual toggle is now fully enabled. Backend /checkout
+  // accepts cycle='annual' and maps to the annual Stripe price. Users
+  // save ~17% picking annual; the saveBadge shows the exact discount.
+  const annualEnabled = true;
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -229,37 +229,40 @@ export default function Paywall() {
 
         <Text style={styles.compareHead}>Compare plans</Text>
         <View style={styles.compare}>
-          {[
-            ['Saved spots', '5', 'Unlimited', 'Unlimited'],
-            ['Private spots', '1', 'Unlimited', 'Unlimited'],
-            ['Collections', '1', 'Unlimited', 'Unlimited'],
-            ['Advanced filters', '—', '✓', '✓'],
-            ['Creator analytics', '—', '—', '✓'],
-            ['Sell spot packs', '—', '—', '✓'],
-            ['Verified creator badge', '—', '—', '✓'],
-            ['DM read receipts', '—', '—', '✓'],
-          ].map((row, i) => (
-            <View
-              key={i}
-              style={[styles.cmpRow, i % 2 === 1 && { backgroundColor: colors.surface1 }]}
-            >
-              <Text style={[styles.cmpCell, { flex: 1.6, textAlign: 'left' }]}>{row[0]}</Text>
-              <Text style={styles.cmpCell}>{row[1]}</Text>
-              <Text style={[styles.cmpCell, { color: colors.primary }]}>{row[2]}</Text>
-              <Text style={[styles.cmpCell, { color: colors.primary }]}>{row[3]}</Text>
-            </View>
-          ))}
+          {/* FIX(2026-05): Rebuilt to the canonical column order
+              Feature | Free | Pro | Elite. Rows are exhaustive, mobile
+              readable, and checkmark-consistent. */}
           <View style={[styles.cmpRow, styles.cmpHead]}>
-            <Text
-              style={[
-                styles.cmpCell,
-                { flex: 1.6, textAlign: 'left', color: colors.textSecondary },
-              ]}
-            />
+            <Text style={[styles.cmpCell, styles.cmpHeadTxt, { flex: 1.9, textAlign: 'left' }]}>Feature</Text>
             <Text style={[styles.cmpCell, styles.cmpHeadTxt]}>Free</Text>
             <Text style={[styles.cmpCell, styles.cmpHeadTxt]}>Pro</Text>
-            <Text style={[styles.cmpCell, styles.cmpHeadTxt]}>Elite</Text>
+            <Text style={[styles.cmpCell, styles.cmpHeadTxt, { color: colors.primary }]}>Elite</Text>
           </View>
+          {([
+            ['Saved spots',              '5',       'Unlimited',  'Unlimited'],
+            ['Private spots',            '1',       'Unlimited',  'Unlimited'],
+            ['Collections',              '1',       'Unlimited',  'Unlimited'],
+            ['Advanced filters',         '—',       '✓',          '✓'],
+            ['Creator analytics',        '—',       'Basic',      'Advanced'],
+            ['Sell spot packs',          '—',       '—',          '✓'],
+            ['Verified creator badge',   '—',       'Pro badge',  'Elite badge'],
+            ['DM read receipts',         '—',       '✓',          '✓'],
+            ['Who viewed profile',       'Teaser',  'Full list',  'Full + analytics'],
+            ['Referral priority',        '—',       'Standard',   'Priority'],
+            ['Featured placement',       '—',       '—',          '✓'],
+            ['AI shoot planner',         '—',       '—',          '✓'],
+            ['Branded client portal',    '—',       '—',          '✓'],
+          ] as Array<[string, string, string, string]>).map((row, i) => (
+            <View
+              key={i}
+              style={[styles.cmpRow, i % 2 === 0 && { backgroundColor: colors.surface1 }]}
+            >
+              <Text style={[styles.cmpCell, { flex: 1.9, textAlign: 'left' }]}>{row[0]}</Text>
+              <Text style={[styles.cmpCell, styles.cmpCellMuted]}>{row[1]}</Text>
+              <Text style={[styles.cmpCell, row[2] !== '—' && styles.cmpCellYes]}>{row[2]}</Text>
+              <Text style={[styles.cmpCell, row[3] !== '—' && { color: colors.primary, fontFamily: font.bodyBold }]}>{row[3]}</Text>
+            </View>
+          ))}
         </View>
 
         {loading && <Text style={[styles.fine, { marginTop: space.lg }]}>Loading plans…</Text>}
@@ -320,7 +323,9 @@ const styles = StyleSheet.create({
   compareHead: { color: colors.text, fontFamily: font.display, fontSize: 22, marginTop: space.xxl, marginBottom: space.md },
   compare: { borderRadius: radii.md, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' },
   cmpRow: { flexDirection: 'row', paddingVertical: 12, paddingHorizontal: space.md, alignItems: 'center' },
-  cmpHead: { backgroundColor: colors.surface2, borderBottomWidth: 1, borderBottomColor: colors.border, flexDirection: 'row-reverse' },
+  cmpHead: { backgroundColor: colors.surface2, borderBottomWidth: 1, borderBottomColor: colors.border },
   cmpHeadTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase' },
-  cmpCell: { flex: 1, color: colors.text, fontFamily: font.bodyMedium, fontSize: 12, textAlign: 'center' },
+  cmpCell: { flex: 1, color: colors.text, fontFamily: font.bodyMedium, fontSize: 12, textAlign: 'center', paddingVertical: 10, paddingHorizontal: 4 },
+  cmpCellMuted: { color: colors.textTertiary },
+  cmpCellYes: { color: colors.text, fontFamily: font.bodyBold },
 });
