@@ -1492,6 +1492,44 @@ async def home_feed(
     )
     hero = hero_pool[0] if hero_pool else None
 
+    # "Freshly Updated Near You" — spots with recent community uploads or
+    # updates, sorted by last_activity_at and proximity.
+    # (Feature 9 / 2026-04 — drives the retention loop on the home screen.)
+    now_ = utcnow()
+    fresh_cutoff = now_ - timedelta(days=30)
+    def _activity_ts(s: dict):
+        v = s.get("last_activity_at")
+        if isinstance(v, datetime): return v
+        if isinstance(v, str):
+            try: return datetime.fromisoformat(v.replace("Z", "+00:00"))
+            except Exception: return None
+        return None
+    fresh_candidates = []
+    for s in scored:
+        ts = _activity_ts(s)
+        if not ts:
+            continue
+        # Normalize to aware UTC
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if ts < fresh_cutoff:
+            continue
+        age_h = max(1.0, (now_ - ts).total_seconds() / 3600.0)
+        # Closer + more-recent = higher weight.
+        recency = 1.0 / (1.0 + age_h / 24.0)  # decays across days
+        s = dict(s)
+        s["_fresh_recency"] = recency
+        s["_fresh_last_activity"] = ts.isoformat()
+        fresh_candidates.append(s)
+    freshly_updated = sorted(
+        fresh_candidates,
+        key=lambda s: s["_fresh_recency"] * 2 + _proximity_boost(s) * 1.5 + (s.get("freshness_score") or 0) * 0.3,
+        reverse=True,
+    )[:10]
+    # strip private helpers before returning
+    for s in freshly_updated:
+        s.pop("_fresh_recency", None)
+
     return {
         "hero": hero,
         "nearby": nearby_list,
@@ -1501,6 +1539,7 @@ async def home_feed(
         "best_for_you": best_for_you,
         "following": following_feed,
         "seasonal": seasonal,
+        "freshly_updated": freshly_updated,
     }
 
 
@@ -1515,7 +1554,508 @@ async def delete_spot(spot_id: str, user: dict = Depends(get_current_user)):
     await db.spot_saves.delete_many({"spot_id": spot_id})
     await db.spot_reviews.delete_many({"spot_id": spot_id})
     await db.spot_checkins.delete_many({"spot_id": spot_id})
+    await db.spot_community_uploads.delete_many({"spot_id": spot_id})
+    await db.spot_updates.delete_many({"spot_id": spot_id})
     return {"ok": True}
+
+
+# ============================================================================
+# Community uploads & updates — the "living spot" retention feature.
+# (Commit 9 / 2026-04) Lets any logged-in user contribute fresh photos +
+# short text check-ins to existing spots. Auto-approved for admin /
+# verified / spot-owner; pending for everyone else. Drives the
+# "Freshly Updated Near You" home rail and the per-spot community sections.
+# ============================================================================
+
+# Canonical condition tag vocabulary — keep short + capped. Frontend mirrors
+# this list for the chip selector on the upload screen.
+ALLOWED_CONDITION_TAGS = [
+    "verified_today",  # "Verified today" check-in
+    "blooming",
+    "great_sunset",
+    "crowded",
+    "quiet",
+    "muddy",
+    "dog_friendly",
+    "family_friendly",
+    "closed_gate",
+    "construction",
+    "good_parking",
+    "fall_colors",
+]
+
+
+class SpotUploadImageIn(BaseModel):
+    image_url: str  # base64 data URL or remote URL
+    caption: Optional[str] = None
+
+
+class SpotCommunityUploadIn(BaseModel):
+    """Body for POST /api/spots/{id}/uploads.
+
+    Bundles 1..N photos into a single community upload submission. The
+    submission as a whole gets one caption, one set of condition tags,
+    and one visibility flag — individual per-photo captions are optional.
+    """
+    images: List[SpotUploadImageIn] = Field(..., min_length=1, max_length=12)
+    caption: Optional[str] = None
+    condition_tags: List[str] = []
+    visibility: str = "public"  # "public" | "followers" (followers is future-ready)
+
+    @field_validator("condition_tags")
+    @classmethod
+    def _norm_tags(cls, v):
+        if not v:
+            return []
+        norm = []
+        seen = set()
+        for t in v:
+            if not isinstance(t, str):
+                continue
+            k = t.strip().lower().replace(" ", "_")
+            if k in ALLOWED_CONDITION_TAGS and k not in seen:
+                norm.append(k)
+                seen.add(k)
+            if len(norm) >= 6:
+                break
+        return norm
+
+    @field_validator("visibility")
+    @classmethod
+    def _norm_vis(cls, v):
+        return v if v in ("public", "followers") else "public"
+
+
+class SpotUpdateIn(BaseModel):
+    """Body for POST /api/spots/{id}/updates — short text-only check-in."""
+    text: str = Field(..., min_length=3, max_length=500)
+    condition_tags: List[str] = []
+
+    @field_validator("text")
+    @classmethod
+    def _strip_text(cls, v):
+        v = (v or "").strip()
+        if len(v) < 3:
+            raise ValueError("Text too short")
+        return v
+
+    @field_validator("condition_tags")
+    @classmethod
+    def _norm_tags(cls, v):
+        if not v:
+            return []
+        out, seen = [], set()
+        for t in v:
+            if isinstance(t, str):
+                k = t.strip().lower().replace(" ", "_")
+                if k in ALLOWED_CONDITION_TAGS and k not in seen:
+                    out.append(k)
+                    seen.add(k)
+            if len(out) >= 6:
+                break
+        return out
+
+
+def _can_auto_approve(user: dict, spot: dict) -> bool:
+    """Rule: auto-approve for admins, verified users, and the spot's author."""
+    if not user:
+        return False
+    if user.get("role") == "admin":
+        return True
+    if user.get("verification_status") == "verified":
+        return True
+    if spot and spot.get("owner_user_id") == user.get("user_id"):
+        return True
+    return False
+
+
+def _upload_to_public_view(doc: dict) -> dict:
+    """Strip _id + compute public shape."""
+    doc = dict(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+async def _hydrate_contributors(items: List[dict]) -> List[dict]:
+    """Attach a minimal contributor object to each upload/update."""
+    if not items:
+        return items
+    uids = list({i.get("user_id") for i in items if i.get("user_id")})
+    if not uids:
+        return items
+    rows = await db.users.find(
+        {"user_id": {"$in": uids}},
+        {"_id": 0, "user_id": 1, "name": 1, "username": 1,
+         "avatar_url": 1, "verification_status": 1, "plan": 1,
+         "is_official": 1, "is_bot": 1},
+    ).to_list(len(uids))
+    umap = {u["user_id"]: u for u in rows}
+    for it in items:
+        it["contributor"] = umap.get(it.get("user_id"))
+    return items
+
+
+async def _recompute_spot_freshness(spot_id: str):
+    """Recalculate `freshness_score`, `recent_upload_count_7d`,
+    `latest_photo_at`, `last_activity_at` on the spot. Called after any
+    new approved upload or update. Kept simple: weights per user spec.
+    """
+    now = utcnow()
+    seven_days_ago = now - timedelta(days=7)
+    # Count recent APPROVED uploads + updates
+    approved_uploads = await db.spot_community_uploads.count_documents({
+        "spot_id": spot_id,
+        "moderation_status": "approved",
+        "created_at": {"$gte": seven_days_ago},
+    })
+    approved_updates = await db.spot_updates.count_documents({
+        "spot_id": spot_id,
+        "moderation_status": "approved",
+        "created_at": {"$gte": seven_days_ago},
+    })
+    # Verified-user recent uploads (extra boost)
+    verified_recent = await db.spot_community_uploads.count_documents({
+        "spot_id": spot_id,
+        "moderation_status": "approved",
+        "contributor_verified": True,
+        "created_at": {"$gte": seven_days_ago},
+    })
+    # Sum of helpful-count across recent approved uploads (cheap, no aggregate)
+    recent_approved_docs = await db.spot_community_uploads.find({
+        "spot_id": spot_id,
+        "moderation_status": "approved",
+        "created_at": {"$gte": seven_days_ago},
+    }, {"_id": 0, "like_count": 1, "helpful_count": 1}).to_list(200)
+    reactions = sum((d.get("like_count") or 0) + (d.get("helpful_count") or 0)
+                    for d in recent_approved_docs)
+    # Latest approved photo timestamp (for "Updated X ago" chip)
+    latest_photo = await db.spot_community_uploads.find_one(
+        {"spot_id": spot_id, "moderation_status": "approved"},
+        {"_id": 0, "created_at": 1},
+        sort=[("created_at", -1)],
+    )
+    # Any activity (photo OR update) for last_activity_at
+    latest_update = await db.spot_updates.find_one(
+        {"spot_id": spot_id, "moderation_status": "approved"},
+        {"_id": 0, "created_at": 1},
+        sort=[("created_at", -1)],
+    )
+    last_activity_at = None
+    if latest_photo and latest_update:
+        a, b = latest_photo.get("created_at"), latest_update.get("created_at")
+        last_activity_at = max(a, b) if a and b else (a or b)
+    else:
+        last_activity_at = (latest_photo or {}).get("created_at") or (latest_update or {}).get("created_at")
+    # Simple weighted score in [0, 10+]
+    score = (
+        approved_uploads * 2.0
+        + approved_updates * 1.0
+        + verified_recent * 1.5
+        + min(10, reactions) * 0.3
+    )
+    await db.spots.update_one(
+        {"spot_id": spot_id},
+        {"$set": {
+            "freshness_score": round(score, 2),
+            "recent_upload_count_7d": approved_uploads,
+            "recent_update_count_7d": approved_updates,
+            "latest_photo_at": (latest_photo or {}).get("created_at"),
+            "last_activity_at": last_activity_at,
+        }},
+    )
+
+
+@api.post("/spots/{spot_id}/uploads")
+async def post_spot_upload(
+    spot_id: str,
+    body: SpotCommunityUploadIn,
+    user: dict = Depends(get_current_user),
+):
+    """Submit 1..N community photos to an existing spot. Each image becomes
+    its own `spot_community_uploads` row so moderation/reactions work per
+    photo. All rows share the same `batch_id` for grouping in the UI.
+    """
+    spot = await db.spots.find_one({"spot_id": spot_id})
+    if not spot:
+        raise HTTPException(status_code=404, detail="Spot not found")
+    if spot.get("visibility_status") == "deleted":
+        raise HTTPException(status_code=410, detail="Spot no longer exists")
+    auto_approve = _can_auto_approve(user, spot)
+    status_ = "approved" if auto_approve else "pending"
+    now = utcnow()
+    batch_id = f"batch_{uuid.uuid4().hex[:12]}"
+    docs = []
+    for img in body.images:
+        docs.append({
+            "upload_id": f"upl_{uuid.uuid4().hex[:12]}",
+            "batch_id": batch_id,
+            "spot_id": spot_id,
+            "user_id": user["user_id"],
+            "image_url": img.image_url,
+            "caption": (img.caption or body.caption or "").strip() or None,
+            "condition_tags": body.condition_tags,
+            "visibility": body.visibility,
+            "moderation_status": status_,
+            "featured": False,
+            "like_count": 0,
+            "helpful_count": 0,
+            "contributor_verified": user.get("verification_status") == "verified",
+            "contributor_role": user.get("role"),
+            "auto_approved": auto_approve,
+            "created_at": now,
+            "updated_at": now,
+        })
+    if docs:
+        await db.spot_community_uploads.insert_many(docs)
+    if auto_approve:
+        await _recompute_spot_freshness(spot_id)
+    return {
+        "ok": True,
+        "batch_id": batch_id,
+        "moderation_status": status_,
+        "auto_approved": auto_approve,
+        "count": len(docs),
+        "message": "Posted to the spot!" if auto_approve else "Submitted for review — you'll be notified when it's approved.",
+    }
+
+
+@api.get("/spots/{spot_id}/uploads")
+async def list_spot_uploads(
+    spot_id: str,
+    page: int = 1,
+    limit: int = 24,
+    viewer: Optional[dict] = Depends(get_optional_user),
+):
+    """Public listing of approved community uploads, newest first.
+
+    Admins and the spot's owner additionally see pending items so they can
+    review inline from the spot page.
+    """
+    limit = max(1, min(60, limit))
+    page = max(1, page)
+    q: dict = {"spot_id": spot_id}
+    # What statuses can the viewer see?
+    include_pending = False
+    if viewer:
+        spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "owner_user_id": 1})
+        if viewer.get("role") == "admin" or (spot and spot.get("owner_user_id") == viewer["user_id"]):
+            include_pending = True
+    q["moderation_status"] = {"$in": ["approved", "pending"]} if include_pending else "approved"
+    total = await db.spot_community_uploads.count_documents(q)
+    skip = (page - 1) * limit
+    items = await db.spot_community_uploads.find(q, {"_id": 0}) \
+        .sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    items = await _hydrate_contributors(items)
+    # Attach viewer's reaction state
+    if viewer and items:
+        upload_ids = [i["upload_id"] for i in items]
+        reacted = await db.spot_upload_reactions.find(
+            {"user_id": viewer["user_id"], "upload_id": {"$in": upload_ids}},
+            {"_id": 0, "upload_id": 1, "kind": 1},
+        ).to_list(500)
+        rmap: Dict[str, set] = {}
+        for r in reacted:
+            rmap.setdefault(r["upload_id"], set()).add(r["kind"])
+        for it in items:
+            kinds = rmap.get(it["upload_id"], set())
+            it["liked_by_me"] = "like" in kinds
+            it["marked_helpful_by_me"] = "helpful" in kinds
+    return {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": (total + limit - 1) // limit,
+        "items": items,
+    }
+
+
+@api.post("/spots/{spot_id}/updates")
+async def post_spot_update(
+    spot_id: str,
+    body: SpotUpdateIn,
+    user: dict = Depends(get_current_user),
+):
+    """Submit a short text-only check-in/update on an existing spot."""
+    spot = await db.spots.find_one({"spot_id": spot_id})
+    if not spot:
+        raise HTTPException(status_code=404, detail="Spot not found")
+    if spot.get("visibility_status") == "deleted":
+        raise HTTPException(status_code=410, detail="Spot no longer exists")
+    auto_approve = _can_auto_approve(user, spot)
+    now = utcnow()
+    doc = {
+        "update_id": f"upd_{uuid.uuid4().hex[:12]}",
+        "spot_id": spot_id,
+        "user_id": user["user_id"],
+        "text": body.text,
+        "condition_tags": body.condition_tags,
+        "moderation_status": "approved" if auto_approve else "pending",
+        "auto_approved": auto_approve,
+        "contributor_verified": user.get("verification_status") == "verified",
+        "contributor_role": user.get("role"),
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.spot_updates.insert_one(doc)
+    if auto_approve:
+        await _recompute_spot_freshness(spot_id)
+    return {
+        "ok": True,
+        "update_id": doc["update_id"],
+        "moderation_status": doc["moderation_status"],
+        "auto_approved": auto_approve,
+    }
+
+
+@api.get("/spots/{spot_id}/updates")
+async def list_spot_updates(
+    spot_id: str,
+    page: int = 1,
+    limit: int = 20,
+    viewer: Optional[dict] = Depends(get_optional_user),
+):
+    """List approved updates, newest first. Admin/owner see pending too."""
+    limit = max(1, min(50, limit))
+    page = max(1, page)
+    q: dict = {"spot_id": spot_id}
+    include_pending = False
+    if viewer:
+        spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "owner_user_id": 1})
+        if viewer.get("role") == "admin" or (spot and spot.get("owner_user_id") == viewer["user_id"]):
+            include_pending = True
+    q["moderation_status"] = {"$in": ["approved", "pending"]} if include_pending else "approved"
+    total = await db.spot_updates.count_documents(q)
+    skip = (page - 1) * limit
+    items = await db.spot_updates.find(q, {"_id": 0}) \
+        .sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    items = await _hydrate_contributors(items)
+    return {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": (total + limit - 1) // limit,
+        "items": items,
+    }
+
+
+@api.post("/spot-uploads/{upload_id}/react")
+async def react_spot_upload(
+    upload_id: str,
+    kind: str = "like",  # "like" | "helpful"
+    user: dict = Depends(get_current_user),
+):
+    """Toggle a reaction on a community upload. Returns new counts."""
+    if kind not in ("like", "helpful"):
+        raise HTTPException(status_code=400, detail="Invalid reaction kind")
+    upload = await db.spot_community_uploads.find_one({"upload_id": upload_id})
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    existing = await db.spot_upload_reactions.find_one({
+        "upload_id": upload_id, "user_id": user["user_id"], "kind": kind,
+    })
+    inc_field = "like_count" if kind == "like" else "helpful_count"
+    if existing:
+        await db.spot_upload_reactions.delete_one({"_id": existing["_id"]})
+        await db.spot_community_uploads.update_one(
+            {"upload_id": upload_id}, {"$inc": {inc_field: -1}}
+        )
+        acted = False
+    else:
+        await db.spot_upload_reactions.insert_one({
+            "upload_id": upload_id,
+            "user_id": user["user_id"],
+            "kind": kind,
+            "created_at": utcnow(),
+        })
+        await db.spot_community_uploads.update_one(
+            {"upload_id": upload_id}, {"$inc": {inc_field: 1}}
+        )
+        acted = True
+    # Refresh freshness lazily (counts affect score)
+    await _recompute_spot_freshness(upload["spot_id"])
+    updated = await db.spot_community_uploads.find_one(
+        {"upload_id": upload_id},
+        {"_id": 0, "like_count": 1, "helpful_count": 1},
+    )
+    return {"ok": True, "acted": acted, **(updated or {})}
+
+
+# ---- Admin moderation ------------------------------------------------------
+
+@api.get("/admin/spot-uploads/pending")
+async def admin_list_pending_uploads(
+    limit: int = 50,
+    user: dict = Depends(get_current_user),
+):
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    limit = max(1, min(200, limit))
+    items = await db.spot_community_uploads.find(
+        {"moderation_status": "pending"}, {"_id": 0}
+    ).sort("created_at", -1).limit(limit).to_list(limit)
+    items = await _hydrate_contributors(items)
+    # Enrich with spot title
+    sids = list({i["spot_id"] for i in items})
+    spots = await db.spots.find({"spot_id": {"$in": sids}}, {"_id": 0, "spot_id": 1, "title": 1, "city": 1, "state": 1}).to_list(len(sids))
+    smap = {s["spot_id"]: s for s in spots}
+    for it in items:
+        it["spot"] = smap.get(it["spot_id"])
+    return {"items": items, "count": len(items)}
+
+
+class SpotUploadModerationIn(BaseModel):
+    action: str  # "approve" | "deny" | "feature" | "unfeature" | "set_as_cover" | "remove"
+
+
+@api.patch("/admin/spot-uploads/{upload_id}")
+async def admin_moderate_upload(
+    upload_id: str,
+    body: SpotUploadModerationIn,
+    user: dict = Depends(get_current_user),
+):
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    upload = await db.spot_community_uploads.find_one({"upload_id": upload_id})
+    if not upload:
+        raise HTTPException(status_code=404, detail="Not found")
+    now = utcnow()
+    updates: dict = {"updated_at": now, "moderated_by": user["user_id"], "moderated_at": now}
+    action = body.action
+    if action == "approve":
+        updates["moderation_status"] = "approved"
+    elif action == "deny":
+        updates["moderation_status"] = "denied"
+    elif action == "remove":
+        updates["moderation_status"] = "removed"
+    elif action == "feature":
+        updates["featured"] = True
+    elif action == "unfeature":
+        updates["featured"] = False
+    elif action == "set_as_cover":
+        # Promote this community upload to the spot's cover image.
+        spot = await db.spots.find_one({"spot_id": upload["spot_id"]})
+        if spot:
+            existing = spot.get("images") or []
+            # Clear previous cover, then prepend this as new cover.
+            for im in existing:
+                if isinstance(im, dict):
+                    im["is_cover"] = False
+            new_cover = {
+                "image_url": upload["image_url"],
+                "caption": upload.get("caption"),
+                "is_cover": True,
+                "sourced_from_upload_id": upload_id,
+                "sourced_from_user_id": upload["user_id"],
+            }
+            await db.spots.update_one(
+                {"spot_id": upload["spot_id"]},
+                {"$set": {"images": [new_cover] + existing}},
+            )
+    else:
+        raise HTTPException(status_code=400, detail="Unknown action")
+    await db.spot_community_uploads.update_one({"upload_id": upload_id}, {"$set": updates})
+    await _recompute_spot_freshness(upload["spot_id"])
+    return {"ok": True, "action": action}
 
 
 # ============================================================================

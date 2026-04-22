@@ -1,511 +1,471 @@
+"""Backend tests for Community Uploads + Updates retention feature (2026-04).
+
+See /app/test_result.md test plan. Runs fully idempotent scenarios and
+cleans up test data at the end.
 """
-PhotoScout — Phase 1 Community backend tests.
-Covers:
-  P0) POST /api/spots regression (normal create returns 200; draft flag honored)
-  P0) Community posts CRUD (+ like/unlike, comments, admin delete audit log)
-  P0) Messaging (idempotent conv, self/unknown target, send, inbox unread, read markers)
-  P1) GET /api/photographers/nearby (default city, filter, no password_hash, excludes self)
-  P1) PATCH /api/auth/me community fields round-trip
-"""
-import os
-import sys
+from __future__ import annotations
+
 import json
-import time
+import sys
 import uuid
+from typing import Any, Dict, List, Optional, Tuple
+
 import requests
 
-BASE = os.environ.get("BACKEND_BASE_URL", "https://photo-finder-60.preview.emergentagent.com/api")
-SOPHIE = {"email": "sophie@photoscout.app", "password": "demo123"}
-MARCO = {"email": "marco@photoscout.app", "password": "demo123"}
-ADMIN = {"email": "admin@photoscout.app", "password": "admin123"}
+# ---------------------------------------------------------------------------
+FRONTEND_ENV = "/app/frontend/.env"
+BACKEND_URL = None
+with open(FRONTEND_ENV) as f:
+    for line in f:
+        if line.startswith("EXPO_PUBLIC_BACKEND_URL="):
+            BACKEND_URL = line.split("=", 1)[1].strip().strip('"').strip("'")
+            break
+if not BACKEND_URL:
+    BACKEND_URL = "https://photo-finder-60.preview.emergentagent.com"
+API = f"{BACKEND_URL}/api"
 
-results = []  # list of (task, case, passed, detail)
+ADMIN_EMAIL = "admin@lumascout.app"
+ADMIN_PASS = "admin123"
+
+PNG_B64 = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgA"
+    "AIAAAUAAarVyFEAAAAASUVORK5CYII="
+)
+
+results: List[Tuple[str, bool, str]] = []
 
 
-def record(task, case, passed, detail=""):
-    status = "PASS" if passed else "FAIL"
-    print(f"[{status}] {task} :: {case} — {detail}")
-    results.append((task, case, bool(passed), detail))
+def rec(name: str, ok: bool, detail: str = "") -> bool:
+    results.append((name, ok, detail))
+    icon = "PASS" if ok else "FAIL"
+    print(f"[{icon}] {name}{'  — ' + detail if detail and not ok else ''}")
+    return ok
 
 
-def login(creds):
-    r = requests.post(f"{BASE}/auth/login", json=creds, timeout=20)
+def req(method: str, path: str, token: Optional[str] = None, **kwargs):
+    url = f"{API}{path}"
+    headers = kwargs.pop("headers", {}) or {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return requests.request(method, url, headers=headers, timeout=45, **kwargs)
+
+
+def login(email: str, password: str) -> Optional[Dict[str, Any]]:
+    r = req("POST", "/auth/login", json={"email": email, "password": password})
+    return r.json() if r.status_code == 200 else None
+
+
+def register_tester() -> Optional[Dict[str, Any]]:
+    email = f"community_tester_{uuid.uuid4().hex[:8]}@test.app"
+    r = req("POST", "/auth/register", json={
+        "email": email, "password": "testpass123", "name": "Community Tester"
+    })
     if r.status_code != 200:
-        raise RuntimeError(f"login failed for {creds['email']}: {r.status_code} {r.text}")
-    data = r.json()
-    return data["token"], data["user"]
+        print("tester register failed:", r.status_code, r.text[:300])
+        return None
+    b = r.json()
+    b["email"] = email
+    return b
 
 
-def H(tok):
-    return {"Authorization": f"Bearer {tok}"}
+def pick_spot(token: str) -> Optional[str]:
+    r = req("GET", "/feed/home", token=token)
+    if r.status_code != 200:
+        return None
+    j = r.json()
+    for k in ("recent", "nearby", "trending", "best_for_you"):
+        lst = j.get(k) or []
+        if lst:
+            return lst[0].get("spot_id")
+    return None
 
 
-# ---------------------------------------------------------------------------
-# Setup: login all users
-# ---------------------------------------------------------------------------
-print(f"\n=== BACKEND BASE: {BASE} ===\n")
+def main():
+    print(f"Backend URL: {API}\n")
 
-try:
-    sophie_tok, sophie = login(SOPHIE)
-    marco_tok, marco = login(MARCO)
-    admin_tok, admin = login(ADMIN)
-except Exception as e:
-    print(f"FATAL login failure: {e}")
-    sys.exit(2)
+    # --- Setup ---
+    admin = login(ADMIN_EMAIL, ADMIN_PASS)
+    if not admin or not admin.get("token"):
+        rec("setup.admin_login", False, "cannot login admin")
+        return 1
+    ADMIN_TOKEN = admin["token"]
+    ADMIN_USER = admin["user"]
+    admin_role = ADMIN_USER.get("role")
+    rec("setup.admin_login", True,
+        f"role={admin_role} user_id={ADMIN_USER.get('user_id')} verified={ADMIN_USER.get('verification_status')}")
 
-print(f"sophie user_id={sophie['user_id']} city={sophie.get('city')!r}")
-print(f"marco  user_id={marco['user_id']}")
-print(f"admin  user_id={admin['user_id']} role={admin.get('role')}\n")
+    tester = register_tester()
+    if not tester or not tester.get("token"):
+        rec("setup.tester_register", False, "register failed")
+        return 1
+    TESTER_TOKEN = tester["token"]
+    TESTER_USER = tester["user"]
+    rec("setup.tester_register",
+        TESTER_USER.get("verification_status") != "verified",
+        f"tester_id={TESTER_USER.get('user_id')} verified={TESTER_USER.get('verification_status')}")
 
+    SPOT_ID = pick_spot(ADMIN_TOKEN)
+    rec("setup.pick_spot", bool(SPOT_ID), f"spot_id={SPOT_ID}")
+    if not SPOT_ID:
+        return 1
 
-# ===========================================================================
-# TASK 1 — POST /api/spots regression
-# ===========================================================================
-T1 = "POST /api/spots regression"
+    r = req("GET", f"/spots/{SPOT_ID}")
+    rec("setup.spot_exists", r.status_code == 200, f"HTTP {r.status_code}")
+    spot_owner = r.json().get("owner_user_id") if r.status_code == 200 else None
+    admin_owns = spot_owner == ADMIN_USER.get("user_id")
+    print(f"  (spot owner={spot_owner}, admin_owns={admin_owns})")
 
-created_spot_ids = []
+    pending_upload_id: Optional[str] = None
 
-try:
-    # Tiny image as base64 — 1x1 png
-    tiny_png = (
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwC"
-        "AAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
-    )
-    body = {
-        "title": f"Test Spot {uuid.uuid4().hex[:6]}",
-        "description": "tiny description",
-        "latitude": 30.2672,
-        "longitude": -97.7431,
-        "city": "Austin",
-        "state": "TX",
-        "privacy_mode": "private",  # avoid moderation queue
-        "shoot_types": ["family"],
-        "style_tags": ["urban"],
-        "images": [{"image_url": tiny_png, "caption": "test"}],
-    }
-    r = requests.post(f"{BASE}/spots", json=body, headers=H(sophie_tok), timeout=25)
-    ok = r.status_code == 200 and r.json().get("spot_id")
-    if ok:
-        created_spot_ids.append(r.json()["spot_id"])
-    record(T1, "small-payload spot creates 200 with spot_id",
-           ok, f"status={r.status_code} body={r.text[:160]}")
-except Exception as e:
-    record(T1, "small-payload spot creates 200 with spot_id", False, str(e))
+    # === Scenario 1: Auto-approve paths (admin) ===
+    print("\n--- 1. Auto-approve (admin) ---")
+    r = req("POST", f"/spots/{SPOT_ID}/uploads", token=ADMIN_TOKEN, json={
+        "images": [
+            {"image_url": PNG_B64, "caption": "admin img 1"},
+            {"image_url": PNG_B64, "caption": "admin img 2"},
+        ],
+        "caption": "Test upload",
+        "condition_tags": ["blooming", "verified_today"],
+    })
+    j = r.json() if r.status_code == 200 else {}
+    rec("1.admin_uploads_auto_approved",
+        r.status_code == 200 and j.get("ok") and j.get("auto_approved") is True
+        and j.get("moderation_status") == "approved" and j.get("count") == 2,
+        f"HTTP {r.status_code} body={json.dumps(j)[:250]}")
 
-try:
-    body = {
-        "title": f"Draft Spot {uuid.uuid4().hex[:6]}",
-        "description": "draft",
-        "latitude": 30.2672,
-        "longitude": -97.7431,
-        "city": "Austin",
-        "state": "TX",
-        "privacy_mode": "public",  # normally would be pending_review
-        "save_as_draft": True,
-        "images": [],
-    }
-    r = requests.post(f"{BASE}/spots", json=body, headers=H(sophie_tok), timeout=25)
-    data = r.json() if r.status_code == 200 else {}
-    ok = r.status_code == 200 and data.get("visibility_status") == "draft"
-    if data.get("spot_id"):
-        created_spot_ids.append(data["spot_id"])
-    record(T1, "save_as_draft:true returns visibility_status=draft",
-           ok, f"status={r.status_code} visibility_status={data.get('visibility_status')}")
-except Exception as e:
-    record(T1, "save_as_draft:true returns visibility_status=draft", False, str(e))
+    r = req("POST", f"/spots/{SPOT_ID}/updates", token=ADMIN_TOKEN, json={
+        "text": "All good today, quiet morning", "condition_tags": ["quiet"],
+    })
+    j = r.json() if r.status_code == 200 else {}
+    rec("1.admin_updates_auto_approved",
+        r.status_code == 200 and j.get("auto_approved") is True
+        and j.get("moderation_status") == "approved",
+        f"HTTP {r.status_code} body={json.dumps(j)[:250]}")
 
+    # === Scenario 2: Pending path (non-verified, non-owner) ===
+    print("\n--- 2. Pending (tester) ---")
+    r = req("POST", f"/spots/{SPOT_ID}/uploads", token=TESTER_TOKEN, json={
+        "images": [{"image_url": PNG_B64, "caption": "tester img"}],
+        "caption": "Tester upload", "condition_tags": ["crowded"],
+    })
+    j = r.json() if r.status_code == 200 else {}
+    rec("2.tester_upload_pending",
+        r.status_code == 200 and j.get("auto_approved") is False
+        and j.get("moderation_status") == "pending",
+        f"HTTP {r.status_code} body={json.dumps(j)[:250]}")
 
-# ===========================================================================
-# TASK 2 — Community posts CRUD
-# ===========================================================================
-T2 = "Community posts CRUD"
-
-post_id = None
-try:
-    body = {
-        "category": "win",
-        "title": "Booked 4 family sessions this month!",
-        "body": "Austin referrals have been wild lately — so grateful.",
-        "city": "Austin",
-        "state": "TX",
-    }
-    r = requests.post(f"{BASE}/posts", json=body, headers=H(sophie_tok), timeout=20)
-    data = r.json() if r.status_code == 200 else {}
-    post_id = data.get("post_id")
-    author = data.get("author") or {}
-    ok = (
-        r.status_code == 200
-        and post_id
-        and author.get("user_id") == sophie["user_id"]
-        and data.get("like_count") == 0
-        and data.get("liked_by_me") is False
-    )
-    record(T2, "create post (sophie) returns 200 with author hydrated",
-           ok, f"status={r.status_code} post_id={post_id} author.name={author.get('name')}")
-except Exception as e:
-    record(T2, "create post (sophie) returns 200 with author hydrated", False, str(e))
-
-try:
-    r = requests.post(f"{BASE}/posts", json={"category": "banana", "title": "bad"},
-                      headers=H(sophie_tok), timeout=20)
-    ok = r.status_code == 400 and "Invalid category" in r.text
-    record(T2, "invalid category → 400 with enum list", ok,
-           f"status={r.status_code} body={r.text[:200]}")
-except Exception as e:
-    record(T2, "invalid category → 400 with enum list", False, str(e))
-
-try:
-    r = requests.get(f"{BASE}/posts", headers=H(sophie_tok), timeout=20)
-    data = r.json() if r.status_code == 200 else {}
-    items = data.get("items", [])
-    found = any(p.get("post_id") == post_id for p in items) if post_id else False
-    first_match = next((p for p in items if p.get("post_id") == post_id), None)
-    ok = r.status_code == 200 and "total" in data and found and first_match and first_match.get("liked_by_me") is False
-    record(T2, "GET /posts includes new post with liked_by_me=false", ok,
-           f"status={r.status_code} total={data.get('total')} found={found}")
-except Exception as e:
-    record(T2, "GET /posts includes new post with liked_by_me=false", False, str(e))
-
-try:
-    r = requests.get(f"{BASE}/posts?category=win", headers=H(sophie_tok), timeout=20)
-    data = r.json() if r.status_code == 200 else {}
-    items = data.get("items", [])
-    ok = r.status_code == 200 and all(p.get("category") == "win" for p in items) and len(items) > 0
-    record(T2, "GET /posts?category=win filters", ok,
-           f"status={r.status_code} n={len(items)} all_win={all(p.get('category')=='win' for p in items)}")
-except Exception as e:
-    record(T2, "GET /posts?category=win filters", False, str(e))
-
-# Likes
-try:
-    r1 = requests.post(f"{BASE}/posts/{post_id}/like", headers=H(admin_tok), timeout=20)
-    # Then GET as admin
-    r2 = requests.get(f"{BASE}/posts/{post_id}", headers=H(admin_tok), timeout=20)
-    data = r2.json() if r2.status_code == 200 else {}
-    ok = r1.status_code == 200 and r2.status_code == 200 and data.get("like_count") == 1 and data.get("liked_by_me") is True
-    record(T2, "POST /like then GET shows like_count=1, liked_by_me=true (admin)",
-           ok, f"like_status={r1.status_code} like_count={data.get('like_count')} liked_by_me={data.get('liked_by_me')}")
-except Exception as e:
-    record(T2, "POST /like then GET shows like_count=1, liked_by_me=true (admin)", False, str(e))
-
-try:
-    # Second like by same user must be idempotent (no count increase)
-    r = requests.post(f"{BASE}/posts/{post_id}/like", headers=H(admin_tok), timeout=20)
-    r2 = requests.get(f"{BASE}/posts/{post_id}", headers=H(admin_tok), timeout=20)
-    data = r2.json() if r2.status_code == 200 else {}
-    ok = r.status_code == 200 and data.get("like_count") == 1
-    record(T2, "second like from same user is idempotent", ok,
-           f"status={r.status_code} like_count={data.get('like_count')}")
-except Exception as e:
-    record(T2, "second like from same user is idempotent", False, str(e))
-
-try:
-    r = requests.delete(f"{BASE}/posts/{post_id}/like", headers=H(admin_tok), timeout=20)
-    r2 = requests.get(f"{BASE}/posts/{post_id}", headers=H(admin_tok), timeout=20)
-    data = r2.json() if r2.status_code == 200 else {}
-    ok = r.status_code == 200 and data.get("like_count") == 0 and data.get("liked_by_me") is False
-    record(T2, "DELETE /like decrements to 0", ok,
-           f"del_status={r.status_code} like_count={data.get('like_count')} liked_by_me={data.get('liked_by_me')}")
-except Exception as e:
-    record(T2, "DELETE /like decrements to 0", False, str(e))
-
-# Comments
-try:
-    r = requests.get(f"{BASE}/posts/{post_id}/comments", headers=H(sophie_tok), timeout=20)
-    ok = r.status_code == 200 and r.json() == []
-    record(T2, "GET /comments initially empty []", ok, f"status={r.status_code} body={r.text[:120]}")
-except Exception as e:
-    record(T2, "GET /comments initially empty []", False, str(e))
-
-try:
-    r = requests.post(f"{BASE}/posts/{post_id}/comments", json={"body": "Congrats Sophie!"},
-                      headers=H(admin_tok), timeout=20)
-    cok = r.status_code == 200 and r.json().get("comment_id")
-    r2 = requests.get(f"{BASE}/posts/{post_id}/comments", headers=H(sophie_tok), timeout=20)
-    lst = r2.json() if r2.status_code == 200 else []
-    has_author = isinstance(lst, list) and len(lst) == 1 and lst[0].get("author", {}).get("user_id") == admin["user_id"]
-    record(T2, "POST comment then GET shows 1 item with author info",
-           cok and has_author, f"post={r.status_code} get={r2.status_code} n={len(lst)}")
-except Exception as e:
-    record(T2, "POST comment then GET shows 1 item with author info", False, str(e))
-
-# Forbidden delete by non-owner
-try:
-    r = requests.delete(f"{BASE}/posts/{post_id}", headers=H(marco_tok), timeout=20)
-    ok = r.status_code == 403
-    record(T2, "DELETE post as non-owner non-admin → 403", ok, f"status={r.status_code} body={r.text[:120]}")
-except Exception as e:
-    record(T2, "DELETE post as non-owner non-admin → 403", False, str(e))
-
-# Owner delete
-try:
-    r = requests.delete(f"{BASE}/posts/{post_id}", headers=H(sophie_tok), timeout=20)
-    ok = r.status_code == 200
-    record(T2, "DELETE post as owner → 200", ok, f"status={r.status_code} body={r.text[:120]}")
-except Exception as e:
-    record(T2, "DELETE post as owner → 200", False, str(e))
-
-# Admin deletion + audit log: create a fresh post as marco, admin deletes, check audit
-admin_del_post_id = None
-try:
-    r = requests.post(f"{BASE}/posts",
-                      json={"category": "tip", "title": "Lens tip", "body": "Use a prime.",
-                            "city": "Austin", "state": "TX"},
-                      headers=H(marco_tok), timeout=20)
+    # Unauth GET should hide pending
+    r = req("GET", f"/spots/{SPOT_ID}/uploads")
     if r.status_code == 200:
-        admin_del_post_id = r.json().get("post_id")
-    record(T2, "setup: marco creates post for admin-delete test",
-           bool(admin_del_post_id), f"status={r.status_code} post_id={admin_del_post_id}")
-except Exception as e:
-    record(T2, "setup: marco creates post for admin-delete test", False, str(e))
+        items = r.json().get("items", [])
+        has_pending = any(i.get("moderation_status") == "pending" for i in items)
+        has_tester = any(i.get("user_id") == TESTER_USER["user_id"] for i in items)
+        rec("2.unauth_list_hides_pending", not has_pending and not has_tester,
+            f"pending_seen={has_pending} tester_seen={has_tester}")
+    else:
+        rec("2.unauth_list_hides_pending", False, f"HTTP {r.status_code}")
 
-if admin_del_post_id:
+    r = req("GET", f"/spots/{SPOT_ID}/uploads", token=TESTER_TOKEN)
+    if r.status_code == 200:
+        items = r.json().get("items", [])
+        has_pending = any(i.get("moderation_status") == "pending" for i in items)
+        rec("2.tester_list_hides_pending", not has_pending, f"pending_seen={has_pending}")
+    else:
+        rec("2.tester_list_hides_pending", False, f"HTTP {r.status_code}")
+
+    r = req("GET", f"/spots/{SPOT_ID}/uploads", token=ADMIN_TOKEN)
+    if r.status_code == 200:
+        items = r.json().get("items", [])
+        has_pending = any(i.get("moderation_status") == "pending" for i in items)
+        rec("2.admin_list_includes_pending", has_pending,
+            f"HTTP {r.status_code} pending_seen={has_pending} admin_role={admin_role} (NOTE: gate checks role=='admin' exactly)")
+    else:
+        rec("2.admin_list_includes_pending", False, f"HTTP {r.status_code}")
+
+    # === Scenario 3: Tag normalisation ===
+    print("\n--- 3. Condition tag normalisation ---")
+
+    def submit_and_get(caption: str, tags: List[str]) -> Optional[List[str]]:
+        r = req("POST", f"/spots/{SPOT_ID}/uploads", token=ADMIN_TOKEN, json={
+            "images": [{"image_url": PNG_B64}], "caption": caption, "condition_tags": tags,
+        })
+        if r.status_code != 200:
+            return None
+        r = req("GET", f"/spots/{SPOT_ID}/uploads", token=ADMIN_TOKEN)
+        items = r.json().get("items", [])
+        for it in items:
+            if it.get("caption") == caption:
+                return it.get("condition_tags")
+        return None
+
+    canonical = {"verified_today","blooming","great_sunset","crowded","quiet","muddy",
+                 "dog_friendly","family_friendly","closed_gate","construction",
+                 "good_parking","fall_colors"}
+
+    tags = submit_and_get("tag test A",
+                          ["blooming", "not_a_real_tag", "crowded", "Uppercase_Tag"])
+    rec("3.tag_drops_noncanonical",
+        tags is not None and set(tags) <= canonical and "blooming" in tags
+        and "crowded" in tags and "not_a_real_tag" not in tags and "uppercase_tag" not in tags,
+        f"stored={tags}")
+
+    tags = submit_and_get("tag test B", ["BLOOMING", "great sunset"])
+    rec("3.tag_uppercase_and_space_normalise",
+        tags is not None and "blooming" in tags and "great_sunset" in tags,
+        f"stored={tags}")
+
+    tags = submit_and_get("tag test C",
+                          ["blooming","crowded","quiet","muddy","dog_friendly",
+                           "family_friendly","good_parking","fall_colors"])
+    rec("3.tag_cap_6", tags is not None and len(tags) == 6,
+        f"len={len(tags) if tags else 'None'} tags={tags}")
+
+    tags = submit_and_get("tag test D", ["great sunset"])
+    rec("3.tag_space_to_underscore", tags == ["great_sunset"], f"stored={tags}")
+
+    # === Scenario 4: Validation ===
+    print("\n--- 4. Validation ---")
+    r = req("POST", f"/spots/{SPOT_ID}/uploads", token=ADMIN_TOKEN, json={"images": []})
+    rec("4.uploads_empty_images_422", r.status_code == 422, f"HTTP {r.status_code}")
+
+    r = req("POST", f"/spots/{SPOT_ID}/uploads", token=ADMIN_TOKEN, json={
+        "images": [{"image_url": PNG_B64} for _ in range(13)]})
+    rec("4.uploads_13_images_422", r.status_code == 422, f"HTTP {r.status_code}")
+
+    r = req("POST", f"/spots/{SPOT_ID}/updates", token=ADMIN_TOKEN, json={"text": "ab"})
+    rec("4.updates_text_too_short_422", r.status_code == 422, f"HTTP {r.status_code}")
+
+    r = req("POST", f"/spots/{SPOT_ID}/updates", token=ADMIN_TOKEN, json={"text": "x" * 600})
+    rec("4.updates_text_too_long_422", r.status_code == 422, f"HTTP {r.status_code}")
+
+    # === Scenario 5: Reactions ===
+    print("\n--- 5. Reactions ---")
+    r = req("GET", f"/spots/{SPOT_ID}/uploads", token=ADMIN_TOKEN)
+    approved = [i for i in r.json().get("items", []) if i.get("moderation_status") == "approved"]
+    target = approved[0] if approved else None
+    if not target:
+        rec("5.find_approved_upload", False, "none found")
+    else:
+        UP_ID = target["upload_id"]
+        prev_like = int(target.get("like_count") or 0)
+        prev_help = int(target.get("helpful_count") or 0)
+
+        r = req("POST", f"/spot-uploads/{UP_ID}/react?kind=like", token=TESTER_TOKEN)
+        j = r.json() if r.status_code == 200 else {}
+        rec("5.react_like_increments",
+            r.status_code == 200 and j.get("acted") is True
+            and int(j.get("like_count") or 0) == prev_like + 1,
+            f"HTTP {r.status_code} body={json.dumps(j)[:200]}")
+
+        r = req("POST", f"/spot-uploads/{UP_ID}/react?kind=like", token=TESTER_TOKEN)
+        j = r.json() if r.status_code == 200 else {}
+        rec("5.react_like_toggle_off",
+            r.status_code == 200 and j.get("acted") is False
+            and int(j.get("like_count") or 0) == prev_like,
+            f"HTTP {r.status_code} body={json.dumps(j)[:200]}")
+
+        r = req("POST", f"/spot-uploads/{UP_ID}/react?kind=helpful", token=TESTER_TOKEN)
+        j = r.json() if r.status_code == 200 else {}
+        rec("5.react_helpful_independent",
+            r.status_code == 200 and j.get("acted") is True
+            and int(j.get("helpful_count") or 0) == prev_help + 1,
+            f"HTTP {r.status_code} body={json.dumps(j)[:200]}")
+        # reset helpful
+        req("POST", f"/spot-uploads/{UP_ID}/react?kind=helpful", token=TESTER_TOKEN)
+
+        r = req("POST", f"/spot-uploads/{UP_ID}/react?kind=wow", token=TESTER_TOKEN)
+        rec("5.react_invalid_kind_400", r.status_code == 400, f"HTTP {r.status_code}")
+
+    # === Scenario 6: Admin moderation ===
+    print("\n--- 6. Admin moderation ---")
+    r = req("GET", "/admin/spot-uploads/pending", token=ADMIN_TOKEN)
+    if r.status_code == 200:
+        j = r.json()
+        items = j.get("items", [])
+        tester_pending = [i for i in items if i.get("user_id") == TESTER_USER["user_id"]]
+        has_spot_hydr = (len(tester_pending) > 0
+                         and all(isinstance(i.get("spot"), dict) and i["spot"].get("spot_id")
+                                 and "title" in i["spot"] and "city" in i["spot"] and "state" in i["spot"]
+                                 for i in tester_pending))
+        has_contrib = (len(tester_pending) > 0
+                       and all(isinstance(i.get("contributor"), dict) for i in tester_pending))
+        rec("6.admin_pending_list",
+            len(tester_pending) >= 1 and has_spot_hydr and has_contrib,
+            f"items={len(items)} tester_pending={len(tester_pending)} spot_hydr={has_spot_hydr} contrib_hydr={has_contrib}")
+        if tester_pending:
+            pending_upload_id = tester_pending[0]["upload_id"]
+    else:
+        rec("6.admin_pending_list", False,
+            f"HTTP {r.status_code} body={r.text[:300]} (admin_role={admin_role}; endpoint requires role=='admin' exact match)")
+
+    if pending_upload_id:
+        r = req("PATCH", f"/admin/spot-uploads/{pending_upload_id}",
+                token=TESTER_TOKEN, json={"action": "approve"})
+        rec("6.patch_as_tester_403", r.status_code == 403, f"HTTP {r.status_code}")
+
+        r = req("PATCH", f"/admin/spot-uploads/{pending_upload_id}",
+                token=ADMIN_TOKEN, json={"action": "approve"})
+        approve_ok = r.status_code == 200
+        rec("6.patch_approve", approve_ok, f"HTTP {r.status_code} body={r.text[:200]}")
+
+        if approve_ok:
+            r = req("GET", f"/spots/{SPOT_ID}/uploads")
+            found = False
+            if r.status_code == 200:
+                items = r.json().get("items", [])
+                found = any(i.get("upload_id") == pending_upload_id for i in items)
+            rec("6.approved_now_public_visible", found, f"found={found}")
+
+        r = req("PATCH", f"/admin/spot-uploads/{pending_upload_id}",
+                token=ADMIN_TOKEN, json={"action": "flamethrower"})
+        rec("6.patch_unknown_action_400", r.status_code == 400, f"HTTP {r.status_code}")
+
+        # set_as_cover
+        r = req("PATCH", f"/admin/spot-uploads/{pending_upload_id}",
+                token=ADMIN_TOKEN, json={"action": "set_as_cover"})
+        if r.status_code == 200:
+            s = req("GET", f"/spots/{SPOT_ID}").json()
+            imgs = s.get("images") or []
+            first = imgs[0] if imgs else {}
+            is_cover_ok = isinstance(first, dict) and first.get("is_cover") is True
+            others_ok = all(
+                (not isinstance(im, dict)) or im.get("is_cover") is False
+                for im in imgs[1:]
+            )
+            rec("6.set_as_cover",
+                is_cover_ok and others_ok,
+                f"first_is_cover={is_cover_ok} others_not_cover={others_ok} first_url_match={first.get('image_url','')[:40] if isinstance(first,dict) else '-'}")
+        else:
+            rec("6.set_as_cover", False, f"HTTP {r.status_code}")
+
+        # feature
+        r = req("PATCH", f"/admin/spot-uploads/{pending_upload_id}",
+                token=ADMIN_TOKEN, json={"action": "feature"})
+        if r.status_code == 200:
+            up = req("GET", f"/spots/{SPOT_ID}/uploads", token=ADMIN_TOKEN).json().get("items", [])
+            latest = next((i for i in up if i.get("upload_id") == pending_upload_id), None)
+            rec("6.feature_persists", bool(latest and latest.get("featured") is True),
+                f"featured={(latest or {}).get('featured')}")
+        else:
+            rec("6.feature_persists", False, f"HTTP {r.status_code}")
+    else:
+        rec("6.find_pending_for_moderation", False,
+            "No pending upload id available — see 6.admin_pending_list failure")
+
+    # === Scenario 7: Freshness on spot ===
+    print("\n--- 7. Freshness propagation ---")
+    r = req("GET", f"/spots/{SPOT_ID}")
+    if r.status_code == 200:
+        s = r.json()
+        la, lp = s.get("last_activity_at"), s.get("latest_photo_at")
+        fs, ru = s.get("freshness_score"), s.get("recent_upload_count_7d")
+        rec("7.freshness_populated",
+            bool(la) and bool(lp) and (fs or 0) > 0 and (ru or 0) > 0,
+            f"last_activity_at={la} latest_photo_at={lp} freshness_score={fs} recent_upload_count_7d={ru}")
+    else:
+        rec("7.freshness_populated", False, f"HTTP {r.status_code}")
+
+    # === Scenario 8: freshly_updated rail ===
+    print("\n--- 8. freshly_updated rail ---")
+    r = req("GET", "/feed/home", token=ADMIN_TOKEN)
+    if r.status_code == 200:
+        j = r.json()
+        fu = j.get("freshly_updated")
+        rec("8.freshly_updated_key_is_list",
+            "freshly_updated" in j and isinstance(fu, list),
+            f"type={type(fu).__name__}")
+        rec("8.freshly_updated_contains_spot",
+            any((s.get("spot_id") == SPOT_ID) for s in (fu or [])),
+            f"len={len(fu or [])} ids={[s.get('spot_id') for s in (fu or [])][:5]}")
+    else:
+        rec("8.freshly_updated_rail", False, f"HTTP {r.status_code}")
+
+    # === Scenario 9: Delete cascade ===
+    print("\n--- 9. Delete cascade ---")
+    sp_body = {
+        "title": f"QA Throwaway {uuid.uuid4().hex[:6]}",
+        "description": "cascade test",
+        "latitude": 30.2672, "longitude": -97.7431,
+        "city": "Austin", "state": "TX", "country_code": "US",
+        "shoot_types": ["Family"],
+        "privacy_mode": "public",
+        "images": [{"image_url": PNG_B64}],
+    }
+    r = req("POST", "/spots", token=ADMIN_TOKEN, json=sp_body)
+    if r.status_code == 200:
+        throw_id = r.json().get("spot_id")
+        u = req("POST", f"/spots/{throw_id}/uploads", token=ADMIN_TOKEN,
+                json={"images": [{"image_url": PNG_B64}], "caption": "cascade"})
+        up_ok = u.status_code == 200
+        t = req("POST", f"/spots/{throw_id}/updates", token=ADMIN_TOKEN,
+                json={"text": "cascade update"})
+        up_t_ok = t.status_code == 200
+        d = req("DELETE", f"/spots/{throw_id}", token=ADMIN_TOKEN)
+        del_ok = d.status_code == 200
+        ua = req("GET", f"/spots/{throw_id}/uploads", token=ADMIN_TOKEN)
+        ta = req("GET", f"/spots/{throw_id}/updates", token=ADMIN_TOKEN)
+        u_cnt = ua.json().get("total") if ua.status_code == 200 else None
+        t_cnt = ta.json().get("total") if ta.status_code == 200 else None
+        rec("9.delete_cascade",
+            up_ok and up_t_ok and del_ok and u_cnt == 0 and t_cnt == 0,
+            f"uploads_after={u_cnt} updates_after={t_cnt}")
+    else:
+        rec("9.delete_cascade", False,
+            f"throwaway create HTTP {r.status_code} body={r.text[:200]}")
+
+    # === Scenario 10: Regressions ===
+    print("\n--- 10. Regressions ---")
+    r = req("GET", "/auth/me", token=ADMIN_TOKEN)
+    rec("10.auth_me", r.status_code == 200, f"HTTP {r.status_code}")
+
+    r = req("GET", "/feed/home", token=ADMIN_TOKEN)
+    if r.status_code == 200:
+        j = r.json()
+        expected = {"nearby","trending","golden_hour","recent","best_for_you",
+                    "following","seasonal","freshly_updated"}
+        missing = expected - set(j.keys())
+        rec("10.feed_home_all_rails", len(missing) == 0, f"missing={list(missing)}")
+    else:
+        rec("10.feed_home_all_rails", False, f"HTTP {r.status_code}")
+
+    r = req("GET", "/spots?limit=5", token=ADMIN_TOKEN)
+    rec("10.spots_list", r.status_code == 200, f"HTTP {r.status_code}")
+
+    r = req("GET", "/me/spots", token=ADMIN_TOKEN)
+    rec("10.me_spots", r.status_code == 200, f"HTTP {r.status_code}")
+
+    # === Cleanup ===
+    print("\n--- Cleanup ---")
     try:
-        r = requests.delete(f"{BASE}/posts/{admin_del_post_id}", headers=H(admin_tok), timeout=20)
-        ok = r.status_code == 200
-        record(T2, "admin deletes another user's post → 200", ok, f"status={r.status_code}")
+        # Remove any remaining tester-created community uploads
+        r = req("GET", "/admin/spot-uploads/pending", token=ADMIN_TOKEN)
+        if r.status_code == 200:
+            for it in r.json().get("items", []):
+                if it.get("user_id") == TESTER_USER["user_id"]:
+                    req("PATCH", f"/admin/spot-uploads/{it['upload_id']}",
+                        token=ADMIN_TOKEN, json={"action": "remove"})
     except Exception as e:
-        record(T2, "admin deletes another user's post → 200", False, str(e))
+        print(" cleanup uploads exc:", e)
 
     try:
-        # Query audit logs filtered by target_id
-        r = requests.get(f"{BASE}/admin/audit-logs",
-                         params={"target_id": admin_del_post_id, "action": "post.remove"},
-                         headers=H(admin_tok), timeout=20)
-        data = r.json() if r.status_code == 200 else {}
-        items = data.get("items", [])
-        found = any(it.get("action") == "post.remove" and it.get("target_id") == admin_del_post_id
-                    and it.get("admin_user_id") == admin["user_id"] for it in items)
-        record(T2, "audit log entry 'post.remove' exists for admin deletion",
-               found, f"status={r.status_code} n_items={len(items)}")
+        uid = TESTER_USER.get("user_id")
+        if uid:
+            req("DELETE", f"/admin/users/{uid}", token=ADMIN_TOKEN,
+                json={"reason_code": "other", "reason_note": "QA cleanup"})
     except Exception as e:
-        record(T2, "audit log entry 'post.remove' exists for admin deletion", False, str(e))
+        print(" cleanup tester exc:", e)
+
+    # Summary
+    passed = sum(1 for _, ok, _ in results if ok)
+    total = len(results)
+    print(f"\n{'='*72}\nRESULT: {passed}/{total} passed")
+    failed = [(n, d) for n, ok, d in results if not ok]
+    if failed:
+        print("\nFAILURES:")
+        for n, d in failed:
+            print(f"  - {n}: {d}")
+    return 0 if not failed else 1
 
 
-# ===========================================================================
-# TASK 3 — Messaging
-# ===========================================================================
-T3 = "Messaging (conversations + messages)"
-
-conv_id = None
-try:
-    r = requests.post(f"{BASE}/conversations",
-                      json={"participant_user_id": admin["user_id"]},
-                      headers=H(sophie_tok), timeout=20)
-    data = r.json() if r.status_code == 200 else {}
-    conv_id = data.get("conversation_id")
-    ok = r.status_code == 200 and conv_id and data.get("participant_key") == "|".join(sorted([sophie["user_id"], admin["user_id"]]))
-    record(T3, "POST /conversations creates 1:1 conversation", ok,
-           f"status={r.status_code} conv_id={conv_id}")
-except Exception as e:
-    record(T3, "POST /conversations creates 1:1 conversation", False, str(e))
-
-try:
-    r = requests.post(f"{BASE}/conversations",
-                      json={"participant_user_id": admin["user_id"]},
-                      headers=H(sophie_tok), timeout=20)
-    data = r.json() if r.status_code == 200 else {}
-    same_id = data.get("conversation_id") == conv_id
-    ok = r.status_code == 200 and same_id
-    record(T3, "POST /conversations is idempotent (same id returned)", ok,
-           f"status={r.status_code} returned_id={data.get('conversation_id')} expected={conv_id}")
-except Exception as e:
-    record(T3, "POST /conversations is idempotent", False, str(e))
-
-try:
-    r = requests.post(f"{BASE}/conversations",
-                      json={"participant_user_id": sophie["user_id"]},
-                      headers=H(sophie_tok), timeout=20)
-    ok = r.status_code == 400
-    record(T3, "self-DM → 400", ok, f"status={r.status_code} body={r.text[:120]}")
-except Exception as e:
-    record(T3, "self-DM → 400", False, str(e))
-
-try:
-    r = requests.post(f"{BASE}/conversations",
-                      json={"participant_user_id": "user_doesnotexist_xxx"},
-                      headers=H(sophie_tok), timeout=20)
-    ok = r.status_code == 404
-    record(T3, "unknown recipient → 404", ok, f"status={r.status_code} body={r.text[:120]}")
-except Exception as e:
-    record(T3, "unknown recipient → 404", False, str(e))
-
-# Send a message
-msg_id = None
-if conv_id:
-    try:
-        r = requests.post(f"{BASE}/conversations/{conv_id}/messages",
-                          json={"body": "hey!"}, headers=H(sophie_tok), timeout=20)
-        data = r.json() if r.status_code == 200 else {}
-        msg_id = data.get("message_id")
-        ok = r.status_code == 200 and msg_id and data.get("body") == "hey!"
-        record(T3, "POST message as sender → 200 with message_id", ok,
-               f"status={r.status_code} message_id={msg_id}")
-    except Exception as e:
-        record(T3, "POST message as sender → 200 with message_id", False, str(e))
-
-    try:
-        r = requests.post(f"{BASE}/conversations/{conv_id}/messages",
-                          json={"body": "   "}, headers=H(sophie_tok), timeout=20)
-        ok = r.status_code == 400
-        record(T3, "empty message body → 400", ok, f"status={r.status_code} body={r.text[:120]}")
-    except Exception as e:
-        record(T3, "empty message body → 400", False, str(e))
-
-    # Sophie's inbox: unread for her should be 0 (she sent it), last_message set
-    try:
-        r = requests.get(f"{BASE}/me/conversations", headers=H(sophie_tok), timeout=20)
-        data = r.json() if r.status_code == 200 else []
-        row = next((c for c in data if c.get("conversation_id") == conv_id), None)
-        ok = r.status_code == 200 and row and row.get("unread") == 0 and row.get("last_message") == "hey!"
-        record(T3, "sophie inbox has unread=0, last_message='hey!'",
-               ok, f"status={r.status_code} row={json.dumps(row)[:200] if row else None}")
-    except Exception as e:
-        record(T3, "sophie inbox unread/last_message", False, str(e))
-
-    # Admin inbox: unread should be 1
-    try:
-        r = requests.get(f"{BASE}/me/conversations", headers=H(admin_tok), timeout=20)
-        data = r.json() if r.status_code == 200 else []
-        row = next((c for c in data if c.get("conversation_id") == conv_id), None)
-        ok = r.status_code == 200 and row and row.get("unread") == 1
-        record(T3, "admin inbox shows unread=1 before reading",
-               ok, f"status={r.status_code} unread={row.get('unread') if row else None}")
-    except Exception as e:
-        record(T3, "admin inbox unread=1", False, str(e))
-
-    # Admin GETs messages → marks read
-    try:
-        r = requests.get(f"{BASE}/conversations/{conv_id}/messages", headers=H(admin_tok), timeout=20)
-        msgs = r.json() if r.status_code == 200 else []
-        ok_get = r.status_code == 200 and isinstance(msgs, list) and any(m.get("body") == "hey!" for m in msgs)
-        # re-check inbox
-        r2 = requests.get(f"{BASE}/me/conversations", headers=H(admin_tok), timeout=20)
-        data = r2.json() if r2.status_code == 200 else []
-        row = next((c for c in data if c.get("conversation_id") == conv_id), None)
-        ok_read = row and row.get("unread") == 0
-        record(T3, "admin GET /messages then inbox unread=0 (marked read)",
-               ok_get and ok_read, f"get_status={r.status_code} n={len(msgs)} unread_after={row.get('unread') if row else None}")
-    except Exception as e:
-        record(T3, "admin GET /messages marks read", False, str(e))
-
-    # Third-party viewer (marco) → 404
-    try:
-        r = requests.get(f"{BASE}/conversations/{conv_id}/messages", headers=H(marco_tok), timeout=20)
-        ok = r.status_code == 404
-        record(T3, "third-party viewer (marco) → 404", ok, f"status={r.status_code}")
-    except Exception as e:
-        record(T3, "third-party viewer → 404", False, str(e))
-
-
-# ===========================================================================
-# TASK 4 — Photographers nearby
-# ===========================================================================
-T4 = "GET /api/photographers/nearby"
-
-try:
-    r = requests.get(f"{BASE}/photographers/nearby", headers=H(sophie_tok), timeout=20)
-    data = r.json() if r.status_code == 200 else {}
-    items = data.get("items", [])
-    ok_status = r.status_code == 200
-    ok_city = (data.get("city") or "").lower() == "austin"
-    ok_no_self = all(u.get("user_id") != sophie["user_id"] for u in items)
-    ok_no_pw = all("password_hash" not in u for u in items)
-    record(T4, "default city → Austin, excludes self, no password_hash",
-           ok_status and ok_city and ok_no_self and ok_no_pw,
-           f"status={r.status_code} city={data.get('city')} count={data.get('count')} "
-           f"no_self={ok_no_self} no_pw={ok_no_pw}")
-except Exception as e:
-    record(T4, "default nearby query", False, str(e))
-
-try:
-    r = requests.get(f"{BASE}/photographers/nearby?city=Austin", headers=H(sophie_tok), timeout=20)
-    data = r.json() if r.status_code == 200 else {}
-    items = data.get("items", [])
-    ok = r.status_code == 200 and (data.get("city") or "").lower() == "austin" and all("password_hash" not in u for u in items)
-    record(T4, "?city=Austin returns city-filtered results", ok,
-           f"status={r.status_code} count={data.get('count')}")
-except Exception as e:
-    record(T4, "?city=Austin", False, str(e))
-
-try:
-    r = requests.get(f"{BASE}/photographers/nearby?specialty=Family", headers=H(sophie_tok), timeout=20)
-    data = r.json() if r.status_code == 200 else {}
-    items = data.get("items", [])
-    # Either 0 or all items have Family in specialties[]
-    valid = all(("Family" in (u.get("specialties") or [])) for u in items)
-    ok = r.status_code == 200 and valid
-    record(T4, "?specialty=Family filters correctly (may be 0)", ok,
-           f"status={r.status_code} count={len(items)} valid_specialty_filter={valid}")
-except Exception as e:
-    record(T4, "?specialty=Family", False, str(e))
-
-
-# ===========================================================================
-# TASK 5 — Profile community fields PATCH/GET round-trip
-# ===========================================================================
-T5 = "Profile community fields"
-
-profile_payload = {
-    "specialties": ["Family", "Pets"],
-    "service_area": "Austin & San Antonio",
-    "years_shooting": 5,
-    "website": "https://petographytx.com",
-    "instagram": "@petographytx",
-    "available_for_second_shooter": True,
-    "mentorship_available": True,
-    "community_onboarded": True,
-}
-
-try:
-    r = requests.patch(f"{BASE}/auth/me", json=profile_payload, headers=H(sophie_tok), timeout=20)
-    patch_ok = r.status_code == 200
-    record(T5, "PATCH /auth/me returns 200", patch_ok, f"status={r.status_code} body={r.text[:160]}")
-
-    r2 = requests.get(f"{BASE}/auth/me", headers=H(sophie_tok), timeout=20)
-    me = r2.json() if r2.status_code == 200 else {}
-    mismatches = []
-    for k, v in profile_payload.items():
-        if me.get(k) != v:
-            mismatches.append(f"{k}: got={me.get(k)!r} expected={v!r}")
-    ok_persist = len(mismatches) == 0
-    record(T5, "GET /auth/me shows all fields persisted exactly",
-           ok_persist, "; ".join(mismatches) if mismatches else "all fields match")
-except Exception as e:
-    record(T5, "PATCH/GET round-trip", False, str(e))
-
-
-# ===========================================================================
-# Cleanup — try to delete spots we made
-# ===========================================================================
-for sid in created_spot_ids:
-    try:
-        requests.delete(f"{BASE}/spots/{sid}", headers=H(sophie_tok), timeout=15)
-    except Exception:
-        pass
-
-
-# ===========================================================================
-# Summary
-# ===========================================================================
-print("\n" + "=" * 78)
-print("SUMMARY")
-print("=" * 78)
-
-by_task = {}
-for task, case, passed, detail in results:
-    by_task.setdefault(task, []).append((case, passed, detail))
-
-total_fail = 0
-for task, cases in by_task.items():
-    passed_n = sum(1 for _, p, _ in cases if p)
-    total_n = len(cases)
-    symbol = "✅" if passed_n == total_n else "❌"
-    print(f"{symbol} {task}: {passed_n}/{total_n}")
-    for case, p, detail in cases:
-        if not p:
-            total_fail += 1
-            print(f"   ✗ {case} — {detail}")
-
-print(f"\nTotal failed: {total_fail}/{len(results)}")
-sys.exit(0 if total_fail == 0 else 1)
+if __name__ == "__main__":
+    sys.exit(main())
