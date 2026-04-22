@@ -929,6 +929,7 @@ async def get_user(user_id: str, viewer: Optional[dict] = Depends(get_optional_u
     # Alias fields so the public profile UI can share rendering code with /auth/me.
     user["stats"] = {
         "spots": spots_count,
+        "spots_count": spots_count,  # alias for frontend consistency
         "spots_created": spots_count,
         "followers": followers,
         "following": following,

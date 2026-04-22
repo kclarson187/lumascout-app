@@ -59,9 +59,9 @@ export default function ScoutAIIntroModal() {
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={() => close(false)}>
-      <View style={styles.backdrop}>
+      <View style={styles.backdrop} testID="scout-intro-backdrop">
         <View style={styles.card}>
-          <TouchableOpacity onPress={() => close(false)} style={styles.closeBtn} hitSlop={10}>
+          <TouchableOpacity onPress={() => close(false)} style={styles.closeBtn} hitSlop={10} testID="scout-intro-close">
             <X size={18} color={colors.textTertiary} />
           </TouchableOpacity>
           <View style={{ alignItems: 'center', gap: 12 }}>
