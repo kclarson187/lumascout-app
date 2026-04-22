@@ -84,7 +84,9 @@ export default function CreatorPacks() {
       ) : loading ? (
         <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
       ) : (
-        <ScrollView contentContainerStyle={{ padding: space.xl, gap: space.md, paddingBottom: 80 }}>
+        <ScrollView
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag" contentContainerStyle={{ padding: space.xl, gap: space.md, paddingBottom: 80 }}>
           <Button
             title="New pack"
             icon={<Plus size={18} color={colors.textInverse} />}

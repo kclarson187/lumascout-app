@@ -52,7 +52,9 @@ export default function SearchScreen() {
       </View>
 
       {!q && (
-        <ScrollView contentContainerStyle={{ padding: space.xl, gap: space.xl }}>
+        <ScrollView
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag" contentContainerStyle={{ padding: space.xl, gap: space.xl }}>
           <View>
             <Text style={styles.suggestHead}>Popular filters</Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>

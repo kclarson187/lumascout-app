@@ -507,7 +507,15 @@ export default function AddSpot() {
           <View style={[styles.progressFill, { width: `${((step + 1) / STEPS.length) * 100}%` }]} />
         </View>
 
-        <ScrollView contentContainerStyle={{ padding: space.xl, paddingBottom: 120 }} keyboardShouldPersistTaps="handled">
+        {/* FIX(Commit 7.6 / 2026-04): keyboardDismissMode lets users swipe
+            the form to dismiss the keyboard — iOS interactive tracking,
+            Android drag-to-dismiss. Combined with keyboardShouldPersistTaps
+            means taps on buttons/labels still work while the keyboard is up. */}
+        <ScrollView
+          contentContainerStyle={{ padding: space.xl, paddingBottom: 120 }}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+        >
           {step === 0 && (
             <View style={{ gap: space.lg }}>
               <Text style={styles.heading}>Add photos</Text>

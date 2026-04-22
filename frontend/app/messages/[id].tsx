@@ -17,7 +17,9 @@ export default function Thread() {
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollView
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag">(null);
 
   // If we arrived with ?user=<id>, ensure a conversation exists (idempotent).
   useEffect(() => {
@@ -70,7 +72,7 @@ export default function Thread() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
         <View style={styles.head}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}><ChevronLeft size={22} color={colors.text} /></TouchableOpacity>
           <TouchableOpacity

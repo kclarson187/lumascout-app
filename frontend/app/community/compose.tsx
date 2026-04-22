@@ -85,7 +85,7 @@ export default function Compose() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
         <View style={styles.head}>
           <TouchableOpacity onPress={() => router.back()} hitSlop={12}><X size={22} color={colors.text} /></TouchableOpacity>
           <Text style={styles.title}>New post</Text>
@@ -101,7 +101,9 @@ export default function Compose() {
           </TouchableOpacity>
         </View>
 
-        <ScrollView contentContainerStyle={{ padding: space.xl, gap: space.lg, paddingBottom: 80 }}>
+        <ScrollView
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag" contentContainerStyle={{ padding: space.xl, gap: space.lg, paddingBottom: 80 }}>
           <View style={styles.tipCard}>
             <Sparkles size={14} color={colors.primary} />
             <Text style={styles.tipTxt}>Be specific. “Need family photog in Austin May 20 — 2hr session” beats “need referral.”</Text>
