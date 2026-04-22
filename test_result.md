@@ -3455,7 +3455,7 @@ backend:
 frontend:
   - task: "Network Phase A — 5-tab nav, Network tab, Inbox, Thread, Profile CTAs"
     implemented: true
-    working: "NA"
+    working: true
     file: |
       /app/frontend/app/(tabs)/_layout.tsx (5-tab restructure)
       /app/frontend/app/(tabs)/network.tsx (new Network tab)
@@ -3463,7 +3463,7 @@ frontend:
       /app/frontend/app/inbox/[id].tsx (thread view w/ image/spot/profile share)
       /app/frontend/app/user/[id].tsx (new CTAs: Follow/Message/Refer/Invite)
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
