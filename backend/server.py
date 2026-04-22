@@ -937,7 +937,226 @@ async def get_user(user_id: str, viewer: Optional[dict] = Depends(get_optional_u
         "reviews_received": reviews_received,
     }
     user["is_following"] = is_following
+    # ================================================================
+    # Phase B.1 — Who Viewed Your Profile
+    # Record a view when an authenticated viewer loads someone else's
+    # profile. Self-views are ignored. Views are deduped on a 1-hour
+    # window per (viewer_user_id, viewed_user_id) pair: subsequent
+    # loads within the hour update `last_viewed_at` + increment the
+    # `count` instead of stacking rows. Fire-and-forget — never blocks
+    # the user-profile response.
+    # ================================================================
+    if viewer and viewer.get("user_id") and viewer["user_id"] != user_id:
+        try:
+            now = utcnow()
+            cutoff = now - timedelta(hours=1)
+            existing = await db.profile_views.find_one({
+                "viewer_user_id": viewer["user_id"],
+                "viewed_user_id": user_id,
+                "last_viewed_at": {"$gte": cutoff},
+            })
+            if existing:
+                await db.profile_views.update_one(
+                    {"view_id": existing["view_id"]},
+                    {"$set": {"last_viewed_at": now},
+                     "$inc": {"count": 1}},
+                )
+            else:
+                await db.profile_views.insert_one({
+                    "view_id": f"pv_{uuid.uuid4().hex[:12]}",
+                    "viewer_user_id": viewer["user_id"],
+                    "viewed_user_id": user_id,
+                    "viewer_city": viewer.get("city"),
+                    "viewer_state": viewer.get("state"),
+                    "viewer_country": viewer.get("country"),
+                    "viewer_plan": plan_of(viewer),
+                    "viewer_specialties": viewer.get("specialties") or [],
+                    "first_viewed_at": now,
+                    "last_viewed_at": now,
+                    "count": 1,
+                })
+        except Exception:
+            pass  # never block profile loads on view-tracking failures
     return user
+
+
+# ============================================================================
+# Who Viewed Your Profile (Phase B.1)
+# Free:   blurred count + top-3 blurred avatars + "upgrade to unlock"
+# Pro:    full list, names, city, timestamp, follow-back + message CTAs
+# Elite:  full list + analytics (top cities, specialty breakdown, repeat
+#         viewers, trend line)
+# ============================================================================
+@api.get("/me/viewers")
+async def get_my_viewers(
+    limit: int = 50,
+    since_days: int = 30,
+    user: dict = Depends(get_current_user),
+):
+    """List photographers who viewed my profile.
+
+    Response shape (tier-gated):
+      {
+        "plan": "free" | "pro" | "elite",
+        "total_views": int,              # distinct viewers in window
+        "total_impressions": int,        # sum of `count`s
+        "period_days": int,
+        "viewers": [                     # empty for free; full list for pro/elite
+          {
+            "user_id", "name", "username", "avatar_url", "city", "state",
+            "specialties", "verification_status", "plan",
+            "last_viewed_at", "view_count", "is_following"
+          }, ...
+        ],
+        "teaser": {                      # present for free tier only
+          "blurred_avatars": [ "data:..." | null, ...],   # up to 3
+          "blurred_initials": ["SC", "MA", ...],
+          "message": "12 photographers viewed your profile this week"
+        },
+        "analytics": {...}               # present for elite only
+      }
+    """
+    uid = user["user_id"]
+    plan = plan_of(user)
+    tier = _effective_plan(plan)  # free | pro | elite
+    cutoff = utcnow() - timedelta(days=max(1, min(since_days, 90)))
+    # Collect distinct-viewer rows (most recent first), bounded by cutoff
+    cursor = db.profile_views.find(
+        {"viewed_user_id": uid, "last_viewed_at": {"$gte": cutoff}},
+        {"_id": 0},
+    ).sort("last_viewed_at", -1).limit(max(1, min(limit, 200)))
+    rows = await cursor.to_list(length=max(1, min(limit, 200)))
+    total_views = len(rows)
+    total_impressions = sum(int(r.get("count") or 1) for r in rows)
+
+    # Free tier: teaser only (blurred)
+    if tier == "free":
+        teaser_rows = rows[:3]
+        teaser_avatars: List[Optional[str]] = []
+        teaser_initials: List[str] = []
+        for r in teaser_rows:
+            v = await db.users.find_one(
+                {"user_id": r["viewer_user_id"]},
+                {"_id": 0, "avatar_url": 1, "name": 1},
+            ) or {}
+            teaser_avatars.append(v.get("avatar_url"))
+            nm = (v.get("name") or "").strip()
+            teaser_initials.append("".join([w[0].upper() for w in nm.split()[:2] if w]) or "?")
+        return {
+            "plan": plan,
+            "total_views": total_views,
+            "total_impressions": total_impressions,
+            "period_days": since_days,
+            "viewers": [],
+            "teaser": {
+                "blurred_avatars": teaser_avatars,
+                "blurred_initials": teaser_initials,
+                "message": (
+                    f"{total_views} photographer{'s' if total_views != 1 else ''} "
+                    f"viewed your profile this {'week' if since_days <= 7 else 'month'}"
+                ),
+            },
+        }
+
+    # Pro / Elite — hydrate viewer profiles and enrich with is_following
+    viewers_out: List[dict] = []
+    for r in rows:
+        v = await db.users.find_one(
+            {"user_id": r["viewer_user_id"]},
+            {"_id": 0, "password_hash": 0, "email": 0},
+        )
+        if not v:
+            continue
+        is_following = await db.follows.count_documents({
+            "follower_user_id": uid,
+            "followed_user_id": r["viewer_user_id"],
+        }) > 0
+        viewers_out.append({
+            "user_id": v.get("user_id"),
+            "name": v.get("name"),
+            "username": v.get("username"),
+            "avatar_url": v.get("avatar_url"),
+            "city": v.get("city"),
+            "state": v.get("state"),
+            "specialties": v.get("specialties") or [],
+            "verification_status": v.get("verification_status"),
+            "plan": plan_of(v),
+            "last_viewed_at": r.get("last_viewed_at"),
+            "view_count": int(r.get("count") or 1),
+            "is_following": is_following,
+        })
+
+    resp = {
+        "plan": plan,
+        "total_views": total_views,
+        "total_impressions": total_impressions,
+        "period_days": since_days,
+        "viewers": viewers_out,
+    }
+
+    # Elite — add analytics block
+    if tier == "elite":
+        # Top cities
+        city_counts: Dict[str, int] = {}
+        for r in rows:
+            c = (r.get("viewer_city") or "").strip()
+            if c:
+                city_counts[c] = city_counts.get(c, 0) + int(r.get("count") or 1)
+        top_cities = sorted(
+            [{"city": k, "views": v} for k, v in city_counts.items()],
+            key=lambda x: -x["views"],
+        )[:5]
+        # Specialty breakdown
+        spec_counts: Dict[str, int] = {}
+        for r in rows:
+            for s in (r.get("viewer_specialties") or []):
+                if s:
+                    spec_counts[s] = spec_counts.get(s, 0) + 1
+        top_specialties = sorted(
+            [{"specialty": k, "viewers": v} for k, v in spec_counts.items()],
+            key=lambda x: -x["viewers"],
+        )[:5]
+        # Repeat viewers (count >= 2)
+        repeat_viewers = sum(1 for r in rows if int(r.get("count") or 1) >= 2)
+        # 7-day trend (counts per day for last 7 days)
+        today = utcnow().date()
+        trend: List[dict] = []
+        for i in range(6, -1, -1):
+            d = today - timedelta(days=i)
+            d_start = datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc)
+            d_end = d_start + timedelta(days=1)
+            c = await db.profile_views.count_documents({
+                "viewed_user_id": uid,
+                "last_viewed_at": {"$gte": d_start, "$lt": d_end},
+            })
+            trend.append({"date": d.isoformat(), "views": c})
+        resp["analytics"] = {
+            "top_cities": top_cities,
+            "top_specialties": top_specialties,
+            "repeat_viewers": repeat_viewers,
+            "trend_7d": trend,
+        }
+
+    return resp
+
+
+@api.get("/me/viewers/summary")
+async def get_my_viewers_summary(user: dict = Depends(get_current_user)):
+    """Lightweight teaser for home/profile badges.
+    Returns {total_7d, total_30d} so the UI can render "3 new viewers"
+    without pulling the full list.
+    """
+    uid = user["user_id"]
+    now = utcnow()
+    t7 = await db.profile_views.count_documents({
+        "viewed_user_id": uid,
+        "last_viewed_at": {"$gte": now - timedelta(days=7)},
+    })
+    t30 = await db.profile_views.count_documents({
+        "viewed_user_id": uid,
+        "last_viewed_at": {"$gte": now - timedelta(days=30)},
+    })
+    return {"total_7d": t7, "total_30d": t30, "plan": plan_of(user)}
 
 
 @api.post("/users/{user_id}/follow")
@@ -6933,6 +7152,9 @@ async def on_startup():
     await db.conversations.create_index("participant_key", unique=True)
     await db.conversations.create_index("participant_user_ids")
     await db.messages.create_index([("conversation_id", 1), ("created_at", 1)])
+    # Phase B.1 — Who Viewed Your Profile
+    await db.profile_views.create_index([("viewed_user_id", 1), ("last_viewed_at", -1)])
+    await db.profile_views.create_index([("viewer_user_id", 1), ("viewed_user_id", 1), ("last_viewed_at", -1)])
     await seed_admin()
     # Promote the seeded admin to super_admin for Phase 1 — creates a usable
     # platform owner. Idempotent: skipped if already super_admin.
