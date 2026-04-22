@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { Search, TrendingUp, MessageCircle, Users, HandHeart, BookOpen } from 'lucide-react-native';
+import { Search, TrendingUp, MessageCircle, Users, HandHeart, BookOpen, Bell } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { api } from '../../src/api';
 import { useAuth } from '../../src/auth';
@@ -36,6 +36,20 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
+  const [unreadNotif, setUnreadNotif] = useState(0);
+  // Poll unread count lightly on mount + pull-to-refresh.
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const r = await api.get('/notifications', { limit: 1 });
+        if (alive) setUnreadNotif(r.unread_count || 0);
+      } catch {}
+    };
+    load();
+    const iv = setInterval(load, 45000);
+    return () => { alive = false; clearInterval(iv); };
+  }, []);
   const [filterResults, setFilterResults] = useState<any[] | null>(null);
   const { coords } = useGps();
 
@@ -193,15 +207,30 @@ export default function Home() {
           </TouchableOpacity>
         </ScrollView>
 
-        <TouchableOpacity
-          style={styles.searchBar}
-          onPress={() => router.push('/search')}
-          testID="home-search"
-          activeOpacity={0.85}
-        >
-          <Search size={18} color={colors.textSecondary} />
-          <Text style={styles.searchPlaceholder}>Search cities, spots, or tags…</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: space.xl, marginTop: space.sm }}>
+          <TouchableOpacity
+            style={[styles.searchBar, { flex: 1, marginHorizontal: 0 }]}
+            onPress={() => router.push('/search')}
+            testID="home-search"
+            activeOpacity={0.85}
+          >
+            <Search size={18} color={colors.textSecondary} />
+            <Text style={styles.searchPlaceholder}>Search cities, spots, or tags…</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => router.push('/notifications' as any)}
+            style={styles.notifBtn}
+            testID="home-notifications"
+            activeOpacity={0.85}
+          >
+            <Bell size={18} color={colors.text} />
+            {unreadNotif > 0 ? (
+              <View style={styles.notifBadge}>
+                <Text style={styles.notifBadgeTxt}>{unreadNotif > 9 ? '9+' : unreadNotif}</Text>
+              </View>
+            ) : null}
+          </TouchableOpacity>
+        </View>
 
         {/* PRD #9 — Contextual monetisation: dismissible Pro upsell shown only
             to free users at the top of their For-You feed. */}
@@ -284,13 +313,39 @@ export default function Home() {
                 </View>
               </TouchableOpacity>
             )}
-            {/* Freshly Updated Near You (Feature 9) — the retention rail.
-                Rendered right under hero so returning users immediately
-                see activity on spots they care about. */}
+            {/* Freshly Updated Near You (Feature 9) — the retention rail. */}
             {Array.isArray(feed.freshly_updated) && feed.freshly_updated.length > 0 && (
               <View>
                 <SectionHeader title="Freshly updated near you" />
                 <FreshlyUpdatedRail spots={feed.freshly_updated} />
+              </View>
+            )}
+            {/* New Photos Added (Phase 2) */}
+            {Array.isArray(feed.new_photos) && feed.new_photos.length > 0 && (
+              <View>
+                <SectionHeader title="New photos added" />
+                <FreshlyUpdatedRail spots={feed.new_photos} />
+              </View>
+            )}
+            {/* Verified This Week (Phase 2) */}
+            {Array.isArray(feed.verified_this_week) && feed.verified_this_week.length > 0 && (
+              <View>
+                <SectionHeader title="Verified this week" />
+                <FreshlyUpdatedRail spots={feed.verified_this_week} />
+              </View>
+            )}
+            {/* Blooming Now (Phase 2) */}
+            {Array.isArray(feed.blooming_now) && feed.blooming_now.length > 0 && (
+              <View>
+                <SectionHeader title="Blooming now" />
+                <FreshlyUpdatedRail spots={feed.blooming_now} />
+              </View>
+            )}
+            {/* Trending Again (Phase 2 bonus) */}
+            {Array.isArray(feed.trending_again) && feed.trending_again.length > 0 && (
+              <View>
+                <SectionHeader title="Trending again" />
+                <FreshlyUpdatedRail spots={feed.trending_again} />
               </View>
             )}
             {sections.map((sec) => {
@@ -387,6 +442,10 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
   },
   searchPlaceholder: { color: colors.textSecondary, fontFamily: font.body, fontSize: 14 },
+  // Notifications bell (Phase 2) — lives next to the search bar.
+  notifBtn: { width: 44, height: 44, borderRadius: radii.md, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  notifBadge: { position: 'absolute', top: 4, right: 4, minWidth: 16, height: 16, borderRadius: 8, backgroundColor: colors.secondary || '#ef4444', paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
+  notifBadgeTxt: { color: colors.textInverse || '#fff', fontFamily: font.bodyBold, fontSize: 9 },
   heroCard: {
     marginHorizontal: space.xl, marginTop: space.xl,
     borderRadius: radii.lg, overflow: 'hidden',

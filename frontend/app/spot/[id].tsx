@@ -30,6 +30,7 @@ import { DetailSkeleton } from '../../src/components/Skeleton';
 import AddToCollectionSheet from '../../src/components/AddToCollectionSheet';
 import CommunityUploadsSection from '../../src/components/CommunityUploadsSection';
 import LatestConditionsSection from '../../src/components/LatestConditionsSection';
+import SeasonalTimelineSection from '../../src/components/SeasonalTimelineSection';
 import { ActivityBadge, timeAgo } from '../../src/components/FreshnessBits';
 import VerifiedBadge from '../../src/components/VerifiedBadge';
 import FreshnessBadge from '../../src/components/FreshnessBadge';
@@ -443,6 +444,16 @@ export default function SpotDetail() {
               </View>
             </>
           )}
+
+          {/* Seasonal timeline (Phase 2) — only renders if uploads span seasons */}
+          {!!spot.spot_id && spot.seasonal_timeline_total > 0 ? (
+            <>
+              <Text style={[styles.sectionH, { marginTop: space.xl }]}>Through the seasons</Text>
+              <View style={{ marginTop: space.md, marginHorizontal: -space.xl }}>
+                <SeasonalTimelineSection spotId={spot.spot_id} initial={spot.seasonal_timeline} />
+              </View>
+            </>
+          ) : null}
 
           {/* Similar */}
           {spot.similar_spots && spot.similar_spots.length > 0 && (

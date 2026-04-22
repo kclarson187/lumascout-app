@@ -1117,6 +1117,89 @@ async def get_spot(spot_id: str, viewer: Optional[dict] = Depends(get_optional_u
         if len(similar) >= 6:
             break
     view["similar_spots"] = similar
+
+    # ---- Feature 9 Phase 2 ----
+    # (A) Rotating cover image: pick the best cover from a priority stack and
+    #     surface it as `hero_cover_image_url`. Original images[] is untouched
+    #     so existing logic isn't disrupted.
+    # (D) Seasonal timeline: group approved community uploads by season
+    #     (Spring / Summer / Fall / Winter) for a dedicated spot-detail
+    #     section aimed at photographers planning by season.
+    now_ = utcnow()
+    recent_cutoff = now_ - timedelta(days=90)
+    community_uploads = await db.spot_community_uploads.find(
+        {"spot_id": spot_id, "moderation_status": "approved"},
+        {"_id": 0, "upload_id": 1, "image_url": 1, "caption": 1,
+         "featured": 1, "like_count": 1, "helpful_count": 1,
+         "user_id": 1, "created_at": 1, "contributor_verified": 1,
+         "visibility": 1},
+    ).sort("created_at", -1).to_list(200)
+
+    # --- Cover rotation priority stack ---
+    chosen_cover: Optional[str] = None
+    rotation_source: Optional[str] = None
+    # 1. Admin-featured community upload
+    for u in community_uploads:
+        if u.get("featured") and u.get("image_url"):
+            chosen_cover = u["image_url"]; rotation_source = "admin_featured"; break
+    # 2. Highest-reacted recent upload (within 90 days)
+    if not chosen_cover:
+        recent = [u for u in community_uploads if u.get("created_at") and (u["created_at"] if isinstance(u["created_at"], datetime) else datetime.fromisoformat(str(u["created_at"]).replace("Z", "+00:00"))) >= recent_cutoff.replace(tzinfo=None) if u.get("image_url")]
+        if recent:
+            best = sorted(recent, key=lambda r: (r.get("like_count", 0) + r.get("helpful_count", 0)), reverse=True)[0]
+            if (best.get("like_count", 0) + best.get("helpful_count", 0)) >= 1:
+                chosen_cover = best["image_url"]; rotation_source = "recent_most_liked"
+    # 3. Seasonal match (current season first)
+    if not chosen_cover:
+        def _season(dt: datetime) -> str:
+            m = dt.month
+            if m in (3, 4, 5): return "spring"
+            if m in (6, 7, 8): return "summer"
+            if m in (9, 10, 11): return "fall"
+            return "winter"
+        current_season = _season(now_.replace(tzinfo=None) if now_.tzinfo else now_)
+        for u in community_uploads:
+            ts = u.get("created_at")
+            if isinstance(ts, str):
+                try: ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except Exception: continue
+            if ts and _season(ts.replace(tzinfo=None) if ts.tzinfo else ts) == current_season and u.get("image_url"):
+                chosen_cover = u["image_url"]; rotation_source = f"seasonal_{current_season}"; break
+    # 4. Original cover fallback (preserves creator's shot identity)
+    if not chosen_cover:
+        imgs = spot.get("images") or []
+        for im in imgs:
+            if isinstance(im, dict) and im.get("is_cover") and im.get("image_url"):
+                chosen_cover = im["image_url"]; rotation_source = "original_cover"; break
+        if not chosen_cover and imgs and isinstance(imgs[0], dict):
+            chosen_cover = imgs[0].get("image_url"); rotation_source = "first_image"
+    view["hero_cover_image_url"] = chosen_cover
+    view["hero_cover_source"] = rotation_source
+
+    # --- Seasonal timeline ---
+    seasonal_timeline: Dict[str, list] = {"spring": [], "summer": [], "fall": [], "winter": []}
+    for u in community_uploads:
+        ts = u.get("created_at")
+        if isinstance(ts, str):
+            try: ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except Exception: continue
+        if not ts:
+            continue
+        m = ts.month
+        key = "spring" if m in (3, 4, 5) else "summer" if m in (6, 7, 8) else "fall" if m in (9, 10, 11) else "winter"
+        # Only keep images for the timeline
+        if not u.get("image_url"):
+            continue
+        if len(seasonal_timeline[key]) < 8:
+            seasonal_timeline[key].append({
+                "upload_id": u["upload_id"],
+                "image_url": u["image_url"],
+                "caption": u.get("caption"),
+                "created_at": u["created_at"].isoformat() if isinstance(u["created_at"], datetime) else u["created_at"],
+            })
+    view["seasonal_timeline"] = seasonal_timeline
+    view["seasonal_timeline_total"] = sum(len(v) for v in seasonal_timeline.values())
+
     return view
 
 
@@ -1530,6 +1613,81 @@ async def home_feed(
     for s in freshly_updated:
         s.pop("_fresh_recency", None)
 
+    # Phase 2 rails (Feature 9) — additional home-feed sections to drive
+    # daily open frequency. Each is derived from the already-hydrated
+    # `scored` pool so we avoid a second DB pass.
+    week_cutoff = now_ - timedelta(days=7)
+
+    # NEW PHOTOS ADDED — spots whose latest_photo_at is within 7 days,
+    # ranked by recency and recent upload volume.
+    def _ts(v):
+        if isinstance(v, datetime): return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+        if isinstance(v, str):
+            try: return datetime.fromisoformat(v.replace("Z", "+00:00"))
+            except Exception: return None
+        return None
+    new_photos = []
+    for s in scored:
+        lp = _ts(s.get("latest_photo_at"))
+        if lp and lp >= week_cutoff:
+            new_photos.append(s)
+    new_photos = sorted(
+        new_photos,
+        key=lambda s: (_ts(s.get("latest_photo_at")) or datetime.min.replace(tzinfo=timezone.utc),
+                       s.get("recent_upload_count_7d") or 0),
+        reverse=True,
+    )[:10]
+
+    # VERIFIED THIS WEEK — spots that have received a "verified_today"
+    # condition tag in the last 7 days.
+    verified_spot_ids: set = set()
+    try:
+        async for r in db.spot_community_uploads.find(
+            {"moderation_status": "approved", "condition_tags": "verified_today",
+             "created_at": {"$gte": week_cutoff}},
+            {"_id": 0, "spot_id": 1},
+        ):
+            verified_spot_ids.add(r["spot_id"])
+        async for r in db.spot_updates.find(
+            {"moderation_status": "approved", "condition_tags": "verified_today",
+             "created_at": {"$gte": week_cutoff}},
+            {"_id": 0, "spot_id": 1},
+        ):
+            verified_spot_ids.add(r["spot_id"])
+    except Exception:
+        verified_spot_ids = set()
+    verified_this_week = [s for s in scored if s.get("spot_id") in verified_spot_ids][:10]
+
+    # BLOOMING NOW — spots flagged with "blooming" condition in last 14d.
+    # Slightly wider window since flower seasons cluster.
+    bloom_cutoff = now_ - timedelta(days=14)
+    bloom_ids: set = set()
+    try:
+        async for r in db.spot_community_uploads.find(
+            {"moderation_status": "approved", "condition_tags": "blooming",
+             "created_at": {"$gte": bloom_cutoff}},
+            {"_id": 0, "spot_id": 1},
+        ):
+            bloom_ids.add(r["spot_id"])
+        async for r in db.spot_updates.find(
+            {"moderation_status": "approved", "condition_tags": "blooming",
+             "created_at": {"$gte": bloom_cutoff}},
+            {"_id": 0, "spot_id": 1},
+        ):
+            bloom_ids.add(r["spot_id"])
+    except Exception:
+        bloom_ids = set()
+    blooming_now = [s for s in scored if s.get("spot_id") in bloom_ids][:10]
+
+    # TRENDING AGAIN — spots that had a fresh burst (3+ uploads last 7d)
+    # AND are scoring well on the feed's score field. Useful for
+    # rediscovery of spots that previously went quiet.
+    trending_again = sorted(
+        [s for s in scored if (s.get("recent_upload_count_7d") or 0) >= 3],
+        key=lambda s: (s.get("recent_upload_count_7d") or 0, s.get("score") or 0),
+        reverse=True,
+    )[:10]
+
     return {
         "hero": hero,
         "nearby": nearby_list,
@@ -1540,6 +1698,10 @@ async def home_feed(
         "following": following_feed,
         "seasonal": seasonal,
         "freshly_updated": freshly_updated,
+        "new_photos": new_photos,
+        "verified_this_week": verified_this_week,
+        "blooming_now": blooming_now,
+        "trending_again": trending_again,
     }
 
 
@@ -1809,6 +1971,51 @@ async def post_spot_upload(
         await db.spot_community_uploads.insert_many(docs)
     if auto_approve:
         await _recompute_spot_freshness(spot_id)
+        # Notify savers of this spot that a fresh photo dropped.
+        # (Fire-and-forget; failures don't affect the upload response.)
+        try:
+            saver_ids = await db.spot_saves.find(
+                {"spot_id": spot_id}, {"_id": 0, "user_id": 1}
+            ).to_list(500)
+            preview_img = docs[0].get("image_url") if docs else None
+            for sv in saver_ids:
+                await _emit_notification(
+                    sv["user_id"],
+                    "saved_spot_fresh_photo",
+                    f"New photos at {spot.get('title') or 'a saved spot'}",
+                    f"{user.get('name') or 'A photographer'} just added fresh photos",
+                    actor_user_id=user["user_id"],
+                    spot_id=spot_id,
+                    upload_id=docs[0]["upload_id"] if docs else None,
+                    image_url=preview_img,
+                    deep_link=f"/spot/{spot_id}",
+                )
+            # Verified-today / blooming alerts
+            if "verified_today" in (body.condition_tags or []):
+                for sv in saver_ids:
+                    await _emit_notification(
+                        sv["user_id"],
+                        "saved_spot_verified",
+                        f"{spot.get('title') or 'A saved spot'} verified today",
+                        f"{user.get('name') or 'A photographer'} confirmed the spot is good right now",
+                        actor_user_id=user["user_id"],
+                        spot_id=spot_id,
+                        deep_link=f"/spot/{spot_id}",
+                    )
+            if "blooming" in (body.condition_tags or []):
+                for sv in saver_ids:
+                    await _emit_notification(
+                        sv["user_id"],
+                        "saved_spot_blooming",
+                        f"Blooming now at {spot.get('title') or 'a saved spot'}",
+                        "Get there before the bloom fades",
+                        actor_user_id=user["user_id"],
+                        spot_id=spot_id,
+                        image_url=preview_img,
+                        deep_link=f"/spot/{spot_id}",
+                    )
+        except Exception:
+            pass
     return {
         "ok": True,
         "batch_id": batch_id,
@@ -1845,6 +2052,24 @@ async def list_spot_uploads(
     skip = (page - 1) * limit
     items = await db.spot_community_uploads.find(q, {"_id": 0}) \
         .sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    # Followers-only visibility: drop items whose author the viewer doesn't
+    # follow. Own items + items authored by followed users + public items
+    # always pass. Moderators/owner keep full visibility for review.
+    if items and not include_pending:
+        followed_ids: set = set()
+        if viewer:
+            followed_ids = {viewer["user_id"]}  # always see own
+            fr = await db.user_follows.find(
+                {"follower_id": viewer["user_id"]}, {"_id": 0, "followed_id": 1}
+            ).to_list(1000) if hasattr(db, "user_follows") else []
+            for f in fr:
+                followed_ids.add(f.get("followed_id"))
+        def _visible(it: dict) -> bool:
+            vis = it.get("visibility") or "public"
+            if vis != "followers":
+                return True
+            return it.get("user_id") in followed_ids
+        items = [it for it in items if _visible(it)]
     items = await _hydrate_contributors(items)
     # Attach viewer's reaction state
     if viewer and items:
@@ -1971,6 +2196,22 @@ async def react_spot_upload(
             {"upload_id": upload_id}, {"$inc": {inc_field: 1}}
         )
         acted = True
+        # Notify the upload's author (not self)
+        try:
+            if upload.get("user_id") and upload["user_id"] != user["user_id"]:
+                await _emit_notification(
+                    upload["user_id"],
+                    "upload_reaction",
+                    f"{user.get('name') or 'Someone'} {'liked' if kind=='like' else 'found helpful'} your photo",
+                    (upload.get("caption") or "").strip()[:140] or "Your contribution is being appreciated",
+                    actor_user_id=user["user_id"],
+                    spot_id=upload["spot_id"],
+                    upload_id=upload_id,
+                    image_url=upload.get("image_url"),
+                    deep_link=f"/spot/{upload['spot_id']}",
+                )
+        except Exception:
+            pass
     # Refresh freshness lazily (counts affect score)
     await _recompute_spot_freshness(upload["spot_id"])
     updated = await db.spot_community_uploads.find_one(
@@ -2055,7 +2296,120 @@ async def admin_moderate_upload(
         raise HTTPException(status_code=400, detail="Unknown action")
     await db.spot_community_uploads.update_one({"upload_id": upload_id}, {"$set": updates})
     await _recompute_spot_freshness(upload["spot_id"])
+    # Notify uploader on approve/deny/feature/set_as_cover
+    try:
+        if action in ("approve", "feature", "set_as_cover") and upload.get("user_id"):
+            notif_title = {
+                "approve": "Your upload was approved",
+                "feature": "Your upload was featured",
+                "set_as_cover": "Your photo is now the cover!",
+            }[action]
+            await _emit_notification(
+                upload["user_id"],
+                f"upload_{action}",
+                notif_title,
+                (upload.get("caption") or "Thanks for keeping the community fresh").strip()[:200],
+                actor_user_id=user["user_id"],
+                spot_id=upload["spot_id"],
+                upload_id=upload_id,
+                image_url=upload.get("image_url"),
+                deep_link=f"/spot/{upload['spot_id']}",
+            )
+    except Exception:
+        pass
     return {"ok": True, "action": action}
+
+
+# ============================================================================
+# Notifications — lightweight in-app inbox.
+# (Feature 9 Phase 2 / 2026-04) Fires on: like on user's upload; upload posted
+# to a spot the user saved; moderator approved user's upload; "verified today"
+# or "blooming" flagged on a saved spot. Push-ready: each notification carries
+# a `deep_link` that the push payload can reuse later.
+# ============================================================================
+
+async def _emit_notification(
+    user_id: str,
+    kind: str,
+    title: str,
+    body: str,
+    *,
+    actor_user_id: Optional[str] = None,
+    spot_id: Optional[str] = None,
+    upload_id: Optional[str] = None,
+    update_id: Optional[str] = None,
+    deep_link: Optional[str] = None,
+    image_url: Optional[str] = None,
+) -> None:
+    """Persist a notification row. No-op if user_id is falsy or == actor_user_id
+    (don't self-notify)."""
+    if not user_id or user_id == actor_user_id:
+        return
+    try:
+        await db.notifications.insert_one({
+            "notification_id": f"ntf_{uuid.uuid4().hex[:12]}",
+            "user_id": user_id,
+            "kind": kind,
+            "title": title[:120],
+            "body": body[:280],
+            "actor_user_id": actor_user_id,
+            "spot_id": spot_id,
+            "upload_id": upload_id,
+            "update_id": update_id,
+            "image_url": image_url,
+            "deep_link": deep_link,
+            "read_at": None,
+            "created_at": utcnow(),
+        })
+    except Exception:
+        # Never let notifications break the happy path.
+        pass
+
+
+@api.get("/notifications")
+async def list_notifications(
+    limit: int = 30,
+    unread_only: bool = False,
+    user: dict = Depends(get_current_user),
+):
+    q: dict = {"user_id": user["user_id"]}
+    if unread_only:
+        q["read_at"] = None
+    limit = max(1, min(100, limit))
+    items = await db.notifications.find(q, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+    # Hydrate actor (name + avatar) for nicer UI
+    actor_ids = list({n.get("actor_user_id") for n in items if n.get("actor_user_id")})
+    amap: Dict[str, dict] = {}
+    if actor_ids:
+        rows = await db.users.find(
+            {"user_id": {"$in": actor_ids}},
+            {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1},
+        ).to_list(len(actor_ids))
+        amap = {r["user_id"]: r for r in rows}
+    for n in items:
+        n["actor"] = amap.get(n.get("actor_user_id"))
+    unread = await db.notifications.count_documents({"user_id": user["user_id"], "read_at": None})
+    return {"items": items, "unread_count": unread}
+
+
+@api.post("/notifications/mark-read")
+async def mark_notifications_read(
+    notification_id: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    """Mark one by id, or ALL unread if no id is supplied."""
+    now = utcnow()
+    if notification_id:
+        await db.notifications.update_one(
+            {"notification_id": notification_id, "user_id": user["user_id"]},
+            {"$set": {"read_at": now}},
+        )
+    else:
+        await db.notifications.update_many(
+            {"user_id": user["user_id"], "read_at": None},
+            {"$set": {"read_at": now}},
+        )
+    return {"ok": True}
 
 
 # ============================================================================

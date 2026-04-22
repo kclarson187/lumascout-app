@@ -15,6 +15,7 @@ export default function UploadScreen() {
   const [photos, setPhotos] = useState<string[]>([]);
   const [caption, setCaption] = useState('');
   const [tags, setTags] = useState<string[]>([]);
+  const [visibility, setVisibility] = useState<'public' | 'followers'>('public');
   const [submitting, setSubmitting] = useState(false);
 
   const pickPhotos = async () => {
@@ -58,7 +59,7 @@ export default function UploadScreen() {
         images: photos.map((u) => ({ image_url: u, caption: null })),
         caption: caption.trim() || null,
         condition_tags: tags,
-        visibility: 'public',
+        visibility,
       });
       Alert.alert(
         res?.auto_approved ? 'Posted!' : 'Submitted for review',
@@ -148,6 +149,27 @@ export default function UploadScreen() {
               })}
             </View>
           </View>
+          <View style={{ gap: space.sm }}>
+            <Text style={styles.sectionTitle}>Who can see this?</Text>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <Pressable
+                onPress={() => setVisibility('public')}
+                style={[styles.visOpt, visibility === 'public' && styles.visOptActive]}
+                testID="vis-public"
+              >
+                <Text style={[styles.visTitle, visibility === 'public' && { color: colors.primary }]}>🌎 Public</Text>
+                <Text style={styles.visSub}>Shows on the spot for everyone.</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setVisibility('followers')}
+                style={[styles.visOpt, visibility === 'followers' && styles.visOptActive]}
+                testID="vis-followers"
+              >
+                <Text style={[styles.visTitle, visibility === 'followers' && { color: colors.primary }]}>👥 Followers</Text>
+                <Text style={styles.visSub}>Only people who follow you can see this.</Text>
+              </Pressable>
+            </View>
+          </View>
         </ScrollView>
 
         <View style={styles.submitBar}>
@@ -189,6 +211,11 @@ const styles = StyleSheet.create({
   tagsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   tagChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
   tagChipTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
+  // Visibility toggle (Phase 2) — lightweight public/followers split.
+  visOpt: { flex: 1, padding: 12, borderRadius: radii.md, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, gap: 4 },
+  visOptActive: { backgroundColor: 'rgba(245,166,35,0.10)', borderColor: colors.primary },
+  visTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
+  visSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11 },
   submitBar: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: space.lg, paddingBottom: Platform.OS === 'ios' ? space.xl : space.lg, backgroundColor: colors.bg, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: radii.md, backgroundColor: colors.primary },
   submitBtnDisabled: { backgroundColor: colors.surface2 },
