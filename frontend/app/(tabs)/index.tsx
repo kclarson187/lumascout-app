@@ -163,7 +163,7 @@ export default function Home() {
             <Text style={styles.brand}>LumaScout</Text>
           </View>
           <TouchableOpacity
-            onPress={() => router.push('/messages')}
+            onPress={() => router.push('/inbox')}
             style={styles.topIconBtn}
             testID="home-messages"
           >

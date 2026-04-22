@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, Pressable, Image, ActivityIndicator, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { Search, MessageSquare, ShieldCheck, Star, MapPin, Send, Users as UsersIcon, Inbox, Eye, Briefcase } from 'lucide-react-native';
+import { Search, MessageSquare, ShieldCheck, Star, MapPin, Send, Users as UsersIcon, Inbox, Eye, Briefcase, BarChart3 } from 'lucide-react-native';
 import { api } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
 
@@ -28,7 +28,7 @@ function Badge({ u }: { u: any }) {
       </View>
     );
   }
-  if (u.plan === 'elite') return <View style={[s.badge, { backgroundColor: 'rgba(236,72,153,0.14)', borderColor: 'rgba(236,72,153,0.4)' }]}><Star size={9} color="#ec4899"/><Text style={[s.badgeTxt,{color:'#ec4899'}]}>Elite</Text></View>;
+  if (u.plan === 'elite') return <View style={[s.badge, { backgroundColor: colors.primary, borderColor: colors.primary }]}><Star size={9} color={colors.textInverse} fill={colors.textInverse} strokeWidth={0}/><Text style={[s.badgeTxt,{color:colors.textInverse}]}>Featured</Text></View>;
   if (u.plan === 'pro')   return <View style={[s.badge, { backgroundColor: 'rgba(245,166,35,0.14)', borderColor: 'rgba(245,166,35,0.4)' }]}><Star size={9} color={colors.primary}/><Text style={[s.badgeTxt,{color:colors.primary}]}>Pro</Text></View>;
   return null;
 }
@@ -118,6 +118,10 @@ export default function NetworkTab() {
         <Pressable onPress={() => router.push('/referrals' as any)} style={s.inboxBtn} testID="network-referrals">
           <Briefcase size={18} color={colors.primary} />
           <Text style={[s.inboxBtnTxt, { color: colors.primary }]}>Gigs</Text>
+        </Pressable>
+        <Pressable onPress={() => router.push('/analytics' as any)} style={s.inboxBtn} testID="network-analytics">
+          <BarChart3 size={18} color={colors.primary} />
+          <Text style={[s.inboxBtnTxt, { color: colors.primary }]}>Analytics</Text>
         </Pressable>
       </View>
 

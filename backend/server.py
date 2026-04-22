@@ -1159,6 +1159,95 @@ async def get_my_viewers_summary(user: dict = Depends(get_current_user)):
     return {"total_7d": t7, "total_30d": t30, "plan": plan_of(user)}
 
 
+@api.get("/me/analytics/networking")
+async def my_networking_analytics(
+    since_days: int = 30,
+    user: dict = Depends(get_current_user),
+):
+    """Phase B.3 — Elite networking analytics dashboard.
+    Pro tier gets a read-only preview with a single headline stat.
+    Elite gets full numbers. Free tier gets a teaser shape.
+    """
+    uid = user["user_id"]
+    tier = _effective_plan(plan_of(user))
+    now = utcnow()
+    cutoff = now - timedelta(days=max(1, min(since_days, 90)))
+
+    # Baseline counts — shared across all tiers (cheap)
+    views_7d = await db.profile_views.count_documents({
+        "viewed_user_id": uid, "last_viewed_at": {"$gte": now - timedelta(days=7)},
+    })
+    views_30d = await db.profile_views.count_documents({
+        "viewed_user_id": uid, "last_viewed_at": {"$gte": now - timedelta(days=30)},
+    })
+    follows_gained = await db.follows.count_documents({
+        "followed_user_id": uid, "created_at": {"$gte": cutoff},
+    }) if True else 0  # follows collection may lack created_at on older docs
+
+    # Marketplace — applications sent + acceptance rate
+    apps_sent = await db.referral_applications.count_documents({
+        "applicant_user_id": uid, "created_at": {"$gte": cutoff},
+    })
+    apps_accepted = await db.referral_applications.count_documents({
+        "applicant_user_id": uid, "status": "accepted", "created_at": {"$gte": cutoff},
+    })
+    acceptance_rate = round((apps_accepted / apps_sent) * 100, 1) if apps_sent > 0 else 0.0
+
+    # Needs posted + applicants received
+    needs_posted = await db.referral_needs.count_documents({
+        "poster_user_id": uid, "posted_at": {"$gte": cutoff},
+    })
+    applicants_received = 0
+    if needs_posted > 0:
+        need_ids = [n["need_id"] async for n in db.referral_needs.find(
+            {"poster_user_id": uid, "posted_at": {"$gte": cutoff}}, {"need_id": 1, "_id": 0}
+        )]
+        applicants_received = await db.referral_applications.count_documents({
+            "need_id": {"$in": need_ids},
+        })
+
+    # Messaging — threads created + conversion (we count distinct thread starts via dm_requests)
+    threads_active = await db.dm_threads.count_documents({
+        "participant_user_ids": uid, "last_message_at": {"$ne": None},
+        "last_message_at": {"$gte": cutoff},
+    })
+
+    base = {
+        "plan": plan_of(user),
+        "period_days": since_days,
+        "profile_views_7d": views_7d,
+        "profile_views_30d": views_30d,
+        "follows_gained": follows_gained,
+        "applications_sent": apps_sent,
+        "applications_accepted": apps_accepted,
+        "acceptance_rate_pct": acceptance_rate,
+        "needs_posted": needs_posted,
+        "applicants_received": applicants_received,
+        "active_threads": threads_active,
+    }
+
+    # Elite-only extras: 7-day trend + funnel
+    if tier == "elite":
+        today = now.date()
+        trend: List[dict] = []
+        for i in range(6, -1, -1):
+            d = today - timedelta(days=i)
+            d_start = datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc)
+            d_end = d_start + timedelta(days=1)
+            cnt = await db.profile_views.count_documents({
+                "viewed_user_id": uid,
+                "last_viewed_at": {"$gte": d_start, "$lt": d_end},
+            })
+            trend.append({"date": d.isoformat(), "views": cnt})
+        base["trend_7d"] = trend
+        base["funnel"] = {
+            "views_to_follow_pct": round((follows_gained / views_30d) * 100, 1) if views_30d > 0 else 0.0,
+            "applications_to_acceptance_pct": acceptance_rate,
+        }
+
+    return base
+
+
 @api.post("/users/{user_id}/follow")
 async def follow_user(user_id: str, user: dict = Depends(get_current_user)):
     if user_id == user["user_id"]:
@@ -2767,6 +2856,18 @@ async def dm_start_thread(
     accepted = await _thread_is_accepted(thread, target_id)
     is_request = not target_follows_sender and not accepted
     if is_request:
+        # Phase B.3 — Free-tier gate: max 5 concurrent PENDING requests.
+        # Pro/Elite are unlimited. Rate limit still applies (5/hr).
+        tier = _effective_plan(plan_of(user))
+        if tier == "free":
+            pending_total = await db.dm_requests.count_documents({
+                "from_user_id": user["user_id"], "status": "pending",
+            })
+            if pending_total >= 5:
+                raise HTTPException(
+                    status_code=402,
+                    detail="Free plan limit: 5 pending message requests. Upgrade to Pro for unlimited.",
+                )
         # Rate limit: max 5 pending requests per hour from this sender.
         hour_ago = utcnow() - timedelta(hours=1)
         sent = await db.dm_requests.count_documents({
@@ -3232,6 +3333,26 @@ async def network_discover(
     # Available for referrals / second shooter
     avail_refer = await db.users.find({**base, "available_for_referrals": True}, proj).limit(limit_per_rail).to_list(limit_per_rail)
     avail_second = await db.users.find({**base, "available_for_second_shooter": True}, proj).limit(limit_per_rail).to_list(limit_per_rail)
+
+    # Phase B.3 — Elite discovery boost.
+    # Moderate boost so Elite photographers surface first in every rail
+    # without feeling spammy. Preserves existing order within each tier.
+    def _elite_boost(lst: list) -> list:
+        elites = [u for u in lst if (u.get("plan") or "free") == "elite"]
+        pros = [u for u in lst if (u.get("plan") or "free") == "pro"]
+        rest = [u for u in lst if (u.get("plan") or "free") not in ("elite", "pro")]
+        return elites + pros + rest
+
+    near_rail = _elite_boost(near_rail)
+    popular_in_city = _elite_boost(popular_in_city)
+    pet = _elite_boost(pet)
+    wedding = _elite_boost(wedding)
+    family = _elite_boost(family)
+    new_members = _elite_boost(new_members)
+    top_contribs = _elite_boost(top_contribs)
+    verified = _elite_boost(verified)
+    avail_refer = _elite_boost(avail_refer)
+    avail_second = _elite_boost(avail_second)
     return {
         "near_you": [_user_public_view(u) for u in near_rail],
         "popular_in_city": [_user_public_view(u) for u in popular_in_city],

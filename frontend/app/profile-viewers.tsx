@@ -42,6 +42,7 @@ import { api, formatApiError } from '../src/api';
 import { useAuth } from '../src/auth';
 import { colors, font, space, radii } from '../src/theme';
 import VerifiedBadge from '../src/components/VerifiedBadge';
+import FeaturedBadge from '../src/components/FeaturedBadge';
 
 type Viewer = {
   user_id: string;
@@ -338,6 +339,7 @@ function ViewerCard({
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
             <Text style={styles.cardName} numberOfLines={1}>{viewer.name}</Text>
             {isVerified && <VerifiedBadge size={12} />}
+            <FeaturedBadge plan={viewer.plan} variant="inline" size={11} />
           </View>
           {cityLine ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>

@@ -1,470 +1,381 @@
-"""Backend tests for Community Uploads + Updates retention feature (2026-04).
-
-See /app/test_result.md test plan. Runs fully idempotent scenarios and
-cleans up test data at the end.
 """
-from __future__ import annotations
-
-import json
+Phase B.3 Backend QA — Focused Tests
+Tests:
+  A) GET /api/me/analytics/networking
+  B) POST /api/dm/threads/start (free-tier 5-pending cap)
+  C) GET /api/network/discover (Elite discovery boost)
+"""
+import os
 import sys
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
-
+import datetime as _dt
 import requests
+from pymongo import MongoClient
 
-# ---------------------------------------------------------------------------
-FRONTEND_ENV = "/app/frontend/.env"
-BACKEND_URL = None
-with open(FRONTEND_ENV) as f:
-    for line in f:
-        if line.startswith("EXPO_PUBLIC_BACKEND_URL="):
-            BACKEND_URL = line.split("=", 1)[1].strip().strip('"').strip("'")
+BASE_URL = os.environ.get("BACKEND_URL", "http://localhost:8001/api")
+MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+DB_NAME = os.environ.get("DB_NAME", "photoscout_database")
+
+CREDS = {
+    "admin": ("admin@lumascout.app", "admin123"),
+    "sophie": ("sophie@lumascout.app", "demo123"),
+    "marco": ("marco@lumascout.app", "demo123"),
+    "priya": ("priya@lumascout.app", "demo123"),
+    "jordan": ("jordan@lumascout.app", "demo123"),
+    "lena": ("lena@lumascout.app", "demo123"),
+    "emily": ("emily.toronto@lumascout.app", "demo123"),
+    "noah": ("noah.vancouver@lumascout.app", "demo123"),
+    "sophie_m": ("sophie.montreal@lumascout.app", "demo123"),
+    "diego": ("diego.cdmx@lumascout.app", "demo123"),
+    "valeria": ("valeria.gdl@lumascout.app", "demo123"),
+    "luis": ("luis.monterrey@lumascout.app", "demo123"),
+    "alex": ("alex.la@lumascout.app", "demo123"),
+    "maya": ("maya.denver@lumascout.app", "demo123"),
+}
+
+mongo = MongoClient(MONGO_URL)
+db = mongo[DB_NAME]
+
+tokens = {}
+uids = {}
+results = []
+
+
+def record(name, passed, note=""):
+    status = "PASS" if passed else "FAIL"
+    results.append((status, name, note))
+    print(f"[{status}] {name}{(' — ' + note) if note else ''}")
+
+
+def login(email, password):
+    r = requests.post(f"{BASE_URL}/auth/login", json={"email": email, "password": password})
+    r.raise_for_status()
+    return r.json()
+
+
+def auth(handle):
+    return {"Authorization": f"Bearer {tokens[handle]}"}
+
+
+def setup_logins():
+    for handle, (email, pw) in CREDS.items():
+        try:
+            resp = login(email, pw)
+            tokens[handle] = resp["token"]
+            uids[handle] = resp["user"]["user_id"]
+            print(f"  logged in {handle} ({uids[handle][:16]}) plan={resp['user'].get('plan')}")
+        except Exception as e:
+            print(f"  WARN: login {handle} failed: {e}")
+
+
+def test_analytics():
+    print("\n=== A) GET /api/me/analytics/networking ===\n")
+
+    r = requests.get(f"{BASE_URL}/me/analytics/networking")
+    record("A1 401 without Authorization", r.status_code == 401, f"got {r.status_code}")
+
+    base_keys = {
+        "plan", "period_days", "profile_views_7d", "profile_views_30d",
+        "follows_gained", "applications_sent", "applications_accepted",
+        "acceptance_rate_pct", "needs_posted", "applicants_received",
+        "active_threads",
+    }
+    elite_extra = {"trend_7d", "funnel"}
+
+    r = requests.get(f"{BASE_URL}/me/analytics/networking", headers=auth("admin"))
+    data = r.json()
+    missing = base_keys - set(data.keys())
+    has_elite = elite_extra.issubset(set(data.keys()))
+    trend = data.get("trend_7d", [])
+    trend_len_ok = isinstance(trend, list) and len(trend) == 7
+    funnel = data.get("funnel", {})
+    funnel_ok = isinstance(funnel, dict) and "views_to_follow_pct" in funnel and "applications_to_acceptance_pct" in funnel
+    trend_items_ok = all({"date", "views"}.issubset(set(t.keys())) for t in trend)
+    dates = [t.get("date") for t in trend]
+    trend_sorted = dates == sorted(dates)
+    ok = r.status_code == 200 and not missing and has_elite and trend_len_ok and funnel_ok and trend_items_ok and trend_sorted
+    record("A2 admin elite: base + trend_7d[7] + funnel", ok,
+           f"status={r.status_code} plan={data.get('plan')} missing={missing} trend_len={len(trend)} funnel_ok={funnel_ok} trend_items_ok={trend_items_ok} trend_sorted={trend_sorted}")
+
+    r = requests.get(f"{BASE_URL}/me/analytics/networking", headers=auth("sophie"))
+    data_pro = r.json()
+    missing = base_keys - set(data_pro.keys())
+    has_trend = "trend_7d" in data_pro
+    has_funnel = "funnel" in data_pro
+    ok = r.status_code == 200 and not missing and not has_trend and not has_funnel
+    record("A3 sophie pro: base only, no trend/funnel", ok,
+           f"status={r.status_code} plan={data_pro.get('plan')} missing={missing} has_trend={has_trend} has_funnel={has_funnel}")
+
+    r = requests.get(f"{BASE_URL}/me/analytics/networking", headers=auth("marco"))
+    data_free = r.json()
+    missing = base_keys - set(data_free.keys())
+    has_trend = "trend_7d" in data_free
+    has_funnel = "funnel" in data_free
+    same_shape = set(data_free.keys()) == set(data_pro.keys())
+    ok = r.status_code == 200 and not missing and not has_trend and not has_funnel and same_shape
+    record("A4 marco free: base only, shape identical to pro", ok,
+           f"status={r.status_code} plan={data_free.get('plan')} missing={missing} same_shape_as_pro={same_shape}")
+
+    # Clamp tests
+    d9999 = requests.get(f"{BASE_URL}/me/analytics/networking?since_days=9999", headers=auth("admin")).json()
+    d0    = requests.get(f"{BASE_URL}/me/analytics/networking?since_days=0", headers=auth("admin")).json()
+    dneg  = requests.get(f"{BASE_URL}/me/analytics/networking?since_days=-10", headers=auth("admin")).json()
+    d45   = requests.get(f"{BASE_URL}/me/analytics/networking?since_days=45", headers=auth("admin")).json()
+
+    ok_9999 = d9999.get("period_days") == 90
+    ok_0 = d0.get("period_days") == 1
+    ok_neg = dneg.get("period_days") == 1
+    ok_45 = d45.get("period_days") == 45
+    record("A5 since_days clamp (9999→90, 0→1, -10→1, 45→45)",
+           ok_9999 and ok_0 and ok_neg and ok_45,
+           f"9999→{d9999.get('period_days')}  0→{d0.get('period_days')}  -10→{dneg.get('period_days')}  45→{d45.get('period_days')}")
+
+    rate = data.get("acceptance_rate_pct")
+    sent = data.get("applications_sent", 0)
+    acc = data.get("applications_accepted", 0)
+    expected = round((acc / sent) * 100, 1) if sent > 0 else 0.0
+    is_float = isinstance(rate, (int, float)) and not isinstance(rate, bool)
+    formula_ok = rate == expected
+    record("A6 acceptance_rate_pct numeric & formula", is_float and formula_ok,
+           f"rate={rate} sent={sent} accepted={acc} expected={expected}")
+
+
+def cleanup_user_dm_state(handle):
+    uid = uids.get(handle)
+    if not uid:
+        return
+    db.dm_requests.delete_many({"from_user_id": uid})
+    db.dm_requests.delete_many({"to_user_id": uid})
+    thread_ids = [t["thread_id"] for t in db.dm_threads.find({"participant_user_ids": uid}, {"thread_id": 1})]
+    if thread_ids:
+        db.dm_threads.delete_many({"thread_id": {"$in": thread_ids}})
+        db.dm_messages.delete_many({"thread_id": {"$in": thread_ids}})
+        db.dm_participants.delete_many({"thread_id": {"$in": thread_ids}})
+    db.dm_blocks.delete_many({"$or": [{"blocker_user_id": uid}, {"blocked_user_id": uid}]})
+
+
+def test_dm_cap():
+    print("\n=== B) POST /api/dm/threads/start (5-pending cap) ===\n")
+
+    cleanup_user_dm_state("marco")
+    marco_id = uids["marco"]
+
+    target_handles = ["priya", "jordan", "lena", "emily", "noah", "diego"]
+    for h in target_handles:
+        db.follows.delete_many({"follower_user_id": uids[h], "followed_user_id": marco_id})
+        db.dm_requests.delete_many({"from_user_id": marco_id, "to_user_id": uids[h]})
+
+    ok7 = True
+    for i, h in enumerate(target_handles[:5]):
+        r = requests.post(f"{BASE_URL}/dm/threads/start", headers=auth("marco"),
+                          json={"user_id": uids[h], "opening_body": f"hey {h}, quick Q about wedding shoot"})
+        if r.status_code != 200:
+            ok7 = False
+            print(f"  req {i+1} to {h}: {r.status_code} {r.text[:200]}")
             break
-if not BACKEND_URL:
-    BACKEND_URL = "https://photo-finder-60.preview.emergentagent.com"
-API = f"{BACKEND_URL}/api"
+        if not r.json().get("is_request"):
+            ok7 = False
+            print(f"  req {i+1} to {h}: NOT flagged is_request=true → cap logic won't apply")
+    pending_count = db.dm_requests.count_documents({"from_user_id": marco_id, "status": "pending"})
+    record("B7 marco 5 distinct pending requests (200, DB has 5 rows)",
+           ok7 and pending_count == 5, f"pending_count={pending_count}")
 
-ADMIN_EMAIL = "admin@lumascout.app"
-ADMIN_PASS = "admin123"
+    r = requests.post(f"{BASE_URL}/dm/threads/start", headers=auth("marco"),
+                      json={"user_id": uids[target_handles[5]], "opening_body": "6th attempt"})
+    detail = ""
+    try:
+        detail = (r.json() or {}).get("detail", "")
+    except Exception:
+        pass
+    ok8 = r.status_code == 402 and "Free plan limit: 5 pending message requests" in detail
+    record("B8 marco 6th request → 402 cap message", ok8,
+           f"status={r.status_code} detail={detail!r}")
 
-PNG_B64 = (
-    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgA"
-    "AIAAAUAAarVyFEAAAAASUVORK5CYII="
-)
+    # Scenario 12: cap precedence over 429
+    ok12 = r.status_code == 402
+    record("B12 402 cap supersedes 429 (cap evaluated first)", ok12, f"status={r.status_code}")
 
-results: List[Tuple[str, bool, str]] = []
+    # Scenario 9: accept drops by 1
+    req = db.dm_requests.find_one({"from_user_id": marco_id, "to_user_id": uids["priya"], "status": "pending"})
+    accept_ok = False
+    new_pending = -1
+    retry_code = None
+    if req:
+        r = requests.post(f"{BASE_URL}/dm/requests/{req['request_id']}/accept", headers=auth("priya"))
+        accept_ok = r.status_code == 200
+        new_pending = db.dm_requests.count_documents({"from_user_id": marco_id, "status": "pending"})
+        r2 = requests.post(f"{BASE_URL}/dm/threads/start", headers=auth("marco"),
+                           json={"user_id": uids[target_handles[5]], "opening_body": "post-accept retry"})
+        retry_code = r2.status_code
+    ok9 = accept_ok and new_pending == 4 and retry_code == 200
+    record("B9 accept drops cap by 1, marco resends (200)",
+           ok9, f"accept={accept_ok} pending={new_pending} retry_status={retry_code}")
+
+    # Scenario 10: sophie (pro), admin (elite) 6+
+    sophie_targets = ["valeria", "luis", "alex", "maya", "emily", "noah", "diego"]
+    cleanup_user_dm_state("sophie")
+    for h in sophie_targets:
+        db.follows.delete_many({"follower_user_id": uids[h], "followed_user_id": uids["sophie"]})
+    sophie_ok = True
+    sophie_results = []
+    for h in sophie_targets[:6]:
+        r = requests.post(f"{BASE_URL}/dm/threads/start", headers=auth("sophie"),
+                          json={"user_id": uids[h], "opening_body": "hi from sophie"})
+        sophie_results.append(r.status_code)
+        if r.status_code != 200:
+            sophie_ok = False
+
+    admin_targets = ["valeria", "luis", "alex", "maya", "emily", "noah"]
+    cleanup_user_dm_state("admin")
+    for h in admin_targets:
+        db.follows.delete_many({"follower_user_id": uids[h], "followed_user_id": uids["admin"]})
+    admin_ok = True
+    admin_results = []
+    for h in admin_targets[:6]:
+        r = requests.post(f"{BASE_URL}/dm/threads/start", headers=auth("admin"),
+                          json={"user_id": uids[h], "opening_body": "hi from admin"})
+        admin_results.append(r.status_code)
+        if r.status_code != 200:
+            admin_ok = False
+    record("B10 pro (sophie) and elite (admin) send 6+ → all 200 (no 402)",
+           sophie_ok and admin_ok,
+           f"sophie={sophie_results} admin={admin_results}")
+
+    # Scenario 11: cap NOT triggered when target follows sender
+    cleanup_user_dm_state("marco")
+    follower_handles = ["emily", "noah", "alex", "maya", "diego", "valeria"]
+    for h in follower_handles:
+        db.follows.delete_many({"follower_user_id": uids[h], "followed_user_id": marco_id})
+        db.follows.insert_one({
+            "follow_id": f"follow_{uuid.uuid4().hex[:12]}",
+            "follower_user_id": uids[h],
+            "followed_user_id": marco_id,
+            "created_at": _dt.datetime.utcnow(),
+        })
+        db.dm_requests.delete_many({"from_user_id": marco_id, "to_user_id": uids[h]})
+    ok11_all = True
+    is_req_flags = []
+    statuses = []
+    for h in follower_handles:
+        r = requests.post(f"{BASE_URL}/dm/threads/start", headers=auth("marco"),
+                          json={"user_id": uids[h], "opening_body": f"hi {h}"})
+        statuses.append(r.status_code)
+        try:
+            is_req_flags.append(r.json().get("is_request"))
+        except Exception:
+            is_req_flags.append(None)
+        if r.status_code != 200:
+            ok11_all = False
+    pending = db.dm_requests.count_documents({"from_user_id": marco_id, "status": "pending"})
+    ok11 = ok11_all and pending == 0 and all(f is False for f in is_req_flags)
+    record("B11 cap bypassed when target follows sender (no dm_request)",
+           ok11, f"statuses={statuses} is_req_flags={is_req_flags} pending_requests={pending}")
+
+    # Remove the synthetic follows so demo data isn't polluted
+    for h in follower_handles:
+        db.follows.delete_many({"follower_user_id": uids[h], "followed_user_id": marco_id})
 
 
-def rec(name: str, ok: bool, detail: str = "") -> bool:
-    results.append((name, ok, detail))
-    icon = "PASS" if ok else "FAIL"
-    print(f"[{icon}] {name}{'  — ' + detail if detail and not ok else ''}")
-    return ok
+def test_discover_boost():
+    print("\n=== C) GET /api/network/discover Elite boost ===\n")
+
+    wedding_users = list(db.users.find(
+        {"specialties": {"$regex": "wedding", "$options": "i"},
+         "is_bot": {"$ne": True}, "is_official": {"$ne": True}},
+        {"user_id": 1, "plan": 1, "name": 1, "username": 1}
+    ).limit(10))
+    print(f"  found {len(wedding_users)} wedding-tagged users")
+    if len(wedding_users) < 2:
+        record("C13 test setup (≥2 wedding users)", False,
+               f"only {len(wedding_users)} found — boost test blocked")
+        return
+
+    # Exclude sophie (viewer) from the flip set so she remains the viewer
+    sophie_id = uids["sophie"]
+    wedding_users = [u for u in wedding_users if u["user_id"] != sophie_id]
+
+    u_elite = wedding_users[0]
+    u_free = wedding_users[1]
+    u_elite2 = wedding_users[2] if len(wedding_users) >= 3 else None
+
+    orig_elite_plan = u_elite.get("plan", "free")
+    orig_free_plan = u_free.get("plan", "free")
+    orig_elite2_plan = u_elite2.get("plan", "free") if u_elite2 else None
+
+    try:
+        db.users.update_one({"user_id": u_elite["user_id"]}, {"$set": {"plan": "elite"}})
+        db.users.update_one({"user_id": u_free["user_id"]}, {"$set": {"plan": "free"}})
+        if u_elite2:
+            db.users.update_one({"user_id": u_elite2["user_id"]}, {"$set": {"plan": "elite"}})
+
+        r = requests.get(f"{BASE_URL}/network/discover", headers=auth("sophie"))
+        ok_200 = r.status_code == 200
+        data = r.json() if ok_200 else {}
+        record("C13/C14 /network/discover 200 with viewer=sophie", ok_200, f"status={r.status_code}")
+
+        for rail in ["wedding", "family", "pet"]:
+            rail_users = data.get(rail, [])
+            if not rail_users:
+                print(f"  rail '{rail}' is empty — skipping order check")
+                continue
+            plans = [u.get("plan", "free") for u in rail_users]
+            first_non_elite = next((i for i, p in enumerate(plans) if p != "elite"), len(plans))
+            elites_first = all(p == "elite" for p in plans[:first_non_elite])
+            non_elite = plans[first_non_elite:]
+            first_non_pro = next((i for i, p in enumerate(non_elite) if p != "pro"), len(non_elite))
+            pros_then_rest = all(p == "pro" for p in non_elite[:first_non_pro])
+            record(f"C14 '{rail}' rail: elite→pro→rest ordering", elites_first and pros_then_rest,
+                   f"plans={plans}")
+
+        wedding = data.get("wedding", [])
+        elite_idx = next((i for i, u in enumerate(wedding) if u["user_id"] == u_elite["user_id"]), None)
+        free_idx = next((i for i, u in enumerate(wedding) if u["user_id"] == u_free["user_id"]), None)
+        if elite_idx is None or free_idx is None:
+            record("C14b flipped elite appears before flipped free in wedding rail", False,
+                   f"elite_idx={elite_idx} free_idx={free_idx} (may be paginated out)")
+        else:
+            record("C14b flipped elite appears before flipped free in wedding rail",
+                   elite_idx < free_idx, f"elite_idx={elite_idx} free_idx={free_idx}")
+
+        # Scenario 15: stable same-tier order across 2 calls
+        r2 = requests.get(f"{BASE_URL}/network/discover", headers=auth("sophie"))
+        data2 = r2.json()
+        elite_order1 = [u["user_id"] for u in data.get("wedding", []) if u.get("plan") == "elite"]
+        elite_order2 = [u["user_id"] for u in data2.get("wedding", []) if u.get("plan") == "elite"]
+        record("C15 same-tier order stable across calls (elite order preserved)",
+               elite_order1 == elite_order2,
+               f"call1={elite_order1[:5]} call2={elite_order2[:5]}")
+
+    finally:
+        db.users.update_one({"user_id": u_elite["user_id"]}, {"$set": {"plan": orig_elite_plan}})
+        db.users.update_one({"user_id": u_free["user_id"]}, {"$set": {"plan": orig_free_plan}})
+        if u_elite2:
+            db.users.update_one({"user_id": u_elite2["user_id"]}, {"$set": {"plan": orig_elite2_plan}})
+        print("  C16 cleanup: plans restored to original values")
 
 
-def req(method: str, path: str, token: Optional[str] = None, **kwargs):
-    url = f"{API}{path}"
-    headers = kwargs.pop("headers", {}) or {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    return requests.request(method, url, headers=headers, timeout=45, **kwargs)
-
-
-def login(email: str, password: str) -> Optional[Dict[str, Any]]:
-    r = req("POST", "/auth/login", json={"email": email, "password": password})
-    return r.json() if r.status_code == 200 else None
-
-
-def register_tester() -> Optional[Dict[str, Any]]:
-    email = f"community_tester_{uuid.uuid4().hex[:8]}@test.app"
-    r = req("POST", "/auth/register", json={
-        "email": email, "password": "testpass123", "name": "Community Tester"
-    })
-    if r.status_code != 200:
-        print("tester register failed:", r.status_code, r.text[:300])
-        return None
-    b = r.json()
-    b["email"] = email
-    return b
-
-
-def pick_spot(token: str) -> Optional[str]:
-    r = req("GET", "/feed/home", token=token)
-    if r.status_code != 200:
-        return None
-    j = r.json()
-    for k in ("recent", "nearby", "trending", "best_for_you"):
-        lst = j.get(k) or []
-        if lst:
-            return lst[0].get("spot_id")
-    return None
+def cleanup_after_tests():
+    print("\n=== CLEANUP ===")
+    for handle in ["marco", "sophie", "admin"]:
+        cleanup_user_dm_state(handle)
+    print("  DM state wiped for marco/sophie/admin")
 
 
 def main():
-    print(f"Backend URL: {API}\n")
+    print(f"Testing against: {BASE_URL}")
+    setup_logins()
+    test_analytics()
+    test_dm_cap()
+    test_discover_boost()
+    cleanup_after_tests()
 
-    # --- Setup ---
-    admin = login(ADMIN_EMAIL, ADMIN_PASS)
-    if not admin or not admin.get("token"):
-        rec("setup.admin_login", False, "cannot login admin")
-        return 1
-    ADMIN_TOKEN = admin["token"]
-    ADMIN_USER = admin["user"]
-    admin_role = ADMIN_USER.get("role")
-    rec("setup.admin_login", True,
-        f"role={admin_role} user_id={ADMIN_USER.get('user_id')} verified={ADMIN_USER.get('verification_status')}")
-
-    tester = register_tester()
-    if not tester or not tester.get("token"):
-        rec("setup.tester_register", False, "register failed")
-        return 1
-    TESTER_TOKEN = tester["token"]
-    TESTER_USER = tester["user"]
-    rec("setup.tester_register",
-        TESTER_USER.get("verification_status") != "verified",
-        f"tester_id={TESTER_USER.get('user_id')} verified={TESTER_USER.get('verification_status')}")
-
-    SPOT_ID = pick_spot(ADMIN_TOKEN)
-    rec("setup.pick_spot", bool(SPOT_ID), f"spot_id={SPOT_ID}")
-    if not SPOT_ID:
-        return 1
-
-    r = req("GET", f"/spots/{SPOT_ID}")
-    rec("setup.spot_exists", r.status_code == 200, f"HTTP {r.status_code}")
-    spot_owner = r.json().get("owner_user_id") if r.status_code == 200 else None
-    admin_owns = spot_owner == ADMIN_USER.get("user_id")
-    print(f"  (spot owner={spot_owner}, admin_owns={admin_owns})")
-
-    pending_upload_id: Optional[str] = None
-
-    # === Scenario 1: Auto-approve paths (admin) ===
-    print("\n--- 1. Auto-approve (admin) ---")
-    r = req("POST", f"/spots/{SPOT_ID}/uploads", token=ADMIN_TOKEN, json={
-        "images": [
-            {"image_url": PNG_B64, "caption": "admin img 1"},
-            {"image_url": PNG_B64, "caption": "admin img 2"},
-        ],
-        "caption": "Test upload",
-        "condition_tags": ["blooming", "verified_today"],
-    })
-    j = r.json() if r.status_code == 200 else {}
-    rec("1.admin_uploads_auto_approved",
-        r.status_code == 200 and j.get("ok") and j.get("auto_approved") is True
-        and j.get("moderation_status") == "approved" and j.get("count") == 2,
-        f"HTTP {r.status_code} body={json.dumps(j)[:250]}")
-
-    r = req("POST", f"/spots/{SPOT_ID}/updates", token=ADMIN_TOKEN, json={
-        "text": "All good today, quiet morning", "condition_tags": ["quiet"],
-    })
-    j = r.json() if r.status_code == 200 else {}
-    rec("1.admin_updates_auto_approved",
-        r.status_code == 200 and j.get("auto_approved") is True
-        and j.get("moderation_status") == "approved",
-        f"HTTP {r.status_code} body={json.dumps(j)[:250]}")
-
-    # === Scenario 2: Pending path (non-verified, non-owner) ===
-    print("\n--- 2. Pending (tester) ---")
-    r = req("POST", f"/spots/{SPOT_ID}/uploads", token=TESTER_TOKEN, json={
-        "images": [{"image_url": PNG_B64, "caption": "tester img"}],
-        "caption": "Tester upload", "condition_tags": ["crowded"],
-    })
-    j = r.json() if r.status_code == 200 else {}
-    rec("2.tester_upload_pending",
-        r.status_code == 200 and j.get("auto_approved") is False
-        and j.get("moderation_status") == "pending",
-        f"HTTP {r.status_code} body={json.dumps(j)[:250]}")
-
-    # Unauth GET should hide pending
-    r = req("GET", f"/spots/{SPOT_ID}/uploads")
-    if r.status_code == 200:
-        items = r.json().get("items", [])
-        has_pending = any(i.get("moderation_status") == "pending" for i in items)
-        has_tester = any(i.get("user_id") == TESTER_USER["user_id"] for i in items)
-        rec("2.unauth_list_hides_pending", not has_pending and not has_tester,
-            f"pending_seen={has_pending} tester_seen={has_tester}")
-    else:
-        rec("2.unauth_list_hides_pending", False, f"HTTP {r.status_code}")
-
-    r = req("GET", f"/spots/{SPOT_ID}/uploads", token=TESTER_TOKEN)
-    if r.status_code == 200:
-        items = r.json().get("items", [])
-        has_pending = any(i.get("moderation_status") == "pending" for i in items)
-        rec("2.tester_list_hides_pending", not has_pending, f"pending_seen={has_pending}")
-    else:
-        rec("2.tester_list_hides_pending", False, f"HTTP {r.status_code}")
-
-    r = req("GET", f"/spots/{SPOT_ID}/uploads", token=ADMIN_TOKEN)
-    if r.status_code == 200:
-        items = r.json().get("items", [])
-        has_pending = any(i.get("moderation_status") == "pending" for i in items)
-        rec("2.admin_list_includes_pending", has_pending,
-            f"HTTP {r.status_code} pending_seen={has_pending} admin_role={admin_role} (NOTE: gate checks role=='admin' exactly)")
-    else:
-        rec("2.admin_list_includes_pending", False, f"HTTP {r.status_code}")
-
-    # === Scenario 3: Tag normalisation ===
-    print("\n--- 3. Condition tag normalisation ---")
-
-    def submit_and_get(caption: str, tags: List[str]) -> Optional[List[str]]:
-        r = req("POST", f"/spots/{SPOT_ID}/uploads", token=ADMIN_TOKEN, json={
-            "images": [{"image_url": PNG_B64}], "caption": caption, "condition_tags": tags,
-        })
-        if r.status_code != 200:
-            return None
-        r = req("GET", f"/spots/{SPOT_ID}/uploads", token=ADMIN_TOKEN)
-        items = r.json().get("items", [])
-        for it in items:
-            if it.get("caption") == caption:
-                return it.get("condition_tags")
-        return None
-
-    canonical = {"verified_today","blooming","great_sunset","crowded","quiet","muddy",
-                 "dog_friendly","family_friendly","closed_gate","construction",
-                 "good_parking","fall_colors"}
-
-    tags = submit_and_get("tag test A",
-                          ["blooming", "not_a_real_tag", "crowded", "Uppercase_Tag"])
-    rec("3.tag_drops_noncanonical",
-        tags is not None and set(tags) <= canonical and "blooming" in tags
-        and "crowded" in tags and "not_a_real_tag" not in tags and "uppercase_tag" not in tags,
-        f"stored={tags}")
-
-    tags = submit_and_get("tag test B", ["BLOOMING", "great sunset"])
-    rec("3.tag_uppercase_and_space_normalise",
-        tags is not None and "blooming" in tags and "great_sunset" in tags,
-        f"stored={tags}")
-
-    tags = submit_and_get("tag test C",
-                          ["blooming","crowded","quiet","muddy","dog_friendly",
-                           "family_friendly","good_parking","fall_colors"])
-    rec("3.tag_cap_6", tags is not None and len(tags) == 6,
-        f"len={len(tags) if tags else 'None'} tags={tags}")
-
-    tags = submit_and_get("tag test D", ["great sunset"])
-    rec("3.tag_space_to_underscore", tags == ["great_sunset"], f"stored={tags}")
-
-    # === Scenario 4: Validation ===
-    print("\n--- 4. Validation ---")
-    r = req("POST", f"/spots/{SPOT_ID}/uploads", token=ADMIN_TOKEN, json={"images": []})
-    rec("4.uploads_empty_images_422", r.status_code == 422, f"HTTP {r.status_code}")
-
-    r = req("POST", f"/spots/{SPOT_ID}/uploads", token=ADMIN_TOKEN, json={
-        "images": [{"image_url": PNG_B64} for _ in range(13)]})
-    rec("4.uploads_13_images_422", r.status_code == 422, f"HTTP {r.status_code}")
-
-    r = req("POST", f"/spots/{SPOT_ID}/updates", token=ADMIN_TOKEN, json={"text": "ab"})
-    rec("4.updates_text_too_short_422", r.status_code == 422, f"HTTP {r.status_code}")
-
-    r = req("POST", f"/spots/{SPOT_ID}/updates", token=ADMIN_TOKEN, json={"text": "x" * 600})
-    rec("4.updates_text_too_long_422", r.status_code == 422, f"HTTP {r.status_code}")
-
-    # === Scenario 5: Reactions ===
-    print("\n--- 5. Reactions ---")
-    r = req("GET", f"/spots/{SPOT_ID}/uploads", token=ADMIN_TOKEN)
-    approved = [i for i in r.json().get("items", []) if i.get("moderation_status") == "approved"]
-    target = approved[0] if approved else None
-    if not target:
-        rec("5.find_approved_upload", False, "none found")
-    else:
-        UP_ID = target["upload_id"]
-        prev_like = int(target.get("like_count") or 0)
-        prev_help = int(target.get("helpful_count") or 0)
-
-        r = req("POST", f"/spot-uploads/{UP_ID}/react?kind=like", token=TESTER_TOKEN)
-        j = r.json() if r.status_code == 200 else {}
-        rec("5.react_like_increments",
-            r.status_code == 200 and j.get("acted") is True
-            and int(j.get("like_count") or 0) == prev_like + 1,
-            f"HTTP {r.status_code} body={json.dumps(j)[:200]}")
-
-        r = req("POST", f"/spot-uploads/{UP_ID}/react?kind=like", token=TESTER_TOKEN)
-        j = r.json() if r.status_code == 200 else {}
-        rec("5.react_like_toggle_off",
-            r.status_code == 200 and j.get("acted") is False
-            and int(j.get("like_count") or 0) == prev_like,
-            f"HTTP {r.status_code} body={json.dumps(j)[:200]}")
-
-        r = req("POST", f"/spot-uploads/{UP_ID}/react?kind=helpful", token=TESTER_TOKEN)
-        j = r.json() if r.status_code == 200 else {}
-        rec("5.react_helpful_independent",
-            r.status_code == 200 and j.get("acted") is True
-            and int(j.get("helpful_count") or 0) == prev_help + 1,
-            f"HTTP {r.status_code} body={json.dumps(j)[:200]}")
-        # reset helpful
-        req("POST", f"/spot-uploads/{UP_ID}/react?kind=helpful", token=TESTER_TOKEN)
-
-        r = req("POST", f"/spot-uploads/{UP_ID}/react?kind=wow", token=TESTER_TOKEN)
-        rec("5.react_invalid_kind_400", r.status_code == 400, f"HTTP {r.status_code}")
-
-    # === Scenario 6: Admin moderation ===
-    print("\n--- 6. Admin moderation ---")
-    r = req("GET", "/admin/spot-uploads/pending", token=ADMIN_TOKEN)
-    if r.status_code == 200:
-        j = r.json()
-        items = j.get("items", [])
-        tester_pending = [i for i in items if i.get("user_id") == TESTER_USER["user_id"]]
-        has_spot_hydr = (len(tester_pending) > 0
-                         and all(isinstance(i.get("spot"), dict) and i["spot"].get("spot_id")
-                                 and "title" in i["spot"] and "city" in i["spot"] and "state" in i["spot"]
-                                 for i in tester_pending))
-        has_contrib = (len(tester_pending) > 0
-                       and all(isinstance(i.get("contributor"), dict) for i in tester_pending))
-        rec("6.admin_pending_list",
-            len(tester_pending) >= 1 and has_spot_hydr and has_contrib,
-            f"items={len(items)} tester_pending={len(tester_pending)} spot_hydr={has_spot_hydr} contrib_hydr={has_contrib}")
-        if tester_pending:
-            pending_upload_id = tester_pending[0]["upload_id"]
-    else:
-        rec("6.admin_pending_list", False,
-            f"HTTP {r.status_code} body={r.text[:300]} (admin_role={admin_role}; endpoint requires role=='admin' exact match)")
-
-    if pending_upload_id:
-        r = req("PATCH", f"/admin/spot-uploads/{pending_upload_id}",
-                token=TESTER_TOKEN, json={"action": "approve"})
-        rec("6.patch_as_tester_403", r.status_code == 403, f"HTTP {r.status_code}")
-
-        r = req("PATCH", f"/admin/spot-uploads/{pending_upload_id}",
-                token=ADMIN_TOKEN, json={"action": "approve"})
-        approve_ok = r.status_code == 200
-        rec("6.patch_approve", approve_ok, f"HTTP {r.status_code} body={r.text[:200]}")
-
-        if approve_ok:
-            r = req("GET", f"/spots/{SPOT_ID}/uploads")
-            found = False
-            if r.status_code == 200:
-                items = r.json().get("items", [])
-                found = any(i.get("upload_id") == pending_upload_id for i in items)
-            rec("6.approved_now_public_visible", found, f"found={found}")
-
-        r = req("PATCH", f"/admin/spot-uploads/{pending_upload_id}",
-                token=ADMIN_TOKEN, json={"action": "flamethrower"})
-        rec("6.patch_unknown_action_400", r.status_code == 400, f"HTTP {r.status_code}")
-
-        # set_as_cover
-        r = req("PATCH", f"/admin/spot-uploads/{pending_upload_id}",
-                token=ADMIN_TOKEN, json={"action": "set_as_cover"})
-        if r.status_code == 200:
-            s = req("GET", f"/spots/{SPOT_ID}").json()
-            imgs = s.get("images") or []
-            first = imgs[0] if imgs else {}
-            is_cover_ok = isinstance(first, dict) and first.get("is_cover") is True
-            others_ok = all(
-                (not isinstance(im, dict)) or im.get("is_cover") is False
-                for im in imgs[1:]
-            )
-            rec("6.set_as_cover",
-                is_cover_ok and others_ok,
-                f"first_is_cover={is_cover_ok} others_not_cover={others_ok} first_url_match={first.get('image_url','')[:40] if isinstance(first,dict) else '-'}")
-        else:
-            rec("6.set_as_cover", False, f"HTTP {r.status_code}")
-
-        # feature
-        r = req("PATCH", f"/admin/spot-uploads/{pending_upload_id}",
-                token=ADMIN_TOKEN, json={"action": "feature"})
-        if r.status_code == 200:
-            up = req("GET", f"/spots/{SPOT_ID}/uploads", token=ADMIN_TOKEN).json().get("items", [])
-            latest = next((i for i in up if i.get("upload_id") == pending_upload_id), None)
-            rec("6.feature_persists", bool(latest and latest.get("featured") is True),
-                f"featured={(latest or {}).get('featured')}")
-        else:
-            rec("6.feature_persists", False, f"HTTP {r.status_code}")
-    else:
-        rec("6.find_pending_for_moderation", False,
-            "No pending upload id available — see 6.admin_pending_list failure")
-
-    # === Scenario 7: Freshness on spot ===
-    print("\n--- 7. Freshness propagation ---")
-    r = req("GET", f"/spots/{SPOT_ID}")
-    if r.status_code == 200:
-        s = r.json()
-        la, lp = s.get("last_activity_at"), s.get("latest_photo_at")
-        fs, ru = s.get("freshness_score"), s.get("recent_upload_count_7d")
-        rec("7.freshness_populated",
-            bool(la) and bool(lp) and (fs or 0) > 0 and (ru or 0) > 0,
-            f"last_activity_at={la} latest_photo_at={lp} freshness_score={fs} recent_upload_count_7d={ru}")
-    else:
-        rec("7.freshness_populated", False, f"HTTP {r.status_code}")
-
-    # === Scenario 8: freshly_updated rail ===
-    print("\n--- 8. freshly_updated rail ---")
-    r = req("GET", "/feed/home", token=ADMIN_TOKEN)
-    if r.status_code == 200:
-        j = r.json()
-        fu = j.get("freshly_updated")
-        rec("8.freshly_updated_key_is_list",
-            "freshly_updated" in j and isinstance(fu, list),
-            f"type={type(fu).__name__}")
-        rec("8.freshly_updated_contains_spot",
-            any((s.get("spot_id") == SPOT_ID) for s in (fu or [])),
-            f"len={len(fu or [])} ids={[s.get('spot_id') for s in (fu or [])][:5]}")
-    else:
-        rec("8.freshly_updated_rail", False, f"HTTP {r.status_code}")
-
-    # === Scenario 9: Delete cascade ===
-    print("\n--- 9. Delete cascade ---")
-    sp_body = {
-        "title": f"QA Throwaway {uuid.uuid4().hex[:6]}",
-        "description": "cascade test",
-        "latitude": 30.2672, "longitude": -97.7431,
-        "city": "Austin", "state": "TX", "country_code": "US",
-        "shoot_types": ["Family"],
-        "privacy_mode": "public",
-        "images": [{"image_url": PNG_B64}],
-    }
-    r = req("POST", "/spots", token=ADMIN_TOKEN, json=sp_body)
-    if r.status_code == 200:
-        throw_id = r.json().get("spot_id")
-        u = req("POST", f"/spots/{throw_id}/uploads", token=ADMIN_TOKEN,
-                json={"images": [{"image_url": PNG_B64}], "caption": "cascade"})
-        up_ok = u.status_code == 200
-        t = req("POST", f"/spots/{throw_id}/updates", token=ADMIN_TOKEN,
-                json={"text": "cascade update"})
-        up_t_ok = t.status_code == 200
-        d = req("DELETE", f"/spots/{throw_id}", token=ADMIN_TOKEN)
-        del_ok = d.status_code == 200
-        ua = req("GET", f"/spots/{throw_id}/uploads", token=ADMIN_TOKEN)
-        ta = req("GET", f"/spots/{throw_id}/updates", token=ADMIN_TOKEN)
-        u_cnt = ua.json().get("total") if ua.status_code == 200 else None
-        t_cnt = ta.json().get("total") if ta.status_code == 200 else None
-        rec("9.delete_cascade",
-            up_ok and up_t_ok and del_ok and u_cnt == 0 and t_cnt == 0,
-            f"uploads_after={u_cnt} updates_after={t_cnt}")
-    else:
-        rec("9.delete_cascade", False,
-            f"throwaway create HTTP {r.status_code} body={r.text[:200]}")
-
-    # === Scenario 10: Regressions ===
-    print("\n--- 10. Regressions ---")
-    r = req("GET", "/auth/me", token=ADMIN_TOKEN)
-    rec("10.auth_me", r.status_code == 200, f"HTTP {r.status_code}")
-
-    r = req("GET", "/feed/home", token=ADMIN_TOKEN)
-    if r.status_code == 200:
-        j = r.json()
-        expected = {"nearby","trending","golden_hour","recent","best_for_you",
-                    "following","seasonal","freshly_updated"}
-        missing = expected - set(j.keys())
-        rec("10.feed_home_all_rails", len(missing) == 0, f"missing={list(missing)}")
-    else:
-        rec("10.feed_home_all_rails", False, f"HTTP {r.status_code}")
-
-    r = req("GET", "/spots?limit=5", token=ADMIN_TOKEN)
-    rec("10.spots_list", r.status_code == 200, f"HTTP {r.status_code}")
-
-    r = req("GET", "/me/spots", token=ADMIN_TOKEN)
-    rec("10.me_spots", r.status_code == 200, f"HTTP {r.status_code}")
-
-    # === Cleanup ===
-    print("\n--- Cleanup ---")
-    try:
-        # Remove any remaining tester-created community uploads
-        r = req("GET", "/admin/spot-uploads/pending", token=ADMIN_TOKEN)
-        if r.status_code == 200:
-            for it in r.json().get("items", []):
-                if it.get("user_id") == TESTER_USER["user_id"]:
-                    req("PATCH", f"/admin/spot-uploads/{it['upload_id']}",
-                        token=ADMIN_TOKEN, json={"action": "remove"})
-    except Exception as e:
-        print(" cleanup uploads exc:", e)
-
-    try:
-        uid = TESTER_USER.get("user_id")
-        if uid:
-            req("DELETE", f"/admin/users/{uid}", token=ADMIN_TOKEN,
-                json={"reason_code": "other", "reason_note": "QA cleanup"})
-    except Exception as e:
-        print(" cleanup tester exc:", e)
-
-    # Summary
-    passed = sum(1 for _, ok, _ in results if ok)
-    total = len(results)
-    print(f"\n{'='*72}\nRESULT: {passed}/{total} passed")
-    failed = [(n, d) for n, ok, d in results if not ok]
-    if failed:
-        print("\nFAILURES:")
-        for n, d in failed:
-            print(f"  - {n}: {d}")
-    return 0 if not failed else 1
+    print("\n" + "=" * 70)
+    fails = [r for r in results if r[0] == "FAIL"]
+    passes = [r for r in results if r[0] == "PASS"]
+    print(f"RESULTS: {len(passes)} PASS, {len(fails)} FAIL")
+    for status, name, note in results:
+        print(f"  [{status}] {name}{(' — ' + note) if note else ''}")
+    return 0 if not fails else 1
 
 
 if __name__ == "__main__":
