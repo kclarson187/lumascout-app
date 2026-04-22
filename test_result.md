@@ -3341,3 +3341,134 @@ agent_communication:
       Ready for next phase: Pro/Elite conversion + AI shoot planner +
       referral marketplace + creator growth tools.
 
+
+#====================================================================================================
+# Network Phase A (2026-04) — DM system + Discover + Profile CTAs + 5-tab nav
+#====================================================================================================
+
+backend:
+  - task: "Network Phase A — DM + Network discover + trust + notification hooks"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          DM SYSTEM (14/14 assertions PASS):
+            POST   /api/dm/threads/start
+            GET    /api/dm/threads?tab=all|accepted|requests
+            GET    /api/dm/threads/{id}
+            POST   /api/dm/threads/{id}/messages    (text|image|spot_share|profile_share)
+            POST   /api/dm/threads/{id}/mark-read
+            POST   /api/dm/threads/{id}/mute        (toggle)
+            DELETE /api/dm/threads/{id}             (soft-delete)
+            POST   /api/dm/requests/{id}/accept | ignore | block
+            POST   /api/users/{id}/report
+
+          COLLECTIONS: dm_threads, dm_participants, dm_messages,
+          dm_requests, dm_blocks, user_reports (all indexed).
+
+          RATE LIMITS: 5 new requests/hr/sender (429), 30 msgs/min/
+          sender/thread (429). Participant-only access (non-participants
+          get 404). Blocking enforced server-side on both /start and
+          /messages.
+
+          NETWORK / DISCOVER:
+            GET /api/network/discover → 10 rails (near_you,
+              popular_in_city, pet, wedding, family, new_members,
+              top_contributors, verified_pros,
+              available_for_referrals, available_for_second_shooter)
+            GET /api/network/search with filters
+            GET /api/users/{id}/trust → response_rate_pct,
+              average_reply_time_hours, community_rating,
+              completed_referrals (computed per-request, Phase A)
+
+          NOTIFICATION HOOKS:
+            - follow → "new_follower"
+            - new DM → "new_message"
+            - new message_request → "new_message_request"
+          All reuse the notifications subsystem shipped in Phase 2.
+
+frontend:
+  - task: "Network Phase A — 5-tab nav, Network tab, Inbox, Thread, Profile CTAs"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app/(tabs)/_layout.tsx (5-tab restructure)
+      /app/frontend/app/(tabs)/network.tsx (new Network tab)
+      /app/frontend/app/inbox/index.tsx (threads + requests)
+      /app/frontend/app/inbox/[id].tsx (thread view w/ image/spot/profile share)
+      /app/frontend/app/user/[id].tsx (new CTAs: Follow/Message/Refer/Invite)
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          5-TAB BOTTOM NAV: Home · Explore · ➕ Add · Network · Profile
+          (Saved moved off bottom bar, reachable from Profile screen.)
+          Inbox accessed via bell on Home header + prominent
+          "Messages" pill inside Network tab.
+
+          NETWORK TAB:
+            - Search bar with 350ms debounced /network/search
+            - 10 horizontal rails from /network/discover
+            - User cards: avatar, name, city, specialties, Verified/
+              Pro/Elite + availability badges (Referrals, 2nd Shooter)
+            - Tap card → /user/{id}
+
+          INBOX:
+            - Tabs: All (accepted threads) / Requests (pending count)
+            - Thread row: avatar, name+verified check, time ago,
+              unread dot (count badge), mute indicator
+            - Request card: sender info, kind chip (Referral/Collab),
+              Accept / Ignore / Block actions inline
+
+          THREAD VIEW:
+            - Bubbles (mine=amber, theirs=surface1)
+            - Empty state: 6 quick-starter chips ("Love your work.",
+              "Interested in collaborating?", etc.)
+            - Composer: image attach button + text input + send
+            - Attachment types: text / image (base64 JPEG q=0.7) /
+              spot_share (hydrated cover card) / profile_share
+              (hydrated user card)
+            - KeyboardSafe wrapper
+            - Auto mark-read on thread open
+            - Auto-scroll to bottom
+
+          PROFILE CTAs (on /user/{id}):
+            Row 1: Follow + Message
+            Row 2: Refer + Invite to Collab
+            "Refer" / "Invite to Collab" call /dm/threads/start with
+            kind param → pre-filled opening message and route to
+            the new thread. Handles 429 with friendly copy.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      NETWORK PHASE A COMPLETE + READY FOR FRONTEND QA.
+
+      Backend: 14/14 DM + Network assertions PASS.
+      Frontend: 5 screens shipped, bundles clean (3525 modules, no
+      errors), expo tunnel ready.
+
+      Ready for expo_frontend_testing_agent to validate the
+      end-to-end flow on iPhone (390x844) and Android (360x800):
+
+      Critical flows to test:
+        1. Bottom-nav now shows Home · Explore · ➕ · Network · Profile
+        2. Tap Network → search + 10 discovery rails render
+        3. Tap a user card → profile with 4 CTAs (Follow/Message/Refer/Invite)
+        4. Tap Message → routes to /inbox/{thread_id}, shows 6 quick-starter chips
+        5. Tap a starter → sends, bubble appears, input clears
+        6. Back to Network → tap Messages pill → Inbox opens
+        7. Requests tab shows pending inbound requests with Accept/Ignore/Block
+        8. Tap the bell on Home → /notifications (existing screen)
+        9. In thread: tap image attach icon → pick a photo → sends as image bubble
+        10. Deep link: tap a post on spot → share spot in DM (from Thread)
+
+      Known Expo-Go notes: push warnings expected (needs dev-client build).
+
