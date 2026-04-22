@@ -2574,3 +2574,171 @@ agent_communication:
       Frontend retest requires user approval — 8a/8b/8c are all
       visible changes on home, community, and spot detail screens.
 
+
+
+#====================================================================================================
+# Feature 9 / 2026-04 — Community uploads on existing locations (retention feature)
+#====================================================================================================
+
+backend:
+  - task: "Feature 9 — community uploads, updates, freshness, admin moderation, freshly_updated rail"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Major retention feature complete. New endpoints:
+            POST   /api/spots/{spot_id}/uploads        (batch of 1..12 photos)
+            GET    /api/spots/{spot_id}/uploads        (paginated, hydrated contributors)
+            POST   /api/spots/{spot_id}/updates        (text check-in)
+            GET    /api/spots/{spot_id}/updates
+            POST   /api/spot-uploads/{id}/react?kind=like|helpful   (toggle)
+            GET    /api/admin/spot-uploads/pending
+            PATCH  /api/admin/spot-uploads/{id}        (approve|deny|feature|unfeature|set_as_cover|remove)
+
+          New Mongo collections: `spot_community_uploads`, `spot_updates`,
+          `spot_upload_reactions`. Indexes added for spot_id+created_at,
+          moderation_status+created_at, and unique upload_id / update_id.
+
+          Spot document extended with: freshness_score, recent_upload_count_7d,
+          recent_update_count_7d, latest_photo_at, last_activity_at.
+          Recomputed via _recompute_spot_freshness() on any approved
+          upload/update/reaction change.
+
+          Moderation rule: auto-approve for admin / verified /
+          spot-owner; `pending` for everyone else. Admin moderation
+          endpoint can set an upload as the spot's cover image
+          (preserves previous gallery but demotes prior cover).
+
+          Condition tag vocabulary (12 canonical tags): verified_today,
+          blooming, great_sunset, crowded, quiet, muddy, dog_friendly,
+          family_friendly, closed_gate, construction, good_parking,
+          fall_colors. Validator normalises input + caps at 6 tags per
+          submission.
+
+          Home feed extended: /api/feed/home now returns a new
+          `freshly_updated` array (≤10) ranked by recency * 2 +
+          proximity * 1.5 + freshness_score * 0.3. Proven live via
+          manual curl: upload + update → Cerro de la Silla appears in
+          freshly_updated with freshness_score 4.5 on next /feed/home
+          call.
+
+          Smoke tests run locally (all green):
+            - Admin login works (token field is `token`)
+            - POST /uploads → auto_approved=true (admin rule), returns batch_id
+            - POST /updates → auto_approved=true
+            - GET /uploads returns hydrated contributor {name, username, avatar_url, verification_status}
+            - Freshness fields populated on the spot
+            - /feed/home.freshly_updated contains the spot
+
+          Pending retest scope: as a non-admin, non-verified, non-owner
+          user, uploads + updates should save as `pending` and NOT
+          immediately show in the freshness rail; admin moderation
+          endpoints should promote them.
+        -working: false
+        -agent: "testing"
+        -comment: |
+          COMMUNITY UPLOADS FEATURE TEST — 29/32 assertions PASS, 3 FAIL due to a single root cause.
+          Script: /app/backend_test.py. Backend: https://photo-finder-60.preview.emergentagent.com/api.
+          Auth: admin@lumascout.app / admin123 (role=super_admin, verification_status=verified) + a freshly-registered community_tester_* user.
+
+          CRITICAL BUG (1 root cause → 3 test failures):
+          The admin moderation/visibility gates in the new feature compare `role == "admin"` EXACTLY
+          (server.py lines 1841, 1924, 1990, 2016). The seeded admin user has role="super_admin"
+          (promoted at boot in seed_admin @ line 5934), so the admin endpoints return 403 for the
+          production admin account and include_pending flips to false when the admin lists uploads.
+
+          Failed assertions:
+            • 2.admin_list_includes_pending — GET /api/spots/{id}/uploads as super_admin returned
+              approved items only; pending tester upload invisible to admin. Response HTTP 200 but
+              pending_seen=false. Gate at line 1841 needs to accept super_admin.
+            • 6.admin_pending_list — GET /api/admin/spot-uploads/pending as super_admin returned
+              HTTP 403 {"detail":"Admin only"}. Gate at line 1990 blocks super_admin.
+            • 6.find_pending_for_moderation — cascades from 6.admin_pending_list; without the
+              pending upload_id we can't exercise the PATCH /api/admin/spot-uploads/{id} flow
+              (6.patch_as_tester_403 / 6.patch_approve / 6.approved_now_public_visible /
+              6.patch_unknown_action_400 / 6.set_as_cover / 6.feature_persists all skipped).
+
+          FIX (trivial): replace each `user.get("role") == "admin"` / `!= "admin"` in server.py
+          lines 1841, 1924, 1990, 2016 with membership in {"admin","super_admin"} (or use the
+          existing ADMIN_ROLES tuple defined at line 3027). No schema changes needed.
+
+          Note on scenario 1: the spot picked from /feed/home recent[0] was NOT owned by admin
+          (owner=user_4c6165ec3c6f), yet admin uploads still auto_approved — this is because
+          verification_status="verified" triggers the second rule in _can_auto_approve, so the
+          admin-role path never needed to fire. That's why smoke-testing hid the bug from main.
+
+          ALL OTHER SCENARIOS PASS:
+            1. Admin upload → auto_approved=true, moderation_status=approved, count=2 ✓
+            1. Admin update → auto_approved=true ✓
+            2. Tester upload → auto_approved=false, moderation_status=pending ✓
+            2. Unauthenticated GET /spots/{id}/uploads hides pending ✓
+            2. Tester GET hides their own pending ✓
+            3. Tag validator drops ["not_a_real_tag","Uppercase_Tag"], keeps canonical ✓
+            3. "BLOOMING" → "blooming", "great sunset" → "great_sunset" ✓
+            3. >6 tags → only first 6 kept ✓
+            4. Empty images / 13 images / text="ab" / text=600chars → all 422 ✓
+            5. React kind=like toggles count up/down; kind=helpful is independent ✓
+            5. React kind=wow → 400 ✓
+            7. Freshness: last_activity_at, latest_photo_at, freshness_score (>0),
+               recent_upload_count_7d (>0) all populated on spot after approved upload ✓
+            8. /api/feed/home.freshly_updated is a list AND contains the test spot ✓
+            9. Delete cascade: DELETE /spots/{id} wipes spot_community_uploads and spot_updates
+               rows (verified via GET /spots/{id}/uploads.total==0 and updates.total==0 after) ✓
+           10. /auth/me, /feed/home (all 8 rails), /spots, /me/spots → 200 ✓
+
+          Cleanup performed at end of run: leftover tester pending uploads moderated to "removed",
+          community_tester_* user soft-deleted via /admin/users/{id}.
+
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Phase 1 community uploads + Freshly Updated rail backend shipped.
+      Please verify end-to-end:
+        1. Non-admin (create fresh user) → POST /api/spots/{id}/uploads →
+           moderation_status=pending, auto_approved=false
+        2. Spot owner → same call → auto_approved=true
+        3. Verified user → same call → auto_approved=true
+        4. Admin GET /api/admin/spot-uploads/pending returns the pending
+           non-admin item (with hydrated spot + contributor)
+        5. Admin PATCH /api/admin/spot-uploads/{id} with action=approve
+           flips status to approved; freshness_score increments
+        6. Admin PATCH with action=set_as_cover moves the uploaded image
+           to the spot's images[] as cover (and demotes previous cover)
+        7. POST /api/spot-uploads/{id}/react?kind=like toggles like_count
+        8. /api/feed/home includes a populated `freshly_updated` array
+        9. Condition tag validator:
+           - accepts blooming / great_sunset / verified_today etc.
+           - rejects unknown tags silently (drops them, does NOT 4xx)
+           - caps at 6 tags
+        10. POST /spots/{id}/updates with text length < 3 chars → 422
+        11. POST /spots/{id}/uploads with 0 images OR >12 images → 422
+
+      Use admin creds: admin@lumascout.app / admin123
+
+    -agent: "testing"
+    -message: |
+      Feature 9 / Community Uploads backend tested (29/32 pass). Single
+      critical bug, single root cause, trivial fix:
+
+      The admin-role gates in the new endpoints check role=="admin" exactly,
+      but seeded admin is role="super_admin" (boot-time promote at server.py
+      line 5934). Three assertions fail because of this — all in the admin
+      moderation path.
+
+      Fix: server.py lines 1841, 1924, 1990, 2016 — replace
+        user.get("role") == "admin"       →  user.get("role") in ("admin","super_admin")
+        user.get("role") != "admin"       →  user.get("role") not in ("admin","super_admin")
+      (or use the existing ADMIN_ROLES tuple at line 3027.)
+
+      All other flows — auto-approve, pending, tag normalisation, input
+      validation, reactions toggle, freshness propagation, freshly_updated
+      rail, delete cascade, regressions — pass end-to-end. Test script
+      /app/backend_test.py cleans up after itself (moderates pending
+      uploads to removed + soft-deletes the tester user).
