@@ -1657,10 +1657,10 @@ class SpotUpdateIn(BaseModel):
 
 
 def _can_auto_approve(user: dict, spot: dict) -> bool:
-    """Rule: auto-approve for admins, verified users, and the spot's author."""
+    """Rule: auto-approve for admins/mods/support, verified users, and the spot's author."""
     if not user:
         return False
-    if user.get("role") == "admin":
+    if user.get("role") in ("admin", "super_admin", "moderator", "support"):
         return True
     if user.get("verification_status") == "verified":
         return True
@@ -1838,7 +1838,7 @@ async def list_spot_uploads(
     include_pending = False
     if viewer:
         spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "owner_user_id": 1})
-        if viewer.get("role") == "admin" or (spot and spot.get("owner_user_id") == viewer["user_id"]):
+        if viewer.get("role") in ("admin", "super_admin", "moderator", "support") or (spot and spot.get("owner_user_id") == viewer["user_id"]):
             include_pending = True
     q["moderation_status"] = {"$in": ["approved", "pending"]} if include_pending else "approved"
     total = await db.spot_community_uploads.count_documents(q)
@@ -1921,7 +1921,7 @@ async def list_spot_updates(
     include_pending = False
     if viewer:
         spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "owner_user_id": 1})
-        if viewer.get("role") == "admin" or (spot and spot.get("owner_user_id") == viewer["user_id"]):
+        if viewer.get("role") in ("admin", "super_admin", "moderator", "support") or (spot and spot.get("owner_user_id") == viewer["user_id"]):
             include_pending = True
     q["moderation_status"] = {"$in": ["approved", "pending"]} if include_pending else "approved"
     total = await db.spot_updates.count_documents(q)
@@ -1987,7 +1987,7 @@ async def admin_list_pending_uploads(
     limit: int = 50,
     user: dict = Depends(get_current_user),
 ):
-    if user.get("role") != "admin":
+    if user.get("role") not in ("admin", "super_admin", "moderator", "support"):
         raise HTTPException(status_code=403, detail="Admin only")
     limit = max(1, min(200, limit))
     items = await db.spot_community_uploads.find(
@@ -2013,7 +2013,7 @@ async def admin_moderate_upload(
     body: SpotUploadModerationIn,
     user: dict = Depends(get_current_user),
 ):
-    if user.get("role") != "admin":
+    if user.get("role") not in ("admin", "super_admin", "moderator", "support"):
         raise HTTPException(status_code=403, detail="Admin only")
     upload = await db.spot_community_uploads.find_one({"upload_id": upload_id})
     if not upload:
