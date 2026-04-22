@@ -11,6 +11,76 @@ import DeleteConfirmSheet, { USER_DELETE_PRESETS } from '../../../src/components
 const PLAN_OPTIONS = ['free', 'pro', 'elite', 'comp_pro', 'comp_elite', 'trial_pro', 'trial_elite'];
 const ROLE_OPTIONS = ['user', 'moderator', 'support', 'admin', 'super_admin'];
 
+/**
+ * Canonical role definitions — single source of truth for UI copy.
+ * Mirror the backend `ROLE_LEVELS` hierarchy (user:0, moderator/support:1,
+ * admin:3, super_admin:4). Keep descriptions short enough for mobile chips.
+ */
+const ROLE_DEFS: Record<string, { label: string; emoji: string; tagline: string; powers: string[]; color: string }> = {
+  user: {
+    label: 'User',
+    emoji: '👤',
+    tagline: 'Standard photographer account',
+    color: '#6b7280',
+    powers: [
+      'Post, comment, save spots, message other users',
+      'Report content for moderation review',
+      'No access to admin tools',
+    ],
+  },
+  moderator: {
+    label: 'Moderator',
+    emoji: '🛡️',
+    tagline: 'Content policeperson — keeps the feed clean',
+    color: '#3b82f6',
+    powers: [
+      'Hide / restore / pin / feature / lock posts',
+      'Mark content as spam + resolve community reports',
+      'Approve or reject spots and community uploads',
+      'Cannot ban users, cannot hard-delete, cannot change roles',
+    ],
+  },
+  support: {
+    label: 'Support',
+    emoji: '🎧',
+    tagline: 'Read-heavy staff — helps users, rarely moderates',
+    color: '#14b8a6',
+    powers: [
+      'View user profiles + tickets + audit trails',
+      'Respond to support requests',
+      'Same moderation read-access as moderator, limited write',
+      'Cannot ban users or change roles',
+    ],
+  },
+  admin: {
+    label: 'Admin',
+    emoji: '⚙️',
+    tagline: 'Operational lead — manages staff + bulk actions',
+    color: '#f59e0b',
+    powers: [
+      'Everything moderators can do',
+      'Warn or suspend users (up to 365 days)',
+      'Bulk-moderate posts (up to 200 at a time)',
+      'Soft-delete posts + restore deleted content',
+      'Cannot ban or hard-delete — only super_admin',
+    ],
+  },
+  super_admin: {
+    label: 'Super Admin',
+    emoji: '👑',
+    tagline: 'Owner-tier — unrestricted, destructive powers',
+    color: '#ef4444',
+    powers: [
+      'Everything admins can do',
+      'Permanently ban user accounts',
+      'Hard-delete posts (physical deletion — unrecoverable)',
+      'Change user roles (promote / demote staff)',
+      'Edit platform settings, pricing, seed content',
+      'Only role that can grant or revoke admin/super_admin',
+    ],
+  },
+};
+
 export default function AdminUserDetail() {
   const { user: me } = useAuth();
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -255,23 +325,64 @@ export default function AdminUserDetail() {
           title="Role"
           right={isSuperAdmin ? undefined : <Text style={styles.lockTxt}>super_admin only</Text>}
         >
+          <Text style={styles.roleHelper}>
+            Roles form a hierarchy — each level inherits the powers below it.
+            Tap a role to see what it can do, or to assign it.
+          </Text>
           <View style={styles.chipGrid}>
-            {ROLE_OPTIONS.map((r) => (
-              <TouchableOpacity
-                key={r}
-                onPress={() => requestRoleChange(r)}
-                style={[
-                  styles.optChip,
-                  u.role === r && styles.optChipActive,
-                  (!isSuperAdmin || isSelf) && { opacity: 0.4 },
-                ]}
-                disabled={!isSuperAdmin || isSelf}
-                testID={`role-${r}`}
-              >
-                <Text style={[styles.optChipTxt, u.role === r && styles.optChipTxtActive]}>{r}</Text>
-              </TouchableOpacity>
-            ))}
+            {ROLE_OPTIONS.map((r) => {
+              const def = ROLE_DEFS[r];
+              return (
+                <TouchableOpacity
+                  key={r}
+                  onPress={() => requestRoleChange(r)}
+                  style={[
+                    styles.optChip,
+                    u.role === r && styles.optChipActive,
+                    (!isSuperAdmin || isSelf) && { opacity: 0.5 },
+                  ]}
+                  disabled={!isSuperAdmin || isSelf}
+                  testID={`role-${r}`}
+                >
+                  <Text style={[styles.optChipTxt, u.role === r && styles.optChipTxtActive]}>
+                    {def?.emoji}  {def?.label || r}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
+
+          {/* Role definitions legend */}
+          <View style={styles.roleLegend}>
+            {ROLE_OPTIONS.map((r) => {
+              const def = ROLE_DEFS[r];
+              if (!def) return null;
+              const isCurrent = u.role === r;
+              return (
+                <View key={r} style={[styles.roleDefCard, isCurrent && styles.roleDefCardCurrent]}>
+                  <View style={styles.roleDefHead}>
+                    <View style={[styles.roleDefDot, { backgroundColor: def.color }]} />
+                    <Text style={styles.roleDefLabel}>
+                      {def.emoji}  {def.label}
+                    </Text>
+                    {isCurrent ? (
+                      <View style={styles.roleDefCurrentPill}>
+                        <Text style={styles.roleDefCurrentTxt}>CURRENT</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  <Text style={styles.roleDefTagline}>{def.tagline}</Text>
+                  {def.powers.map((p, i) => (
+                    <View key={i} style={styles.roleDefRow}>
+                      <Text style={styles.roleDefBullet}>•</Text>
+                      <Text style={styles.roleDefTxt}>{p}</Text>
+                    </View>
+                  ))}
+                </View>
+              );
+            })}
+          </View>
+
           <View style={styles.warn}>
             <AlertTriangle size={13} color={colors.warning} />
             <Text style={styles.warnTxt}>
@@ -481,6 +592,23 @@ const styles = StyleSheet.create({
   giftBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 12 },
   warn: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, backgroundColor: 'rgba(251,191,36,0.08)', padding: 8, borderRadius: radii.md, borderColor: colors.warning, borderWidth: 1, marginTop: 6 },
   warnTxt: { flex: 1, color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17 },
+
+  roleHelper: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17, marginBottom: 8 },
+  roleLegend: { gap: 8, marginTop: 12 },
+  roleDefCard: {
+    backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border,
+    borderRadius: radii.md, padding: 12, gap: 4,
+  },
+  roleDefCardCurrent: { borderColor: colors.primary, backgroundColor: 'rgba(245,166,35,0.06)' },
+  roleDefHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
+  roleDefDot: { width: 8, height: 8, borderRadius: 4 },
+  roleDefLabel: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13 },
+  roleDefCurrentPill: { marginLeft: 'auto', paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.sm, backgroundColor: colors.primary },
+  roleDefCurrentTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.5 },
+  roleDefTagline: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, marginBottom: 4, fontStyle: 'italic' },
+  roleDefRow: { flexDirection: 'row', gap: 6, alignItems: 'flex-start' },
+  roleDefBullet: { color: colors.textTertiary, fontFamily: font.body, fontSize: 12, lineHeight: 17 },
+  roleDefTxt: { flex: 1, color: colors.text, fontFamily: font.body, fontSize: 12, lineHeight: 17 },
   actBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 10, borderRadius: radii.md },
   actTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 13 },
   noteInputRow: { flexDirection: 'row', gap: 8 },
