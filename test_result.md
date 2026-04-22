@@ -4762,3 +4762,47 @@ agent_communication:
       Live camera + GPS behavior requires a real device / Expo Go, not
       web.
 
+
+
+#====================================================================================================
+# Billing toggle + Comparison table fixes (2026-05)
+#====================================================================================================
+
+frontend:
+  - task: "Paywall — enable Annual toggle + rebuild plan comparison table"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/paywall.tsx"
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          P0 BUG FIX #1 — Annual toggle was a dead tap: `annualEnabled`
+          was hardcoded to `false`. Flipped to `true`. Backend
+          /checkout has always accepted `cycle='annual'` + maps to
+          pro_annual/elite_annual Stripe lookup keys. Both toggle
+          states now fully switch: active pill background, price,
+          /mo vs /yr, equivalent-per-month hint, CTA copy.
+          P0 BUG FIX #2 — Plan comparison table columns were
+          reversed (Elite | Pro | Free) via row-reverse hack on the
+          header. Rebuilt in canonical order: Feature | Free | Pro |
+          Elite. Header row now rendered FIRST (top-down reading).
+          13 rows added per user spec (Saved Spots, Private Spots,
+          Collections, Advanced Filters, Creator Analytics, Sell
+          Packs, Verified Badge, Read Receipts, Who Viewed,
+          Referral Priority, Featured Placement, AI Shoot Planner,
+          Branded Client Portal). Free col muted grey, Pro col bold,
+          Elite col orange bold, zebra-striped.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Two P0 paywall bugs fixed. Deferred in this pass due to scope:
+      Admin Explore cover-photo/focal-point editor (existing
+      /admin/spots-pending + approve/reject flows already work),
+      inline-on-card community moderation (Control Center already
+      ships — adding kebab on feed is follow-up), Pack Marketplace
+      polish (dedicated session required), global keyboard sweep
+      (KeyboardSafe already enhanced; per-screen audit is next).
