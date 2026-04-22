@@ -1,0 +1,196 @@
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Alert, ActivityIndicator, Pressable, Platform } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { router, useLocalSearchParams } from 'expo-router';
+import { ChevronLeft, ImagePlus, X, Camera } from 'lucide-react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { api } from '../../../src/api';
+import { colors, font, space, radii } from '../../../src/theme';
+import { CONDITION_TAGS } from '../../../src/components/FreshnessBits';
+import KeyboardSafe from '../../../src/components/KeyboardSafe';
+
+export default function UploadScreen() {
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const spotId = String(id || '');
+  const [photos, setPhotos] = useState<string[]>([]);
+  const [caption, setCaption] = useState('');
+  const [tags, setTags] = useState<string[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+
+  const pickPhotos = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (perm.status !== 'granted') {
+      Alert.alert('Permission needed', 'Allow photo library access to share photos of this spot.');
+      return;
+    }
+    const r = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+      base64: true,
+      quality: 0.7,
+      selectionLimit: Math.max(1, 12 - photos.length),
+    });
+    if (!r.canceled && r.assets) {
+      const incoming = r.assets
+        .map((a) => a.base64 ? `data:image/jpeg;base64,${a.base64}` : null)
+        .filter(Boolean) as string[];
+      setPhotos((prev) => [...prev, ...incoming].slice(0, 12));
+    }
+  };
+
+  const toggleTag = (k: string) => {
+    setTags((prev) => {
+      if (prev.includes(k)) return prev.filter((t) => t !== k);
+      if (prev.length >= 6) return prev; // cap matches backend
+      return [...prev, k];
+    });
+  };
+
+  const removePhoto = (idx: number) => setPhotos((prev) => prev.filter((_, i) => i !== idx));
+
+  const canSubmit = photos.length > 0 && !submitting;
+
+  const submit = async () => {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    try {
+      const res = await api.post(`/spots/${spotId}/uploads`, {
+        images: photos.map((u) => ({ image_url: u, caption: null })),
+        caption: caption.trim() || null,
+        condition_tags: tags,
+        visibility: 'public',
+      });
+      Alert.alert(
+        res?.auto_approved ? 'Posted!' : 'Submitted for review',
+        res?.message || 'Thanks for contributing — your photos help keep this spot alive.',
+        [{ text: 'OK', onPress: () => router.back() }]
+      );
+    } catch (e: any) {
+      Alert.alert('Upload failed', e?.message || 'Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.root} edges={['top']}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} testID="upload-back">
+          <ChevronLeft size={22} color={colors.text} />
+        </TouchableOpacity>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.kicker}>Add Recent Photos</Text>
+          <Text style={styles.title}>Keep this spot alive</Text>
+        </View>
+      </View>
+      <KeyboardSafe style={{ flex: 1 }}>
+        <ScrollView
+          contentContainerStyle={{ paddingBottom: space.xxxl + 40, paddingHorizontal: space.xl, gap: space.lg }}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Photo picker */}
+          <View style={{ gap: space.sm }}>
+            <Text style={styles.sectionTitle}>Photos <Text style={styles.req}>·  up to 12</Text></Text>
+            <View style={styles.gridWrap}>
+              {photos.map((uri, i) => (
+                <View key={i} style={styles.tileWrap}>
+                  <Image source={{ uri }} style={styles.tileImg} />
+                  <TouchableOpacity onPress={() => removePhoto(i)} style={styles.tileClose} testID={`remove-photo-${i}`}>
+                    <X size={14} color={colors.textInverse} />
+                  </TouchableOpacity>
+                </View>
+              ))}
+              {photos.length < 12 ? (
+                <TouchableOpacity onPress={pickPhotos} style={styles.tileAdd} testID="pick-photos">
+                  <ImagePlus size={22} color={colors.primary} />
+                  <Text style={styles.tileAddTxt}>{photos.length === 0 ? 'Select photos' : 'Add more'}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          </View>
+
+          {/* Caption */}
+          <View style={{ gap: space.sm }}>
+            <Text style={styles.sectionTitle}>Caption <Text style={styles.optional}>(optional)</Text></Text>
+            <TextInput
+              value={caption}
+              onChangeText={setCaption}
+              placeholder="Bluebonnets still blooming today, light was soft at 7pm…"
+              placeholderTextColor={colors.textTertiary}
+              multiline
+              style={styles.captionInput}
+              maxLength={500}
+              testID="upload-caption"
+            />
+          </View>
+
+          {/* Condition tags */}
+          <View style={{ gap: space.sm }}>
+            <Text style={styles.sectionTitle}>Conditions <Text style={styles.optional}>(tap up to 6)</Text></Text>
+            <View style={styles.tagsGrid}>
+              {CONDITION_TAGS.map((t) => {
+                const selected = tags.includes(t.key);
+                const Icon = t.Icon;
+                return (
+                  <Pressable
+                    key={t.key}
+                    onPress={() => toggleTag(t.key)}
+                    style={[
+                      styles.tagChip,
+                      selected && { backgroundColor: t.color + '22', borderColor: t.color },
+                    ]}
+                    testID={`tag-${t.key}`}
+                  >
+                    <Icon size={13} color={selected ? t.color : colors.textSecondary} />
+                    <Text style={[styles.tagChipTxt, selected && { color: t.color, fontFamily: font.bodySemibold }]}>{t.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+        </ScrollView>
+
+        <View style={styles.submitBar}>
+          <TouchableOpacity
+            disabled={!canSubmit}
+            onPress={submit}
+            style={[styles.submitBtn, !canSubmit && styles.submitBtnDisabled]}
+            testID="upload-submit"
+          >
+            {submitting ? <ActivityIndicator color={colors.textInverse} /> : (
+              <>
+                <Camera size={16} color={colors.textInverse} />
+                <Text style={styles.submitBtnTxt}>Post {photos.length > 0 ? `${photos.length} photo${photos.length > 1 ? 's' : ''}` : 'photos'}</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+      </KeyboardSafe>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: colors.bg },
+  header: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingHorizontal: space.md, paddingBottom: space.sm },
+  backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  kicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase' },
+  title: { color: colors.text, fontFamily: font.display, fontSize: 20 },
+  sectionTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
+  req: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
+  optional: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
+  gridWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  tileWrap: { width: 92, height: 92, borderRadius: radii.md, overflow: 'hidden', backgroundColor: colors.surface1, position: 'relative' },
+  tileImg: { width: '100%', height: '100%' },
+  tileClose: { position: 'absolute', top: 4, right: 4, width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(0,0,0,0.7)', alignItems: 'center', justifyContent: 'center' },
+  tileAdd: { width: 92, height: 92, borderRadius: radii.md, alignItems: 'center', justifyContent: 'center', gap: 4, borderWidth: 1, borderStyle: 'dashed', borderColor: colors.primary, backgroundColor: 'rgba(245,166,35,0.06)' },
+  tileAddTxt: { color: colors.primary, fontFamily: font.bodyMedium, fontSize: 10, textAlign: 'center', paddingHorizontal: 4 },
+  captionInput: { minHeight: 80, padding: 12, borderRadius: radii.md, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, color: colors.text, fontFamily: font.body, fontSize: 14, textAlignVertical: 'top' },
+  tagsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  tagChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
+  tagChipTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
+  submitBar: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: space.lg, paddingBottom: Platform.OS === 'ios' ? space.xl : space.lg, backgroundColor: colors.bg, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: radii.md, backgroundColor: colors.primary },
+  submitBtnDisabled: { backgroundColor: colors.surface2 },
+  submitBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 },
+});

@@ -21,6 +21,7 @@ import { useGps } from '../../src/hooks/useGps';
 import { colors, font, space, radii, QUICK_FILTERS } from '../../src/theme';
 import SpotCard from '../../src/components/SpotCard';
 import SpotCardCompact from '../../src/components/SpotCardCompact';
+import FreshlyUpdatedRail from '../../src/components/FreshlyUpdatedRail';
 import { SectionHeader, Chip, EmptyState } from '../../src/components/ui';
 import { SectionSkeleton, SkeletonBox } from '../../src/components/Skeleton';
 import UpgradeBanner from '../../src/components/UpgradeBanner';
@@ -282,6 +283,15 @@ export default function Home() {
                   <Text style={styles.heroMeta}>{hero.city}, {hero.state} · Shoot Score {hero.shoot_score}</Text>
                 </View>
               </TouchableOpacity>
+            )}
+            {/* Freshly Updated Near You (Feature 9) — the retention rail.
+                Rendered right under hero so returning users immediately
+                see activity on spots they care about. */}
+            {Array.isArray(feed.freshly_updated) && feed.freshly_updated.length > 0 && (
+              <View>
+                <SectionHeader title="Freshly updated near you" />
+                <FreshlyUpdatedRail spots={feed.freshly_updated} />
+              </View>
             )}
             {sections.map((sec) => {
               const items = feed[sec.key] || [];
