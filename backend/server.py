@@ -8199,6 +8199,544 @@ async def reject_referral_application(
     return {"ok": True}
 
 
+# ============================================================================
+# Pack Marketplace
+# Premium creator store for photographers to sell digital goods:
+#   - Lightroom presets, spot packs, city guides, route packs, LUTs,
+#     templates, mentorship calls.
+# Platform takes 15% of gross; rest is payable to seller (Stripe Connect
+# split-payouts TBD — we record the split now and store it for payout).
+# ============================================================================
+
+MARKETPLACE_TYPES = {
+    "preset":     "Lightroom Presets",
+    "spot_pack":  "Spot Pack",
+    "city_guide": "City Guide",
+    "route_pack": "Route Pack",
+    "lut":        "LUT",
+    "template":   "Template",
+    "mentorship": "Mentorship Call",
+}
+MARKETPLACE_STATUSES = {"pending", "active", "denied", "suspended", "removed"}
+PLATFORM_FEE_PCT = 15  # percent
+
+
+class MarketplaceProductIn(BaseModel):
+    title: str
+    type: str
+    description: str
+    price_cents: int
+    thumbnail_url: str
+    preview_urls: Optional[List[str]] = None
+    contents_url: Optional[str] = None   # delivery URL (zip/pdf/etc)
+    tags: Optional[List[str]] = None
+    category: Optional[str] = None
+
+    @field_validator("title")
+    @classmethod
+    def _t(cls, v):
+        v = (v or "").strip()
+        if len(v) < 4 or len(v) > 140: raise ValueError("Title 4..140")
+        return v
+
+    @field_validator("type")
+    @classmethod
+    def _ty(cls, v):
+        if v not in MARKETPLACE_TYPES: raise ValueError("Invalid type")
+        return v
+
+    @field_validator("price_cents")
+    @classmethod
+    def _p(cls, v):
+        if v < 0 or v > 100_000_00: raise ValueError("Price must be 0..100000 USD")
+        return v
+
+
+class MarketplaceProductPatchIn(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    price_cents: Optional[int] = None
+    thumbnail_url: Optional[str] = None
+    preview_urls: Optional[List[str]] = None
+    contents_url: Optional[str] = None
+    tags: Optional[List[str]] = None
+    category: Optional[str] = None
+
+
+async def _hydrate_seller(user_id: str) -> dict:
+    u = await db.users.find_one({"user_id": user_id}, {
+        "_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
+        "plan": 1, "verification_status": 1, "city": 1,
+    })
+    return u or {}
+
+
+async def _shape_product(p: dict, viewer: Optional[dict] = None) -> dict:
+    p = dict(p); p.pop("_id", None)
+    p["seller"] = await _hydrate_seller(p.get("seller_user_id"))
+    p["in_wishlist"] = False
+    p["has_purchased"] = False
+    if viewer:
+        if await db.marketplace_wishlist.count_documents({
+            "user_id": viewer["user_id"], "product_id": p["product_id"],
+        }) > 0:
+            p["in_wishlist"] = True
+        if await db.marketplace_purchases.count_documents({
+            "buyer_user_id": viewer["user_id"], "product_id": p["product_id"],
+            "status": "completed",
+        }) > 0:
+            p["has_purchased"] = True
+    # Strip contents_url from public response unless viewer has purchased it
+    # or is the seller / admin.
+    if viewer and (
+        p.get("has_purchased")
+        or viewer.get("user_id") == p.get("seller_user_id")
+        or viewer.get("role") in ("admin", "super_admin", "moderator")
+    ):
+        pass  # keep contents_url
+    else:
+        p.pop("contents_url", None)
+    return p
+
+
+@api.post("/marketplace/products")
+async def create_product(body: MarketplaceProductIn, user: dict = Depends(get_current_user)):
+    now = utcnow()
+    doc = {
+        "product_id": f"prod_{uuid.uuid4().hex[:12]}",
+        "seller_user_id": user["user_id"],
+        "seller_plan": plan_of(user),
+        "title": body.title,
+        "type": body.type,
+        "description": (body.description or "").strip(),
+        "price_cents": int(body.price_cents),
+        "currency": "USD",
+        "thumbnail_url": body.thumbnail_url,
+        "preview_urls": body.preview_urls or [],
+        "contents_url": body.contents_url,
+        "tags": body.tags or [],
+        "category": body.category,
+        "status": "pending",           # admin must approve before active
+        "featured": False,
+        "view_count": 0,
+        "sales_count": 0,
+        "rating_avg": 0.0,
+        "rating_count": 0,
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.marketplace_products.insert_one(doc)
+    return await _shape_product(doc, user)
+
+
+@api.get("/marketplace/products")
+async def list_products(
+    q: Optional[str] = None,
+    type: Optional[str] = None,
+    category: Optional[str] = None,
+    sort: Optional[str] = "trending",  # trending | newest | top_rated | price_low | price_high
+    seller_id: Optional[str] = None,
+    featured: Optional[bool] = None,
+    limit: int = 30,
+    skip: int = 0,
+    viewer: Optional[dict] = Depends(get_optional_user),
+):
+    filt: dict = {"status": "active"}
+    if type: filt["type"] = type
+    if category: filt["category"] = category
+    if seller_id: filt["seller_user_id"] = seller_id
+    if featured: filt["featured"] = True
+    if q:
+        filt["$or"] = [
+            {"title": {"$regex": q, "$options": "i"}},
+            {"description": {"$regex": q, "$options": "i"}},
+            {"tags": {"$in": [q]}},
+        ]
+    sort_spec: list = [("featured", -1)]
+    if sort == "newest": sort_spec += [("created_at", -1)]
+    elif sort == "top_rated": sort_spec += [("rating_avg", -1), ("rating_count", -1)]
+    elif sort == "price_low": sort_spec += [("price_cents", 1)]
+    elif sort == "price_high": sort_spec += [("price_cents", -1)]
+    else:  # trending: sales_count + recent
+        sort_spec += [("sales_count", -1), ("view_count", -1), ("created_at", -1)]
+    limit = max(1, min(limit, 60))
+    skip = max(0, skip)
+    total = await db.marketplace_products.count_documents(filt)
+    cur = db.marketplace_products.find(filt, {"_id": 0}).sort(sort_spec).skip(skip).limit(limit)
+    rows = await cur.to_list(limit)
+    items = [await _shape_product(r, viewer) for r in rows]
+    return {"items": items, "total": total}
+
+
+@api.get("/marketplace/storefront")
+async def storefront(viewer: Optional[dict] = Depends(get_optional_user)):
+    """Returns a curated storefront: Featured (max 6), Trending (6), Newest (6),
+    + category rails for each of the 7 product types."""
+    async def _rail(filt: dict, sort_spec: list, n: int = 6) -> list:
+        cur = db.marketplace_products.find({**filt, "status": "active"}, {"_id": 0}).sort(sort_spec).limit(n)
+        rows = await cur.to_list(n)
+        return [await _shape_product(r, viewer) for r in rows]
+    rails = {
+        "featured": await _rail({"featured": True}, [("created_at", -1)]),
+        "trending": await _rail({}, [("sales_count", -1), ("view_count", -1)]),
+        "newest":   await _rail({}, [("created_at", -1)]),
+    }
+    by_type: dict = {}
+    for t in MARKETPLACE_TYPES.keys():
+        rail = await _rail({"type": t}, [("sales_count", -1)])
+        if rail:
+            by_type[t] = rail
+    return {"rails": rails, "by_type": by_type}
+
+
+@api.get("/marketplace/products/{product_id}")
+async def get_product(product_id: str, viewer: Optional[dict] = Depends(get_optional_user)):
+    p = await db.marketplace_products.find_one({"product_id": product_id})
+    if not p: raise HTTPException(status_code=404, detail="Product not found")
+    # Track view (fire & forget)
+    try:
+        await db.marketplace_products.update_one({"product_id": product_id}, {"$inc": {"view_count": 1}})
+    except Exception: pass
+    return await _shape_product(p, viewer)
+
+
+@api.patch("/marketplace/products/{product_id}")
+async def patch_product(product_id: str, body: MarketplaceProductPatchIn, user: dict = Depends(get_current_user)):
+    p = await db.marketplace_products.find_one({"product_id": product_id})
+    if not p: raise HTTPException(status_code=404, detail="Product not found")
+    is_owner = p["seller_user_id"] == user["user_id"]
+    is_admin = user.get("role") in ("admin", "super_admin")
+    if not (is_owner or is_admin):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    patch: dict = {"updated_at": utcnow()}
+    for k, v in body.dict(exclude_unset=True).items():
+        if v is None: continue
+        patch[k] = v
+    # If seller changed price/content, kick back to 'pending' for re-approval
+    if is_owner and not is_admin and ("price_cents" in patch or "contents_url" in patch):
+        patch["status"] = "pending"
+    await db.marketplace_products.update_one({"product_id": product_id}, {"$set": patch})
+    p = await db.marketplace_products.find_one({"product_id": product_id})
+    return await _shape_product(p, user)
+
+
+@api.delete("/marketplace/products/{product_id}")
+async def delete_product(product_id: str, user: dict = Depends(get_current_user)):
+    p = await db.marketplace_products.find_one({"product_id": product_id})
+    if not p: raise HTTPException(status_code=404, detail="Not found")
+    if p["seller_user_id"] != user["user_id"] and user.get("role") not in ("admin", "super_admin"):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    await db.marketplace_products.update_one(
+        {"product_id": product_id},
+        {"$set": {"status": "removed", "updated_at": utcnow()}},
+    )
+    return {"ok": True}
+
+
+@api.post("/marketplace/products/{product_id}/checkout")
+async def product_checkout(product_id: str, request: Request, user: dict = Depends(get_current_user)):
+    """Stripe checkout (mode=payment, one-time) for a marketplace product.
+    Platform fee % recorded at session-create time; Stripe Connect split-payout
+    to be wired in a follow-up when sellers finish onboarding."""
+    if not _stripe_ready():
+        raise HTTPException(status_code=503, detail="Billing not configured")
+    p = await db.marketplace_products.find_one({"product_id": product_id})
+    if not p: raise HTTPException(status_code=404, detail="Product not found")
+    if p["status"] != "active":
+        raise HTTPException(status_code=400, detail="Product is not available")
+    if p["seller_user_id"] == user["user_id"]:
+        raise HTTPException(status_code=400, detail="You can't buy your own product")
+
+    origin = str(request.base_url).rstrip("/")
+    fwd_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if fwd_host and "localhost" not in fwd_host:
+        origin = f"https://{fwd_host}"
+    success_url = f"{origin}/marketplace/{product_id}?status=success&session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{origin}/marketplace/{product_id}?status=cancelled"
+
+    fee_cents = int(p["price_cents"] * PLAN_PRICING_CENTS_BUFFER if False else (p["price_cents"] * PLATFORM_FEE_PCT / 100))
+    payout_cents = p["price_cents"] - fee_cents
+    customer_id = await _ensure_stripe_customer(user)
+    try:
+        session = _stripe.checkout.Session.create(
+            mode="payment",
+            customer=customer_id,
+            line_items=[{
+                "price_data": {
+                    "currency": "usd",
+                    "unit_amount": p["price_cents"],
+                    "product_data": {
+                        "name": p["title"],
+                        "description": (p.get("description") or "")[:180],
+                    },
+                },
+                "quantity": 1,
+            }],
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata={
+                "kind": "marketplace_purchase",
+                "product_id": product_id,
+                "buyer_user_id": user["user_id"],
+                "seller_user_id": p["seller_user_id"],
+                "platform_fee_cents": str(fee_cents),
+                "seller_payout_cents": str(payout_cents),
+            },
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Stripe error: {e}")
+
+    await db.marketplace_purchases.insert_one({
+        "purchase_id": f"mp_{uuid.uuid4().hex[:12]}",
+        "product_id": product_id,
+        "buyer_user_id": user["user_id"],
+        "seller_user_id": p["seller_user_id"],
+        "price_cents": p["price_cents"],
+        "platform_fee_cents": fee_cents,
+        "seller_payout_cents": payout_cents,
+        "stripe_session_id": session.id,
+        "status": "pending",
+        "created_at": utcnow(),
+    })
+    return {"url": session.url, "session_id": session.id}
+
+
+# Simulate completion in non-production environments (e.g. emergent previews
+# where Stripe webhooks aren't round-tripping). Real environments MUST rely on
+# the Stripe webhook handler already in place.
+@api.post("/marketplace/purchases/{purchase_id}/complete")
+async def complete_purchase(purchase_id: str, user: dict = Depends(get_current_user)):
+    purchase = await db.marketplace_purchases.find_one({"purchase_id": purchase_id})
+    if not purchase: raise HTTPException(status_code=404, detail="Purchase not found")
+    if purchase["buyer_user_id"] != user["user_id"] and user.get("role") not in ("admin", "super_admin"):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if purchase["status"] == "completed":
+        return {"ok": True, "already_completed": True}
+    await db.marketplace_purchases.update_one(
+        {"purchase_id": purchase_id},
+        {"$set": {"status": "completed", "completed_at": utcnow()}},
+    )
+    await db.marketplace_products.update_one(
+        {"product_id": purchase["product_id"]},
+        {"$inc": {"sales_count": 1}},
+    )
+    # Notify seller
+    try:
+        await _emit_notification(
+            purchase["seller_user_id"],
+            "marketplace_sale",
+            "You made a sale! 🎉",
+            f"+${purchase['seller_payout_cents'] / 100:.2f}",
+            actor_user_id=purchase["buyer_user_id"],
+            deep_link=f"/marketplace/{purchase['product_id']}",
+        )
+    except Exception: pass
+    return {"ok": True}
+
+
+class MarketplaceReviewIn(BaseModel):
+    rating: int
+    text: Optional[str] = None
+
+    @field_validator("rating")
+    @classmethod
+    def _r(cls, v):
+        if v < 1 or v > 5: raise ValueError("rating 1..5")
+        return v
+
+
+@api.post("/marketplace/products/{product_id}/reviews")
+async def create_review(product_id: str, body: MarketplaceReviewIn, user: dict = Depends(get_current_user)):
+    # Must have purchased to review
+    has_purchase = await db.marketplace_purchases.count_documents({
+        "buyer_user_id": user["user_id"], "product_id": product_id,
+        "status": "completed",
+    }) > 0
+    if not has_purchase:
+        raise HTTPException(status_code=403, detail="Only buyers can review")
+    existing = await db.marketplace_reviews.find_one({
+        "product_id": product_id, "buyer_user_id": user["user_id"],
+    })
+    now = utcnow()
+    if existing:
+        await db.marketplace_reviews.update_one(
+            {"review_id": existing["review_id"]},
+            {"$set": {"rating": body.rating, "text": body.text, "updated_at": now}},
+        )
+        rid = existing["review_id"]
+    else:
+        rid = f"rev_{uuid.uuid4().hex[:12]}"
+        await db.marketplace_reviews.insert_one({
+            "review_id": rid,
+            "product_id": product_id,
+            "buyer_user_id": user["user_id"],
+            "rating": body.rating,
+            "text": (body.text or "").strip() or None,
+            "created_at": now,
+        })
+    # Recompute aggregate
+    agg = await db.marketplace_reviews.aggregate([
+        {"$match": {"product_id": product_id}},
+        {"$group": {"_id": None, "avg": {"$avg": "$rating"}, "count": {"$sum": 1}}},
+    ]).to_list(1)
+    if agg:
+        await db.marketplace_products.update_one(
+            {"product_id": product_id},
+            {"$set": {"rating_avg": round(agg[0]["avg"], 2), "rating_count": agg[0]["count"]}},
+        )
+    return {"ok": True, "review_id": rid}
+
+
+@api.get("/marketplace/products/{product_id}/reviews")
+async def list_reviews(product_id: str, limit: int = 20):
+    cur = db.marketplace_reviews.find({"product_id": product_id}, {"_id": 0}).sort("created_at", -1).limit(max(1, min(limit, 100)))
+    rows = await cur.to_list(100)
+    for r in rows:
+        r["reviewer"] = await _hydrate_seller(r["buyer_user_id"])
+    return {"items": rows, "count": len(rows)}
+
+
+@api.post("/marketplace/wishlist/{product_id}")
+async def toggle_wishlist(product_id: str, user: dict = Depends(get_current_user)):
+    existing = await db.marketplace_wishlist.find_one({
+        "user_id": user["user_id"], "product_id": product_id,
+    })
+    if existing:
+        await db.marketplace_wishlist.delete_one({"wishlist_id": existing["wishlist_id"]})
+        return {"in_wishlist": False}
+    await db.marketplace_wishlist.insert_one({
+        "wishlist_id": f"wl_{uuid.uuid4().hex[:12]}",
+        "user_id": user["user_id"],
+        "product_id": product_id,
+        "added_at": utcnow(),
+    })
+    return {"in_wishlist": True}
+
+
+@api.get("/me/wishlist")
+async def my_wishlist(user: dict = Depends(get_current_user)):
+    cur = db.marketplace_wishlist.find({"user_id": user["user_id"]}, {"_id": 0}).sort("added_at", -1)
+    rows = await cur.to_list(200)
+    items: list = []
+    for w in rows:
+        p = await db.marketplace_products.find_one({"product_id": w["product_id"]})
+        if p and p.get("status") == "active":
+            items.append(await _shape_product(p, user))
+    return {"items": items, "count": len(items)}
+
+
+@api.get("/me/marketplace/sales")
+async def my_sales(since_days: int = 90, user: dict = Depends(get_current_user)):
+    since = utcnow() - timedelta(days=max(1, min(since_days, 365)))
+    cur = db.marketplace_purchases.find(
+        {"seller_user_id": user["user_id"], "created_at": {"$gte": since}},
+        {"_id": 0},
+    ).sort("created_at", -1).limit(500)
+    purchases = await cur.to_list(500)
+
+    total_sales = sum(1 for p in purchases if p["status"] == "completed")
+    gross_cents = sum(p["price_cents"] for p in purchases if p["status"] == "completed")
+    net_cents = sum(p["seller_payout_cents"] for p in purchases if p["status"] == "completed")
+    fee_cents = sum(p["platform_fee_cents"] for p in purchases if p["status"] == "completed")
+
+    # Product stats
+    product_ids = list({p["product_id"] for p in purchases})
+    products_cur = db.marketplace_products.find({"seller_user_id": user["user_id"]}, {"_id": 0})
+    products = await products_cur.to_list(300)
+    product_stats = []
+    for p in products:
+        pid = p["product_id"]
+        sales = [x for x in purchases if x["product_id"] == pid and x["status"] == "completed"]
+        product_stats.append({
+            "product_id": pid,
+            "title": p["title"],
+            "thumbnail_url": p.get("thumbnail_url"),
+            "view_count": p.get("view_count", 0),
+            "sales": len(sales),
+            "revenue_cents": sum(s["seller_payout_cents"] for s in sales),
+            "status": p.get("status"),
+            "rating_avg": p.get("rating_avg", 0),
+        })
+    product_stats.sort(key=lambda x: -x["revenue_cents"])
+
+    return {
+        "since_days": since_days,
+        "total_sales": total_sales,
+        "gross_cents": gross_cents,
+        "net_cents": net_cents,
+        "platform_fee_cents": fee_cents,
+        "platform_fee_pct": PLATFORM_FEE_PCT,
+        "products": product_stats,
+        "recent_purchases": purchases[:20],
+    }
+
+
+@api.get("/me/marketplace/library")
+async def my_library(user: dict = Depends(get_current_user)):
+    cur = db.marketplace_purchases.find(
+        {"buyer_user_id": user["user_id"], "status": "completed"},
+        {"_id": 0},
+    ).sort("completed_at", -1).limit(500)
+    purchases = await cur.to_list(500)
+    items = []
+    for p in purchases:
+        prod = await db.marketplace_products.find_one({"product_id": p["product_id"]})
+        if prod:
+            items.append({
+                "purchase_id": p["purchase_id"],
+                "purchased_at": p.get("completed_at"),
+                "product": await _shape_product(prod, user),
+            })
+    return {"items": items, "count": len(items)}
+
+
+# ---- Admin marketplace moderation ----
+class AdminProductModerateIn(BaseModel):
+    action: str        # approve | deny | feature | unfeature | suspend | unsuspend
+    reason: Optional[str] = None
+
+
+@api.post("/admin/marketplace/products/{product_id}/moderate")
+async def admin_moderate_product(
+    product_id: str, body: AdminProductModerateIn,
+    me: dict = Depends(require_role("admin")),
+):
+    p = await db.marketplace_products.find_one({"product_id": product_id})
+    if not p: raise HTTPException(status_code=404, detail="Product not found")
+    before = {"status": p.get("status"), "featured": p.get("featured")}
+    patch: dict = {"updated_at": utcnow(), "moderated_by": me["user_id"]}
+    a = body.action
+    if a == "approve":
+        patch["status"] = "active"
+    elif a == "deny":
+        patch["status"] = "denied"
+        patch["deny_reason"] = body.reason
+    elif a == "feature":
+        patch["featured"] = True
+    elif a == "unfeature":
+        patch["featured"] = False
+    elif a == "suspend":
+        patch["status"] = "suspended"
+        patch["suspend_reason"] = body.reason
+    elif a == "unsuspend":
+        patch["status"] = "active"
+    else:
+        raise HTTPException(status_code=400, detail="Invalid action")
+    await db.marketplace_products.update_one({"product_id": product_id}, {"$set": patch})
+    await audit_log(me, f"marketplace_product.{a}", "marketplace_product", product_id,
+                    before=before, after=patch, notes=body.reason)
+    return {"ok": True, "action": a}
+
+
+@api.get("/admin/marketplace/pending")
+async def admin_pending_products(me: dict = Depends(require_role("moderator"))):
+    cur = db.marketplace_products.find({"status": "pending"}, {"_id": 0}).sort("created_at", 1).limit(100)
+    rows = await cur.to_list(100)
+    for r in rows:
+        r["seller"] = await _hydrate_seller(r.get("seller_user_id"))
+    return {"items": rows, "count": len(rows)}
+
+
 # Register the api router AFTER every @api.<method> decorator above has run.
 # FastAPI's include_router() snapshots routes at call-time, so this must be the
 # very last route-registration step before startup.
@@ -8250,6 +8788,17 @@ async def on_startup():
     await db.user_sanctions.create_index([("active", 1), ("type", 1)])
     await db.community_posts.create_index([("pinned", -1), ("created_at", -1)])
     await db.community_posts.create_index([("status", 1), ("created_at", -1)])
+    # Pack Marketplace
+    await db.marketplace_products.create_index("product_id", unique=True)
+    await db.marketplace_products.create_index([("status", 1), ("created_at", -1)])
+    await db.marketplace_products.create_index([("type", 1), ("sales_count", -1)])
+    await db.marketplace_products.create_index("seller_user_id")
+    await db.marketplace_purchases.create_index("purchase_id", unique=True)
+    await db.marketplace_purchases.create_index([("buyer_user_id", 1), ("status", 1)])
+    await db.marketplace_purchases.create_index([("seller_user_id", 1), ("created_at", -1)])
+    await db.marketplace_purchases.create_index("stripe_session_id")
+    await db.marketplace_reviews.create_index([("product_id", 1), ("buyer_user_id", 1)], unique=True)
+    await db.marketplace_wishlist.create_index([("user_id", 1), ("product_id", 1)], unique=True)
     await seed_admin()
     # Promote the seeded admin to super_admin for Phase 1 — creates a usable
     # platform owner. Idempotent: skipped if already super_admin.
