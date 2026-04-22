@@ -1576,6 +1576,131 @@ NOMINATIM_HEADERS = {
     "Accept-Language": "en",
 }
 
+# FIX(Commit 7.7 / 2026-04): Mapbox primary geocoding provider. When the env
+# var is set, the /geocode/search endpoint tries Mapbox first and falls back
+# to Nominatim only if Mapbox returns nothing. This is the launch-grade
+# enterprise stack — Mapbox handles business names, POIs, rural TX FM roads,
+# and park/preserve names much more reliably than Nominatim alone.
+MAPBOX_TOKEN = os.environ.get("MAPBOX_TOKEN", "").strip()
+MAPBOX_BASE = "https://api.mapbox.com/search/geocode/v6"
+
+
+def _parse_mapbox_feature(f: dict) -> dict:
+    """Shape a Mapbox v6 feature to the LumaScout geocode result format."""
+    props = f.get("properties", {}) or {}
+    ctx = props.get("context", {}) or {}
+    geom = f.get("geometry", {}) or {}
+    coords = geom.get("coordinates") or [None, None]
+    # Prefer place (municipality) over region (state) for the city field.
+    place = ctx.get("place", {}) or {}
+    locality = ctx.get("locality", {}) or {}
+    region = ctx.get("region", {}) or {}
+    postcode = ctx.get("postcode", {}) or {}
+    country = ctx.get("country", {}) or {}
+    district = ctx.get("district", {}) or {}
+    city = place.get("name") or locality.get("name") or district.get("name") or ""
+    state_full = region.get("name") or ""
+    state_abbr = (region.get("region_code") or "").upper() or state_full[:2].upper()
+    country_code = (country.get("country_code") or "").upper() or None
+    # Mapbox returns a match_code with a granular confidence string — map to 0..1.
+    mc = props.get("match_code", {}) or {}
+    confidence_map = {"exact": 0.95, "high": 0.85, "medium": 0.65, "low": 0.35, "plausible": 0.25}
+    conf_str = (mc.get("confidence") or "").lower()
+    confidence = confidence_map.get(conf_str, 0.6)
+    return {
+        "place_id": props.get("mapbox_id") or "",
+        "display_name": props.get("full_address") or props.get("name") or "",
+        "latitude": float(coords[1]) if coords[1] is not None else None,
+        "longitude": float(coords[0]) if coords[0] is not None else None,
+        "name": props.get("name") or "",
+        "city": city,
+        "state": state_abbr,
+        "province_state": state_full,
+        "county_region": district.get("name") or "",
+        "country": country.get("name") or "",
+        "country_name": country.get("name") or "",
+        "country_code": country_code,
+        "postcode": postcode.get("name") or "",
+        "type": props.get("feature_type") or "",
+        "confidence": confidence,
+        "language_hint": "en",
+        # Launch-grade provenance so admins can audit / replay failed geocodes.
+        "source_provider": "mapbox",
+        "formatted_address": props.get("full_address") or props.get("name") or "",
+    }
+
+
+async def _mapbox_search(q: str, limit: int, country: Optional[str], proximity: Optional[str]) -> list:
+    """Query Mapbox Geocoding v6. Returns [] on any error (graceful degrade)."""
+    if not MAPBOX_TOKEN:
+        return []
+    params: dict = {
+        "q": q,
+        "access_token": MAPBOX_TOKEN,
+        "limit": str(limit),
+        # Prefer POI / address / place types for LumaScout's use case
+        # (parks, businesses, landmarks, street addresses).
+        "types": "poi,address,place,locality,neighborhood,street",
+        "language": "en",
+    }
+    if country:
+        params["country"] = country
+    else:
+        # Default country bias matches where the app has the most traction.
+        # Keeps "Pearl District" anchored to San Antonio, TX and not Peru.
+        params["country"] = "us,ca,mx"
+    if proximity:
+        params["proximity"] = proximity  # "lng,lat"
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(f"{MAPBOX_BASE}/forward", params=params)
+            if r.status_code != 200:
+                return []
+            data = r.json() or {}
+            return [_parse_mapbox_feature(f) for f in (data.get("features") or [])]
+    except Exception:
+        return []
+
+
+def _progressive_query_variants(q: str) -> list:
+    """Generate fallback query variants of decreasing specificity.
+
+    Example: "Joshua Springs Preserve 716 FM 289 Comfort TX 78013" yields
+    ["…78013", "…Comfort TX", "Joshua Springs Preserve Comfort TX",
+     "Joshua Springs Preserve TX", "Joshua Springs Preserve"].
+
+    We strip ZIP first (Nominatim hates mismatched ZIPs), then street
+    numbers + FM-road prefixes (often wrong in the DB), then city, then
+    state. The original query is always index 0.
+    """
+    q = (q or "").strip()
+    if not q:
+        return []
+    variants = [q]
+    import re as _re
+    # Drop trailing ZIP
+    no_zip = _re.sub(r'\s+\b\d{5}(?:-\d{4})?\b\s*,?\s*$', '', q).strip().rstrip(",")
+    if no_zip and no_zip != q:
+        variants.append(no_zip)
+    # Drop street numbers + FM/RR/CR/Highway prefixes (rural TX)
+    no_street = _re.sub(
+        r'\b\d+\s+(?:FM|RR|CR|US|SH|TX|Hwy|Highway|FR|Farm\s+Road|Ranch\s+Road|County\s+Road)\s*\d+\b',
+        '', no_zip or q, flags=_re.IGNORECASE).strip().rstrip(",").strip()
+    # Also drop plain leading street numbers like "716 Main St"
+    no_street = _re.sub(r'^\d+\s+', '', no_street).strip()
+    if no_street and no_street not in variants:
+        variants.append(no_street)
+    # Keep only first 3 comma-separated chunks (title, city, state)
+    chunks = [c.strip() for c in (no_street or q).split(",") if c.strip()]
+    if len(chunks) > 2:
+        shorter = ", ".join(chunks[:2])
+        if shorter not in variants:
+            variants.append(shorter)
+    # Just the title (first chunk)
+    if chunks and chunks[0] not in variants and len(chunks[0]) >= 3:
+        variants.append(chunks[0])
+    return variants
+
 
 def _parse_nominatim_item(it: dict) -> dict:
     addr = it.get("address", {}) or {}
