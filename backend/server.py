@@ -424,6 +424,16 @@ class SpotCreateIn(BaseModel):
     # one of: 'success' | 'failed' | 'low_confidence' | 'skipped'.
     original_address_input: Optional[str] = None
     geocode_status: Optional[str] = None
+    # FIX(2026-05): Camera-capture provenance → "On-Site Verified" badge.
+    # `capture_source` is one of 'camera_capture' | 'gallery_upload' |
+    # 'manual_entry'. When camera_capture + gps_accuracy_m <= 100 we set
+    # `on_site_verified = True` and surface the badge in the UI.
+    capture_source: Optional[str] = None
+    captured_at: Optional[str] = None
+    gps_accuracy_m: Optional[float] = None
+    gps_heading: Optional[float] = None
+    gps_altitude_m: Optional[float] = None
+    on_site_verified: Optional[bool] = None
     # FIX(2026-04): [1.2] freeform photographer notes captured on the Ratings step.
     # Max 2000 chars, stripped, stored as null if empty after strip.
     notes: Optional[str] = None

@@ -17,7 +17,7 @@ import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as Location from 'expo-location';
-import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown, AlertTriangle, Search, Map as MapIcon, Edit3, FileText, Sun, Eye, EyeOff, Sparkles, Circle } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown, AlertTriangle, Search, Map as MapIcon, Edit3, FileText, Sun, Eye, EyeOff, Sparkles, Circle, Camera } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii, SHOOT_TYPES, BEST_TIMES, PRIVACY_MODES } from '../../src/theme';
@@ -44,6 +44,12 @@ type Draft = {
   // FIX(Commit 7.5 / 2026-04): location-integrity provenance fields.
   originalAddressInput?: string;
   geocodeStatus?: 'success' | 'failed' | 'low_confidence' | 'skipped';
+  // FIX(2026-05): on-site camera-capture provenance for "On-Site Verified" badge.
+  sourceType?: 'camera_capture' | 'gallery_upload' | 'manual_entry';
+  capturedAt?: string;          // ISO datetime when the shutter fired
+  gpsAccuracy?: number;         // meters
+  gpsHeading?: number;          // degrees (if available)
+  gpsAltitude?: number;         // meters (if available)
   landmark: string;  // Step 3 user-entered "Park / landmark / area" (surfaced separately)
   images: { image_url: string; caption?: string; is_cover: boolean }[];
   title: string;
@@ -326,6 +332,139 @@ export default function AddSpot() {
     setDraft({ ...draft, images: [...draft.images, ...processed].slice(0, 8) });
   };
 
+  // =========================================================================
+  // Take Photo Now (camera capture + auto-GPS tag + reverse geocode)
+  // =========================================================================
+  // Opens the device camera, runs a parallel GPS request, and on success
+  // prefills the draft with coordinates + captured-at + accuracy.
+  // User is auto-advanced to the Location step for confirmation. Failures
+  // degrade gracefully: camera-without-GPS still captures the photo; we just
+  // ask the user to finish location manually.
+  const takePhotoWithGPS = async () => {
+    // 1. Permissions — ask for both camera + location together.
+    const cam = await ImagePicker.requestCameraPermissionsAsync();
+    if (cam.status !== 'granted') {
+      Alert.alert('Camera permission needed', 'LumaScout needs camera access to capture on-site spots.');
+      return;
+    }
+    const locPerm = await Location.requestForegroundPermissionsAsync();
+
+    // 2. Launch camera + GPS fetch in parallel so the spot is ready by the
+    //    time the user finishes shooting.
+    const gpsPromise = locPerm.status === 'granted'
+      ? Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
+          .catch(() => null)
+      : Promise.resolve(null);
+
+    const res = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 1,
+      base64: false,
+      exif: true,
+    });
+    if (res.canceled || !res.assets?.[0]?.uri) {
+      return;
+    }
+    const asset = res.assets[0];
+
+    // 3. Compress + encode base64 (same pipeline as pickImages).
+    let imageUrl: string | null = null;
+    try {
+      const manipulated = await ImageManipulator.manipulateAsync(
+        asset.uri,
+        [{ resize: { width: 1280 } }],
+        { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+      );
+      if (manipulated.base64) {
+        imageUrl = `data:image/jpeg;base64,${manipulated.base64}`;
+      }
+    } catch {}
+
+    if (!imageUrl) {
+      Alert.alert('Photo failed', 'Could not process the captured photo. Try again.');
+      return;
+    }
+
+    // 4. Await GPS. Prefer live GPS; fall back to EXIF GPS if GPS denied.
+    const gps = await gpsPromise;
+    let lat: number | undefined;
+    let lng: number | undefined;
+    let accuracy: number | undefined;
+    let heading: number | undefined;
+    let altitude: number | undefined;
+    if (gps?.coords) {
+      lat = gps.coords.latitude;
+      lng = gps.coords.longitude;
+      accuracy = gps.coords.accuracy ?? undefined;
+      heading = gps.coords.heading ?? undefined;
+      altitude = gps.coords.altitude ?? undefined;
+    } else if (asset.exif) {
+      const ex: any = asset.exif;
+      if (typeof ex.GPSLatitude === 'number' && typeof ex.GPSLongitude === 'number') {
+        lat = ex.GPSLatitude;
+        lng = ex.GPSLongitude;
+      }
+    }
+
+    // 5. Reverse-geocode to hint city/state (best effort, never blocks).
+    let city: string | undefined;
+    let state: string | undefined;
+    let locationLabel: string | undefined;
+    if (lat != null && lng != null) {
+      try {
+        const places = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
+        if (places && places[0]) {
+          const p = places[0];
+          city = p.city || p.subregion || undefined;
+          state = p.region || undefined;
+          locationLabel = [p.name, city, state].filter(Boolean).join(', ');
+        }
+      } catch {}
+    }
+
+    // 6. Merge into draft and auto-advance to Location step for confirmation.
+    const newImage = {
+      image_url: imageUrl,
+      is_cover: draft.images.length === 0,
+      caption: undefined,
+    };
+    setDraft((prev) => ({
+      ...prev,
+      images: [...prev.images, newImage].slice(0, 8),
+      latitude: lat ?? prev.latitude,
+      longitude: lng ?? prev.longitude,
+      locationLabel: locationLabel ?? prev.locationLabel,
+      locationSource: lat != null ? 'gps' : prev.locationSource,
+      city: city || prev.city,
+      state: state || prev.state,
+      sourceType: 'camera_capture',
+      capturedAt: new Date().toISOString(),
+      gpsAccuracy: accuracy,
+      gpsHeading: heading,
+      gpsAltitude: altitude,
+      geocodeStatus: locationLabel ? 'success' : 'skipped',
+      geocodeConfidence: locationLabel ? 0.85 : undefined,
+    }));
+
+    // 7. Low-accuracy warning — if accuracy > 100m, nudge the user to drop a pin.
+    if (accuracy != null && accuracy > 100) {
+      Alert.alert(
+        'Low GPS accuracy',
+        `We locked on to a rough area (${Math.round(accuracy)}m radius). Please tap "Change" on the next step to drop a pin or search for the exact spot.`,
+      );
+    } else if (lat == null) {
+      Alert.alert(
+        'Location couldn\'t be captured',
+        'The photo was saved, but we couldn\'t auto-tag the GPS coordinates. Please set the location on the next step.',
+      );
+    }
+
+    // Jump forward to the Location step only if we actually got coordinates.
+    if (lat != null) {
+      setStep(1);
+    }
+  };
+
   const setCover = (idx: number) => {
     setDraft({
       ...draft,
@@ -416,6 +555,15 @@ export default function AddSpot() {
     // FIX(Commit 7.5): carry provenance so admins can audit / replay geocodes.
     original_address_input: draft.originalAddressInput,
     geocode_status: draft.geocodeStatus,
+    // FIX(2026-05): camera-capture provenance for "On-Site Verified" badge.
+    capture_source: draft.sourceType || undefined,
+    captured_at: draft.capturedAt,
+    gps_accuracy_m: draft.gpsAccuracy,
+    gps_heading: draft.gpsHeading,
+    gps_altitude_m: draft.gpsAltitude,
+    on_site_verified: draft.sourceType === 'camera_capture'
+      && typeof draft.gpsAccuracy === 'number'
+      && draft.gpsAccuracy <= 100,
     save_as_draft: asDraft,
   });
 
@@ -524,11 +672,35 @@ export default function AddSpot() {
             <View style={{ gap: space.lg }}>
               <Text style={styles.heading}>Add photos</Text>
               <Text style={styles.sub}>Start with your shots. You'll assign a location next. Public spots need at least one photo — tap an image to make it the cover.</Text>
+              {/* Take Photo Now — captures GPS in parallel with the shutter */}
+              <TouchableOpacity style={styles.takePhotoCard} onPress={takePhotoWithGPS} testID="add-take-photo">
+                <View style={styles.takePhotoIconWrap}>
+                  <Camera size={22} color={colors.textInverse} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.takePhotoTitle}>Take photo now</Text>
+                  <Text style={styles.takePhotoSub}>
+                    On-site? We'll auto-tag GPS + suggest a location.
+                  </Text>
+                </View>
+                <View style={styles.onSitePill}>
+                  <Text style={styles.onSitePillTxt}>📍 On-Site Verified</Text>
+                </View>
+              </TouchableOpacity>
               <TouchableOpacity style={styles.uploadCard} onPress={pickImages} testID="add-pick-images">
                 <ImageIcon size={28} color={colors.primary} />
-                <Text style={styles.uploadText}>Choose photos</Text>
+                <Text style={styles.uploadText}>Upload from camera roll</Text>
                 <Text style={styles.uploadHint}>Up to 8 images</Text>
               </TouchableOpacity>
+              {draft.sourceType === 'camera_capture' && draft.gpsAccuracy != null ? (
+                <View style={styles.gpsChip}>
+                  <MapPin size={12} color={colors.primary} />
+                  <Text style={styles.gpsChipTxt}>
+                    GPS locked · ±{Math.round(draft.gpsAccuracy)}m
+                    {draft.locationLabel ? ` · ${draft.locationLabel}` : ''}
+                  </Text>
+                </View>
+              ) : null}
               <View style={styles.imgGrid}>
                 {draft.images.map((img, i) => (
                   <TouchableOpacity key={i} style={styles.imgWrap} onPress={() => setCover(i)}>
@@ -1389,6 +1561,38 @@ const styles = StyleSheet.create({
   },
   uploadText: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 15, marginTop: 6 },
   uploadHint: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12 },
+
+  // "Take photo now" — on-site capture card
+  takePhotoCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    padding: 14,
+    backgroundColor: 'rgba(245,166,35,0.08)',
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.45)',
+    borderRadius: radii.lg,
+  },
+  takePhotoIconWrap: {
+    width: 46, height: 46, borderRadius: 23,
+    backgroundColor: colors.primary,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  takePhotoTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
+  takePhotoSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, marginTop: 2, lineHeight: 15 },
+  onSitePill: {
+    paddingHorizontal: 8, paddingVertical: 4,
+    borderRadius: radii.sm,
+    backgroundColor: colors.primary,
+  },
+  onSitePillTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.3 },
+  gpsChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10, paddingVertical: 5,
+    backgroundColor: 'rgba(34,197,94,0.12)',
+    borderRadius: radii.pill,
+    borderWidth: 1, borderColor: 'rgba(34,197,94,0.4)',
+  },
+  gpsChipTxt: { color: '#16a34a', fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.2 },
+
   imgGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   imgWrap: { width: '31%', aspectRatio: 1, position: 'relative' },
   imgThumb: { width: '100%', height: '100%', borderRadius: radii.md },
