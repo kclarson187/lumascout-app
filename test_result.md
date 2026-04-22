@@ -2742,3 +2742,50 @@ agent_communication:
       rail, delete cascade, regressions — pass end-to-end. Test script
       /app/backend_test.py cleans up after itself (moderates pending
       uploads to removed + soft-deletes the tester user).
+
+
+    -agent: "testing"
+    -message: |
+      RETEST after admin-family role gates patched (server.py lines 1663, 1841,
+      1924, 1990, 2016 now accept admin/super_admin/moderator/support).
+
+      Re-ran ONLY the 3 previously-failing assertions as requested — via
+      /app/backend_test_moderation_retest.py against http://localhost:8001/api.
+      Admin = admin@lumascout.app / admin123 (resolved username='keith',
+      role=super_admin). Fresh tester registered via /api/auth/register
+      (role='user', verification_status='unverified').
+
+      SCENARIO A — list_spot_uploads pending visibility (3/3 PASS):
+        • Unauth GET /api/spots/{id}/uploads → 200, 0 items (pending hidden).
+        • Tester GET (non-admin, non-owner) → 200, 0 items (pending hidden).
+        • Admin GET → 200, 1 item with moderation_status='pending' (FIXED —
+          was 200-but-empty when gate was strict 'admin' only).
+
+      SCENARIO B — Full admin moderation flow (8/8 PASS):
+        1. Tester POST /spots/{id}/uploads → 200 moderation_status='pending'
+           auto_approved=false count=1.
+        2. Admin GET /api/admin/spot-uploads/pending → 200 returns the upload
+           with hydrated spot{spot_id,title,city,state} and contributor
+           {user_id,name,username,avatar_url,verification_status,plan}
+           (FIXED — was 403 when gate was strict 'admin' only).
+        3. Admin PATCH {action:'approve'} → 200 {ok:true, action:'approve'},
+           moderation_status flipped to 'approved' (FIXED — was 403 before).
+        4. Unauth GET /spots/{id}/uploads now includes the upload with
+           moderation_status='approved'.
+        5. Tester PATCH /admin/spot-uploads/{id} → 403 {detail:'Admin only'}
+           (non-staff correctly blocked post-patch).
+        6. Admin PATCH {action:'set_as_cover'} → 200; subsequent GET
+           /api/spots/{id} shows spots[0].images[0] has is_cover=true AND
+           image_url === the tester's uploaded image (promotion confirmed).
+        7. Admin PATCH {action:'feature'} → 200; subsequent admin GET
+           /spots/{id}/uploads shows featured=true persists on the upload row.
+        8. Admin PATCH {action:'garbage'} → 400 {detail:'Unknown action'}.
+
+      All 11 checks passed. Cleanup: spot hard-deleted via
+      DELETE /api/admin/spots/{id} {reason_code:'qa_test'} → 200; throwaway
+      tester soft-deleted via DELETE /api/admin/users/{id} → 200. No residual
+      test data remaining in DB.
+
+      The original 29 scenarios were NOT replayed (per request). The three
+      role-gate fixes fully resolve the prior 3/32 failures — admin/super_admin
+      moderation path is now launch-ready.
