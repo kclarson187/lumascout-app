@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, Image, Alert, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ChevronLeft, Heart, Send, MessageCircle } from 'lucide-react-native';
+import { ChevronLeft, Heart, Send, MessageCircle, MapPin } from 'lucide-react-native';
 import { api, formatApiError } from '../../../src/api';
 import { useAuth } from '../../../src/auth';
 import { colors, font, space, radii } from '../../../src/theme';
@@ -94,6 +94,34 @@ export default function PostDetail() {
           <Text style={styles.postTitle}>{post.title}</Text>
           {post.body ? <Text style={styles.body}>{post.body}</Text> : null}
           {post.image_url ? <Image source={{ uri: post.image_url }} style={styles.img} /> : null}
+          {/* Spot attachment (Commit 8c / 2026-04) */}
+          {post.spot_ref ? (
+            <TouchableOpacity
+              onPress={() => router.push(`/spot/${post.spot_ref.spot_id}` as any)}
+              style={styles.spotAttach}
+              testID={`post-detail-spot-${post.post_id}`}
+            >
+              {post.spot_ref.cover_image_url ? (
+                <Image source={{ uri: post.spot_ref.cover_image_url }} style={styles.spotAttachCover} />
+              ) : (
+                <View style={[styles.spotAttachCover, { backgroundColor: colors.surface2, alignItems: 'center', justifyContent: 'center' }]}>
+                  <MapPin size={22} color={colors.textTertiary} />
+                </View>
+              )}
+              <View style={styles.spotAttachOverlay}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <MapPin size={11} color={colors.primary} />
+                  <Text style={styles.spotAttachKicker}>SPOT</Text>
+                </View>
+                <Text style={styles.spotAttachTitle} numberOfLines={1}>{post.spot_ref.title || 'Untitled spot'}</Text>
+                {(post.spot_ref.city || post.spot_ref.state) ? (
+                  <Text style={styles.spotAttachLoc} numberOfLines={1}>
+                    {[post.spot_ref.city, post.spot_ref.state].filter(Boolean).join(', ')}
+                  </Text>
+                ) : null}
+              </View>
+            </TouchableOpacity>
+          ) : null}
 
           <View style={styles.actions}>
             <TouchableOpacity onPress={toggleLike} style={styles.action}>
@@ -163,6 +191,13 @@ const styles = StyleSheet.create({
   postTitle: { color: colors.text, fontFamily: font.display, fontSize: 26, letterSpacing: -0.5, lineHeight: 32 },
   body: { color: colors.textSecondary, fontFamily: font.body, fontSize: 14, lineHeight: 21 },
   img: { width: '100%', aspectRatio: 16 / 10, borderRadius: radii.md },
+  // Spot attachment (Commit 8c / 2026-04)
+  spotAttach: { position: 'relative', borderRadius: radii.md, overflow: 'hidden', backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border, marginTop: 10 },
+  spotAttachCover: { width: '100%', aspectRatio: 16 / 9 },
+  spotAttachOverlay: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 10, backgroundColor: 'rgba(0,0,0,0.55)' },
+  spotAttachKicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.6 },
+  spotAttachTitle: { color: '#fff', fontFamily: font.bodySemibold, fontSize: 14, marginTop: 2 },
+  spotAttachLoc: { color: 'rgba(255,255,255,0.8)', fontFamily: font.body, fontSize: 11, marginTop: 1 },
   actions: { flexDirection: 'row', gap: 20, paddingVertical: space.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   action: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   actionTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13 },

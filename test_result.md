@@ -2448,3 +2448,129 @@ agent_communication:
       dropdown still lets the user pick. MAPBOX_TOKEN moved to backend/.env.
       Please retest the geocode endpoints + confirm Add Spot save-to-DB
       with the canonical Joshua Springs example no longer lands in the ocean.
+
+#====================================================================================================
+# Commit 8 / 2026-04 — Pre-launch sweep (golden-hour TZ, home pills, spot attachments, test hygiene)
+#====================================================================================================
+
+backend:
+  - task: "Commit 8c — Community post spot_ref hydration"
+    implemented: true
+    working: "NA"  # needs regression retest
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Extended _hydrate_posts() (~line 3395) to look up each post's
+          referenced spot (post.spot_id) and attach a minimal `spot_ref`
+          preview: {spot_id, title, city, state, cover_image_url,
+          privacy_mode}. Filters out test data + deleted spots. This
+          enables the frontend to render an inline spot-attachment
+          card on community posts — the community feed had mostly
+          text-only cards (only 1/15 posts had image_url) so the spot
+          cover becomes the richest media signal on most cards.
+          Verified end-to-end: GET /api/posts returns spot_ref with
+          correct title + cover_image_url for a post with a linked spot.
+
+  - task: "Commit 8e — Test data hygiene batch flag"
+    implemented: true
+    working: true
+    file: "mongodb photoscout_database.spots"
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Batch-flagged 35 spots as is_test_data:true (TEST_ prefix,
+          Regression Test prefix, and _Test_Spot suffix patterns),
+          stamped test_flagged_at + test_flagged_reason for auditing.
+          Pre-state: 10 test-flagged / 70 total. Post-state: 35
+          test-flagged / 34 production spots visible on home feed.
+          Verified no false-positives via lorem/ipsum/foo/bar/dummy
+          sweep. All list endpoints (feed/home, spots, posts, map)
+          already filter is_test_data:{$ne:true}.
+
+frontend:
+  - task: "Commit 8a — Golden-hour timezone fix (per-spot local time)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/utils/sun.ts"
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Rewrote goldenHourLabel() to format in the SPOT'S local
+          timezone (via tz-lookup → IANA zone → Intl.DateTimeFormat
+          with timeZone option), not the viewer's runtime TZ. Previous
+          code used toLocaleTimeString(undefined, …) which renders in
+          the runtime timezone — Expo Web SSR runs with TZ=UTC, so
+          Enchanted Rock's 7:35 PM CDT golden hour leaked as "12:35 AM".
+
+          Verified via Node in a container with TZ=UTC:
+            Enchanted Rock (30.51, -98.82) → America/Chicago → 7:35 PM ✅
+            Manhattan (40.70, -74.00)       → America/New_York → 7:04 PM ✅
+
+          This is also the map-product-correct behaviour: a photographer
+          in NYC planning a shoot at Enchanted Rock should see Central
+          golden hour, not Eastern. Added tz-lookup dep (~45KB, offline).
+
+  - task: "Commit 8b — Home top-tabs restyled as neutral nav pills"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(tabs)/index.tsx"
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Removed the loud amber primary-fill `cTabActive` style from
+          the "For You" pill. All five top-strip pills now use the
+          same neutral surface1 + border look. Subtle you-are-here
+          cue: "For You" uses surface2 fill + bodySemibold weight
+          (vs surface1 + bodyMedium on the navs). Icons shifted to
+          textSecondary to match the muted tone. This addresses the
+          screenshot-tour Bucket D finding that the active amber
+          state read as a CTA, not navigation context.
+
+  - task: "Commit 8c — Community feed spot-attachment card"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/community.tsx, /app/frontend/app/community/post/[id].tsx"
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Added an inline spot-attachment card when a community post
+          has a `spot_ref` (hydrated server-side). Renders the spot's
+          cover image (16:9), overlays a SPOT kicker + title + city/state
+          meta at the bottom. Tap routes to /spot/[id]. Applied to both
+          the feed card (community.tsx) and the post detail page
+          (community/post/[id].tsx) for consistency.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Commit 8 pre-launch sweep complete (4 items):
+        8a ✅ Golden-hour TZ bug fixed via tz-lookup + spot-local zone
+        8b ✅ Home nav pills — amber active state removed
+        8c ✅ Community feed now renders spot_ref attachments
+        8e ✅ 35 test spots flagged is_test_data:true
+
+      Backend retest scope: /api/posts list + /api/posts/{id}
+      should return spot_ref when post.spot_id is set (with filtering
+      for is_test_data + visibility). Quick sanity: /api/feed/home
+      and /api/spots still filter test data (no behavior change there).
+
+      Frontend retest requires user approval — 8a/8b/8c are all
+      visible changes on home, community, and spot detail screens.
+
