@@ -2789,3 +2789,129 @@ agent_communication:
       The original 29 scenarios were NOT replayed (per request). The three
       role-gate fixes fully resolve the prior 3/32 failures — admin/super_admin
       moderation path is now launch-ready.
+
+#====================================================================================================
+# Feature 9 Frontend — Community uploads UI + Freshly Updated rail (2026-04)
+#====================================================================================================
+
+frontend:
+  - task: "Feature 9 — Community uploads frontend (CTAs, upload/update screens, sections, home rail)"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/src/components/FreshnessBits.tsx
+      /app/frontend/src/components/CommunityUploadsSection.tsx
+      /app/frontend/src/components/LatestConditionsSection.tsx
+      /app/frontend/src/components/FreshlyUpdatedRail.tsx
+      /app/frontend/app/spot/[id]/upload.tsx
+      /app/frontend/app/spot/[id]/update.tsx
+      /app/frontend/app/spot/[id].tsx
+      /app/frontend/app/(tabs)/index.tsx
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Frontend for the retention feature shipped. Delivered:
+
+          NEW SCREENS:
+            /spot/[id]/upload    — multi-photo picker (up to 12),
+                                   optional caption, 12 condition-tag
+                                   chip picker (cap 6), submit bar
+                                   with auto-approve/pending toast.
+            /spot/[id]/update    — short text check-in (3-500 chars)
+                                   with quick-pick suggestions +
+                                   condition chips, auto-focus, counter.
+
+          SHARED PRIMITIVES (FreshnessBits.tsx):
+            CONDITION_TAGS       — canonical 12-tag vocabulary mirrored
+                                   from the backend (verified_today,
+                                   blooming, great_sunset, crowded,
+                                   quiet, muddy, dog_friendly,
+                                   family_friendly, closed_gate,
+                                   construction, good_parking,
+                                   fall_colors) with icon + color.
+            ConditionChip        — compact pill used in lists.
+            ActivityBadge        — "Updated Today / Fresh This Week /
+                                   Recently Verified / Trending Again"
+                                   driven by last_activity_at +
+                                   recent_upload_count_7d. (Renamed
+                                   from FreshnessBadge to avoid
+                                   clashing with the existing
+                                   FreshnessBadge component.)
+            timeAgo              — "2h ago / yesterday / 3d ago" helper.
+
+          SPOT DETAIL UPDATES (/spot/[id].tsx):
+            - Two premium CTAs under meta: "Add Recent Photos"
+              (primary) + "Add Update" (secondary, amber border).
+            - ActivityBadge rendered next to existing FreshnessBadge.
+            - "Recent community uploads" section with horizontal grid
+              of uploads + "Updated Xh ago" subtitle.
+            - "Latest conditions" section with vertical updates feed.
+            - Both sections handle empty + loading states with clean
+              icon + copy ("Be the first to share a fresh photo...").
+
+          COMMUNITY UPLOADS RAIL COMPONENT:
+            - Horizontal FlatList of 18 newest approved uploads.
+            - Each card: image, contributor avatar + name, time ago,
+              caption, up to 3 condition chips, like + helpful counts.
+            - Optimistic like toggle with rollback-on-error.
+            - Pending items flagged with "Pending review" badge
+              (owner/admin viewers only).
+
+          HOME FEED INTEGRATION (/app/(tabs)/index.tsx):
+            - "Freshly updated near you" horizontal rail rendered
+              immediately after the Editor's Pick hero, so returning
+              users see activity first thing.
+            - Each card: thumbnail (4:3), green "Xh ago" chip overlay,
+              spot title, city, state. Tap routes to /spot/[id].
+
+          UX POLISH:
+            - KeyboardSafe wrapper on both upload + update screens.
+            - Submit bars stick to bottom with platform-safe padding
+              (iOS extra bottom padding for home indicator).
+            - Disabled submit state (grey) until minimum inputs met.
+            - ActivityIndicator while submitting (prevents double-tap).
+            - Alert-based success toast with auto-approved vs pending
+              review copy pulled from server response.
+            - Condition tag chips use per-tag color (e.g. blooming
+              pink, muddy brown, great_sunset amber) when selected.
+            - Empty state iconography + helpful copy drives first
+              contributions.
+
+          PERFORMANCE:
+            - Sections lazy-fetch their own data (don't block spot
+              detail load).
+            - Paginated endpoints (18 uploads, 8 updates initial).
+            - Base64 images capped at quality 0.7 via expo-image-picker.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      FRONTEND COMPLETE FOR FEATURE 9. All 5 build items delivered:
+        1. Spot detail CTAs           ✓
+        2. Upload screen              ✓ (/spot/[id]/upload)
+        3. Update screen              ✓ (/spot/[id]/update)
+        4. Spot detail sections       ✓ (uploads grid + conditions feed + last updated chip + activity badge)
+        5. Home Freshly Updated rail  ✓
+
+      Metro bundles cleanly (3516 modules, no errors). All components
+      use the existing theme + safe area patterns. KeyboardSafe wraps
+      both upload + update screens. Empty states drive first
+      contributions.
+
+      Awaiting frontend QA approval from user. Recommend testing on
+      iPhone dimensions (390x844):
+        1. Home feed → Freshly updated rail visible (may be empty
+           until users start uploading).
+        2. Any spot detail → two CTA buttons visible under the meta.
+        3. Tap "Add Recent Photos" → upload screen loads, can pick
+           photos, pick tags, submit → success alert.
+        4. Tap "Add Update" → update screen loads, text focused,
+           quick-pick suggestions work, submit → success alert.
+        5. Back on spot detail → new upload appears in "Recent
+           community uploads" section, new update in "Latest conditions".
+
+      Admin creds: admin@lumascout.app / admin123
+

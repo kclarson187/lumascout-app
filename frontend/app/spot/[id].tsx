@@ -18,7 +18,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import {
   ChevronLeft, Bookmark, Share2, Flag, MapPin, Sun, Sunrise, Sunset, Cloud,
   Camera, Car, Accessibility, Users, Shield, DogIcon, BabyIcon, TicketIcon, ClockIcon, CheckCircle,
-  FolderPlus, MessageSquarePlus, Navigation, Wand2, ChevronRight, Trash2,
+  FolderPlus, MessageSquarePlus, Navigation, Wand2, ChevronRight, Trash2, PenLine,
 } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
@@ -28,6 +28,9 @@ import SpotCard from '../../src/components/SpotCard';
 import { Button } from '../../src/components/Button';
 import { DetailSkeleton } from '../../src/components/Skeleton';
 import AddToCollectionSheet from '../../src/components/AddToCollectionSheet';
+import CommunityUploadsSection from '../../src/components/CommunityUploadsSection';
+import LatestConditionsSection from '../../src/components/LatestConditionsSection';
+import { ActivityBadge, timeAgo } from '../../src/components/FreshnessBits';
 import VerifiedBadge from '../../src/components/VerifiedBadge';
 import FreshnessBadge from '../../src/components/FreshnessBadge';
 import ReportSheet from '../../src/components/ReportSheet';
@@ -188,10 +191,16 @@ export default function SpotDetail() {
           </View>
 
           {(spot.freshness && spot.freshness !== 'unknown') && (
-            <View style={{ alignSelf: 'flex-start', marginTop: 6 }}>
+            <View style={{ alignSelf: 'flex-start', marginTop: 6, flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
               <FreshnessBadge freshness={spot.freshness} label={spot.freshness_label} />
+              <ActivityBadge lastActivityAt={spot.last_activity_at} recentUploadCount7d={spot.recent_upload_count_7d} />
             </View>
           )}
+          {(!spot.freshness || spot.freshness === 'unknown') && spot.last_activity_at ? (
+            <View style={{ alignSelf: 'flex-start', marginTop: 6 }}>
+              <ActivityBadge lastActivityAt={spot.last_activity_at} recentUploadCount7d={spot.recent_upload_count_7d} />
+            </View>
+          ) : null}
 
           <View style={styles.tagRow}>
             {(spot.shoot_types || []).map((t: string) => (
@@ -241,6 +250,30 @@ export default function SpotDetail() {
             <View style={styles.privacyNote}>
               <MapPin size={14} color={colors.info} />
               <Text style={styles.privacyNoteTxt}>Map pin hidden by owner. Contact contributor for details.</Text>
+            </View>
+          )}
+
+          {/* Community uploads + updates CTAs (Feature 9) */}
+          {!!spot.spot_id && (
+            <View style={styles.communityCtaRow}>
+              <TouchableOpacity
+                style={styles.communityCtaPrimary}
+                onPress={() => router.push(`/spot/${spot.spot_id}/upload` as any)}
+                activeOpacity={0.85}
+                testID="spot-add-photos"
+              >
+                <Camera size={16} color={colors.textInverse} />
+                <Text style={styles.communityCtaPrimaryTxt}>Add Recent Photos</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.communityCtaSecondary}
+                onPress={() => router.push(`/spot/${spot.spot_id}/update` as any)}
+                activeOpacity={0.85}
+                testID="spot-add-update"
+              >
+                <PenLine size={16} color={colors.primary} />
+                <Text style={styles.communityCtaSecondaryTxt}>Add Update</Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -385,6 +418,31 @@ export default function SpotDetail() {
               <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 13 }}>No reviews yet — be the first!</Text>
             )}
           </View>
+
+          {/* Community uploads (Feature 9 — retention) */}
+          {!!spot.spot_id && (
+            <>
+              <View style={styles.sectionHeadRow}>
+                <Text style={styles.sectionH}>Recent community uploads</Text>
+                {spot.last_activity_at ? (
+                  <Text style={styles.sectionHsub}>Updated {timeAgo(spot.last_activity_at)}</Text>
+                ) : null}
+              </View>
+              <View style={{ marginTop: space.md, marginHorizontal: -space.xl }}>
+                <CommunityUploadsSection spotId={spot.spot_id} />
+              </View>
+            </>
+          )}
+
+          {/* Latest conditions (text updates feed) */}
+          {!!spot.spot_id && (
+            <>
+              <Text style={[styles.sectionH, { marginTop: space.xl }]}>Latest conditions</Text>
+              <View style={{ marginTop: space.md, marginHorizontal: -space.xl }}>
+                <LatestConditionsSection spotId={spot.spot_id} />
+              </View>
+            </>
+          )}
 
           {/* Similar */}
           {spot.similar_spots && spot.similar_spots.length > 0 && (
@@ -565,6 +623,14 @@ const styles = StyleSheet.create({
   aiBtnTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   aiBtnSub: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, marginTop: 2 },
   sectionH: { color: colors.text, fontFamily: font.display, fontSize: 20, marginTop: space.xl, letterSpacing: -0.2 },
+  sectionHeadRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginTop: space.xl },
+  sectionHsub: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
+  // Community CTAs (Feature 9) — primary photo upload + secondary text update.
+  communityCtaRow: { flexDirection: 'row', gap: 8, marginTop: space.md, marginBottom: space.sm },
+  communityCtaPrimary: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderRadius: radii.md, backgroundColor: colors.primary },
+  communityCtaPrimaryTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 13 },
+  communityCtaSecondary: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderRadius: radii.md, backgroundColor: colors.surface1, borderWidth: 1, borderColor: 'rgba(245,166,35,0.4)' },
+  communityCtaSecondaryTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 13 },
   scoreGrid: {
     flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: space.md,
     padding: space.lg, backgroundColor: colors.surface1, borderRadius: radii.lg,
