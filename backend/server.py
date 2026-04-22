@@ -1214,7 +1214,7 @@ async def my_networking_analytics(
 
     base = {
         "plan": plan_of(user),
-        "period_days": since_days,
+        "period_days": max(1, min(since_days, 90)),
         "profile_views_7d": views_7d,
         "profile_views_30d": views_30d,
         "follows_gained": follows_gained,
@@ -2868,14 +2868,16 @@ async def dm_start_thread(
                     status_code=402,
                     detail="Free plan limit: 5 pending message requests. Upgrade to Pro for unlimited.",
                 )
-        # Rate limit: max 5 pending requests per hour from this sender.
-        hour_ago = utcnow() - timedelta(hours=1)
-        sent = await db.dm_requests.count_documents({
-            "from_user_id": user["user_id"], "status": "pending",
-            "created_at": {"$gte": hour_ago},
-        })
-        if sent >= 5:
-            raise HTTPException(status_code=429, detail="Too many new requests. Try again later.")
+        # Rate limit: max 5 pending requests per hour from free-tier senders.
+        # Pro / Elite are not rate-limited (feature they pay for).
+        if tier == "free":
+            hour_ago = utcnow() - timedelta(hours=1)
+            sent = await db.dm_requests.count_documents({
+                "from_user_id": user["user_id"], "status": "pending",
+                "created_at": {"$gte": hour_ago},
+            })
+            if sent >= 5:
+                raise HTTPException(status_code=429, detail="Too many new requests. Try again later.")
         existing_req = await db.dm_requests.find_one({
             "from_user_id": user["user_id"], "to_user_id": target_id,
             "status": {"$in": ["pending", "ignored"]},
