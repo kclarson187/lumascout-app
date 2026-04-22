@@ -2059,11 +2059,11 @@ async def list_spot_uploads(
         followed_ids: set = set()
         if viewer:
             followed_ids = {viewer["user_id"]}  # always see own
-            fr = await db.user_follows.find(
-                {"follower_id": viewer["user_id"]}, {"_id": 0, "followed_id": 1}
-            ).to_list(1000) if hasattr(db, "user_follows") else []
+            fr = await db.follows.find(
+                {"follower_user_id": viewer["user_id"]}, {"_id": 0, "followed_user_id": 1}
+            ).to_list(1000)
             for f in fr:
-                followed_ids.add(f.get("followed_id"))
+                followed_ids.add(f.get("followed_user_id"))
         def _visible(it: dict) -> bool:
             vis = it.get("visibility") or "public"
             if vis != "followers":
