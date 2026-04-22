@@ -4111,3 +4111,177 @@ agent_communication:
 
       Note for main agent: FOR THE FRONTEND PHASE B.2 SCREENS QA,
       YOU MUST ASK USER BEFORE DOING FRONTEND TESTING.
+
+#====================================================================================================
+# Phase B.3 — Networking Perks (2026-04)
+#====================================================================================================
+
+backend:
+  - task: "Phase B.3 — Featured badge, free-tier DM-request cap, Elite discovery boost, networking analytics"
+    implemented: true
+    working: false
+    file: "/app/backend/server.py"
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: false
+        -agent: "testing"
+        -comment: |
+          PHASE B.3 FOCUSED QA — 16/18 assertions PASS; 2 FAIL.
+          Test script: /app/backend_test.py. Backend: http://localhost:8001/api.
+
+          ============================================================
+          A) GET /api/me/analytics/networking
+          ============================================================
+          A1 PASS — no Authorization header → 401.
+          A2 PASS — admin (elite) returns all 11 base keys + trend_7d (length=7, each item={date,views}, dates sorted oldest→newest) + funnel{views_to_follow_pct, applications_to_acceptance_pct}.
+          A3 PASS — sophie (pro) returns only the 11 base keys; NO trend_7d, NO funnel.
+          A4 PASS — marco (free) returns identical shape to sophie (same 11 base keys, no extras). `plan='free'` surfaced.
+          A5 FAIL — since_days clamping DOES affect the Mongo cutoff (line 1174) BUT the response field `period_days` echoes the RAW unclamped value: since_days=9999 → period_days=9999 (expected 90), since_days=0 → period_days=0 (expected 1), since_days=-10 → period_days=-10 (expected 1), since_days=45 → period_days=45 (ok). Root cause: server.py:1217 sets `"period_days": since_days` instead of the clamped value. Fix: change to `"period_days": max(1, min(since_days, 90))` (or compute clamped once and reuse). Functionally the internal queries use the clamped cutoff so stats are correct, but the response contract is wrong per review spec.
+          A6 PASS — acceptance_rate_pct is a numeric float (0.0 when sent=0) and matches `round((accepted/sent)*100, 1)` formula.
+
+          ============================================================
+          B) POST /api/dm/threads/start — free-tier 5-pending cap
+          ============================================================
+          B7 PASS — marco (free) sends 5 distinct pending requests (priya, jordan, lena, emily, noah) → each 200 with is_request=true. DB: dm_requests.count_documents(from=marco, status=pending) == 5.
+          B8 PASS — marco 6th request (→diego) → 402 with detail exactly `"Free plan limit: 5 pending message requests. Upgrade to Pro for unlimited."`
+          B9 PASS — priya accepts marco's request → marco's pending count drops to 4. marco's new request to diego → 200.
+          B10 FAIL — sophie (pro) and admin (elite) send 6+ pending requests, expected all 200 but the 6th returns **429** (not 402, but not 200 either). Per-hour rate-limit at server.py:2872-2878 (`if sent >= 5: raise 429 "Too many new requests. Try again later."`) applies to ALL tiers, not just free. Result: [200, 200, 200, 200, 200, 429] for both sophie and admin. Review expects pro/elite to be unlimited. Two possible fixes: (a) gate the 429 rate-limit to `if tier == 'free'` as well — pro/elite bypass; (b) clarify in the spec that the 5/hr rate-limit persists across all tiers. This is a behavior gap: paying tiers are NOT "unlimited" for pending requests within a 1-hour window.
+          B11 PASS — when the target user follows marco, `is_request=False` is returned and no dm_request is ever created. Marco can safely start 6+ threads with followers (pending stays at 0). Cap correctly bypassed.
+          B12 PASS — 402 cap supersedes 429 in free tier (cap check runs first in code, confirmed live).
+
+          ============================================================
+          C) GET /api/network/discover — Elite discovery boost
+          ============================================================
+          C13/C14 PASS — flipped 2 seed users (Marco and Diego, both with specialties=['Wedding']) — Marco→elite, Diego→free (plus a third, Valeria, to elite for same-tier stability test). /network/discover as sophie → 200.
+          C14 PASS (wedding rail) — plans in order: ['elite', 'elite', 'free', 'free', 'free']. All elites appear before any free. No pro users in this rail.
+          C14 PASS (family rail) — ['elite', 'free']. Elite precedes free.
+          C14 PASS (pet rail) — ['elite', 'free']. Elite precedes free.
+          C14b PASS — flipped-elite (Marco) is at index 0; flipped-free (Diego) is at index 4 — elite strictly before free in the same rail.
+          C15 PASS — two consecutive calls return the SAME elite order in the wedding rail: ['user_1da5471413f5', 'user_ae52618a3e77'] both times. Intra-tier order is deterministic/preserved (Mongo natural order is stable here).
+          C16 Cleanup — original plans restored to all 3 users after the test.
+
+          ============================================================
+          NO 500s. No schema deviations beyond the two listed FAIL cases.
+          ============================================================
+
+          VERDICT: 2 real issues to address before B.3 is launch-ready:
+            1. [A5] Clamp the `period_days` response field, not just the internal cutoff. One-line fix at server.py:1217.
+            2. [B10] Decide intent: should pro/elite bypass the 5/hr 429 rate-limit on pending requests? If yes, wrap the rate-limit block in `if tier == 'free'` at server.py:2871-2878. If the 5/hr limit is intentional across all tiers, the review spec should be updated and the frontend upsell copy should reflect that.
+
+          Cleanup performed: DM state (threads, messages, requests, blocks) wiped for marco/sophie/admin. Plan flips on Marco/Diego/Valeria restored. Synthetic follows added to let marco bypass is_request also removed.
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          NEW ENDPOINTS:
+            GET /api/me/analytics/networking?since_days=30
+              - Free tier: shape present but UI blurs numbers + upsell.
+              - Pro tier: all base stats (profile_views_7d, _30d,
+                follows_gained, applications_sent/accepted, acceptance
+                rate %, needs_posted, applicants_received, active_threads).
+              - Elite tier: base + `trend_7d` (7 datapoints oldest-first)
+                + `funnel` (views_to_follow_pct, apps_to_acceptance_pct).
+
+          MODIFIED ENDPOINTS:
+            POST /api/dm/threads/start
+              - Phase B.3 free-tier gate: max 5 CONCURRENT pending
+                requests from a free account → 402 with upgrade copy.
+              - Pro / Elite unlimited. 5/hr rate-limit unchanged.
+
+            GET /api/network/discover
+              - Moderate Elite discovery boost: within each rail, plan
+                'elite' sorts first, then 'pro', then others. Preserves
+                existing intra-tier order.
+
+          LIVE-VERIFIED:
+            - admin (elite) /me/analytics/networking → full keys incl.
+              trend_7d[7] + funnel{views_to_follow_pct:33.3}.
+            - sophie (pro) → base shape, no trend_7d, no funnel.
+            - marco (free) → base shape with real numbers (UI blurs).
+
+          QA CHECKLIST FOR TESTING AGENT:
+            1. /me/analytics/networking: 401 unauth, 200 for each tier,
+               trend_7d length == 7 only for elite, funnel only elite.
+            2. since_days param clamps 1..90.
+            3. POST /dm/threads/start free-tier 6th concurrent pending
+               → 402 "Free plan limit: 5 pending message requests".
+            4. Same endpoint pro/elite → 200 with no 402.
+            5. Once recipient accepts a request, the free user can send
+               another pending request (counter drops).
+            6. /network/discover with elite users in any rail → elite
+               users appear before pro/free within that rail, order is
+               preserved among same-tier users.
+
+frontend:
+  - task: "Phase B.3 — FeaturedBadge component + wiring, Analytics screen, Network pill"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/src/components/FeaturedBadge.tsx (new)
+      /app/frontend/app/analytics.tsx (new Elite dashboard screen)
+      /app/frontend/app/user/[id].tsx (compact Featured pill in header)
+      /app/frontend/app/profile-viewers.tsx (inline Featured star next to names)
+      /app/frontend/app/(tabs)/network.tsx (Featured pill on cards + "Analytics" quick pill + stronger "Featured" copy replacing "Elite")
+      /app/frontend/app/messages.tsx (redirect shim to /inbox)
+      /app/frontend/app/messages/[id].tsx (redirect shim to /inbox/[id]; fixes the keyboardShouldPersistTaps crash)
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          FIXED P0 CRASH: `/messages/[id]` had a broken `useRef<ScrollView
+          keyboardShouldPersistTaps="handled" ...>(null)` — props parsed
+          as generic type arguments, throwing at runtime. Replaced with
+          lightweight shim that redirects to `/inbox/{thread_id}` (uses
+          /dm/threads/start when `?user=X`).
+
+          ALSO RETIRED /messages, /messages.tsx (inbox listing) → shim
+          that redirects to /inbox. Home message icon updated to push
+          `/inbox`. Community "Messages" button updated too.
+
+          NEW: FeaturedBadge.tsx — 3 variants (chip/inline/compact)
+          mirrors VerifiedBadge shape so it drops in anywhere. Only
+          renders when plan==='elite'. Wired into:
+            - User profile header (compact pill next to name)
+            - Profile viewers list (inline star next to name)
+            - Network tab discover cards (replaced old "Elite" pill with
+              "Featured" orange pill)
+
+          NEW: /analytics screen — premium dashboard.
+            - Elite: 8-card stat grid + rate hero + 7-day bar-chart
+              trend + conversion funnel (Views→Follows, Apps→Accept).
+            - Pro: 8-card grid + rate hero (no trend/funnel).
+            - Free: 8-card grid BLURRED ("••") with lock icons + rate
+              hero blurred + upgrade CTA → /paywall?reason=analytics.
+
+          NETWORK TAB:
+            Added "Analytics" quick pill next to Gigs/Viewers/Messages
+            (BarChart3 icon, orange accent).
+
+          TESTIDs:
+            - analytics-back, analytics-upgrade
+            - network-analytics
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Phase B.3 shipped with P0 DM crash fix:
+      - /messages/[id] crash fix (shim redirect)
+      - FeaturedBadge component + wiring across user profile, network
+        cards, viewer list
+      - /analytics dashboard screen with tier-based rendering
+      - Backend: Elite discovery boost in /network/discover, free-tier
+        5-pending-DM-request cap (402), GET /me/analytics/networking
+      - Analytics live-verified via direct Python requests for all 3
+        tiers.
+
+      Advanced people filters UI deferred (scoped for B.4). Free-tier
+      now pressures to upgrade via multiple fronts: blurred analytics,
+      blurred viewer teaser, 5-DM-request cap, 5-referral-apply cap.
+
+      Please run backend QA on:
+        - POST /dm/threads/start (5-pending cap)
+        - GET /network/discover (elite boost)
+        - GET /me/analytics/networking (all tiers + 401 + clamps)
+

@@ -93,7 +93,7 @@ export default function Community() {
         <TouchableOpacity onPress={() => router.push('/mentors')} style={styles.iconBtn} testID="community-mentors">
           <GraduationCap size={20} color={colors.text} />
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => router.push('/messages')} style={styles.iconBtn} testID="community-messages">
+        <TouchableOpacity onPress={() => router.push('/inbox')} style={styles.iconBtn} testID="community-messages">
           <MessageCircle size={20} color={colors.text} />
         </TouchableOpacity>
         <TouchableOpacity onPress={() => router.push('/community/compose')} style={styles.composeBtn} testID="community-compose">

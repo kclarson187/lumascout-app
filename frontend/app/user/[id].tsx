@@ -35,6 +35,7 @@ import { colors, font, space, radii } from '../../src/theme';
 import { Button } from '../../src/components/Button';
 import { EmptyState } from '../../src/components/ui';
 import SpotCard from '../../src/components/SpotCard';
+import FeaturedBadge from '../../src/components/FeaturedBadge';
 
 type TabKey = 'posts' | 'spots' | 'photos' | 'reviews' | 'about';
 const TABS: { key: TabKey; label: string }[] = [
@@ -192,6 +193,7 @@ export default function UserProfile() {
                 <ShieldCheck size={14} color={colors.textInverse} />
               </View>
             )}
+            <FeaturedBadge plan={profile.plan} variant="compact" size={11} />
           </View>
           <Text style={styles.handle}>@{profile.username}</Text>
           {(profile.city || profile.state) && (
