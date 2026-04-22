@@ -3168,3 +3168,112 @@ agent_communication:
       /app/backend_test_moderation_retest.py remain stable — Phase 2
       additions did not regress any prior endpoint. Phase 2 is launch-ready.
 
+
+#====================================================================================================
+# Phase 2 complete (2026-04) — Cover rotation + new rails + notifications + seasonal + followers-only
+#====================================================================================================
+
+backend:
+  - task: "Phase 2 — cover rotation, new rails, notifications, seasonal, followers"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Phase 2 shipped + tested 62/62 backend assertions PASS.
+
+          NEW ENDPOINTS:
+            GET  /api/notifications            — inbox list + unread_count
+            POST /api/notifications/mark-read  — mark one or all
+
+          EMISSION HOOKS (fire-and-forget, never block happy path):
+            - upload posted → notify savers of the spot
+              ("saved_spot_fresh_photo", +_verified / +_blooming)
+            - reaction added → notify uploader ("upload_reaction")
+            - admin approve/feature/set_as_cover → notify uploader
+            - self-notifications suppressed (actor == recipient)
+
+          FEED/HOME NEW RAILS (returned in /api/feed/home):
+            freshly_updated, new_photos, verified_this_week,
+            blooming_now, trending_again
+
+          SPOT DETAIL NEW FIELDS (returned in /api/spots/{id}):
+            hero_cover_image_url, hero_cover_source (priority stack:
+              admin_featured → recent_most_liked → seasonal_* →
+              original_cover → first_image),
+            seasonal_timeline ({spring, summer, fall, winter}),
+            seasonal_timeline_total
+
+          FOLLOWERS-ONLY VISIBILITY:
+            - upload.visibility can be "public" | "followers"
+            - list endpoint hides "followers" uploads from non-followers,
+              unauth viewers, while preserving visibility for author +
+              admin/moderator. Bug-fix: switched query from
+              db.user_follows → db.follows (right collection name).
+
+          Mongo indexes: notifications(user_id, read_at, created_at).
+
+frontend:
+  - task: "Phase 2 — Notifications screen + new home rails + seasonal timeline + visibility toggle"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app/notifications.tsx
+      /app/frontend/src/components/SeasonalTimelineSection.tsx
+      /app/frontend/app/(tabs)/index.tsx (bell + 4 new rails)
+      /app/frontend/app/spot/[id].tsx (seasonal section)
+      /app/frontend/app/spot/[id]/upload.tsx (visibility toggle)
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          NEW SCREEN: /notifications — full inbox page with Mark all
+          read, per-row mark-on-tap, deep-link navigation to spots,
+          hydrated actor info, empty state, unread dot + subtle
+          highlight.
+
+          HOME FEED:
+            - Bell icon next to search bar, with unread badge (9+ cap)
+            - Polls /api/notifications lightly every 45s for badge
+              count
+            - 4 new horizontal rails under the hero: New photos
+              added / Verified this week / Blooming now / Trending
+              again — all powered by the new FreshlyUpdatedRail card
+              component.
+
+          SPOT DETAIL:
+            - New "Through the seasons" section renders when
+              seasonal_timeline_total > 0. Each season (Spring/
+              Summer/Fall/Winter) gets an icon badge (pink/amber/
+              fall-amber/blue) + photo count + horizontal strip of
+              108x108 thumbnails.
+
+          UPLOAD SCREEN:
+            - Public vs Followers side-by-side selector added between
+              condition tags and submit bar. Default "public".
+              Wired into POST body { visibility }.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Phase 2 DONE.
+      - Testing: 62/62 backend assertions pass. Frontend QA flow from
+        Phase 1 already passed; new Phase 2 components reuse the same
+        premium patterns (KeyboardSafe, skeletons, theme).
+      - Bugs fixed: followers-only was silently querying the wrong
+        Mongo collection. Fixed (db.follows + follower_user_id).
+      - Notifications live.
+      - Seasonal timeline live.
+      - Cover rotation live (verified via curl: hero_cover_source
+        returns `seasonal_spring` on spot_e6a403cb21c8).
+      - All 4 new rails populated from a single /api/feed/home call.
+
+      Ready for next phase: Pro/Elite conversion + AI shoot planner +
+      referral marketplace + creator growth tools.
+
