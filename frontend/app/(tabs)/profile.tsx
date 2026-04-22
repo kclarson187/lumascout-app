@@ -264,7 +264,7 @@ export default function Profile() {
     <SafeAreaView style={styles.root} edges={['top']}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <ScrollView contentContainerStyle={{ paddingBottom: 60 }}>
           {/* Banner */}

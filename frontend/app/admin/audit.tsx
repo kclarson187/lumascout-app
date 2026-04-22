@@ -189,6 +189,8 @@ export default function AdminAudit() {
         <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
       ) : (
         <ScrollView
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
           contentContainerStyle={{ padding: space.xl, gap: 8, paddingBottom: 80 }}
           refreshControl={<RefreshControl refreshing={false} onRefresh={load} tintColor={colors.primary} />}
         >

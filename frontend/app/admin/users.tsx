@@ -61,7 +61,9 @@ export default function AdminUsers() {
           />
         </View>
       </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, flexShrink: 0, maxHeight: 44 }} contentContainerStyle={styles.chipsStrip}>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag" horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, flexShrink: 0, maxHeight: 44 }} contentContainerStyle={styles.chipsStrip}>
         {ROLE_FILTERS.map((r) => <Chip key={`role-${r}`} label={`role: ${r}`} active={role === r} onPress={() => { setPage(1); setRole(r); }} />)}
         {PLAN_FILTERS.map((p) => <Chip key={`plan-${p}`} label={`plan: ${p}`} active={plan === p} onPress={() => { setPage(1); setPlan(p); }} />)}
         {STATUS_FILTERS.map((s) => <Chip key={`status-${s}`} label={`status: ${s}`} active={status === s} onPress={() => { setPage(1); setStatus(s); }} />)}

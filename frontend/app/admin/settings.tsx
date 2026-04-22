@@ -36,7 +36,7 @@ export default function AdminSettings() {
   const disabled = user?.role !== 'super_admin';
 
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
       <ScrollView
         contentContainerStyle={{ padding: space.xl, gap: space.lg, paddingBottom: 80 }}
         refreshControl={<RefreshControl refreshing={false} onRefresh={load} tintColor={colors.primary} />}

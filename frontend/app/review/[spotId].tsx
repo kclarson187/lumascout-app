@@ -49,7 +49,9 @@ export default function ReviewScreen() {
           <Text style={styles.title}>Field check-in</Text>
         </View>
 
-        <ScrollView contentContainerStyle={{ padding: space.xl, gap: space.lg, paddingBottom: 100 }}>
+        <ScrollView
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag" contentContainerStyle={{ padding: space.xl, gap: space.lg, paddingBottom: 100 }}>
           <Text style={styles.label}>Overall rating</Text>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             {[1, 2, 3, 4, 5].map((v) => (

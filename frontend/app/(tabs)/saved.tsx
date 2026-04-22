@@ -184,7 +184,9 @@ export default function Saved() {
             </View>
           )}
           <View style={styles.sortRail}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: space.xl, gap: 6 }}>
+            <ScrollView
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag" horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: space.xl, gap: 6 }}>
               {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
                 <TouchableOpacity
                   key={k}
