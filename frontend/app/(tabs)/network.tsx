@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, Pressable, Image, ActivityIndicator, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { Search, MessageSquare, ShieldCheck, Star, MapPin, Send, Users as UsersIcon, Inbox } from 'lucide-react-native';
+import { Search, MessageSquare, ShieldCheck, Star, MapPin, Send, Users as UsersIcon, Inbox, Eye } from 'lucide-react-native';
 import { api } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
 
@@ -110,6 +110,10 @@ export default function NetworkTab() {
         <Pressable onPress={() => router.push('/inbox' as any)} style={s.inboxBtn} testID="network-inbox">
           <Inbox size={18} color={colors.text} />
           <Text style={s.inboxBtnTxt}>Messages</Text>
+        </Pressable>
+        <Pressable onPress={() => router.push('/profile-viewers' as any)} style={s.inboxBtn} testID="network-viewers">
+          <Eye size={18} color={colors.primary} />
+          <Text style={[s.inboxBtnTxt, { color: colors.primary }]}>Viewers</Text>
         </Pressable>
       </View>
 

@@ -39,6 +39,7 @@ import {
   GraduationCap,
   MessageCircle,
   HelpCircle,
+  Eye,
 } from 'lucide-react-native';
 import { useAuth } from '../../src/auth';
 import { api, formatApiError } from '../../src/api';
@@ -447,6 +448,7 @@ export default function Profile() {
 
           {/* === ACCOUNT ================================================= */}
           <Text style={styles.sectionLabel}>Account</Text>
+          <ProfileViewersTeaser />
           <View style={styles.actionsRow}>
             <TouchableOpacity style={styles.actionCard} onPress={() => router.push(plan !== 'free' ? '/billing' : '/paywall')} testID="profile-paywall">
               <Crown size={18} color={colors.primary} />
@@ -698,6 +700,84 @@ function AboutRow({ label, value }: { label: string; value: string }) {
     </View>
   );
 }
+
+/**
+ * ProfileViewersTeaser — Phase B.1 "Who Viewed Your Profile"
+ * Premium card above the Account section. Polls /me/viewers/summary
+ * and surfaces the 7-day new-viewer count with a one-tap CTA to the
+ * full Viewers screen. Deliberately designed to trigger curiosity +
+ * repeat opens (free tier sees blurred teaser → upgrade prompt).
+ */
+function ProfileViewersTeaser() {
+  const [summary, setSummary] = useState<{ total_7d: number; total_30d: number; plan: string } | null>(null);
+
+  const fetchSummary = useCallback(async () => {
+    try {
+      const s = await api.get('/me/viewers/summary');
+      setSummary(s);
+    } catch {}
+  }, []);
+
+  useFocusEffect(useCallback(() => { fetchSummary(); }, [fetchSummary]));
+
+  const total7 = summary?.total_7d ?? 0;
+  const plan = summary?.plan || 'free';
+  const headline = total7 > 0
+    ? `${total7} new ${total7 === 1 ? 'viewer' : 'viewers'} this week`
+    : 'Who viewed your profile';
+  const sub = plan === 'free'
+    ? (total7 > 0 ? 'Tap to see who noticed you' : "We'll let you know when someone checks you out")
+    : (total7 > 0 ? 'Tap to see the full list' : 'Your viewers will show up here');
+
+  return (
+    <TouchableOpacity
+      style={viewersStyles.card}
+      onPress={() => router.push('/profile-viewers')}
+      testID="profile-viewers-teaser"
+      activeOpacity={0.85}
+    >
+      <View style={viewersStyles.iconWrap}>
+        <Eye size={18} color={colors.primary} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={viewersStyles.headline}>{headline}</Text>
+        <Text style={viewersStyles.sub}>{sub}</Text>
+      </View>
+      {plan === 'free' && total7 > 0 ? (
+        <View style={viewersStyles.proPill}>
+          <Crown size={10} color={colors.primary} />
+          <Text style={viewersStyles.proTxt}>Pro</Text>
+        </View>
+      ) : null}
+    </TouchableOpacity>
+  );
+}
+
+const viewersStyles = StyleSheet.create({
+  card: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    backgroundColor: colors.surface1,
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.28)',
+    borderRadius: radii.lg,
+    marginHorizontal: space.xl, marginBottom: space.md,
+    paddingVertical: 14, paddingHorizontal: 14,
+  },
+  iconWrap: {
+    width: 38, height: 38, borderRadius: 19,
+    backgroundColor: 'rgba(245,166,35,0.12)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  headline: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
+  sub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2 },
+  proPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 8, paddingVertical: 4,
+    borderRadius: radii.sm,
+    backgroundColor: 'rgba(245,166,35,0.15)',
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.4)',
+  },
+  proTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.4 },
+});
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },

@@ -3533,6 +3533,219 @@ agent_communication:
       Known Expo-Go notes: push warnings expected (needs dev-client build).
 
 
+#====================================================================================================
+# Phase B.1 — Who Viewed Your Profile (2026-04)
+#====================================================================================================
+
+backend:
+  - task: "Phase B.1 — Profile Views tracking + tier-gated /me/viewers endpoints"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          FULL VALIDATION PASS — 94/94 assertions green (/app/backend_test_profile_views.py).
+          Backend at http://localhost:8001/api via python-requests + direct Motor for DB inspection.
+          Credentials per /app/memory/test_credentials.md: admin (elite/super_admin), sophie (pro/verified),
+          marco (free/verified), priya (free).
+
+          Setup: Wiped profile_views rows for all 4 test users to ensure deterministic baseline (count=0).
+
+          (2) Self-view ignored: admin GET /users/{admin_id} → 200; DB count of (admin,admin) rows = 0. PASS.
+
+          (3) Unauth view ignored: anon GET /users/{admin_id} (no Authorization header) → 200; DB count of
+              rows with viewed_user_id=admin_id still 0. get_optional_user returns None correctly. PASS.
+
+          (4) Basic record: sophie GET /users/{admin_id} → 200; exactly 1 row created for (sophie→admin)
+              with count=1, viewer_plan='pro', viewer_city='Austin'. All 11 required schema keys present on
+              the doc: view_id, viewer_user_id, viewed_user_id, viewer_city, viewer_state, viewer_country,
+              viewer_plan, viewer_specialties, first_viewed_at, last_viewed_at, count. PASS.
+
+          (5) 1h dedupe: sophie 2nd GET /users/{admin_id} within the 1-hour window → 200. Row count still 1
+              (no new insert). count incremented from 1 → 2. last_viewed_at bumped forward
+              (old < new, verified by Motor read before/after). first_viewed_at preserved. PASS.
+
+          (6) Multi-viewer: marco GET /users/{admin_id} → 200 created a 2nd distinct row. admin now has
+              2 profile_views rows; marco's row has viewer_plan='free' as expected. PASS.
+
+          (7) Free-tier teaser shape (marco /me/viewers → 200):
+              plan='free', viewers=[] (hidden), total_views & total_impressions are ints, period_days=30
+              (default), teaser={blurred_avatars:list, blurred_initials:list, message:str}, 'analytics'
+              key absent. All exact spec matches. PASS.
+
+          (8) Pro-tier full shape (sophie /me/viewers → 200):
+              plan='pro', viewers is non-empty list, 'teaser' absent, 'analytics' absent. Every viewer card
+              has all 12 required keys: user_id, name, username, avatar_url, city, state, specialties,
+              verification_status, plan, last_viewed_at, view_count, is_following. No 'password_hash' and
+              no 'email' leak anywhere (verified per-item). PASS.
+
+          (9) Elite-tier analytics (admin /me/viewers → 200):
+              plan='elite', viewers non-empty, 'teaser' absent. analytics block present with exactly 4 keys:
+              top_cities (list ≤5, each {city, views}), top_specialties (list ≤5, each {specialty, viewers}),
+              repeat_viewers (int), trend_7d. trend_7d has EXACTLY 7 items; each item is {date, views}; dates
+              are in ascending order (oldest first); last item's date == today (UTC). PASS.
+
+          (10) Summary endpoint: admin /me/viewers/summary → 200 {total_7d:int, total_30d:int, plan:'elite'}.
+               sophie → plan='pro'. marco → plan='free'. All three return the exact 3-key shape. PASS.
+
+          (11) Auth gates: /me/viewers no auth → 401. /me/viewers/summary no auth → 401. PASS.
+
+          (12) Param clamping:
+               • since_days=9999 → 200 (clamped to 90 via max(1, min(since_days, 90))).
+               • limit=-5 → 200, viewers length ≤1 (clamped to 1).
+               • limit=0 → 200 (clamped to 1).
+               Clamping logic at server.py:1022 and :1027 works correctly. PASS.
+
+          (13) Cross-user leak safety: admin /me/viewers returned viewers set exactly equal to the set of
+               viewer_user_ids with viewed_user_id=admin in Mongo. No sophie-audience viewers leaked into
+               admin's list. Scoping by viewed_user_id is correct. PASS.
+
+          (14) /users/{id} never-500 invariant: every /users/{id} call during testing returned 200, even
+               while profile_views writes were happening. Wrapped in try/except at server.py:978-979. PASS.
+
+          NOTES for main agent (not bugs):
+            • free-tier response returns `period_days = since_days` param value as-passed (not post-clamp).
+              For marco with no param → 30 (correct). Works as spec'd but the clamped value is not echoed
+              back; frontend that wants to display the actual window should clamp client-side too.
+            • trend_7d date field is a YYYY-MM-DD string (iso date), not a datetime. Matches sensible API
+              convention and dates sort correctly lexically.
+
+          No backend bugs found. Ready to ship.
+
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          NEW COLLECTION: profile_views
+            Indexes: (viewed_user_id, last_viewed_at desc),
+                     (viewer_user_id, viewed_user_id, last_viewed_at desc)
+            Schema: {view_id, viewer_user_id, viewed_user_id,
+                     viewer_city, viewer_state, viewer_country,
+                     viewer_plan, viewer_specialties,
+                     first_viewed_at, last_viewed_at, count}
+
+          VIEW TRACKING (side-effect in GET /api/users/{id}):
+            - Auto-records when authenticated viewer loads someone
+              else's profile.
+            - Self-views ignored.
+            - Deduped on a 1-hour window per (viewer, viewed) pair:
+              subsequent loads bump `last_viewed_at` + `$inc:count`
+              instead of stacking rows.
+            - Fire-and-forget; never blocks /users/{id} response.
+
+          NEW ENDPOINTS:
+            GET /api/me/viewers[?limit=50&since_days=30]
+              - Free tier: teaser {total_views, total_impressions,
+                  blurred_avatars[3], blurred_initials[3], message}
+                  viewers=[] (hidden).
+              - Pro tier: full viewer list with hydrated user cards
+                  (name, username, avatar_url, city, state, specialties,
+                  verification_status, plan, last_viewed_at, view_count,
+                  is_following).
+              - Elite tier: same as Pro + `analytics` block:
+                  {top_cities[5], top_specialties[5], repeat_viewers,
+                   trend_7d[7]}.
+            GET /api/me/viewers/summary
+              - Lightweight {total_7d, total_30d, plan} for badge/teaser
+                rendering without pulling the full list.
+
+          LIVE-VERIFIED via admin@lumascout.app / sophie / marco logins:
+            - sophie (pro) viewing admin → recorded; admin sees sophie
+              in full viewers list with is_following=false.
+            - marco (free) viewing admin → recorded; admin sees marco;
+              admin (elite) gets analytics: top_cities=[San Antonio,
+              Austin], top_specialties=[Wedding, Portrait, Family,
+              Pets], repeat_viewers=0, trend_7d=7 bars.
+            - admin viewing admin (self) → NOT recorded.
+            - marco fetching /me/viewers (free) → viewers=[], teaser
+              populated, blurred_avatars=[admin+priya avatars],
+              message="2 photographers viewed your profile this month".
+            - summary endpoint works for all three.
+
+          QA CHECKLIST FOR TESTING AGENT:
+            1. Self-view exclusion (no row created).
+            2. 1h dedupe (second view within window → count++,
+               last_viewed_at updated, NO new row).
+            3. 1h dedupe boundary (view >1h later → new row).
+            4. Free tier gating: viewers=[] + teaser present.
+            5. Pro tier: full viewer hydration + is_following accurate.
+            6. Elite tier: analytics block present with all 4 keys
+               (top_cities, top_specialties, repeat_viewers, trend_7d
+                of length 7).
+            7. since_days param bounds (1..90 clamp).
+            8. Unauthenticated viewer of /users/{id} does NOT record
+               a view (optional auth path).
+            9. /me/viewers and /me/viewers/summary → 401 without auth.
+           10. Cleanup: test data lives in profile_views collection;
+               safe to leave (not queryable on public endpoints).
+
+frontend:
+  - task: "Phase B.1 — Profile Viewers screen + Profile tab teaser card + Network tab quick-access pill"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app/profile-viewers.tsx (new screen)
+      /app/frontend/app/(tabs)/profile.tsx (teaser card + Eye icon)
+      /app/frontend/app/(tabs)/network.tsx (Viewers pill next to Messages)
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          NEW SCREEN: /profile-viewers
+            - Hero summary: big orange count + "X photographers viewed
+              your profile · In the last 30 days · Y impressions"
+            - Elite-only analytics block: 2 stat cards (Repeat viewers,
+              Views this week), 7-day bar-chart trend with day labels,
+              Top cities + Top niches list cards
+            - Free-tier teaser: overlapping blurred avatar stack with
+              orange lock badges + upgrade CTA + perks list
+            - Pro/Elite viewer cards: avatar, name (+ verified check),
+              city, "Viewed Nx · 2h ago", Follow/Following toggle,
+              Message button (opens /dm/threads/start → routes to
+              /inbox/{id}), tap-to-open /user/{id}
+            - Pull-to-refresh + optimistic follow toggle + friendly
+              error alerts on 429/403
+
+          PROFILE TAB ENTRY POINT:
+            Premium teaser card under Account heading — Eye icon +
+            "X new viewers this week" (falls back to "Who viewed your
+            profile") + contextual CTA + Pro pill (free-tier only).
+            Polls /me/viewers/summary on focus.
+
+          NETWORK TAB:
+            Added "Viewers" pill next to the existing "Messages" pill
+            at the top (orange-accented, Eye icon) so photographers
+            discover the feature from their primary hub.
+
+          TESTIDS added:
+            - profile-viewers-teaser (profile tab card)
+            - network-viewers (network tab pill)
+            - viewers-back, viewers-total-count,
+              viewers-free-teaser, viewers-upgrade-cta,
+              viewer-{id}, viewer-{id}-follow, viewer-{id}-message
+          Screenshots captured successfully for both elite admin view
+          (full analytics) and free marco view (blurred teaser +
+          upgrade CTA).
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Phase B.1 "Who Viewed Your Profile" complete. Backend + frontend
+      shipped and live-verified via Playwright (both elite and free
+      tier renders captured). Requesting focused backend QA on the two
+      new endpoints (+ the view-tracking side-effect in GET
+      /api/users/{id}) before shipping Phase B.2 (Referral Marketplace).
+
+      Priority: HIGH. Do NOT mock anything — real Mongo.
+      Credentials: admin (elite), sophie (pro), marco (free) per
+      /app/memory/test_credentials.md.
+
+
 
 #====================================================================================================
 # Login blocker resolution + Network Phase A re-QA (2026-04)
