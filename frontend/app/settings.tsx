@@ -79,6 +79,14 @@ export default function Settings() {
                 </View>
                 <ChevronRight size={18} color={colors.textTertiary} />
               </TouchableOpacity>
+              <TouchableOpacity style={styles.row} onPress={() => router.push('/admin/community' as any)} testID="settings-staff-community">
+                <View style={styles.rowIcon}><ShieldCheck size={20} color={colors.primary} /></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.rowTitle}>Community Control Center</Text>
+                  <Text style={styles.rowSub}>Moderate posts, polls, comments, reports & spam</Text>
+                </View>
+                <ChevronRight size={18} color={colors.textTertiary} />
+              </TouchableOpacity>
             </View>
           </>
         )}

@@ -4285,3 +4285,337 @@ agent_communication:
         - GET /network/discover (elite boost)
         - GET /me/analytics/networking (all tiers + 401 + clamps)
 
+
+#====================================================================================================
+# Super Admin Community Control Center (2026-04)
+#====================================================================================================
+
+backend:
+  - task: "Community Control Center — unified moderation, bulk, reports, sanctions, audit"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          FULL VALIDATION PASS — 39/39 assertions green (/app/backend_test_community_cc.py).
+          Backend at http://localhost:8001/api. Creds per /app/memory/test_credentials.md
+          (admin super_admin, sophie pro user, marco free user, priya free user;
+          priya temporarily elevated to role='admin' for non-super-admin gate tests
+          and fully reverted after).
+
+          AUTH GATES (3/3 PASS):
+            1. /admin/community/moderate no Authorization → 401.
+            2. marco (role='user') → 403.
+            3. /report no auth → 401.
+
+          MODERATE HAPPY PATH as super_admin (11 sub-checks PASS):
+            5. pin → post.pinned=true; audit_logs row `post.pin` with
+               admin_user_id=admin present (count=2 after re-pin later).
+            6. unpin → pinned=false.
+            7. feature → featured=true; unfeature → false.
+            8. hide → hidden=true, status='active' (unchanged).
+            9. restore → hidden=false, status='active'.
+            10. mark_spam → spam=true, status='removed', removed_by=admin.
+            11. clear_spam → spam=false, status='active'.
+            12. lock → locked=true; unlock → false.
+            13. soft_delete with prior sophie pending report on the same post →
+                status='removed', removed_by=admin, removed_at set,
+                removal_reason='qa soft delete'; pending reports for this post
+                auto-resolved (count went 1→0).
+            14. hard_delete as super_admin → community_posts.find_one() → None
+                (physical deletion confirmed).
+            15. hard_delete as priya (elevated to admin) → 403 "Super admin only".
+
+          UNKNOWN ACTIONS / TYPES (2/2 PASS):
+            16. action='bogus' → 400 "Unknown action 'bogus'".
+            17. type='spot' → 400 "Unknown target kind 'spot'".
+
+          BULK MODERATE (4/4 PASS):
+            18. 3 valid post ids + action='hide' → {applied:3, failed:0,
+                items:[3x{ok:true, action:'hide'}]}.
+            19. 1 valid + 1 bogus id + action='restore' → {applied:1, failed:1,
+                items[1].ok=false, error='post not found'}.
+            20. 201 ids → 400 {detail:'Max 200 items per bulk action'}.
+            21. Bulk hard_delete as admin (priya elevated non-super) → 403
+                "Super admin only for hard_delete".
+
+          LIST /admin/community/content (3/3 PASS):
+            22. ?type=post&status=pinned → only items with pinned=true, and the
+                freshly-pinned post_id appears.
+            23. ?type=post&reported=true → only items with pending reports;
+                every returned item has _report_count > 0 (both items did).
+            24. Each item includes hydrated _author{user_id, username, name,
+                avatar_url, role, plan} (sophie's row showed name='Sophie Reyes'
+                and avatar_url present).
+
+          SUMMARY (1/1 PASS):
+            25. /admin/community/summary → 200 with all 5 top-level keys
+                {posts, polls, comments, reports, sanctions}; posts sub-keys
+                {active, removed, hidden, spam, pinned, featured} all present
+                and >= 0.
+
+          PUBLIC REPORTS (4/4 PASS):
+            26. sophie POST /report {target_type:'post', target_id:<pid>,
+                reason:'spam'} → 200, report_id 'rpt_*' persisted.
+            27. Same sophie same target (pending) → 200 with same report_id
+                and deduped=true.
+            28. reason of 41 chars → 400 "Invalid reason".
+            29. target_type='xyz' → 400 "Invalid target_type".
+
+          SANCTIONS (7/7 PASS):
+            30. admin warn marco → 200; user_sanctions row type='warn' active=true;
+                marco.user.status unchanged ('active').
+            31. admin suspend marco duration_days=7 → user.status='suspended',
+                suspended_until ≈ now+7d (measured 6.999999d delta).
+            32. suspend duration_days=9999 → clamped: suspended_until = now+365d
+                exactly (measured 364.999999d delta).
+            33. priya (elevated to role='admin', not super_admin) tries
+                ban → 403 "Only super admin can ban users". Reverted to role=user.
+            34. super_admin ban priya → user.status='banned', banned_at set.
+            35. admin unsanction marco → revoked sanction.active=false,
+                user.status='active', suspended_until removed, 0 active
+                sanctions remain.
+            36. GET /admin/users/{marco_id}/sanctions → 200 with
+                {items:[…], count≥1} history.
+
+          AUDIT LOG (1/1 PASS):
+            37. 29 audit_logs rows with admin_user_id=admin and action in
+                {post.pin, post.unpin, post.feature, post.unfeature, post.hide,
+                post.restore, post.mark_spam, post.clear_spam, post.lock,
+                post.unlock, post.soft_delete, post.hard_delete, user.warn,
+                user.suspend, user.ban, user.unsanction} — well above the ≥10
+                required. Each moderate/sanction call wrote the expected
+                `<kind>.<action>` entry.
+
+          CLEANUP: 8 throwaway posts hard-deleted; marco + priya sanctions
+          cleared (user_sanctions.deleteMany, users.updateMany status='active',
+          unset suspended_until/banned_at); priya role reverted to 'user'. No
+          residue.
+
+          NO BUGS FOUND. All 7 endpoints + bulk/role-gate/audit behavior match
+          spec exactly. Task is launch-ready.
+
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          NEW COLLECTIONS:
+            - user_sanctions: {sanction_id, user_id, type(warn|suspend|ban),
+              reason, issued_by, issued_at, expires_at, active, revoked_by,
+              revoked_at}
+
+          NEW / EXTENDED FIELDS on community_posts (and poll/comment):
+            - hidden, hidden_by, hidden_at
+            - pinned, pinned_by, pinned_at
+            - featured, featured_by, featured_at
+            - locked, locked_by, locked_at, lock_reason
+            - spam (bool)
+            - moderated_by, moderated_at
+
+          INDEXES added:
+            reports: (status, created_at desc),
+                     (target_type, target_id, status)
+            user_sanctions: (user_id, issued_at desc), (active, type)
+            community_posts: (pinned desc, created_at desc),
+                             (status, created_at desc)
+
+          NEW ENDPOINTS (role-gated):
+            POST  /api/admin/community/moderate       (moderator+)
+                  body: {type:'post'|'poll'|'comment', id, action, reason?}
+                  actions allowed: soft_delete, hide, restore, pin, unpin,
+                    feature, unfeature, lock, unlock, mark_spam, clear_spam
+                  hard_delete: super_admin only
+                  - Audit-logs every action
+                  - Auto-resolves pending reports when content is
+                    removed/hidden/marked_spam
+            POST  /api/admin/community/bulk-moderate  (admin+)
+                  body: {type, ids:[…max 200], action, reason?}
+                  - Per-item error reporting, batch never aborts
+            GET   /api/admin/community/content         (moderator+)
+                  qs: type, status(active|removed|hidden|spam|pinned|
+                  featured), reported(bool), q, limit, skip
+                  - Intersects with pending reports when reported=true
+                  - Hydrates _author + _report_count per item
+            GET   /api/admin/community/summary         (moderator+)
+                  - Returns counters for all 3 content types + reports
+                    + active sanctions (warn/suspend/ban)
+            POST  /api/report                          (any logged-in user)
+                  body: {target_type, target_id, reason, detail?}
+                  reasons: spam | harassment | fake_giveaway |
+                           abusive_poll | stolen | offensive | other
+                  - Dedupes per (reporter, target) when pending
+            POST  /api/admin/users/{id}/sanction       (admin+)
+                  body: {type:'warn'|'suspend'|'ban', reason, duration_days?}
+                  - 'ban' requires super_admin
+                  - Flips user.status = 'suspended' | 'banned'
+                  - Sets user.suspended_until (expires) / banned_at
+                  - Fires notification to target user
+            POST  /api/admin/users/{id}/unsanction     (admin+)
+                  - Revokes most-recent active sanction, restores user
+            GET   /api/admin/users/{id}/sanctions      (moderator+)
+                  - Full history
+
+          LIVE-VERIFIED:
+            - admin (super_admin) summary returns 5 top-level keys with
+              accurate counts (11 active / 4 removed / 0 hidden / 0
+              spam / 0 pinned / 0 featured on posts).
+            - pin / unpin / feature / unfeature on real post → 200.
+            - sophie reporter POST /api/report spam on a post → 200 +
+              report_id. Dedupe: 2nd identical report from sophie returns
+              same report_id with deduped=true.
+            - warn + unsanction on marco → 200, audit logged.
+            - Summary reports.pending incremented from 18 → 19 after
+              sophie's report, reflecting live counter.
+
+          QA CHECKLIST FOR TESTING AGENT:
+            1. Auth gates: all /admin/community/* require moderator+.
+               POST /report requires auth. 401/403 must fire correctly.
+            2. /admin/community/moderate rejects unknown type or action.
+            3. hard_delete is super_admin-only; moderator+admin get 403.
+            4. soft_delete updates {status:'removed', removed_by,
+               removed_at, removal_reason} and auto-resolves pending
+               reports with resolution_note='post soft_delete'.
+            5. hide sets {hidden:true, hidden_by, hidden_at} WITHOUT
+               flipping status to 'removed'.
+            6. restore flips status back to 'active', unsets hidden/
+               removed_* fields.
+            7. mark_spam sets {spam:true, status:'removed', removal_reason}.
+            8. clear_spam flips spam:false, status:'active'.
+            9. pin/unpin, feature/unfeature, lock/unlock are idempotent.
+            10. Bulk: 3 post ids + action='hide' returns {applied:3,
+                failed:0, items:[{ok:true}x3]}. Passing 201 ids → 400.
+            11. /admin/community/content filters: status=pinned only
+                returns pinned posts. reported=true intersects with
+                pending reports.
+            12. _report_count per item is accurate (matches reports
+                collection).
+            13. /report dedupe: sophie reporting same (post,spam) twice
+                returns same report_id both times with 2nd having
+                deduped=true.
+            14. /report rejects target_type=unknown, reason>40 chars.
+            15. /admin/users/{id}/sanction:
+                - warn: no user.status change, sanction doc created.
+                - suspend with duration_days=7: user.status='suspended',
+                  suspended_until = now+7d.
+                - suspend with duration_days=9999 clamps to 365d.
+                - ban (super_admin only): user.status='banned',
+                  banned_at=now. Non-super admin → 403.
+            16. /admin/users/{id}/unsanction restores user.status='active'.
+            17. Every moderate/bulk/sanction call appears in
+                db.audit_logs with action name like 'post.pin',
+                'post.soft_delete', 'user.warn', etc.
+            18. Audit log entries contain actor user_id, before/after
+                snapshots, notes.
+
+frontend:
+  - task: "Community Control Center dashboard screen + settings entry"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app/admin/community.tsx (new dashboard with tabs)
+      /app/frontend/app/settings.tsx (added Staff Tools > Community Control row)
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          NEW SCREEN: /admin/community (role-gated — hard fallback if
+          non-mod user lands here).
+
+          DASHBOARD TABS (V1):
+            Posts | Reports | Spam | Deleted
+            (Polls / Comments / Users / Appeals deferred to V1.1)
+
+          FEATURES:
+            - Summary strip: Active count + Pending reports (highlighted
+              orange if > 0) + Spam count + Removed count
+            - Tab chips with badge counts
+            - Post rows: author avatar + name, status pill (color-coded),
+              flag badge (F + count) for reported items, body preview,
+              multi-select checkbox, kebab menu → action sheet
+            - Bulk actions bar appears when any selected: Hide / Mark
+              Spam / clear-selection
+            - Action sheet: 12 actions, destructive ones require a
+              two-tap confirm (tap again to confirm), reason input
+            - Reports tab: each card shows reporter, target, reason pill,
+              detail + "Open target" + "Mark resolved"
+            - Role-based action visibility: moderator sees
+              hide/restore/pin/feature/lock/mark_spam/clear_spam only,
+              admin sees + soft_delete, super_admin sees + hard_delete
+
+          SETTINGS ENTRY:
+            Settings > Staff Tools now has a dedicated "Community
+            Control Center" row alongside the existing "Admin dashboard"
+            row. testID `settings-staff-community`.
+
+          TESTIDs:
+            admin-community-back, admin-tab-posts, admin-tab-reports,
+            admin-tab-spam, admin-tab-deleted, admin-row-more-{post_id},
+            settings-staff-community
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Super Admin Community Control Center V1 shipped.
+      Backend + frontend live-verified manually (direct requests +
+      Playwright). Summary strip, tab switching, action sheet, bulk
+      selection, role-gated buttons — all rendering.
+
+      V1 ships: Posts / Reports / Spam / Deleted tabs. Polls, Comments,
+      Users (sanction inline), Appeals deferred to V1.1.
+
+      Please focused-QA:
+        - /api/admin/community/moderate (all 12 actions, role gates,
+          audit log writes)
+        - /api/admin/community/bulk-moderate (200-item cap, per-item
+          errors)
+        - /api/admin/community/content (filters + reported=true)
+        - /api/admin/community/summary
+        - /api/report (dedupe, reason/type validation)
+        - /api/admin/users/{id}/sanction (warn/suspend/ban, role gates,
+          status flipping)
+        - /api/admin/users/{id}/unsanction
+
+      Credentials per /app/memory/test_credentials.md.
+    -agent: "testing"
+    -message: |
+      COMMUNITY CONTROL CENTER — backend QA COMPLETE.
+      All 39/39 assertions PASS (/app/backend_test_community_cc.py).
+
+      Coverage: 7 endpoints + bulk + role gates + audit log. Scenarios 1-37
+      from the review request all green (5 scenarios internally span multiple
+      sub-assertions, hence 39). Highlights:
+        - All 12 mod actions (pin/unpin/feature/unfeature/hide/restore/
+          mark_spam/clear_spam/lock/unlock/soft_delete/hard_delete) work
+          and write the correct `<kind>.<action>` audit row.
+        - soft_delete + mark_spam + hide auto-resolve pending reports on
+          the same target as spec'd.
+        - hard_delete is genuinely super_admin-only (403 for elevated
+          admin); physical deletion confirmed via direct DB find_one.
+        - Bulk endpoint: 200-item cap, per-item error capture, hard_delete
+          gate all work.
+        - List endpoint: status=pinned / reported=true filters plus
+          hydrated _author{user_id,name,username,avatar_url,role,plan}
+          and _report_count per item.
+        - Summary: 5 top-level keys, all expected sub-keys, non-negative.
+        - /api/report: 40-char reason guard, target_type enum guard,
+          dedupe per (reporter, target, pending) returning the same
+          report_id with deduped=true.
+        - Sanctions: warn leaves user.status untouched; suspend flips to
+          'suspended' and sets suspended_until with 1-365 day clamp (9999
+          clamps to exactly 365); ban is super-admin-only (admin-elevated
+          user got 403); super_admin ban sets status='banned' + banned_at;
+          unsanction flips back to 'active' and unsets suspended_until.
+        - Audit log: 29 qualifying rows for admin_user_id=admin across
+          the 16 expected action names (vs ≥10 required).
+
+      CLEANUP verified: 8 throwaway posts hard-deleted, marco + priya
+      sanctions cleared, priya role reverted to 'user'. No DB residue.
+
+      NO BUGS FOUND. Marked working:true. No 500s, no role-gate leaks,
+      no schema deviations.
+
