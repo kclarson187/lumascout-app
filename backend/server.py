@@ -956,6 +956,18 @@ async def follow_user(user_id: str, user: dict = Depends(get_current_user)):
         "followed_user_id": user_id,
         "created_at": utcnow(),
     })
+    # Notify followed user (non-blocking)
+    try:
+        await _emit_notification(
+            user_id,
+            "new_follower",
+            f"{user.get('name') or 'Someone'} followed you",
+            f"@{user.get('username') or ''} just hit follow",
+            actor_user_id=user["user_id"],
+            deep_link=f"/profile/{user['user_id']}",
+        )
+    except Exception:
+        pass
     return {"following": True}
 
 
@@ -2410,6 +2422,645 @@ async def mark_notifications_read(
             {"$set": {"read_at": now}},
         )
     return {"ok": True}
+
+
+# ============================================================================
+# Direct Messages (DM) + Network/Discover (Network Phase A — 2026-04)
+# ============================================================================
+
+class DMSendIn(BaseModel):
+    type: str = "text"          # text | image | spot_share | profile_share
+    body: Optional[str] = None
+    attachment_url: Optional[str] = None  # for image
+    ref_spot_id: Optional[str] = None     # for spot_share
+    ref_user_id: Optional[str] = None     # for profile_share
+
+
+class DMStartIn(BaseModel):
+    user_id: str
+    opening_body: Optional[str] = None   # optional first message text
+    kind: Optional[str] = None           # "message" | "refer" | "collab"
+
+
+class DMReportIn(BaseModel):
+    reason: str
+    notes: Optional[str] = None
+
+
+def _thread_key(u1: str, u2: str) -> str:
+    return "::".join(sorted([u1, u2]))
+
+
+async def _dm_get_or_create_thread(a: str, b: str) -> dict:
+    """Idempotently return the 1:1 thread between two users."""
+    key = _thread_key(a, b)
+    t = await db.dm_threads.find_one({"thread_key": key})
+    if t:
+        return t
+    now = utcnow()
+    t = {
+        "thread_id": f"dm_{uuid.uuid4().hex[:12]}",
+        "thread_key": key,
+        "participant_user_ids": sorted([a, b]),
+        "created_at": now,
+        "updated_at": now,
+        "last_message_at": None,
+        "last_message_preview": None,
+    }
+    await db.dm_threads.insert_one(t)
+    # Seed per-participant state docs
+    for uid in t["participant_user_ids"]:
+        await db.dm_participants.insert_one({
+            "thread_id": t["thread_id"],
+            "user_id": uid,
+            "joined_at": now,
+            "last_read_at": None,
+            "is_muted": False,
+            "is_blocked": False,
+            "hidden": False,  # soft-delete for this viewer
+        })
+    return t
+
+
+async def _thread_is_accepted(thread: dict, viewer_id: str) -> bool:
+    """A thread is 'accepted' for the viewer if:
+       - viewer follows the other participant, OR
+       - any message_request for this pair is status=accepted, OR
+       - viewer was the sender of the first message (their own thread)
+    """
+    others = [u for u in thread["participant_user_ids"] if u != viewer_id]
+    if not others:
+        return True
+    other = others[0]
+    fol = await db.follows.find_one({"follower_user_id": viewer_id, "followed_user_id": other})
+    if fol:
+        return True
+    req = await db.dm_requests.find_one({
+        "$or": [
+            {"from_user_id": viewer_id, "to_user_id": other},
+            {"from_user_id": other, "to_user_id": viewer_id},
+        ],
+        "status": "accepted",
+    })
+    return bool(req)
+
+
+async def _emit_dm_notification(recipient_id: str, sender: dict, preview: str, thread_id: str):
+    await _emit_notification(
+        recipient_id,
+        "new_message",
+        f"New message from {sender.get('name') or 'a photographer'}",
+        preview[:140],
+        actor_user_id=sender["user_id"],
+        deep_link=f"/inbox/{thread_id}",
+        image_url=sender.get("avatar_url"),
+    )
+
+
+@api.post("/dm/threads/start")
+async def dm_start_thread(
+    body: DMStartIn,
+    user: dict = Depends(get_current_user),
+):
+    """Return the 1:1 thread with `user_id` (creates if needed). If the
+    other user does not follow the sender, a pending message_request is
+    created so recipient can accept/ignore/block from the Requests tab.
+
+    Supports quick-start kinds (refer / collab) that pre-fill the first
+    message body when the caller doesn't supply one.
+    """
+    target_id = body.user_id
+    if target_id == user["user_id"]:
+        raise HTTPException(status_code=400, detail="Cannot message yourself")
+    target = await db.users.find_one({"user_id": target_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Safety: if recipient has blocked sender, refuse.
+    blocked = await db.dm_blocks.find_one({"blocker_user_id": target_id, "blocked_user_id": user["user_id"]})
+    if blocked:
+        raise HTTPException(status_code=403, detail="You cannot message this user")
+    thread = await _dm_get_or_create_thread(user["user_id"], target_id)
+    # Message request if recipient doesn't follow sender and hasn't accepted
+    target_follows_sender = await db.follows.find_one({
+        "follower_user_id": target_id, "followed_user_id": user["user_id"],
+    })
+    accepted = await _thread_is_accepted(thread, target_id)
+    is_request = not target_follows_sender and not accepted
+    if is_request:
+        # Rate limit: max 5 pending requests per hour from this sender.
+        hour_ago = utcnow() - timedelta(hours=1)
+        sent = await db.dm_requests.count_documents({
+            "from_user_id": user["user_id"], "status": "pending",
+            "created_at": {"$gte": hour_ago},
+        })
+        if sent >= 5:
+            raise HTTPException(status_code=429, detail="Too many new requests. Try again later.")
+        existing_req = await db.dm_requests.find_one({
+            "from_user_id": user["user_id"], "to_user_id": target_id,
+            "status": {"$in": ["pending", "ignored"]},
+        })
+        if not existing_req:
+            await db.dm_requests.insert_one({
+                "request_id": f"dmr_{uuid.uuid4().hex[:12]}",
+                "from_user_id": user["user_id"],
+                "to_user_id": target_id,
+                "thread_id": thread["thread_id"],
+                "status": "pending",
+                "kind": body.kind or "message",
+                "created_at": utcnow(),
+            })
+            try:
+                await _emit_notification(
+                    target_id,
+                    "new_message_request",
+                    f"Message request from {user.get('name') or 'a photographer'}",
+                    (body.opening_body or '')[:140] or "Tap to review and accept",
+                    actor_user_id=user["user_id"],
+                    image_url=user.get("avatar_url"),
+                    deep_link=f"/inbox?tab=requests",
+                )
+            except Exception:
+                pass
+    # Optional opening body → post as first message via the /messages endpoint logic
+    opening_preview = None
+    if body.opening_body and body.opening_body.strip():
+        # Pre-filled templates for refer/collab kinds
+        if not body.opening_body.strip() and body.kind == "refer":
+            body.opening_body = "Hey! I may have a client to refer to you — are you available?"
+        if not body.opening_body.strip() and body.kind == "collab":
+            body.opening_body = "Loved your work. Open to a collab shoot?"
+        msg_doc = await _dm_insert_message(
+            thread, user, {"type": "text", "body": body.opening_body.strip()},
+        )
+        opening_preview = msg_doc["body"]
+    return {
+        "thread_id": thread["thread_id"],
+        "is_request": is_request,
+        "opening_preview": opening_preview,
+    }
+
+
+async def _dm_insert_message(thread: dict, sender: dict, payload: dict) -> dict:
+    """Create a message + touch the thread. Shared by /start (opening body)
+    and /messages endpoint. Rate-limits at 30 msgs/min per sender per thread.
+    """
+    msg_type = (payload.get("type") or "text").lower()
+    if msg_type not in ("text", "image", "spot_share", "profile_share"):
+        raise HTTPException(status_code=400, detail="Invalid message type")
+    body_txt = (payload.get("body") or "").strip()
+    if msg_type == "text" and len(body_txt) < 1:
+        raise HTTPException(status_code=422, detail="Empty message")
+    if msg_type == "text" and len(body_txt) > 2000:
+        raise HTTPException(status_code=422, detail="Message too long")
+    # Rate limit
+    min_ago = utcnow() - timedelta(minutes=1)
+    recent = await db.dm_messages.count_documents({
+        "thread_id": thread["thread_id"],
+        "sender_user_id": sender["user_id"],
+        "created_at": {"$gte": min_ago},
+    })
+    if recent >= 30:
+        raise HTTPException(status_code=429, detail="Sending too fast, slow down")
+    doc = {
+        "message_id": f"msg_{uuid.uuid4().hex[:12]}",
+        "thread_id": thread["thread_id"],
+        "sender_user_id": sender["user_id"],
+        "type": msg_type,
+        "body": body_txt or None,
+        "attachment_url": payload.get("attachment_url") or None,
+        "ref_spot_id": payload.get("ref_spot_id") or None,
+        "ref_user_id": payload.get("ref_user_id") or None,
+        "is_deleted": False,
+        "created_at": utcnow(),
+    }
+    await db.dm_messages.insert_one(doc)
+    preview = body_txt or {
+        "image": "📷 Photo",
+        "spot_share": "📍 Shared a spot",
+        "profile_share": "👤 Shared a profile",
+    }.get(msg_type, "")
+    await db.dm_threads.update_one(
+        {"thread_id": thread["thread_id"]},
+        {"$set": {"last_message_at": doc["created_at"], "last_message_preview": preview[:160],
+                  "updated_at": doc["created_at"]}},
+    )
+    # Unhide for both participants (in case they soft-deleted)
+    await db.dm_participants.update_many(
+        {"thread_id": thread["thread_id"]},
+        {"$set": {"hidden": False}},
+    )
+    # Notify the other participant
+    others = [u for u in thread["participant_user_ids"] if u != sender["user_id"]]
+    for other_id in others:
+        try: await _emit_dm_notification(other_id, sender, preview, thread["thread_id"])
+        except Exception: pass
+    return doc
+
+
+@api.post("/dm/threads/{thread_id}/messages")
+async def dm_send_message(
+    thread_id: str,
+    body: DMSendIn,
+    user: dict = Depends(get_current_user),
+):
+    thread = await db.dm_threads.find_one({"thread_id": thread_id})
+    if not thread or user["user_id"] not in thread["participant_user_ids"]:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    # Block check on the recipient side
+    other_ids = [u for u in thread["participant_user_ids"] if u != user["user_id"]]
+    if other_ids:
+        blk = await db.dm_blocks.find_one({"blocker_user_id": other_ids[0], "blocked_user_id": user["user_id"]})
+        if blk:
+            raise HTTPException(status_code=403, detail="Cannot send to this user")
+    msg = await _dm_insert_message(thread, user, body.model_dump())
+    msg.pop("_id", None)
+    return msg
+
+
+@api.get("/dm/threads")
+async def dm_list_threads(
+    tab: str = "all",   # "all" | "requests" | "accepted"
+    limit: int = 30,
+    user: dict = Depends(get_current_user),
+):
+    """List my threads grouped/filtered by tab.
+
+    - 'accepted' ⇒ exclude threads whose last_message_at is null AND we
+      have a pending request from the other side.
+    - 'requests' ⇒ only pending inbound requests.
+    """
+    limit = max(1, min(100, limit))
+    if tab == "requests":
+        pending = await db.dm_requests.find(
+            {"to_user_id": user["user_id"], "status": "pending"}, {"_id": 0}
+        ).sort("created_at", -1).limit(limit).to_list(limit)
+        # Hydrate sender
+        sids = list({r["from_user_id"] for r in pending})
+        users = await db.users.find({"user_id": {"$in": sids}},
+            {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
+             "verification_status": 1, "plan": 1, "city": 1, "specialties": 1}).to_list(len(sids))
+        umap = {u["user_id"]: u for u in users}
+        for r in pending:
+            r["sender"] = umap.get(r["from_user_id"])
+        return {"items": pending, "tab": "requests"}
+
+    # Accepted / all
+    part_filter = {"user_id": user["user_id"], "hidden": {"$ne": True}}
+    myparts = await db.dm_participants.find(part_filter, {"_id": 0}).to_list(500)
+    tids = [p["thread_id"] for p in myparts]
+    threads = await db.dm_threads.find(
+        {"thread_id": {"$in": tids}}, {"_id": 0}
+    ).sort("last_message_at", -1).to_list(limit)
+    # Drop threads with no messages that still have pending inbound requests
+    # (those live in Requests tab)
+    pending_from_me_ids = await db.dm_requests.find(
+        {"from_user_id": user["user_id"], "status": "pending"}, {"_id": 0, "thread_id": 1}
+    ).to_list(500)
+    pending_thread_ids = {r["thread_id"] for r in pending_from_me_ids}
+    # Hydrate other participant + unread counts
+    other_ids: list = []
+    for t in threads: other_ids += [u for u in t["participant_user_ids"] if u != user["user_id"]]
+    other_ids = list(set(other_ids))
+    ulist = await db.users.find({"user_id": {"$in": other_ids}},
+        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
+         "verification_status": 1, "plan": 1, "city": 1, "specialties": 1}).to_list(len(other_ids))
+    umap = {u["user_id"]: u for u in ulist}
+    my_map = {p["thread_id"]: p for p in myparts}
+    out = []
+    for t in threads:
+        others = [u for u in t["participant_user_ids"] if u != user["user_id"]]
+        other = umap.get(others[0]) if others else None
+        last_read = (my_map.get(t["thread_id"]) or {}).get("last_read_at")
+        q_unread: dict = {"thread_id": t["thread_id"], "sender_user_id": {"$ne": user["user_id"]}}
+        if last_read:
+            q_unread["created_at"] = {"$gt": last_read}
+        unread = await db.dm_messages.count_documents(q_unread)
+        row = {
+            **t,
+            "other": other,
+            "unread_count": unread,
+            "is_muted": (my_map.get(t["thread_id"]) or {}).get("is_muted", False),
+            "is_pending_from_me": t["thread_id"] in pending_thread_ids,
+        }
+        out.append(row)
+    return {"items": out, "tab": tab}
+
+
+@api.get("/dm/threads/{thread_id}")
+async def dm_get_thread(
+    thread_id: str,
+    limit: int = 50,
+    before: Optional[str] = None,  # ISO timestamp for pagination
+    user: dict = Depends(get_current_user),
+):
+    thread = await db.dm_threads.find_one({"thread_id": thread_id}, {"_id": 0})
+    if not thread or user["user_id"] not in thread["participant_user_ids"]:
+        raise HTTPException(status_code=404, detail="Not found")
+    limit = max(1, min(100, limit))
+    q: dict = {"thread_id": thread_id, "is_deleted": {"$ne": True}}
+    if before:
+        try:
+            q["created_at"] = {"$lt": datetime.fromisoformat(before.replace("Z", "+00:00"))}
+        except Exception:
+            pass
+    msgs = await db.dm_messages.find(q, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+    msgs.reverse()  # chronological
+    # Hydrate refs (spot_share + profile_share)
+    ref_spot_ids = list({m["ref_spot_id"] for m in msgs if m.get("ref_spot_id")})
+    ref_user_ids = list({m["ref_user_id"] for m in msgs if m.get("ref_user_id")})
+    smap, umap = {}, {}
+    if ref_spot_ids:
+        rows = await db.spots.find({"spot_id": {"$in": ref_spot_ids}},
+            {"_id": 0, "spot_id": 1, "title": 1, "city": 1, "state": 1, "images": 1}).to_list(len(ref_spot_ids))
+        for s in rows:
+            imgs = s.get("images") or []
+            cover = next((i.get("image_url") for i in imgs if isinstance(i, dict) and i.get("is_cover")), None) or (imgs[0].get("image_url") if imgs and isinstance(imgs[0], dict) else None)
+            smap[s["spot_id"]] = {"spot_id": s["spot_id"], "title": s.get("title"), "city": s.get("city"), "state": s.get("state"), "cover_image_url": cover}
+    if ref_user_ids:
+        rows = await db.users.find({"user_id": {"$in": ref_user_ids}},
+            {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "city": 1, "specialties": 1}).to_list(len(ref_user_ids))
+        umap = {u["user_id"]: u for u in rows}
+    for m in msgs:
+        if m.get("ref_spot_id"): m["spot_ref"] = smap.get(m["ref_spot_id"])
+        if m.get("ref_user_id"): m["user_ref"] = umap.get(m["ref_user_id"])
+    # Hydrate other + last_read
+    others = [u for u in thread["participant_user_ids"] if u != user["user_id"]]
+    other_u = await db.users.find_one({"user_id": others[0]} if others else {"user_id": "__none__"},
+        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1, "plan": 1, "city": 1, "specialties": 1}) if others else None
+    other_part = await db.dm_participants.find_one({"thread_id": thread_id, "user_id": others[0]}, {"_id": 0}) if others else None
+    return {
+        "thread": thread,
+        "other": other_u,
+        "other_last_read_at": (other_part or {}).get("last_read_at"),
+        "messages": msgs,
+    }
+
+
+@api.post("/dm/threads/{thread_id}/mark-read")
+async def dm_mark_read(thread_id: str, user: dict = Depends(get_current_user)):
+    thread = await db.dm_threads.find_one({"thread_id": thread_id})
+    if not thread or user["user_id"] not in thread["participant_user_ids"]:
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.dm_participants.update_one(
+        {"thread_id": thread_id, "user_id": user["user_id"]},
+        {"$set": {"last_read_at": utcnow()}},
+    )
+    return {"ok": True}
+
+
+@api.post("/dm/threads/{thread_id}/mute")
+async def dm_mute_toggle(thread_id: str, user: dict = Depends(get_current_user)):
+    p = await db.dm_participants.find_one({"thread_id": thread_id, "user_id": user["user_id"]})
+    if not p:
+        raise HTTPException(status_code=404, detail="Not found")
+    new_val = not p.get("is_muted", False)
+    await db.dm_participants.update_one(
+        {"thread_id": thread_id, "user_id": user["user_id"]},
+        {"$set": {"is_muted": new_val}},
+    )
+    return {"is_muted": new_val}
+
+
+@api.delete("/dm/threads/{thread_id}")
+async def dm_delete_thread(thread_id: str, user: dict = Depends(get_current_user)):
+    """Soft-delete for this viewer only — re-appears on next inbound message."""
+    await db.dm_participants.update_one(
+        {"thread_id": thread_id, "user_id": user["user_id"]},
+        {"$set": {"hidden": True, "last_read_at": utcnow()}},
+    )
+    return {"ok": True}
+
+
+@api.post("/dm/requests/{request_id}/accept")
+async def dm_accept_request(request_id: str, user: dict = Depends(get_current_user)):
+    r = await db.dm_requests.find_one({"request_id": request_id})
+    if not r or r["to_user_id"] != user["user_id"]:
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.dm_requests.update_one({"request_id": request_id}, {"$set": {"status": "accepted", "acted_at": utcnow()}})
+    return {"ok": True, "thread_id": r["thread_id"]}
+
+
+@api.post("/dm/requests/{request_id}/ignore")
+async def dm_ignore_request(request_id: str, user: dict = Depends(get_current_user)):
+    r = await db.dm_requests.find_one({"request_id": request_id})
+    if not r or r["to_user_id"] != user["user_id"]:
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.dm_requests.update_one({"request_id": request_id}, {"$set": {"status": "ignored", "acted_at": utcnow()}})
+    # Hide the thread for the recipient until further action
+    await db.dm_participants.update_one(
+        {"thread_id": r["thread_id"], "user_id": user["user_id"]},
+        {"$set": {"hidden": True}},
+    )
+    return {"ok": True}
+
+
+@api.post("/dm/requests/{request_id}/block")
+async def dm_block_from_request(request_id: str, user: dict = Depends(get_current_user)):
+    r = await db.dm_requests.find_one({"request_id": request_id})
+    if not r or r["to_user_id"] != user["user_id"]:
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.dm_blocks.update_one(
+        {"blocker_user_id": user["user_id"], "blocked_user_id": r["from_user_id"]},
+        {"$set": {"blocker_user_id": user["user_id"], "blocked_user_id": r["from_user_id"], "created_at": utcnow()}},
+        upsert=True,
+    )
+    await db.dm_requests.update_one({"request_id": request_id}, {"$set": {"status": "blocked", "acted_at": utcnow()}})
+    await db.dm_participants.update_one(
+        {"thread_id": r["thread_id"], "user_id": user["user_id"]},
+        {"$set": {"hidden": True}},
+    )
+    return {"ok": True}
+
+
+@api.post("/users/{user_id}/report")
+async def report_user(user_id: str, body: DMReportIn, user: dict = Depends(get_current_user)):
+    if user_id == user["user_id"]:
+        raise HTTPException(status_code=400, detail="Cannot report yourself")
+    await db.user_reports.insert_one({
+        "report_id": f"rpt_{uuid.uuid4().hex[:12]}",
+        "reporter_user_id": user["user_id"],
+        "reported_user_id": user_id,
+        "reason": (body.reason or "unspecified")[:80],
+        "notes": (body.notes or "")[:500] or None,
+        "status": "pending",
+        "created_at": utcnow(),
+    })
+    return {"ok": True}
+
+
+# ---- Network / Discover -----------------------------------------------------
+
+def _user_public_view(u: dict) -> dict:
+    u = {**u}
+    u.pop("_id", None)
+    u.pop("password_hash", None)
+    u.pop("email", None)
+    return u
+
+
+async def _compute_trust_metrics(user_id: str) -> dict:
+    """Compute live trust metrics for a user. Kept cheap — 3 small queries.
+    Response-rate = % of inbound threads where the user replied at least once.
+    Average-reply-time = median (approx via mean for cheapness) of (first-reply
+    ts − inbound-msg ts) across last 30 replies.
+    Community-rating = simple average of likes-per-approved-upload, capped 5.
+    """
+    try:
+        # Threads where user received a message
+        my_threads_as_recipient = await db.dm_messages.distinct(
+            "thread_id", {"sender_user_id": {"$ne": user_id}},
+        )
+        threads_in = [t for t in my_threads_as_recipient
+                      if await db.dm_participants.find_one(
+                          {"thread_id": t, "user_id": user_id})]
+        responded = 0
+        reply_samples = []
+        for tid in threads_in[:80]:
+            inbound = await db.dm_messages.find_one(
+                {"thread_id": tid, "sender_user_id": {"$ne": user_id}},
+                sort=[("created_at", 1)])
+            if not inbound: continue
+            outbound = await db.dm_messages.find_one(
+                {"thread_id": tid, "sender_user_id": user_id,
+                 "created_at": {"$gt": inbound["created_at"]}},
+                sort=[("created_at", 1)])
+            if outbound:
+                responded += 1
+                secs = (outbound["created_at"] - inbound["created_at"]).total_seconds()
+                if secs > 0: reply_samples.append(secs / 3600.0)
+        response_rate = round((responded / max(1, len(threads_in))) * 100) if threads_in else None
+        avg_reply_h = round(sum(reply_samples) / max(1, len(reply_samples)), 1) if reply_samples else None
+    except Exception:
+        response_rate, avg_reply_h = None, None
+    # Community rating: avg likes per approved upload, capped 5
+    try:
+        docs = await db.spot_community_uploads.find(
+            {"user_id": user_id, "moderation_status": "approved"},
+            {"_id": 0, "like_count": 1, "helpful_count": 1},
+        ).to_list(200)
+        if docs:
+            avg_lk = sum((d.get("like_count") or 0) + (d.get("helpful_count") or 0) for d in docs) / len(docs)
+            community_rating = round(min(5.0, 1.0 + avg_lk * 1.5), 1)
+        else:
+            community_rating = None
+    except Exception:
+        community_rating = None
+    # Completed referrals — count accepted referral-kind requests sent by this user
+    try:
+        completed_referrals = await db.dm_requests.count_documents({
+            "from_user_id": user_id, "kind": "refer", "status": "accepted",
+        })
+    except Exception:
+        completed_referrals = 0
+    return {
+        "response_rate_pct": response_rate,
+        "average_reply_time_hours": avg_reply_h,
+        "community_rating": community_rating,
+        "completed_referrals": completed_referrals,
+    }
+
+
+@api.get("/users/{user_id}/trust")
+async def get_user_trust(user_id: str):
+    m = await _compute_trust_metrics(user_id)
+    u = await db.users.find_one({"user_id": user_id}, {"_id": 0, "created_at": 1, "verification_status": 1, "city": 1, "state": 1, "specialties": 1})
+    return {**m, **(u or {})}
+
+
+@api.get("/network/discover")
+async def network_discover(
+    limit_per_rail: int = 10,
+    viewer: Optional[dict] = Depends(get_optional_user),
+):
+    """Return the 'Network' discovery rails in one call."""
+    limit_per_rail = max(1, min(20, limit_per_rail))
+    proj = {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
+            "verification_status": 1, "plan": 1, "city": 1, "state": 1,
+            "specialties": 1, "is_bot": 1, "is_official": 1, "created_at": 1,
+            "available_for_referrals": 1, "available_for_second_shooter": 1,
+            "years_experience": 1, "bio": 1}
+    base = {"is_bot": {"$ne": True}, "is_official": {"$ne": True}}
+    if viewer: base["user_id"] = {"$ne": viewer["user_id"]}
+
+    near_rail: list = []
+    if viewer and viewer.get("city"):
+        near_rail = await db.users.find({**base, "city": viewer["city"]}, proj).limit(limit_per_rail).to_list(limit_per_rail)
+    # Popular in city
+    popular_in_city: list = []
+    if viewer and viewer.get("city"):
+        popular_in_city = await db.users.find({**base, "city": viewer["city"]}, proj).sort("created_at", -1).limit(limit_per_rail).to_list(limit_per_rail)
+
+    async def _niche(tag: str) -> list:
+        return await db.users.find({**base, "specialties": {"$regex": tag, "$options": "i"}}, proj).limit(limit_per_rail).to_list(limit_per_rail)
+    pet = await _niche("pet")
+    wedding = await _niche("wedding")
+    family = await _niche("family")
+    # New members (joined last 30d)
+    cutoff = utcnow() - timedelta(days=30)
+    new_members = await db.users.find({**base, "created_at": {"$gte": cutoff}}, proj).sort("created_at", -1).limit(limit_per_rail).to_list(limit_per_rail)
+    # Top contributors: users with the most approved community uploads
+    pipeline = [
+        {"$match": {"moderation_status": "approved"}},
+        {"$group": {"_id": "$user_id", "uploads": {"$sum": 1}}},
+        {"$sort": {"uploads": -1}},
+        {"$limit": limit_per_rail},
+    ]
+    top_ids = [r["_id"] async for r in db.spot_community_uploads.aggregate(pipeline)]
+    top_contribs = await db.users.find({**base, "user_id": {"$in": top_ids}}, proj).to_list(limit_per_rail) if top_ids else []
+    # Verified pros
+    verified = await db.users.find({**base, "verification_status": "verified"}, proj).limit(limit_per_rail).to_list(limit_per_rail)
+    # Available for referrals / second shooter
+    avail_refer = await db.users.find({**base, "available_for_referrals": True}, proj).limit(limit_per_rail).to_list(limit_per_rail)
+    avail_second = await db.users.find({**base, "available_for_second_shooter": True}, proj).limit(limit_per_rail).to_list(limit_per_rail)
+    return {
+        "near_you": [_user_public_view(u) for u in near_rail],
+        "popular_in_city": [_user_public_view(u) for u in popular_in_city],
+        "pet": [_user_public_view(u) for u in pet],
+        "wedding": [_user_public_view(u) for u in wedding],
+        "family": [_user_public_view(u) for u in family],
+        "new_members": [_user_public_view(u) for u in new_members],
+        "top_contributors": [_user_public_view(u) for u in top_contribs],
+        "verified_pros": [_user_public_view(u) for u in verified],
+        "available_for_referrals": [_user_public_view(u) for u in avail_refer],
+        "available_for_second_shooter": [_user_public_view(u) for u in avail_second],
+    }
+
+
+@api.get("/network/search")
+async def network_search(
+    q: Optional[str] = None,
+    city: Optional[str] = None,
+    niche: Optional[str] = None,
+    min_years: Optional[int] = None,
+    available_for_referrals: Optional[bool] = None,
+    available_for_second_shooter: Optional[bool] = None,
+    verified_only: bool = False,
+    plan: Optional[str] = None,  # "pro"|"elite"
+    limit: int = 30,
+    viewer: Optional[dict] = Depends(get_optional_user),
+):
+    limit = max(1, min(60, limit))
+    query: dict = {"is_bot": {"$ne": True}, "is_official": {"$ne": True}}
+    if viewer: query["user_id"] = {"$ne": viewer["user_id"]}
+    if q:
+        query["$or"] = [
+            {"name": {"$regex": q, "$options": "i"}},
+            {"username": {"$regex": q, "$options": "i"}},
+            {"bio": {"$regex": q, "$options": "i"}},
+            {"specialties": {"$regex": q, "$options": "i"}},
+        ]
+    if city: query["city"] = {"$regex": f"^{city}", "$options": "i"}
+    if niche: query["specialties"] = {"$regex": niche, "$options": "i"}
+    if min_years is not None: query["years_experience"] = {"$gte": min_years}
+    if available_for_referrals: query["available_for_referrals"] = True
+    if available_for_second_shooter: query["available_for_second_shooter"] = True
+    if verified_only: query["verification_status"] = "verified"
+    if plan in ("pro", "elite"): query["plan"] = plan
+    rows = await db.users.find(query, {"_id": 0, "user_id": 1, "name": 1, "username": 1,
+        "avatar_url": 1, "verification_status": 1, "plan": 1, "city": 1, "state": 1,
+        "specialties": 1, "years_experience": 1, "bio": 1, "available_for_referrals": 1,
+        "available_for_second_shooter": 1}).limit(limit).to_list(limit)
+    return {"items": rows, "total": len(rows)}
 
 
 # ============================================================================
