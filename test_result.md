@@ -4619,3 +4619,146 @@ agent_communication:
       NO BUGS FOUND. Marked working:true. No 500s, no role-gate leaks,
       no schema deviations.
 
+
+#====================================================================================================
+# Global keyboard handling + Camera capture w/ auto-GPS (2026-05)
+#====================================================================================================
+
+backend:
+  - task: "SpotCreateIn — camera-capture provenance fields (capture_source, captured_at, gps_accuracy_m, gps_heading, gps_altitude_m, on_site_verified)"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py"
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Added optional fields on the SpotCreateIn Pydantic model so spots
+          submitted from the new "Take photo now" flow can persist GPS
+          provenance:
+            - capture_source: 'camera_capture' | 'gallery_upload' | 'manual_entry'
+            - captured_at: ISO datetime (shutter fire time)
+            - gps_accuracy_m / gps_heading / gps_altitude_m: numbers
+            - on_site_verified: bool (true when camera_capture + ≤100m accuracy)
+          Fields flow through `doc = body.dict()` in create_spot so no
+          other handler change is needed. create_spot validators still
+          reject (0,0) "Null Island" and out-of-range coords.
+
+          TESTING:
+            1. POST /api/spots with capture_source='camera_capture',
+               gps_accuracy_m=25, on_site_verified=true,
+               captured_at=ISO date → fields should be persisted on the
+               spot document and returned in GET /api/spots/{id}.
+            2. POST without any of the new fields must still succeed
+               (optional, backwards compatible).
+            3. Old spots must still load (no migration required).
+
+frontend:
+  - task: "KeyboardSafe — auto-scroll focused input into view (iOS automaticallyAdjustKeyboardInsets)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/KeyboardSafe.tsx"
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Enhanced the global KeyboardSafe wrapper so any screen that
+          already uses it automatically benefits from these behaviors:
+            - iOS 14+: `automaticallyAdjustKeyboardInsets={true}` on the
+              inner ScrollView. The OS auto-scrolls the currently-focused
+              TextInput into view so the keyboard never covers what the
+              user is typing.
+            - Android: already correctly configured by
+              `app.json > android.softwareKeyboardLayoutMode='resize'`
+              + `KeyboardAvoidingView behavior='height'`.
+            - Existing tap-outside-to-dismiss (Pressable wrapper) stays.
+            - Existing `keyboardDismissMode='interactive'` on iOS stays.
+          All screens wrapping their content with KeyboardSafe now get
+          proper keyboard behavior automatically: Login, Signup, Add Spot,
+          Edit Spot, Referral Post, Profile Edit, Inbox composer, etc.
+
+  - task: "Add Spot — Take photo now (camera capture + auto GPS tag + reverse geocode)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(tabs)/add.tsx"
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          NEW: "Take photo now" option on Step 0 of Add Spot. Opens the
+          device camera and — IN PARALLEL — requests live GPS so the
+          spot is fully ready by the time the shutter closes.
+
+          Flow:
+            1. Request camera + location permissions.
+            2. Launch camera + Location.getCurrentPositionAsync in
+               parallel (non-blocking — photo capture doesn't wait on GPS).
+            3. Compress photo to 1280w JPEG, base64-encode (matches
+               pickImages pipeline — same Mongo storage contract).
+            4. Prefer live GPS coords. Fall back to EXIF GPSLatitude/
+               GPSLongitude if user denied location (camera permission
+               alone still allows EXIF).
+            5. Reverse-geocode to hint city/state via
+               Location.reverseGeocodeAsync (best-effort — never blocks).
+            6. Merge into draft:
+               images [+new], latitude/longitude, city, state,
+               locationLabel, locationSource='gps',
+               sourceType='camera_capture', capturedAt, gpsAccuracy,
+               gpsHeading, gpsAltitude.
+            7. Low-accuracy warning (>100m) nudges user to drop a pin.
+            8. Auto-advances to Step 1 (Location confirmation) when
+               coords captured.
+
+          "GPS locked · ±Xm · City, State" chip appears under the
+          capture card when a camera-captured draft is in progress.
+
+          SUBMIT payload (publishing the spot) now also includes
+            capture_source, captured_at, gps_accuracy_m, gps_heading,
+            gps_altitude_m, on_site_verified.
+
+  - task: "Spot detail — On-Site Verified badge"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/spot/[id].tsx"
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Green "📍 On-Site Verified" pill renders on the spot detail
+          page whenever spot.on_site_verified is true OR
+          spot.capture_source === 'camera_capture'. Positioned below the
+          title meta row alongside Freshness/Activity badges.
+          testID: `spot-on-site-verified`.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Shipped two features:
+        1. KeyboardSafe auto-scrolls focused inputs on iOS (Android
+           already configured via manifest).
+        2. "Take photo now" on Add Spot captures GPS in parallel with
+           the shutter, merges into the draft, and auto-advances the
+           flow. An "On-Site Verified" badge then renders on the spot
+           detail once published (capture_source=camera_capture +
+           accuracy ≤ 100m).
+
+      Suggested QA (backend, focused):
+        - Create a spot with capture_source=camera_capture, gps_accuracy_m=25
+          → persisted fields on GET /spots/{id} match.
+        - Create a spot without new fields → still 200.
+        - Ensure old spots load fine (no migration).
+
+      Frontend UI verified via Playwright screenshot on web build
+      (/add tab Step 0 shows the new "Take photo now" card with
+      "📍 On-Site Verified" pill + "Upload from camera roll" beneath).
+      Live camera + GPS behavior requires a real device / Expo Go, not
+      web.
+

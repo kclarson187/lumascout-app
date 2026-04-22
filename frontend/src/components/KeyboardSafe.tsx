@@ -103,6 +103,13 @@ export default function KeyboardSafe({
       keyboardShouldPersistTaps={keyboardShouldPersistTaps}
       keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
       showsVerticalScrollIndicator={false}
+      // iOS 14+ : auto-scrolls the currently-focused input into view so the
+      // keyboard never covers what the user is typing. Harmless on older
+      // iOS and ignored on Android (we rely on windowSoftInputMode=resize
+      // + KeyboardAvoidingView behavior='height' there).
+      automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+      automaticallyAdjustContentInsets={false}
+      contentInsetAdjustmentBehavior="automatic"
       testID={testID}
     >
       {children}

@@ -197,6 +197,12 @@ export default function SpotDetail() {
               <ActivityBadge lastActivityAt={spot.last_activity_at} recentUploadCount7d={spot.recent_upload_count_7d} />
             </View>
           )}
+          {spot.on_site_verified || spot.capture_source === 'camera_capture' ? (
+            <View style={styles.onSiteBadge} testID="spot-on-site-verified">
+              <MapPin size={11} color={colors.textInverse} />
+              <Text style={styles.onSiteBadgeTxt}>On-Site Verified</Text>
+            </View>
+          ) : null}
           {(!spot.freshness || spot.freshness === 'unknown') && spot.last_activity_at ? (
             <View style={{ alignSelf: 'flex-start', marginTop: 6 }}>
               <ActivityBadge lastActivityAt={spot.last_activity_at} recentUploadCount7d={spot.recent_upload_count_7d} />
@@ -596,6 +602,14 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontFamily: font.display, fontSize: 32, letterSpacing: -0.5, lineHeight: 38 },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
   meta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13 },
+  onSiteBadge: {
+    alignSelf: 'flex-start', marginTop: 6,
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 8, paddingVertical: 4,
+    borderRadius: radii.sm,
+    backgroundColor: '#16a34a',
+  },
+  onSiteBadgeTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.4 },
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.md },
   tag: { backgroundColor: colors.surface2, paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.pill },
   tagText: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.3 },
