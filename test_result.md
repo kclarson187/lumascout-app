@@ -6691,12 +6691,71 @@ agent_communication:
 backend:
   - task: "Phase 2 route extraction — /app/backend/routes/network.py (22 endpoints), /app/backend/routes/referrals.py (10 endpoints), /app/backend/routes/push.py (7 endpoints)"
     implemented: true
-    working: false
+    working: true
     file: "/app/backend/routes/network.py, /app/backend/routes/referrals.py, /app/backend/routes/push.py"
     stuck_count: 0
     priority: "highest"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          REFERRALS RE-TEST AFTER IMPORT FIX (2026-04-24) — 14/14 PASS, 0 FAIL, no 500s.
+          Harness: /app/backend_test_referrals_retest.py against
+          https://photo-finder-60.preview.emergentagent.com/api. The three
+          missing constants (GIG_TYPES, REFERRAL_STATUSES,
+          REFERRAL_APPLY_CAP_FREE_MONTH) are now imported at
+          /app/backend/routes/referrals.py:21-29 and all previously-blocked
+          flows work end-to-end.
+
+          Scenarios (per review request, all green):
+          (1) POST /referrals {title, shoot_type:"portrait",
+              gig_type:"event_coverage", city:"Austin", state:"TX",
+              budget_cents:20000} → 200 with need_id. extra budget_cents
+              field tolerated (pydantic ignores unknown keys).
+          (2) POST /referrals/{need_id}/apply as U2 → 200 with app_id +
+              thread_id. DM thread verified in db.dm_threads. Poster
+              received 'new_referral_applicant' notification row.
+              (NOTE: body used review's {cover_letter:"hi"}; actual model
+              field is `pitch` — extra key ignored and default opening
+              line "Hi! I'd love to apply for …" used. Not a bug.)
+          (3) POST /applications/{app_id}/accept by poster → 200
+              {ok:true, need_id, accepted_app_id}. Applicant received
+              'referral_application_accepted' notification row within 1s.
+          (4) POST /applications/{app_id}/reject by poster → 200 {ok:true}
+              (on a fresh need+app, because accept auto-rejects others).
+          (5) PATCH /referrals/{need_id} {status:"filled"} by poster → 200
+              with status='filled' in response. REFERRAL_STATUSES
+              validator now works. BONUS: PATCH {status:"BOGUS_INVALID"} →
+              422 (was NameError 500 before fix — proper pydantic
+              validation path confirmed).
+          (6) DELETE /referrals/{need_id} by poster → 200 {ok:true}.
+          (7a) Non-poster PATCH → 403 "Not authorized".
+          (7b) Non-poster DELETE → 403 "Not authorized".
+          (8) Apply cap (REFERRAL_APPLY_CAP_FREE_MONTH=5): U1 posted 6
+              referrals, free-tier U2 applied. First 5 apps → 200. 6th →
+              402 with detail "Free plan limit: 5 applications per
+              month. Upgrade to Pro for unlimited." Review's spec said
+              400 "or similar" — backend uses 402 (upgrade-required),
+              which is semantically correct and idiomatic across the rest
+              of the app. Cap validator fires cleanly now.
+          (9) Cross-module regression: U1 POSTs referral in Austin → U3
+              (Austin, available_for_referrals=true, push_enabled,
+              QH=off) gets db.push_log row with kind='referral_nearby'
+              within ~1s (before=0 → after=1). _emit_notification →
+              send_growth_push path wires across the routes/referrals.py
+              module boundary with no behaviour drift.
+
+          CLEANUP: all test referrals DELETEd via API; throwaway Mongo
+          rows (users/notifications/push_log/dm_threads/dm_messages/
+          dm_participants/dm_requests/referral_needs/
+          referral_applications) wiped at end of run.
+
+          VERDICT: Phase 2 extraction of referrals.py is now GREEN. All
+          67 previously-passing checks for network.py + push.py +
+          cross-module + non-regression remain green (per prior run).
+          No 500s. Ship it.
+
         -working: false
         -agent: "testing"
         -comment: |
@@ -6846,6 +6905,24 @@ backend:
               three names to the import and retest.
 
 agent_communication:
+    -agent: "testing"
+    -message: |
+      REFERRALS RE-TEST AFTER IMPORT FIX — 14/14 PASS (2026-04-24).
+      All 9 previously-blocked scenarios from the review are now GREEN:
+      (1) POST /referrals valid shape → 200 with need_id; (2) /apply opens
+      DM thread + notifies poster; (3) /accept notifies applicant; (4)
+      /reject OK; (5) PATCH status:'filled' OK + invalid status → 422
+      (was NameError 500 before fix); (6) DELETE by poster OK; (7)
+      non-poster PATCH/DELETE → 403; (8) free-tier apply cap: 5 pass, 6th
+      → 402 with 'Free plan limit: 5 applications per month' detail; (9)
+      cross-module referral_nearby push_log row lands for Austin target
+      with available_for_referrals=true within ~1s. No 500s. All test
+      referrals cleaned up via API + Mongo.
+
+      Harness: /app/backend_test_referrals_retest.py. The 67 previously-
+      green items (network.py, push.py, cross-module, non-regression)
+      were not re-tested per review scope.
+
     -agent: "testing"
     -message: |
       Phase 2 regression — 67/68 sub-checks pass. ONE extraction bug found.
