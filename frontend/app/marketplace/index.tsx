@@ -31,13 +31,13 @@ import { colors, font, space, radii } from '../../src/theme';
 import ProductCard, { Product } from '../../src/components/ProductCard';
 
 const TYPE_META: Record<string, { label: string; icon: any; emoji: string }> = {
-  preset:     { label: 'Lightroom Presets', icon: Palette,    emoji: '🎨' },
-  spot_pack:  { label: 'Spot Packs',        icon: MapIcon,    emoji: '📍' },
-  city_guide: { label: 'City Guides',       icon: FileText,   emoji: '🗺️' },
-  route_pack: { label: 'Route Packs',       icon: MapIcon,    emoji: '🛣️' },
-  lut:        { label: 'LUTs',              icon: Palette,    emoji: '🎞️' },
-  template:   { label: 'Templates',         icon: FileText,   emoji: '📐' },
-  mentorship: { label: 'Mentorship Calls',  icon: Users,      emoji: '🎧' },
+  preset:     { label: 'Presets',      icon: Palette,    emoji: '🎨' },
+  spot_pack:  { label: 'Spot Packs',   icon: MapIcon,    emoji: '📍' },
+  city_guide: { label: 'Guides',       icon: FileText,   emoji: '🗺️' },
+  route_pack: { label: 'Routes',       icon: MapIcon,    emoji: '🛣️' },
+  lut:        { label: 'LUTs',         icon: Palette,    emoji: '🎞️' },
+  template:   { label: 'Templates',    icon: FileText,   emoji: '📐' },
+  mentorship: { label: 'Mentorship',   icon: Users,      emoji: '🎧' },
 };
 
 export default function MarketplaceIndex() {
@@ -265,16 +265,20 @@ const styles = StyleSheet.create({
   bannerTitle: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 },
   bannerSub: { color: 'rgba(255,255,255,0.88)', fontFamily: font.body, fontSize: 12, marginTop: 2, lineHeight: 16 },
 
-  typesRow: { paddingHorizontal: space.md, gap: 8 },
+  typesRow: { paddingHorizontal: space.lg, gap: 8, alignItems: 'center' },
   typePill: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: 12, paddingVertical: 7,
+    height: 40,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 16,
     backgroundColor: colors.surface1,
     borderWidth: 1, borderColor: colors.border,
-    borderRadius: radii.pill,
+    borderRadius: 20,
   },
-  typePillEmoji: { fontSize: 13 },
-  typePillTxt: { color: colors.text, fontFamily: font.bodyBold, fontSize: 12 },
+  typePillEmoji: { fontSize: 14, includeFontPadding: false },
+  typePillTxt: {
+    color: colors.text, fontFamily: font.bodyMedium, fontSize: 13,
+    lineHeight: 17, includeFontPadding: false,
+  },
 
   railHead: {
     flexDirection: 'row', alignItems: 'flex-end',

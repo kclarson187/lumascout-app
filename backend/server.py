@@ -8525,9 +8525,22 @@ class MarketplaceProductPatchIn(BaseModel):
 async def _hydrate_seller(user_id: str) -> dict:
     u = await db.users.find_one({"user_id": user_id}, {
         "_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
-        "plan": 1, "verification_status": 1, "city": 1,
+        "plan": 1, "verification_status": 1, "city": 1, "deleted_at": 1,
     })
-    return u or {}
+    if not u:
+        # User doc not found — show a neutral fallback instead of empty state.
+        return {"user_id": user_id, "name": "Marketplace Creator", "username": "creator"}
+    # Soft-deleted users should not appear by their old name on storefront.
+    if u.get("deleted_at"):
+        return {
+            "user_id": u.get("user_id"),
+            "name": "Marketplace Creator",
+            "username": "creator",
+            "avatar_url": None,
+            "plan": "free",
+        }
+    u.pop("deleted_at", None)
+    return u
 
 
 async def _shape_product(p: dict, viewer: Optional[dict] = None) -> dict:
