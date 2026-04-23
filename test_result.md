@@ -24,6 +24,61 @@ user_problem_statement: |
   (soft delete + anonymize), plus comprehensive QA pass. See tasks below.
 
 backend:
+  - task: "REAL Cover Editor end-to-end fix — admin_cover_override now propagates through public_spot_view (list endpoints), SpotCard cover-priority fixed, admin/spots gets ALL SPOTS tab, Explore uses useFocusEffect to reload"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py (public_spot_view), /app/frontend/src/components/SpotCard.tsx, /app/frontend/app/admin/spots.tsx, /app/frontend/app/(tabs)/explore.tsx, /app/frontend/app/admin/spots/[id]/cover.tsx"
+    stuck_count: 0
+    priority: "highest"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          User reported "still cannot edit the cover from photos already
+          uploaded from Explore tab or Admin tools." Root-caused three
+          bugs:
+
+          (1) public_spot_view (used by /api/spots list, Explore feed, map,
+              saved lists, search) did NOT compute hero_cover_image_url.
+              Only the single-spot detail endpoint did. So when an admin
+              pinned a cover via the editor, the list endpoints returned
+              the old images[0] and the Explore feed never showed the
+              change. → Fixed: added admin_cover_override → hero_cover_
+              image_url + hero_cover_meta propagation to public_spot_view.
+              Live-verified: GET /api/spots?limit=50 now returns
+              hero_cover_source='admin_override' and the override's focal/
+              scale/rotation after a PATCH.
+
+          (2) SpotCard had cover priority inverted:
+                cover = images.is_cover OR images[0] OR hero_cover_image_url
+              Even with a valid hero_cover from the backend, images[0]
+              always won on the client. → Fixed: cover priority now
+                cover = hero_cover_image_url OR images.is_cover OR images[0]
+
+          (3) Admin/spots only showed the PENDING queue. Once submissions
+              were cleared there was no way to reach the editor for a
+              live spot. → Rewrote /admin/spots with a PENDING | ALL SPOTS
+              tabs. ALL SPOTS has a search input + list of every approved
+              spot with thumbnail/title/city/Q-score/photo count; tapping
+              a row opens the Cover Editor. So admins can now hit the
+              editor from BOTH Explore (kebab) and Admin dashboard.
+
+          Additional UX wins:
+          - Explore tab uses useFocusEffect to reload on return from
+            the editor → new cover shows immediately without pull-to-
+            refresh.
+          - Cover Editor gallery now restores the saved crop if admin taps
+            the currently-pinned image (preserves previous focal/scale/
+            rotation instead of resetting to defaults).
+          - Friendly tip line below the gallery explains the workflow.
+
+          E2E frontend QA: PASS. Admin badges + kebab visible on Explore;
+          Change cover routes correctly; gallery shows all spot + UGC
+          images; canvas updates on tap; drag/pinch/rotate/reset work;
+          Save persists; the new cover appears in the Explore feed.
+
+
   - task: "Explore Ranking + Freshness Badges + Admin Spot Menu — quality_score (0-100), is_new/is_fresh/is_trending/is_verified_discovery flags on every public_spot_view, new sort=quality mode; Admin roles get kebab + long-press menu on SpotCard"
     implemented: true
     working: true
