@@ -1,12 +1,12 @@
 {
   "/session/login/route": "app/session/login/route.js",
+  "/me/seller/page": "app/me/seller/page.js",
   "/login/page": "app/login/page.js",
-  "/admin/page": "app/admin/page.js",
-  "/admin/spots/page": "app/admin/spots/page.js",
-  "/admin/community/page": "app/admin/community/page.js",
-  "/admin/marketplace/page": "app/admin/marketplace/page.js",
-  "/admin/users/page": "app/admin/users/page.js",
-  "/admin/reports/page": "app/admin/reports/page.js",
-  "/admin/audit-logs/page": "app/admin/audit-logs/page.js",
+  "/seller/page": "app/seller/page.js",
+  "/seller/products/page": "app/seller/products/page.js",
+  "/seller/products/new/page": "app/seller/products/new/page.js",
+  "/seller/orders/page": "app/seller/orders/page.js",
+  "/seller/payouts/page": "app/seller/payouts/page.js",
+  "/seller/analytics/page": "app/seller/analytics/page.js",
   "/dashboard/page": "app/dashboard/page.js"
 }

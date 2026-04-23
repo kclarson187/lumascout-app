@@ -16,45 +16,45 @@
       "static/chunks/main-app.js",
       "static/chunks/app/not-found.js"
     ],
-    "/admin/layout": [
+    "/seller/layout": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/admin/layout.js"
+      "static/chunks/app/seller/layout.js"
     ],
-    "/admin/page": [
+    "/seller/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/admin/page.js"
+      "static/chunks/app/seller/page.js"
     ],
-    "/admin/spots/page": [
+    "/seller/products/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/admin/spots/page.js"
+      "static/chunks/app/seller/products/page.js"
     ],
-    "/admin/community/page": [
+    "/seller/products/new/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/admin/community/page.js"
+      "static/chunks/app/seller/products/new/page.js"
     ],
-    "/admin/marketplace/page": [
+    "/seller/orders/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/admin/marketplace/page.js"
+      "static/chunks/app/seller/orders/page.js"
     ],
-    "/admin/reports/page": [
+    "/seller/payouts/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/admin/reports/page.js"
+      "static/chunks/app/seller/payouts/page.js"
     ],
-    "/admin/users/page": [
+    "/seller/analytics/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/admin/users/page.js"
+      "static/chunks/app/seller/analytics/page.js"
     ],
-    "/admin/audit-logs/page": [
+    "/me/seller/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/admin/audit-logs/page.js"
+      "static/chunks/app/me/seller/page.js"
     ],
     "/login/page": [
       "static/chunks/webpack.js",

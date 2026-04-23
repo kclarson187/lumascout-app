@@ -7478,3 +7478,82 @@ All routes SSR via shared-backend admin endpoints (all pre-existing).
   this wave.
 - Expo tunnel ready; mobile 10.79.131.x IPs actively hitting backend.
 
+
+================================================================================
+# Marketplace Seller Center (Apr 2026)
+================================================================================
+
+## Web-only, additive, zero mobile changes
+- `/app/frontend` — untouched (git clean, no diffs).
+- `/app/backend` — zero changes this wave. Used existing endpoints:
+    POST /api/me/seller/onboard        (Stripe Connect AccountLink)
+    GET  /api/me/seller/connect-status (live Connect state)
+    POST /api/me/seller/dashboard-link (Stripe Express login link)
+    GET  /api/me/seller/payouts        (payouts + balances)
+    POST /api/marketplace/products     (create)
+    GET  /api/marketplace/products     (list by seller_user_id)
+    GET  /api/marketplace/products/:id
+    PATCH/DELETE same
+    GET  /api/me/marketplace/sales     (orders)
+- All seller actions run through Next.js Server Actions (`'use server'`) so
+  the HttpOnly session cookie is attached server-side to Bearer calls.
+
+## 5 routes + 2 sub-routes built
+  /seller                         Overview \u2014 earnings, pending/available,
+                                  sales, conversion, recent orders, top
+                                  products, quick-actions.
+  /seller/products                Products manager \u2014 filter tabs
+                                  (All/Active/Pending/Archived), data table
+                                  w/ per-row Edit / View / Archive /
+                                  Unarchive / Delete.
+  /seller/products/new            Full product form: title, type, category,
+                                  description, tags, thumbnail (live
+                                  preview), contents URL (delivery), price
+                                  with live \u201cYou\u2019ll earn 85%\u201d calc.
+  /seller/products/[id]           Same form in edit mode.
+  /seller/payouts                 Status card (Active/Onboarding/Pending/
+                                  Restricted/Disconnected), Start/Resume
+                                  Onboarding button (redirects to Stripe
+                                  Connect AccountLink), Stripe Dashboard
+                                  link, Available + Pending balance cards,
+                                  Payout history table, Troubleshooting
+                                  panel.
+  /seller/orders                  Data table: When / Buyer / Product /
+                                  Delivery / Status / Gross / You earn.
+                                  Links buyer \u2192 /u/<username>.
+  /seller/analytics               4 KPI cards, 30-day revenue bar chart,
+                                  Top products table w/ conversion + revenue.
+
+## Stripe return-URL bridge (web-only)
+The backend was configured to redirect Stripe Connect returns to
+`/me/seller?connect_return=1` \u2014 originally a mobile path. Added a Next.js
+bridge at `/app/web/app/me/seller/page.tsx` that server-redirects to
+`/seller/payouts?connect=return` (or `?connect=refresh`). The
+`/seller/payouts` page shows a success banner when the user arrives via
+that redirect.
+
+## Smoke tests (public URL, super_admin cookie)
+  /seller                        200 \u2714
+  /seller/products               200 \u2714
+  /seller/products/new           200 \u2714
+  /seller/orders                 200 \u2714
+  /seller/payouts                200 \u2714
+  /seller/analytics              200 \u2714
+  /me/seller?connect_return=1    307 \u2192 /seller/payouts?connect=return \u2714
+
+## Visual verification (public URL, 1440x900)
+  Overview: "Welcome back, Keith.", onboarding callout, 6 KPI cards
+    (Gross $0 / Net $0 / Available $0 / Pending $0 / Sales 0 / Active 13/13),
+    Conversion 0.00% from 824 views, Top products loaded REAL listings
+    (Moody Film \u2014 20 Desktop + Mobile Presets $32, 1-on-1 Portfolio Review
+    $79, Photographer Invoice + Contract Template $9) \u2014 all from DB.
+  Payouts: Status card \"Stripe Connect \u00b7 disconnected\" + brand-gold
+    \"Start onboarding\" button wired to server-action redirect. Empty
+    payout history state. Troubleshooting panel.
+  Analytics: 4 KPIs, 30-day bar chart (empty gradient tone), Top products
+    table computing revenue/conversion from real product docs.
+
+## Ready for next phase
+Backend Modularization Phase 5 (routes/auth.py) is the remaining item
+on the user's approved roadmap.
+
