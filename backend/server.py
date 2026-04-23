@@ -2821,8 +2821,15 @@ async def _emit_notification(
     deep_link: Optional[str] = None,
     image_url: Optional[str] = None,
 ) -> None:
-    """Persist a notification row. No-op if user_id is falsy or == actor_user_id
-    (don't self-notify)."""
+    """Persist a notification row AND dispatch a push notification (best effort).
+
+    Central emitter for the app. Rules applied in send_growth_push:
+      • category opt-out via user.notification_preferences.categories
+      • quiet hours in the user's local timezone
+      • daily frequency cap (default 10/day)
+      • 10-min dedupe window on (user, kind, title)
+    Never raises — notifications are side-channel and must not block flows.
+    """
     if not user_id or user_id == actor_user_id:
         return
     try:
@@ -2842,8 +2849,224 @@ async def _emit_notification(
             "created_at": utcnow(),
         })
     except Exception:
-        # Never let notifications break the happy path.
         pass
+    # Dispatch push (fire-and-forget). Schedule as a task so long webhooks
+    # don't await on network I/O.
+    try:
+        asyncio.create_task(send_growth_push(
+            user_id=user_id, kind=kind, title=title, body=body,
+            deep_link=deep_link, image_url=image_url,
+        ))
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Push Notification Growth System (Phase 2026-04-23)
+# ---------------------------------------------------------------------------
+# Categories map app events (kind) to user-toggleable preference buckets.
+# This lets users say "no marketplace pushes" without also losing messages.
+# ---------------------------------------------------------------------------
+NOTIFICATION_CATEGORIES: Dict[str, str] = {
+    # explore
+    "new_spot_nearby": "explore",
+    "saved_spot_update": "explore",
+    "trending_spot": "explore",
+    "golden_hour": "explore",
+    # network
+    "profile_view": "network",
+    "new_follower": "network",
+    "dm_request": "messages",
+    "dm_message": "messages",
+    "referral_nearby": "referrals",
+    "referral_application": "referrals",
+    # marketplace
+    "marketplace_sale": "marketplace",
+    "marketplace_refund": "marketplace",
+    "marketplace_payout": "marketplace",
+    "wishlist_discount": "marketplace",
+    "featured_pack": "marketplace",
+    # community
+    "upload_featured": "community",
+    "reply_on_post": "community",
+    "poll_update": "community",
+    # promotional / monetization nudges
+    "upgrade_nudge": "promotions",
+    "pack_creator_nudge": "promotions",
+}
+DEFAULT_NOTIFICATION_PREFERENCES: Dict[str, Any] = {
+    "categories": {
+        "explore": True, "network": True, "messages": True,
+        "referrals": True, "marketplace": True, "community": True,
+        "promotions": False,   # off by default (respect users)
+    },
+    "quiet_hours": {"enabled": True, "start": "22:00", "end": "07:00"},  # local TZ
+    "timezone": "UTC",
+    "daily_cap": 10,
+    "push_enabled": True,
+}
+
+
+def _tz_from_user(user: dict) -> str:
+    prefs = user.get("notification_preferences") or {}
+    return prefs.get("timezone") or user.get("timezone") or "UTC"
+
+
+def _is_in_quiet_hours(user: dict) -> bool:
+    """True if user's local time falls inside their quiet-hours window."""
+    prefs = user.get("notification_preferences") or {}
+    qh = prefs.get("quiet_hours") or {}
+    if not qh.get("enabled"):
+        return False
+    start = qh.get("start") or "22:00"
+    end = qh.get("end") or "07:00"
+    try:
+        sh, sm = (int(x) for x in start.split(":"))
+        eh, em = (int(x) for x in end.split(":"))
+    except Exception:
+        return False
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(_tz_from_user(user))
+    except Exception:
+        from datetime import timezone as _tz
+        tz = _tz.utc
+    now_local = datetime.now(tz).time()
+    start_t = datetime.min.replace(hour=sh, minute=sm).time()
+    end_t = datetime.min.replace(hour=eh, minute=em).time()
+    # Windows that wrap midnight (22:00 → 07:00) are a union.
+    if start_t <= end_t:
+        return start_t <= now_local <= end_t
+    return (now_local >= start_t) or (now_local <= end_t)
+
+
+async def send_growth_push(
+    user_id: str, kind: str, title: str, body: str,
+    deep_link: Optional[str] = None, image_url: Optional[str] = None,
+) -> bool:
+    """Core push dispatcher. Returns True if a push was queued/sent.
+
+    Gates:
+      1. User exists + has push_enabled
+      2. Category preference ON (inferred from kind)
+      3. Not currently in quiet hours (local TZ)
+      4. Under daily_cap
+      5. Not duplicated in the last 10 min
+    """
+    u = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if not u:
+        return False
+    prefs = u.get("notification_preferences") or DEFAULT_NOTIFICATION_PREFERENCES
+    if not prefs.get("push_enabled", True):
+        return False
+    category = NOTIFICATION_CATEGORIES.get(kind, "network")
+    cats = prefs.get("categories") or DEFAULT_NOTIFICATION_PREFERENCES["categories"]
+    if cats.get(category) is False:
+        return False
+    if _is_in_quiet_hours(u):
+        return False
+
+    now = utcnow()
+    # Rate limit (daily cap)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    sent_today = await db.push_log.count_documents({
+        "user_id": user_id, "sent_at": {"$gte": day_start},
+    })
+    cap = int(prefs.get("daily_cap") or DEFAULT_NOTIFICATION_PREFERENCES["daily_cap"])
+    if sent_today >= cap:
+        return False
+
+    # Dedupe: 10-min window on (user_id, kind, title)
+    dup = await db.push_log.find_one({
+        "user_id": user_id, "kind": kind, "title": title[:120],
+        "sent_at": {"$gte": now - timedelta(minutes=10)},
+    })
+    if dup:
+        return False
+
+    # Dispatch to Expo
+    data: Dict[str, Any] = {"kind": kind}
+    if deep_link:
+        data["deep_link"] = deep_link
+        data["url"] = deep_link   # Expo + linking helpers
+    if image_url:
+        data["image_url"] = image_url
+    await send_push([user_id], title, body, data)
+
+    # Record for rate-limiting / analytics
+    try:
+        await db.push_log.insert_one({
+            "log_id": f"pl_{uuid.uuid4().hex[:10]}",
+            "user_id": user_id, "kind": kind, "category": category,
+            "title": title[:120], "body": body[:240],
+            "deep_link": deep_link,
+            "sent_at": now,
+        })
+    except Exception:
+        pass
+    return True
+
+
+class NotificationPrefsIn(BaseModel):
+    categories: Optional[Dict[str, bool]] = None
+    quiet_hours: Optional[Dict[str, Any]] = None  # {enabled, start, end}
+    timezone: Optional[str] = None
+    daily_cap: Optional[int] = None
+    push_enabled: Optional[bool] = None
+
+
+@api.get("/me/notification-preferences")
+async def get_notification_prefs(user: dict = Depends(get_current_user)):
+    """Returns the caller's notification preferences (merged with defaults)."""
+    stored = user.get("notification_preferences") or {}
+    merged = {**DEFAULT_NOTIFICATION_PREFERENCES, **stored}
+    # Deep-merge categories so new categories added later auto-appear as True.
+    merged["categories"] = {**DEFAULT_NOTIFICATION_PREFERENCES["categories"],
+                             **(stored.get("categories") or {})}
+    return merged
+
+
+@api.patch("/me/notification-preferences")
+async def update_notification_prefs(body: NotificationPrefsIn, user: dict = Depends(get_current_user)):
+    """Partial-update of notification_preferences. Each field is optional."""
+    current = user.get("notification_preferences") or {}
+    merged = {**DEFAULT_NOTIFICATION_PREFERENCES, **current}
+    merged["categories"] = {**DEFAULT_NOTIFICATION_PREFERENCES["categories"],
+                             **(current.get("categories") or {})}
+    if body.categories is not None:
+        merged["categories"] = {**merged["categories"], **body.categories}
+    if body.quiet_hours is not None:
+        # Sanitize time strings to HH:MM
+        qh = body.quiet_hours
+        merged["quiet_hours"] = {
+            "enabled": bool(qh.get("enabled", merged["quiet_hours"]["enabled"])),
+            "start":   str(qh.get("start", merged["quiet_hours"]["start"]))[:5],
+            "end":     str(qh.get("end",   merged["quiet_hours"]["end"]))[:5],
+        }
+    if body.timezone is not None:
+        merged["timezone"] = body.timezone[:60]
+    if body.daily_cap is not None:
+        merged["daily_cap"] = max(1, min(50, int(body.daily_cap)))
+    if body.push_enabled is not None:
+        merged["push_enabled"] = bool(body.push_enabled)
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"notification_preferences": merged, "updated_at": utcnow()}},
+    )
+    return merged
+
+
+@api.post("/me/notifications/test-push")
+async def test_push(user: dict = Depends(get_current_user)):
+    """Send a test push to the caller to verify device-level delivery.
+    Respects quiet-hours / category gating to make debugging obvious."""
+    ok = await send_growth_push(
+        user["user_id"], kind="upgrade_nudge",
+        title="Notifications are working 🎉",
+        body="This is a test push from LumaScout. Tap to see recent activity.",
+        deep_link="/notifications",
+    )
+    return {"delivered": ok}
 
 
 @api.get("/notifications")

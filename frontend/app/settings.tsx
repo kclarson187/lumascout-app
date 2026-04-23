@@ -30,7 +30,7 @@ export default function Settings() {
     { key: 'wishlist', icon: <Bookmark size={20} color={colors.primary} />, title: 'Wishlist', subtitle: 'Saved packs to buy later', onPress: () => router.push('/me/wishlist' as any) },
     { key: 'seller', icon: <Briefcase size={20} color={colors.primary} />, title: 'Seller dashboard', subtitle: 'Sales, revenue, payouts', onPress: () => router.push('/me/seller' as any) },
     { key: 'profile', icon: <User size={20} color={colors.primary} />, title: 'Edit profile', subtitle: 'Name, bio, specialties, city', onPress: () => router.push('/(tabs)/profile') },
-    { key: 'notif', icon: <Bell size={20} color={colors.primary} />, title: 'Notifications', subtitle: 'Push notifications (coming soon)', onPress: () => Alert.alert('Coming soon', 'Push notifications launch with mobile build.') },
+    { key: 'notif', icon: <Bell size={20} color={colors.primary} />, title: 'Notifications', subtitle: 'Categories, quiet hours, frequency cap', onPress: () => router.push('/settings/notifications' as any) },
     { key: 'privacy', icon: <Shield size={20} color={colors.primary} />, title: 'Privacy defaults', subtitle: 'How new spots are displayed', onPress: () => Alert.alert('Privacy defaults', 'You control each spot\'s privacy when you create it. Bulk defaults land in the next release.') },
   ];
 
