@@ -18,10 +18,69 @@ backend:
     implemented: true
     working: false
     file: "/app/backend/server.py (send_growth_push, NOTIFICATION_CATEGORIES, BYPASS_CAP_KINDS, /api/me/notification-preferences, /api/me/notifications/test-push, profile_view emission @ toggle_save, trending_spot fanout @ 4 saves, referral_nearby fanout @ /referrals POST, comment_reply + comment_mention @ /posts/{id}/comments)"
-    stuck_count: 2
+    stuck_count: 0
     priority: "highest"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          FINAL RE-TEST (items 5, 7, 9, 10) — all GREEN after `import asyncio`
+          fix at /app/backend/server.py:11.
+          Harness: /app/backend_test_push_retest.py → 13/13 PASS, 0 FAIL.
+
+          (5) category block stops PUSH — PASS (4/4):
+              · U1 → U2 follow: push_log row lands for U2 kind=new_follower
+                within 3s (baseline=0, after=1).
+              · /api/notifications row for new_follower exists with correct
+                deep_link /profile/{U1_user_id}.
+              · After U2 toggles network=false, fresh U1b→U2 re-follow does
+                NOT add a new push_log row (before=1, after=1). Category
+                gate is genuinely blocking the push now (no longer a
+                trivial pass — we can see the baseline row landed first).
+              · Inbox row IS still persisted (notifications count went
+                1 → 2) — insert happens before the push gate.
+
+          (7) trending_spot fanout + 7d dedupe — PASS (4/4):
+              · Admin creates fresh Austin spot, 4 distinct savers save
+                it. Target user E (city=Austin, explore=on, QH=off) gets
+                /api/notifications row with kind=trending_spot and
+                deep_link=/spot/{SPOT_ID} within 3s of the 4th save.
+              · db.push_log row for E kind=trending_spot lands within 3s
+                (before=0, after=1).
+              · F (also Austin) saves as 5th → fanout correctly does NOT
+                re-fire (E's push_log count stays at 1 pre5=post5=1).
+                Per-spot 7-day dedupe verified.
+
+          (9) transactional bypass — PASS (4/4):
+              · Admin prefs set: quiet_hours enabled all-day (00:00–23:59),
+                daily_cap=1, all categories on. Non-transactional test-
+                push (upgrade_nudge) → delivered=false; push_log count
+                does NOT increase (correctly blocked).
+              · U1 DMs admin → BYPASS path fires. push_log row for admin
+                kind ∈ {new_message, new_message_request, dm_message,
+                dm_request} lands within 3s (before=0, after=2 — both
+                the message and request side-channels land, confirming
+                the DM trigger went end-to-end).
+              · U1 saves admin-owned Houston spot → upload_featured is
+                NOT in BYPASS_CAP_KINDS → correctly blocked by QH
+                (push_log count stays 0).
+
+          (10) 10-min same-title dedupe — PASS:
+              · Two identical test-pushes back-to-back: d1=True,
+                d2=False, db.push_log has exactly 1 'upgrade_nudge' row.
+
+          Non-regression smoke — PASS:
+              · /api/auth/me → 200
+              · /api/feed/home → 200
+              · /api/spots?limit=3 → 200
+              · /api/marketplace/storefront → 200
+
+          No 500s observed. No regressions. All prior bugs confirmed
+          fixed end-to-end: (a) naive-vs-tz-aware datetime in toggle_save
+          trending branch, (b) asyncio.create_task weak-ref GC, and
+          (c) missing `import asyncio`. Ready for ship.
+
         -working: "NA"
         -agent: "main"
         -comment: |
