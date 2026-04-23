@@ -1107,6 +1107,25 @@ async def get_user(user_id: str, viewer: Optional[dict] = Depends(get_optional_u
                     "last_viewed_at": now,
                     "count": 1,
                 })
+                # Profile-view push — Pro/Elite perk (who-viewed feature).
+                # Only on the first row per 1h dedupe window. Actor + deep
+                # link so tap routes straight to /network/viewers.
+                try:
+                    viewed_user_plan = plan_of(user)
+                    if viewed_user_plan in ("pro", "elite"):
+                        viewer_name = viewer.get("name") or "A photographer"
+                        viewer_city = viewer.get("city") or "your network"
+                        await _emit_notification(
+                            user_id,
+                            "profile_view",
+                            "Someone viewed your profile 👀",
+                            f"{viewer_name} from {viewer_city} checked out your profile",
+                            actor_user_id=viewer["user_id"],
+                            deep_link="/network/viewers",
+                            image_url=viewer.get("avatar_url"),
+                        )
+                except Exception:
+                    pass
         except Exception:
             pass  # never block profile loads on view-tracking failures
     return user
@@ -2871,15 +2890,24 @@ NOTIFICATION_CATEGORIES: Dict[str, str] = {
     # explore
     "new_spot_nearby": "explore",
     "saved_spot_update": "explore",
+    "saved_spot_fresh_photo": "explore",
+    "saved_spot_verified": "explore",
+    "saved_spot_blooming": "explore",
     "trending_spot": "explore",
     "golden_hour": "explore",
     # network
     "profile_view": "network",
     "new_follower": "network",
+    # messages
     "dm_request": "messages",
     "dm_message": "messages",
+    "new_message": "messages",
+    "new_message_request": "messages",
+    # referrals
     "referral_nearby": "referrals",
     "referral_application": "referrals",
+    "new_referral_applicant": "referrals",
+    "referral_application_accepted": "referrals",
     # marketplace
     "marketplace_sale": "marketplace",
     "marketplace_refund": "marketplace",
@@ -2888,11 +2916,39 @@ NOTIFICATION_CATEGORIES: Dict[str, str] = {
     "featured_pack": "marketplace",
     # community
     "upload_featured": "community",
+    "upload_reaction": "community",
+    "upload_approved": "community",
+    "upload_rejected": "community",
     "reply_on_post": "community",
+    "comment_reply": "community",
+    "comment_mention": "community",
     "poll_update": "community",
+    # security — always delivered (maps to network so master off still blocks)
+    "user_sanction_warning": "network",
+    "user_sanction_suspension": "network",
+    "security_alert": "network",
     # promotional / monetization nudges
     "upgrade_nudge": "promotions",
     "pack_creator_nudge": "promotions",
+}
+
+# ---------------------------------------------------------------------------
+# Transactional / safety pushes that bypass quiet-hours + daily-cap gates.
+# These are high-signal, user-initiated, or revenue/safety critical events
+# the user expects to receive immediately. They STILL respect:
+#   - master push_enabled flag
+#   - category opt-out
+#   - 10-min dedupe window
+# ---------------------------------------------------------------------------
+BYPASS_CAP_KINDS: set = {
+    # Direct messages — user explicitly reached out
+    "new_message", "new_message_request", "dm_message", "dm_request",
+    # Revenue + payouts — seller expects instant awareness
+    "marketplace_sale", "marketplace_refund", "marketplace_payout",
+    # Referral acceptance — applicant just got a gig
+    "referral_application_accepted",
+    # Security / account safety
+    "user_sanction_warning", "user_sanction_suspension", "security_alert",
 }
 DEFAULT_NOTIFICATION_PREFERENCES: Dict[str, Any] = {
     "categories": {
@@ -2963,18 +3019,27 @@ async def send_growth_push(
     cats = prefs.get("categories") or DEFAULT_NOTIFICATION_PREFERENCES["categories"]
     if cats.get(category) is False:
         return False
-    if _is_in_quiet_hours(u):
+
+    # Transactional / safety pushes bypass quiet hours and daily cap.
+    # Master toggle, category opt-out, and dedupe still apply above/below.
+    is_bypass = kind in BYPASS_CAP_KINDS
+
+    if not is_bypass and _is_in_quiet_hours(u):
         return False
 
     now = utcnow()
-    # Rate limit (daily cap)
-    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    sent_today = await db.push_log.count_documents({
-        "user_id": user_id, "sent_at": {"$gte": day_start},
-    })
-    cap = int(prefs.get("daily_cap") or DEFAULT_NOTIFICATION_PREFERENCES["daily_cap"])
-    if sent_today >= cap:
-        return False
+    if not is_bypass:
+        # Rate limit (daily cap) — non-transactional only
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        sent_today = await db.push_log.count_documents({
+            "user_id": user_id,
+            "sent_at": {"$gte": day_start},
+            # Count only non-transactional sends against the cap
+            "kind": {"$nin": list(BYPASS_CAP_KINDS)},
+        })
+        cap = int(prefs.get("daily_cap") or DEFAULT_NOTIFICATION_PREFERENCES["daily_cap"])
+        if sent_today >= cap:
+            return False
 
     # Dedupe: 10-min window on (user_id, kind, title)
     dup = await db.push_log.find_one({
@@ -3811,16 +3876,83 @@ async def toggle_save(spot_id: str, user: dict = Depends(get_current_user)):
         "spot_id": spot_id,
         "created_at": utcnow(),
     })
-    # Notify the spot owner (fire-and-forget, never blocks).
+    # Live-count saves after the insert — used for trending signal.
+    saves_after = await db.spot_saves.count_documents({"spot_id": spot_id})
+
+    # Notify the spot owner (routes through gates + deep link).
     try:
-        spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "owner_user_id": 1, "title": 1})
+        spot = await db.spots.find_one(
+            {"spot_id": spot_id},
+            {"_id": 0, "owner_user_id": 1, "title": 1, "city": 1,
+             "created_at": 1, "images": 1},
+        )
         if spot and spot.get("owner_user_id") and spot["owner_user_id"] != user["user_id"]:
-            await send_push(
-                [spot["owner_user_id"]],
-                "New save",
-                f"{user.get('name') or 'Someone'} saved “{(spot.get('title') or 'your spot')[:60]}”",
-                {"type": "spot.save", "spot_id": spot_id},
+            cover = None
+            try:
+                imgs = spot.get("images") or []
+                if imgs:
+                    cover = (imgs[0] or {}).get("image_url")
+            except Exception:
+                cover = None
+            await _emit_notification(
+                spot["owner_user_id"],
+                "upload_featured",  # community bucket — low-frequency
+                f"{user.get('name') or 'Someone'} saved your spot",
+                f"“{(spot.get('title') or 'your spot')[:60]}” just got saved",
+                actor_user_id=user["user_id"],
+                spot_id=spot_id,
+                deep_link=f"/spot/{spot_id}",
+                image_url=cover,
             )
+
+        # Trending-spot fanout: when saves cross 4 on a recently-created
+        # spot, push to nearby photographers who haven't saved it yet.
+        # Dedupe: send_growth_push's 10-min (user, kind, title) window
+        # plus the 7-day per-spot dedupe via push_log.
+        if spot and saves_after == 4:
+            created_at = spot.get("created_at") or utcnow()
+            age_days = (utcnow() - created_at).days if created_at else 999
+            if age_days <= 30:
+                spot_city = (spot.get("city") or "").strip()
+                spot_title = (spot.get("title") or "a new spot")[:60]
+                existing_savers = await db.spot_saves.find(
+                    {"spot_id": spot_id}, {"_id": 0, "user_id": 1}
+                ).to_list(50)
+                saver_ids = {s["user_id"] for s in existing_savers}
+                saver_ids.add(user["user_id"])
+                # 7-day per-spot dedupe across users
+                seven_ago = utcnow() - timedelta(days=7)
+                recent_log = await db.push_log.find({
+                    "kind": "trending_spot",
+                    "deep_link": f"/spot/{spot_id}",
+                    "sent_at": {"$gte": seven_ago},
+                }, {"_id": 0, "user_id": 1}).to_list(500)
+                already_pushed = {r["user_id"] for r in recent_log}
+
+                target_q = {"user_id": {"$nin": list(saver_ids | already_pushed)}}
+                if spot_city:
+                    target_q["city"] = spot_city
+                cover = None
+                try:
+                    imgs = spot.get("images") or []
+                    if imgs:
+                        cover = (imgs[0] or {}).get("image_url")
+                except Exception:
+                    cover = None
+                cur = db.users.find(target_q, {"_id": 0, "user_id": 1}).limit(40)
+                async for tgt in cur:
+                    tid = tgt.get("user_id")
+                    if not tid:
+                        continue
+                    await _emit_notification(
+                        tid,
+                        "trending_spot",
+                        f"🔥 Trending in {spot_city or 'your area'}",
+                        f"{spot_title} just hit 4 saves — check it out",
+                        spot_id=spot_id,
+                        deep_link=f"/spot/{spot_id}",
+                        image_url=cover,
+                    )
     except Exception:
         pass
     return {"saved": True}
@@ -6589,17 +6721,60 @@ async def create_comment(post_id: str, body: CommentIn, user: dict = Depends(get
     await db.post_comments.insert_one(doc)
     await db.community_posts.update_one({"post_id": post_id}, {"$inc": {"comment_count": 1}})
     doc.pop("_id", None)
-    # Notify the post author
+
+    # ------------------------------------------------------------------
+    # Notify post author of a reply + @mention parsing
+    # ------------------------------------------------------------------
+    body_text = doc["body"]
+    actor_name = user.get("name") or "Someone"
+    post_owner = p.get("author_id") or p.get("author_user_id")
+    post_title = (p.get("title") or "your post")[:60]
+    notified: set = set()
+
+    # 1) Reply-on-post → post author (skip if self-reply)
     try:
-        if p.get("author_id") and p["author_id"] != user["user_id"]:
-            await send_push(
-                [p["author_id"]],
-                "New comment",
-                f"{user.get('name') or 'Someone'} replied to “{(p.get('title') or 'your post')[:60]}”",
-                {"type": "post.comment", "post_id": post_id, "comment_id": doc["comment_id"]},
+        if post_owner and post_owner != user["user_id"]:
+            await _emit_notification(
+                post_owner,
+                "comment_reply",
+                "New reply on your post",
+                f"{actor_name} replied to “{post_title}”",
+                actor_user_id=user["user_id"],
+                deep_link=f"/community/post/{post_id}",
+                image_url=user.get("avatar_url"),
             )
+            notified.add(post_owner)
     except Exception:
         pass
+
+    # 2) @mentions — extract tokens like @handle, resolve via users.username,
+    #    notify each unique mentioned user (skip actor, skip already-notified).
+    try:
+        import re as _re
+        tokens = _re.findall(r"@([a-zA-Z0-9_]{2,24})", body_text)
+        if tokens:
+            uniq = {t.lower() for t in tokens}
+            mentioned = await db.users.find(
+                {"username": {"$in": list(uniq)}},
+                {"_id": 0, "user_id": 1, "username": 1},
+            ).to_list(20)
+            for mu in mentioned:
+                mid = mu.get("user_id")
+                if not mid or mid == user["user_id"] or mid in notified:
+                    continue
+                await _emit_notification(
+                    mid,
+                    "comment_mention",
+                    f"{actor_name} mentioned you",
+                    f"@{mu.get('username')} — in a reply on “{post_title}”",
+                    actor_user_id=user["user_id"],
+                    deep_link=f"/community/post/{post_id}",
+                    image_url=user.get("avatar_url"),
+                )
+                notified.add(mid)
+    except Exception:
+        pass
+
     return doc
 
 
@@ -8543,6 +8718,36 @@ async def create_referral_need(
         "is_featured": plan_of(user) == "elite",
     }
     await db.referral_needs.insert_one(doc)
+
+    # Push "referral opportunity nearby" to available photographers in the
+    # same city (excluding the poster). 1-hr same-city dedupe handled by
+    # send_growth_push's 10-min dedupe on (user_id, kind, title). Cap batch
+    # to 50 to respect Expo limits + platform quiet-hours.
+    try:
+        city = (body.city or "").strip()
+        if city:
+            q_targets = {
+                "available_for_referrals": True,
+                "user_id": {"$ne": user["user_id"]},
+                "city": city,
+            }
+            cursor = db.users.find(q_targets, {"_id": 0, "user_id": 1}).limit(50)
+            async for tgt in cursor:
+                tid = tgt.get("user_id")
+                if not tid:
+                    continue
+                shoot = (body.shoot_type or "shoot").replace("_", " ")
+                await _emit_notification(
+                    tid,
+                    "referral_nearby",
+                    f"New {shoot} gig in {city}",
+                    f"{(body.title or 'A photographer')[:80]} — tap to apply",
+                    actor_user_id=user["user_id"],
+                    deep_link=f"/referrals/{doc['need_id']}",
+                )
+    except Exception:
+        pass
+
     return await _shape_need(doc, user)
 
 
