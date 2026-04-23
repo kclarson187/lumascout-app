@@ -22,7 +22,7 @@ export default async function DashboardOverview() {
   const conversationsCount = Array.isArray(conversations) ? conversations.length : 0;
 
   const stats = [
-    { label: 'Saved spots', value: savedCount, icon: Bookmark, href: '/dashboard/saved' },
+    { label: 'Saves', value: savedCount, icon: Bookmark, href: '/dashboard/saved' },
     { label: 'Collections', value: collectionsCount, icon: Folder, href: '/dashboard/collections' },
     { label: 'Profile viewers', value: viewersCount, icon: Eye, href: '/dashboard/viewers' },
     { label: 'Followers', value: followersCount, icon: Users, href: '/dashboard/followers' },
