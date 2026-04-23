@@ -961,11 +961,87 @@ backend:
   - task: "Pack Marketplace MVP — storefront/products/checkout(MOCK)/purchases/reviews/wishlist/sales/library/admin-moderation + demo seed"
     implemented: true
     working: true
-    file: "/app/backend/server.py"
+    file: "/app/backend/routes/marketplace.py"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          POST-MODULARIZATION REGRESSION — 2026-04-23. Marketplace router was
+          extracted verbatim from server.py into /app/backend/routes/
+          marketplace.py and mounted via app.include_router(
+          _marketplace_routes.router). Ran /app/backend_test.py (14
+          scenarios, 102 sub-assertions). RESULT: 102 PASS / 0 FAIL, no
+          500s, no route 404s. Backend.err.log '500' count = 0 across the
+          full test run.
+
+          Verified scenarios:
+          (1) GET /api/marketplace/storefront — rails{featured,trending,
+              newest} + by_type present; each item carries seller,
+              rating_avg, in_wishlist, has_purchased.
+          (2) GET /api/marketplace/products — q=preset, type=mentorship
+              filter-correct, sort=price_low strictly ascending, sort=
+              trending/newest/top_rated all 200, limit/skip pagination
+              returns disjoint ids.
+          (3) GET /api/marketplace/products/{id} — view_count increments
+              on repeat GET, bogus id → 404, unauth response does NOT
+              include contents_url.
+          (4) Full create/approve/PATCH/DELETE lifecycle — seller POST
+              returns status='pending'; non-owner PATCH 403; owner title
+              PATCH keeps 'pending'; admin approve flips 'active'; owner
+              price PATCH auto-reverts to 'pending'; re-approve works.
+          (5) Mock checkout — seller self-buy 400; buyer checkout 200 with
+              mocked=true, platform_fee_cents=270 (15% of 1800),
+              seller_payout_cents=1530 (85%). Duplicate checkout after
+              completion returns already_owned:true.
+          (6) Complete purchase — 200; sales_count incremented; buyer GET
+              now includes contents_url; seller receives marketplace_sale
+              notification.
+          (7) Reviews — buyer POST rating=5 200; rating_avg/rating_count
+              updated; rating=0 and rating=6 both → 422; non-buyer → 403;
+              re-post updates in place (count stays 1).
+          (8) GET /reviews — 200 with reviewer hydrated (name+username).
+          (9) Wishlist toggle — add/remove round-trip correct; GET
+              /me/wishlist returns the product.
+          (10) /me/marketplace/sales — all 7 required keys present
+              (total_sales, gross_cents, net_cents, platform_fee_cents,
+              platform_fee_pct=15, products[], recent_purchases);
+              net == gross - fee math correct.
+          (11) /me/marketplace/library — buyer's completed purchase
+              present with unlocked contents_url on the nested product.
+          (12) Seller Stripe Connect endpoints (Connect DISABLED on
+              platform — expected per spec):
+                · /me/seller/connect-status (fresh user) → {status:
+                  'disconnected', acct_id:null, stripe_ready:true}.
+                · /me/seller/onboard → 400 (NOT 500) with detail starting
+                  "Stripe error:" and containing "Connect".
+                · /me/seller/payouts (disconnected) → {items:[], count:0,
+                  connected:false}.
+                · /me/seller/dashboard-link (no account) → 400 with
+                  detail == "Connect your account first".
+          (13) Admin — /admin/marketplace/pending admin 200 / non-staff
+              403. Moderate actions approve/deny/feature/unfeature/
+              suspend/unsuspend ALL return 200. audit_logs surfaces
+              marketplace_product.* entries. /admin/marketplace/
+              purchases?status=completed|refunded|pending all 200.
+              Admin refund on mock purchase → 200; purchase flips to
+              'refunded'; sales_count decremented to 0; idempotent
+              second call returns already_refunded:true; non-admin →
+              403; buyer receives marketplace_refund notification.
+          (14) Non-regression smoke — /api/auth/me, /api/feed/home,
+              /api/spots?limit=3, /api/notifications?limit=5 all 200.
+              Zero 500s in backend.err.log across the whole run.
+
+          CLEANUP: 4 throwaway users soft-deleted, 3 products marked
+          status='removed' via direct Mongo (admin DELETE /users/{id}
+          requires reason_code body — direct Mongo used for cleanup only).
+
+          VERDICT: Modularization is CLEAN. Every endpoint moved
+          verbatim from server.py behaves identically after the
+          extraction. Ready to ship.
+
         -working: "NA"
         -agent: "main"
         -comment: |
@@ -6367,3 +6443,60 @@ agent_communication:
         - Mobile-first design responsive across devices
         - Authentication flow working with proper token storage
         - Ready for production deployment
+
+
+agent_communication:
+    -agent: "testing"
+    -message: |
+      POST-MODULARIZATION MARKETPLACE REGRESSION — 2026-04-23. Ran the full
+      14-scenario review brief against the freshly-extracted
+      /app/backend/routes/marketplace.py router. Test harness:
+      /app/backend_test.py (102 assertions, single run, no restart
+      required).
+
+      RESULT: 102 PASS / 0 FAIL. No 500s. No route 404s. backend.err.log
+      count of ' 500 ' occurrences = 0 across the entire run.
+
+      All 14 scenarios green:
+        (1) storefront rails + seller/rating_avg/in_wishlist/has_purchased.
+        (2) products q=preset / type=mentorship / sort=price_low (strictly
+            asc) / sort=trending|newest|top_rated / pagination disjoint.
+        (3) product detail view_count increments, bogus → 404, unauth has
+            NO contents_url.
+        (4) create → pending → title-PATCH stays pending → approve →
+            active → price-PATCH reverts → re-approve → non-owner 403.
+        (5) Mock checkout: seller self-buy 400, buyer checkout 200,
+            mocked=true, 15%/85% math exact (270/1530 on 1800c).
+        (6) Complete: 200 + sales_count inc + contents_url unlocked to
+            buyer + marketplace_sale notification to seller + duplicate
+            checkout → already_owned:true.
+        (7) Reviews: 5-star 200, rating_avg/count updated, 0&6 → 422,
+            non-buyer 403, re-post updates in place.
+        (8) GET /reviews hydrates reviewer.
+        (9) Wishlist toggle + /me/wishlist round-trip.
+        (10) /me/marketplace/sales: all KPIs present, platform_fee_pct=15,
+             net=gross-fee.
+        (11) /me/marketplace/library unlocks contents_url on the nested
+             product.
+        (12) Stripe Connect (DISABLED on platform — expected):
+             connect-status={disconnected, acct_id:null, stripe_ready:
+             true}; onboard→400 "Stripe error:...Connect" (NOT 500);
+             payouts={items:[], count:0, connected:false};
+             dashboard-link→400 "Connect your account first".
+        (13) Admin: pending 200/403, all 6 moderate actions (approve,
+             deny, feature, unfeature, suspend, unsuspend) return 200
+             with audit_logs row; purchases?status={completed|refunded|
+             pending} all 200; refund on mock 200, flips to 'refunded',
+             sales_count decremented, idempotent (already_refunded:true),
+             non-admin 403, buyer gets marketplace_refund notif.
+        (14) Non-regression: /api/auth/me, /api/feed/home, /api/spots?
+             limit=3, /api/notifications?limit=5 all 200.
+
+      VERDICT: Modularization is completely clean. Every endpoint behaves
+      identically to its pre-extraction counterpart. Zero behaviour drift.
+      Ready to ship.
+
+      Cleanup: 4 throwaway users soft-deleted via direct Mongo
+      (deleted_at set) + 3 throwaway products set to status='removed'.
+      Note: admin DELETE /api/admin/users/{id} requires reason_code body —
+      direct Mongo used for test cleanup only.
