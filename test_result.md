@@ -834,6 +834,30 @@ backend:
         -comment: "RETEST after main agent tightened seed guard and added 2 more non-US spots (Montréal, Monterrey). GET /api/spots?limit=300 now returns 41 items with {US:31, CA:5, MX:5, missing:0}. CA+MX = 10 (>= 6 required). No legacy spots missing country_code. Both Phase A NA seed checks PASS."
 
 frontend:
+  - task: "Pack Marketplace MVP — Storefront / Product Detail / Mock Checkout / Seller Dashboard / My Purchases / Wishlist / Admin Moderation"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/marketplace/*, /app/frontend/app/me/*, /app/frontend/app/admin/marketplace.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          FULL MOBILE QA PASS — iPhone 12 (390x844) + iPhone 11 Pro Max (414x896).
+          All 10 flows verified: Storefront, Product Detail, Mock Checkout (bottom-
+          sheet with fee breakdown), Seller Dashboard, New Product form (image
+          picker, type chips, submit), Edit Product, My Purchases, Wishlist,
+          Admin Moderation (3-tab pending/active/all with approve/deny/feature/
+          suspend + reason modal), and Settings entry points (My Purchases /
+          Wishlist / Seller dashboard rows). Dark mode clean (#0A0A0A bg,
+          #F5A623 primary, white text). No layout clipping, overflow, or
+          overlapping elements. Touch targets >=44px. Keyboard safety on
+          forms confirmed. VERDICT: MVP mobile-polished, READY for live
+          Stripe Connect wiring.
+
+frontend:
   - task: "Home — community tab strip + Messages icon"
     implemented: true
     working: "NA"
