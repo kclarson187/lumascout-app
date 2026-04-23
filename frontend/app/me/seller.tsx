@@ -18,7 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack, useFocusEffect } from 'expo-router';
 import {
   ArrowLeft, Plus, Briefcase, TrendingUp, DollarSign, Eye, ShoppingCart,
-  Edit3, Package, Info,
+  Edit3, Package, Info, ExternalLink, CheckCircle2, AlertCircle, Zap,
 } from 'lucide-react-native';
 import { api } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
@@ -27,13 +27,20 @@ function fmt(cents: number) { return `$${(cents / 100).toFixed(2)}`; }
 
 export default function SellerDashboard() {
   const [data, setData] = useState<any>(null);
+  const [connect, setConnect] = useState<any>(null);
+  const [payouts, setPayouts] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [connecting, setConnecting] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const r = await api.get('/me/marketplace/sales', { since_days: 90 });
-      setData(r);
+      const [r, c, p] = await Promise.all([
+        api.get('/me/marketplace/sales', { since_days: 90 }),
+        api.get('/me/seller/connect-status').catch(() => null),
+        api.get('/me/seller/payouts').catch(() => null),
+      ]);
+      setData(r); setConnect(c); setPayouts(p);
     } catch (e: any) {
       if (e?.response?.status !== 401) {
         // ignore
@@ -42,6 +49,34 @@ export default function SellerDashboard() {
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const onConnectStripe = async () => {
+    if (connecting) return;
+    setConnecting(true);
+    try {
+      const r = await api.post('/me/seller/onboard', {});
+      if (r.url) {
+        const WebBrowser = await import('expo-web-browser');
+        await WebBrowser.openBrowserAsync(r.url);
+        // Refresh after return
+        setTimeout(load, 1500);
+      }
+    } catch (e: any) {
+      Alert.alert('Could not start onboarding', e?.response?.data?.detail || 'Please try again.');
+    } finally { setConnecting(false); }
+  };
+
+  const onOpenStripeDashboard = async () => {
+    try {
+      const r = await api.post('/me/seller/dashboard-link', {});
+      if (r.url) {
+        const WebBrowser = await import('expo-web-browser');
+        await WebBrowser.openBrowserAsync(r.url);
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e?.response?.data?.detail || 'Could not open Stripe dashboard.');
+    }
+  };
 
   if (loading || !data) {
     return (
@@ -108,17 +143,15 @@ export default function SellerDashboard() {
           <Kpi label="Conversion" value={`${conversion}%`} />
         </View>
 
-        {/* Payout status */}
-        <View style={styles.payoutCard}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.payoutK}>Next payout</Text>
-            <Text style={styles.payoutV}>{fmt(data.net_cents || 0)}</Text>
-            <Text style={styles.payoutSub}>Available balance. Payouts are disbursed weekly via Stripe Connect (coming soon).</Text>
-          </View>
-          <TouchableOpacity style={styles.payoutBtn} onPress={() => Alert.alert('Payouts', 'Stripe Connect onboarding launches in the next release. Your balance is tracked and ready to pay out.')}>
-            <Text style={styles.payoutBtnTxt}>Set up payouts</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Connect / Payout status */}
+        <ConnectPayoutCard
+          connect={connect}
+          payouts={payouts}
+          net_cents={data.net_cents || 0}
+          connecting={connecting}
+          onConnect={onConnectStripe}
+          onOpenDashboard={onOpenStripeDashboard}
+        />
 
         {/* Products list */}
         <View style={{ paddingHorizontal: space.md, marginTop: space.xl }}>
@@ -167,6 +200,141 @@ export default function SellerDashboard() {
     </SafeAreaView>
   );
 }
+
+function ConnectPayoutCard({
+  connect, payouts, net_cents, connecting, onConnect, onOpenDashboard,
+}: {
+  connect: any; payouts: any; net_cents: number; connecting: boolean;
+  onConnect: () => void; onOpenDashboard: () => void;
+}) {
+  const status = connect?.status || 'disconnected';
+  const active = status === 'active';
+  const onboarding = status === 'onboarding';
+  const restricted = status === 'restricted';
+
+  if (!connect || status === 'disconnected') {
+    return (
+      <View style={styles.connectCard}>
+        <View style={styles.connectRow}>
+          <View style={styles.stripeIconWrap}>
+            <Zap size={18} color={colors.primary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.connectHead}>Get paid with Stripe</Text>
+            <Text style={styles.connectSub}>
+              Connect your Stripe account to receive 85% of every sale, paid weekly
+              to your bank. Takes ~2 minutes.
+            </Text>
+          </View>
+        </View>
+        <TouchableOpacity style={styles.connectBtn} onPress={onConnect} disabled={connecting}>
+          {connecting ? <ActivityIndicator color={colors.textInverse} /> : (
+            <>
+              <ExternalLink size={14} color={colors.textInverse} />
+              <Text style={styles.connectBtnTxt}>Connect Stripe</Text>
+            </>
+          )}
+        </TouchableOpacity>
+        <Text style={styles.connectFoot}>Powered by Stripe Express. US sellers only (more countries soon).</Text>
+      </View>
+    );
+  }
+
+  if (onboarding) {
+    return (
+      <View style={[styles.connectCard, { borderColor: colors.warning }]}>
+        <View style={styles.connectRow}>
+          <View style={[styles.stripeIconWrap, { backgroundColor: 'rgba(251,191,36,0.12)', borderColor: colors.warning }]}>
+            <AlertCircle size={18} color={colors.warning} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.connectHead}>Finish Stripe setup</Text>
+            <Text style={styles.connectSub}>
+              You started Stripe onboarding but a few steps remain (bank account,
+              ID verification). Earnings accrue but can't pay out until this is done.
+            </Text>
+          </View>
+        </View>
+        <TouchableOpacity style={styles.connectBtn} onPress={onConnect} disabled={connecting}>
+          {connecting ? <ActivityIndicator color={colors.textInverse} /> :
+            <><ExternalLink size={14} color={colors.textInverse} /><Text style={styles.connectBtnTxt}>Resume onboarding</Text></>}
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  if (restricted) {
+    return (
+      <View style={[styles.connectCard, { borderColor: colors.warning }]}>
+        <View style={styles.connectRow}>
+          <View style={[styles.stripeIconWrap, { backgroundColor: 'rgba(251,191,36,0.12)', borderColor: colors.warning }]}>
+            <AlertCircle size={18} color={colors.warning} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.connectHead}>Payouts restricted</Text>
+            <Text style={styles.connectSub}>
+              Stripe needs more info before they can release payouts. Open your
+              Stripe dashboard to see what's needed.
+            </Text>
+          </View>
+        </View>
+        <TouchableOpacity style={styles.connectBtn} onPress={onOpenDashboard}>
+          <ExternalLink size={14} color={colors.textInverse} />
+          <Text style={styles.connectBtnTxt}>Open Stripe dashboard</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // ACTIVE — show balance + payouts
+  const pending = payouts?.pending_cents || 0;
+  const available = payouts?.available_cents || 0;
+  const items = (payouts?.items || []).slice(0, 3);
+  return (
+    <View style={[styles.connectCard, { borderColor: colors.success }]}>
+      <View style={styles.connectRow}>
+        <View style={[styles.stripeIconWrap, { backgroundColor: 'rgba(16,185,129,0.12)', borderColor: colors.success }]}>
+          <CheckCircle2 size={18} color={colors.success} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.connectHead}>Stripe Connected</Text>
+          <Text style={styles.connectSub}>Payouts arrive weekly to your bank via Stripe.</Text>
+        </View>
+      </View>
+      <View style={styles.balanceRow}>
+        <View style={styles.balanceBox}>
+          <Text style={styles.balanceLabel}>Available</Text>
+          <Text style={styles.balanceVal}>{fmt(available)}</Text>
+        </View>
+        <View style={styles.balanceBox}>
+          <Text style={styles.balanceLabel}>Pending</Text>
+          <Text style={styles.balanceVal}>{fmt(pending)}</Text>
+        </View>
+      </View>
+      {items.length > 0 && (
+        <View style={{ marginTop: 10 }}>
+          <Text style={[styles.connectHead, { fontSize: 11, marginBottom: 6, color: colors.textTertiary, letterSpacing: 0.5 }]}>RECENT PAYOUTS</Text>
+          {items.map((p: any) => (
+            <View key={p.id} style={styles.payoutLine}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.payoutDate}>
+                  {p.arrival_date ? new Date(p.arrival_date * 1000).toLocaleDateString() : '—'}
+                </Text>
+                <Text style={styles.payoutStatus}>{p.status}</Text>
+              </View>
+              <Text style={styles.payoutAmt}>{fmt(p.amount)}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+      <TouchableOpacity style={[styles.connectBtn, { backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border, marginTop: 14 }]} onPress={onOpenDashboard}>
+        <ExternalLink size={14} color={colors.primary} />
+        <Text style={[styles.connectBtnTxt, { color: colors.primary }]}>Open Stripe dashboard</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 
 function Kpi({ label, value }: { label: string; value: string }) {
   return (
@@ -237,6 +405,38 @@ const styles = StyleSheet.create({
   payoutSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, marginTop: 4, lineHeight: 15 },
   payoutBtn: { paddingVertical: 9, paddingHorizontal: 12, backgroundColor: colors.surface2, borderRadius: radii.md, borderWidth: 1, borderColor: colors.border },
   payoutBtnTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 12 },
+
+  connectCard: {
+    marginHorizontal: space.md, marginTop: space.md,
+    padding: 14,
+    backgroundColor: colors.surface1,
+    borderWidth: 1, borderColor: colors.border,
+    borderRadius: radii.lg,
+  },
+  connectRow: { flexDirection: 'row', gap: 10, marginBottom: 12 },
+  stripeIconWrap: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: 'rgba(245,166,35,0.12)',
+    borderWidth: 1, borderColor: colors.primary,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  connectHead: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
+  connectSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 3, lineHeight: 17 },
+  connectBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 12, paddingHorizontal: 16,
+    backgroundColor: colors.primary, borderRadius: radii.md,
+  },
+  connectBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 13 },
+  connectFoot: { color: colors.textTertiary, fontFamily: font.body, fontSize: 10, textAlign: 'center', marginTop: 8 },
+  balanceRow: { flexDirection: 'row', gap: 8 },
+  balanceBox: { flex: 1, padding: 10, backgroundColor: colors.surface2, borderRadius: radii.md, borderWidth: 1, borderColor: colors.border },
+  balanceLabel: { color: colors.textTertiary, fontFamily: font.body, fontSize: 10, letterSpacing: 0.5 },
+  balanceVal: { color: colors.text, fontFamily: font.bodyBold, fontSize: 18, marginTop: 2 },
+  payoutLine: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6, borderTopWidth: 1, borderTopColor: colors.border },
+  payoutDate: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },
+  payoutStatus: { color: colors.textTertiary, fontFamily: font.body, fontSize: 10, marginTop: 2 },
+  payoutAmt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 14 },
 
   sectionHead: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13, marginBottom: 10, letterSpacing: 0.3 },
 

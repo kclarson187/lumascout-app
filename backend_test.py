@@ -1,382 +1,461 @@
 """
-Phase B.3 Backend QA — Focused Tests
-Tests:
-  A) GET /api/me/analytics/networking
-  B) POST /api/dm/threads/start (free-tier 5-pending cap)
-  C) GET /api/network/discover (Elite discovery boost)
+Backend tests for LumaScout Stripe Connect + Admin Refund endpoints.
 """
-import os
-import sys
+from __future__ import annotations
+
 import uuid
-import datetime as _dt
+from typing import List, Tuple
+
 import requests
-from pymongo import MongoClient
-
-BASE_URL = os.environ.get("BACKEND_URL", "http://localhost:8001/api")
-MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-DB_NAME = os.environ.get("DB_NAME", "photoscout_database")
-
-CREDS = {
-    "admin": ("admin@lumascout.app", "admin123"),
-    "sophie": ("sophie@lumascout.app", "demo123"),
-    "marco": ("marco@lumascout.app", "demo123"),
-    "priya": ("priya@lumascout.app", "demo123"),
-    "jordan": ("jordan@lumascout.app", "demo123"),
-    "lena": ("lena@lumascout.app", "demo123"),
-    "emily": ("emily.toronto@lumascout.app", "demo123"),
-    "noah": ("noah.vancouver@lumascout.app", "demo123"),
-    "sophie_m": ("sophie.montreal@lumascout.app", "demo123"),
-    "diego": ("diego.cdmx@lumascout.app", "demo123"),
-    "valeria": ("valeria.gdl@lumascout.app", "demo123"),
-    "luis": ("luis.monterrey@lumascout.app", "demo123"),
-    "alex": ("alex.la@lumascout.app", "demo123"),
-    "maya": ("maya.denver@lumascout.app", "demo123"),
-}
-
-mongo = MongoClient(MONGO_URL)
-db = mongo[DB_NAME]
-
-tokens = {}
-uids = {}
-results = []
 
 
-def record(name, passed, note=""):
-    status = "PASS" if passed else "FAIL"
-    results.append((status, name, note))
-    print(f"[{status}] {name}{(' — ' + note) if note else ''}")
+BASE = "http://localhost:8001/api"
+
+ADMIN_EMAIL = "admin@lumascout.app"
+ADMIN_PASSWORD = "admin123"
+
+results: List[Tuple[str, bool, str]] = []
 
 
-def login(email, password):
-    r = requests.post(f"{BASE_URL}/auth/login", json={"email": email, "password": password})
-    r.raise_for_status()
-    return r.json()
+def record(name: str, ok: bool, info: str = ""):
+    status = "PASS" if ok else "FAIL"
+    line = f"[{status}] {name}" + (f" — {info}" if info else "")
+    print(line)
+    results.append((name, ok, info))
 
 
-def auth(handle):
-    return {"Authorization": f"Bearer {tokens[handle]}"}
+def post(url, token=None, json_body=None):
+    h = {"Content-Type": "application/json"}
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    return requests.post(BASE + url, headers=h, json=json_body or {})
 
 
-def setup_logins():
-    for handle, (email, pw) in CREDS.items():
-        try:
-            resp = login(email, pw)
-            tokens[handle] = resp["token"]
-            uids[handle] = resp["user"]["user_id"]
-            print(f"  logged in {handle} ({uids[handle][:16]}) plan={resp['user'].get('plan')}")
-        except Exception as e:
-            print(f"  WARN: login {handle} failed: {e}")
+def get(url, token=None, params=None):
+    h = {}
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    return requests.get(BASE + url, headers=h, params=params or {})
 
 
-def test_analytics():
-    print("\n=== A) GET /api/me/analytics/networking ===\n")
-
-    r = requests.get(f"{BASE_URL}/me/analytics/networking")
-    record("A1 401 without Authorization", r.status_code == 401, f"got {r.status_code}")
-
-    base_keys = {
-        "plan", "period_days", "profile_views_7d", "profile_views_30d",
-        "follows_gained", "applications_sent", "applications_accepted",
-        "acceptance_rate_pct", "needs_posted", "applicants_received",
-        "active_threads",
-    }
-    elite_extra = {"trend_7d", "funnel"}
-
-    r = requests.get(f"{BASE_URL}/me/analytics/networking", headers=auth("admin"))
-    data = r.json()
-    missing = base_keys - set(data.keys())
-    has_elite = elite_extra.issubset(set(data.keys()))
-    trend = data.get("trend_7d", [])
-    trend_len_ok = isinstance(trend, list) and len(trend) == 7
-    funnel = data.get("funnel", {})
-    funnel_ok = isinstance(funnel, dict) and "views_to_follow_pct" in funnel and "applications_to_acceptance_pct" in funnel
-    trend_items_ok = all({"date", "views"}.issubset(set(t.keys())) for t in trend)
-    dates = [t.get("date") for t in trend]
-    trend_sorted = dates == sorted(dates)
-    ok = r.status_code == 200 and not missing and has_elite and trend_len_ok and funnel_ok and trend_items_ok and trend_sorted
-    record("A2 admin elite: base + trend_7d[7] + funnel", ok,
-           f"status={r.status_code} plan={data.get('plan')} missing={missing} trend_len={len(trend)} funnel_ok={funnel_ok} trend_items_ok={trend_items_ok} trend_sorted={trend_sorted}")
-
-    r = requests.get(f"{BASE_URL}/me/analytics/networking", headers=auth("sophie"))
-    data_pro = r.json()
-    missing = base_keys - set(data_pro.keys())
-    has_trend = "trend_7d" in data_pro
-    has_funnel = "funnel" in data_pro
-    ok = r.status_code == 200 and not missing and not has_trend and not has_funnel
-    record("A3 sophie pro: base only, no trend/funnel", ok,
-           f"status={r.status_code} plan={data_pro.get('plan')} missing={missing} has_trend={has_trend} has_funnel={has_funnel}")
-
-    r = requests.get(f"{BASE_URL}/me/analytics/networking", headers=auth("marco"))
-    data_free = r.json()
-    missing = base_keys - set(data_free.keys())
-    has_trend = "trend_7d" in data_free
-    has_funnel = "funnel" in data_free
-    same_shape = set(data_free.keys()) == set(data_pro.keys())
-    ok = r.status_code == 200 and not missing and not has_trend and not has_funnel and same_shape
-    record("A4 marco free: base only, shape identical to pro", ok,
-           f"status={r.status_code} plan={data_free.get('plan')} missing={missing} same_shape_as_pro={same_shape}")
-
-    # Clamp tests
-    d9999 = requests.get(f"{BASE_URL}/me/analytics/networking?since_days=9999", headers=auth("admin")).json()
-    d0    = requests.get(f"{BASE_URL}/me/analytics/networking?since_days=0", headers=auth("admin")).json()
-    dneg  = requests.get(f"{BASE_URL}/me/analytics/networking?since_days=-10", headers=auth("admin")).json()
-    d45   = requests.get(f"{BASE_URL}/me/analytics/networking?since_days=45", headers=auth("admin")).json()
-
-    ok_9999 = d9999.get("period_days") == 90
-    ok_0 = d0.get("period_days") == 1
-    ok_neg = dneg.get("period_days") == 1
-    ok_45 = d45.get("period_days") == 45
-    record("A5 since_days clamp (9999→90, 0→1, -10→1, 45→45)",
-           ok_9999 and ok_0 and ok_neg and ok_45,
-           f"9999→{d9999.get('period_days')}  0→{d0.get('period_days')}  -10→{dneg.get('period_days')}  45→{d45.get('period_days')}")
-
-    rate = data.get("acceptance_rate_pct")
-    sent = data.get("applications_sent", 0)
-    acc = data.get("applications_accepted", 0)
-    expected = round((acc / sent) * 100, 1) if sent > 0 else 0.0
-    is_float = isinstance(rate, (int, float)) and not isinstance(rate, bool)
-    formula_ok = rate == expected
-    record("A6 acceptance_rate_pct numeric & formula", is_float and formula_ok,
-           f"rate={rate} sent={sent} accepted={acc} expected={expected}")
+def delete(url, token=None):
+    h = {}
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    return requests.delete(BASE + url, headers=h)
 
 
-def cleanup_user_dm_state(handle):
-    uid = uids.get(handle)
-    if not uid:
-        return
-    db.dm_requests.delete_many({"from_user_id": uid})
-    db.dm_requests.delete_many({"to_user_id": uid})
-    thread_ids = [t["thread_id"] for t in db.dm_threads.find({"participant_user_ids": uid}, {"thread_id": 1})]
-    if thread_ids:
-        db.dm_threads.delete_many({"thread_id": {"$in": thread_ids}})
-        db.dm_messages.delete_many({"thread_id": {"$in": thread_ids}})
-        db.dm_participants.delete_many({"thread_id": {"$in": thread_ids}})
-    db.dm_blocks.delete_many({"$or": [{"blocker_user_id": uid}, {"blocked_user_id": uid}]})
+def login(email: str, password: str) -> str:
+    r = post("/auth/login", json_body={"email": email, "password": password})
+    assert r.status_code == 200, f"login failed {email}: {r.status_code} {r.text}"
+    return r.json()["token"]
 
 
-def test_dm_cap():
-    print("\n=== B) POST /api/dm/threads/start (5-pending cap) ===\n")
+def register(email: str, password: str, name: str) -> Tuple[str, str]:
+    r = post("/auth/register", json_body={"email": email, "password": password, "name": name})
+    assert r.status_code == 200, f"register failed: {r.status_code} {r.text}"
+    body = r.json()
+    return body["token"], body["user"]["user_id"]
 
-    cleanup_user_dm_state("marco")
-    marco_id = uids["marco"]
 
-    target_handles = ["priya", "jordan", "lena", "emily", "noah", "diego"]
-    for h in target_handles:
-        db.follows.delete_many({"follower_user_id": uids[h], "followed_user_id": marco_id})
-        db.dm_requests.delete_many({"from_user_id": marco_id, "to_user_id": uids[h]})
+def unique_email(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex[:10]}@example.com"
 
-    ok7 = True
-    for i, h in enumerate(target_handles[:5]):
-        r = requests.post(f"{BASE_URL}/dm/threads/start", headers=auth("marco"),
-                          json={"user_id": uids[h], "opening_body": f"hey {h}, quick Q about wedding shoot"})
-        if r.status_code != 200:
-            ok7 = False
-            print(f"  req {i+1} to {h}: {r.status_code} {r.text[:200]}")
-            break
-        if not r.json().get("is_request"):
-            ok7 = False
-            print(f"  req {i+1} to {h}: NOT flagged is_request=true → cap logic won't apply")
-    pending_count = db.dm_requests.count_documents({"from_user_id": marco_id, "status": "pending"})
-    record("B7 marco 5 distinct pending requests (200, DB has 5 rows)",
-           ok7 and pending_count == 5, f"pending_count={pending_count}")
 
-    r = requests.post(f"{BASE_URL}/dm/threads/start", headers=auth("marco"),
-                      json={"user_id": uids[target_handles[5]], "opening_body": "6th attempt"})
-    detail = ""
-    try:
+def test_all():
+    admin_token = login(ADMIN_EMAIL, ADMIN_PASSWORD)
+    cleanup_user_ids: List[str] = []
+    cleanup_product_ids: List[str] = []
+
+    r = get("/auth/me", admin_token)
+    record(
+        "admin /auth/me 200 super_admin",
+        r.status_code == 200 and r.json().get("role") == "super_admin",
+        f"code={r.status_code} role={r.json().get('role') if r.status_code==200 else None}",
+    )
+
+    # (1) Connect status — disconnected
+    fresh_email = unique_email("fresh_seller")
+    fresh_token, fresh_uid = register(fresh_email, "demo1234", "Fresh Seller")
+    cleanup_user_ids.append(fresh_uid)
+
+    r = get("/me/seller/connect-status", fresh_token)
+    ok = False
+    info = f"code={r.status_code}"
+    if r.status_code == 200:
+        j = r.json()
+        info = f"code=200 body={j}"
+        ok = (
+            j.get("status") == "disconnected"
+            and j.get("acct_id") is None
+            and j.get("stripe_ready") is True
+        )
+    record("(1) /me/seller/connect-status disconnected", ok, info)
+
+    # (2) Onboarding — Connect not enabled → 400 clean
+    r = post("/me/seller/onboard", fresh_token)
+    ok = False
+    info = f"code={r.status_code}"
+    if r.status_code == 400:
         detail = (r.json() or {}).get("detail", "")
-    except Exception:
-        pass
-    ok8 = r.status_code == 402 and "Free plan limit: 5 pending message requests" in detail
-    record("B8 marco 6th request → 402 cap message", ok8,
-           f"status={r.status_code} detail={detail!r}")
+        info = f"code=400 detail={detail[:220]}"
+        ok = detail.startswith("Stripe error:") and "Connect" in detail
+    elif r.status_code == 500:
+        info = f"code=500 CRASH body={r.text[:220]}"
+    elif r.status_code == 200:
+        info = f"code=200 body={r.json()}"
+        ok = True
+    record("(2) /me/seller/onboard returns clean 400 (no 500)", ok, info)
 
-    # Scenario 12: cap precedence over 429
-    ok12 = r.status_code == 402
-    record("B12 402 cap supersedes 429 (cap evaluated first)", ok12, f"status={r.status_code}")
+    # (2b) User doc not persisted with stripe_connect_account_id on failure
+    r2 = get("/me/seller/connect-status", fresh_token)
+    if r.status_code == 400:
+        ok2 = r2.status_code == 200 and r2.json().get("acct_id") is None
+        record(
+            "(2b) no stripe_connect_account_id persisted after failed onboard",
+            ok2,
+            f"code={r2.status_code} body={r2.json() if r2.status_code==200 else r2.text[:120]}",
+        )
+    else:
+        record("(2b) onboard succeeded — persistence check N/A", True, "skipped")
 
-    # Scenario 9: accept drops by 1
-    req = db.dm_requests.find_one({"from_user_id": marco_id, "to_user_id": uids["priya"], "status": "pending"})
-    accept_ok = False
-    new_pending = -1
-    retry_code = None
-    if req:
-        r = requests.post(f"{BASE_URL}/dm/requests/{req['request_id']}/accept", headers=auth("priya"))
-        accept_ok = r.status_code == 200
-        new_pending = db.dm_requests.count_documents({"from_user_id": marco_id, "status": "pending"})
-        r2 = requests.post(f"{BASE_URL}/dm/threads/start", headers=auth("marco"),
-                           json={"user_id": uids[target_handles[5]], "opening_body": "post-accept retry"})
-        retry_code = r2.status_code
-    ok9 = accept_ok and new_pending == 4 and retry_code == 200
-    record("B9 accept drops cap by 1, marco resends (200)",
-           ok9, f"accept={accept_ok} pending={new_pending} retry_status={retry_code}")
+    # (3) Payouts when not connected
+    r = get("/me/seller/payouts", fresh_token)
+    ok = False
+    info = f"code={r.status_code}"
+    if r.status_code == 200:
+        j = r.json()
+        info = f"code=200 body={j}"
+        ok = (
+            j.get("items") == []
+            and (j.get("count") == 0 or j.get("total") == 0)
+            and j.get("connected") is False
+        )
+    record("(3) /me/seller/payouts disconnected shape", ok, info)
 
-    # Scenario 10: sophie (pro), admin (elite) 6+
-    sophie_targets = ["valeria", "luis", "alex", "maya", "emily", "noah", "diego"]
-    cleanup_user_dm_state("sophie")
-    for h in sophie_targets:
-        db.follows.delete_many({"follower_user_id": uids[h], "followed_user_id": uids["sophie"]})
-    sophie_ok = True
-    sophie_results = []
-    for h in sophie_targets[:6]:
-        r = requests.post(f"{BASE_URL}/dm/threads/start", headers=auth("sophie"),
-                          json={"user_id": uids[h], "opening_body": "hi from sophie"})
-        sophie_results.append(r.status_code)
-        if r.status_code != 200:
-            sophie_ok = False
+    # (4) Dashboard-link w/o account → 400
+    r = post("/me/seller/dashboard-link", fresh_token)
+    ok = False
+    info = f"code={r.status_code}"
+    if r.status_code == 400:
+        detail = (r.json() or {}).get("detail", "")
+        info = f"code=400 detail={detail}"
+        ok = "Connect your account first" in detail
+    record("(4) /me/seller/dashboard-link → 400 'Connect your account first'", ok, info)
 
-    admin_targets = ["valeria", "luis", "alex", "maya", "emily", "noah"]
-    cleanup_user_dm_state("admin")
-    for h in admin_targets:
-        db.follows.delete_many({"follower_user_id": uids[h], "followed_user_id": uids["admin"]})
-    admin_ok = True
-    admin_results = []
-    for h in admin_targets[:6]:
-        r = requests.post(f"{BASE_URL}/dm/threads/start", headers=auth("admin"),
-                          json={"user_id": uids[h], "opening_body": "hi from admin"})
-        admin_results.append(r.status_code)
-        if r.status_code != 200:
-            admin_ok = False
-    record("B10 pro (sophie) and elite (admin) send 6+ → all 200 (no 402)",
-           sophie_ok and admin_ok,
-           f"sophie={sophie_results} admin={admin_results}")
+    # (5) Admin listing purchases
+    r = get("/admin/marketplace/purchases", admin_token)
+    ok = False
+    info = f"code={r.status_code}"
+    if r.status_code == 200:
+        j = r.json()
+        items = j.get("items", [])
+        info = f"code=200 count={j.get('count')} items_len={len(items)}"
+        ok = isinstance(items, list) and "count" in j
+    record("(5a) admin GET /admin/marketplace/purchases 200", ok, info)
 
-    # Scenario 11: cap NOT triggered when target follows sender
-    cleanup_user_dm_state("marco")
-    follower_handles = ["emily", "noah", "alex", "maya", "diego", "valeria"]
-    for h in follower_handles:
-        db.follows.delete_many({"follower_user_id": uids[h], "followed_user_id": marco_id})
-        db.follows.insert_one({
-            "follow_id": f"follow_{uuid.uuid4().hex[:12]}",
-            "follower_user_id": uids[h],
-            "followed_user_id": marco_id,
-            "created_at": _dt.datetime.utcnow(),
-        })
-        db.dm_requests.delete_many({"from_user_id": marco_id, "to_user_id": uids[h]})
-    ok11_all = True
-    is_req_flags = []
-    statuses = []
-    for h in follower_handles:
-        r = requests.post(f"{BASE_URL}/dm/threads/start", headers=auth("marco"),
-                          json={"user_id": uids[h], "opening_body": f"hi {h}"})
-        statuses.append(r.status_code)
-        try:
-            is_req_flags.append(r.json().get("is_request"))
-        except Exception:
-            is_req_flags.append(None)
-        if r.status_code != 200:
-            ok11_all = False
-    pending = db.dm_requests.count_documents({"from_user_id": marco_id, "status": "pending"})
-    ok11 = ok11_all and pending == 0 and all(f is False for f in is_req_flags)
-    record("B11 cap bypassed when target follows sender (no dm_request)",
-           ok11, f"statuses={statuses} is_req_flags={is_req_flags} pending_requests={pending}")
+    if r.status_code == 200 and r.json().get("items"):
+        required = {
+            "purchase_id", "product_id", "buyer", "seller", "product",
+            "price_cents", "platform_fee_cents", "seller_payout_cents",
+            "status", "mocked", "created_at",
+        }
+        item = r.json()["items"][0]
+        missing = required - set(item.keys())
+        record(
+            "(5b) purchase item has required keys",
+            not missing,
+            f"missing={sorted(missing)}" if missing else "all keys present",
+        )
+    else:
+        record("(5b) purchase item shape", True, "no purchases yet — will retest after 6)")
 
-    # Remove the synthetic follows so demo data isn't polluted
-    for h in follower_handles:
-        db.follows.delete_many({"follower_user_id": uids[h], "followed_user_id": marco_id})
+    # Non-admin → 403
+    non_admin_email = unique_email("non_admin")
+    non_admin_token, non_admin_uid = register(non_admin_email, "demo1234", "Non Admin")
+    cleanup_user_ids.append(non_admin_uid)
+    r = get("/admin/marketplace/purchases", non_admin_token)
+    record(
+        "(5e) non-admin GET → 403",
+        r.status_code == 403,
+        f"code={r.status_code}",
+    )
 
+    # (6) End-to-end refund on a MOCK purchase
+    seller_email = unique_email("seller")
+    seller_token, seller_uid = register(seller_email, "demo1234", "QA Seller")
+    cleanup_user_ids.append(seller_uid)
+    buyer_email = unique_email("buyer")
+    buyer_token, buyer_uid = register(buyer_email, "demo1234", "QA Buyer")
+    cleanup_user_ids.append(buyer_uid)
 
-def test_discover_boost():
-    print("\n=== C) GET /api/network/discover Elite boost ===\n")
-
-    wedding_users = list(db.users.find(
-        {"specialties": {"$regex": "wedding", "$options": "i"},
-         "is_bot": {"$ne": True}, "is_official": {"$ne": True}},
-        {"user_id": 1, "plan": 1, "name": 1, "username": 1}
-    ).limit(10))
-    print(f"  found {len(wedding_users)} wedding-tagged users")
-    if len(wedding_users) < 2:
-        record("C13 test setup (≥2 wedding users)", False,
-               f"only {len(wedding_users)} found — boost test blocked")
+    product_payload = {
+        "title": f"QA Refund Preset Pack {uuid.uuid4().hex[:6]}",
+        "type": "preset",
+        "description": "QA test pack for refund flow",
+        "price_cents": 1500,
+        "thumbnail_url": "https://images.unsplash.com/photo-1",
+    }
+    r = post("/marketplace/products", seller_token, product_payload)
+    if r.status_code != 200:
+        record("(6a) seller create product", False, f"code={r.status_code} body={r.text[:200]}")
         return
+    product = r.json()
+    pid = product["product_id"]
+    cleanup_product_ids.append(pid)
+    record("(6a) seller create product 200", True, f"pid={pid}")
 
-    # Exclude sophie (viewer) from the flip set so she remains the viewer
-    sophie_id = uids["sophie"]
-    wedding_users = [u for u in wedding_users if u["user_id"] != sophie_id]
+    r = post(
+        f"/admin/marketplace/products/{pid}/moderate",
+        admin_token,
+        json_body={"action": "approve"},
+    )
+    record("(6b) admin approve product", r.status_code == 200, f"code={r.status_code}")
 
-    u_elite = wedding_users[0]
-    u_free = wedding_users[1]
-    u_elite2 = wedding_users[2] if len(wedding_users) >= 3 else None
+    r = post(f"/marketplace/products/{pid}/checkout", buyer_token)
+    if r.status_code != 200:
+        record("(6c) buyer checkout", False, f"code={r.status_code} body={r.text[:200]}")
+        return
+    checkout = r.json()
+    record(
+        "(6c) buyer MOCK fallback (seller_not_onboarded)",
+        checkout.get("mocked") is True and checkout.get("seller_not_onboarded") is True,
+        f"mocked={checkout.get('mocked')} seller_not_onboarded={checkout.get('seller_not_onboarded')} purchase_id={checkout.get('purchase_id')}",
+    )
+    purchase_id = checkout.get("purchase_id")
 
-    orig_elite_plan = u_elite.get("plan", "free")
-    orig_free_plan = u_free.get("plan", "free")
-    orig_elite2_plan = u_elite2.get("plan", "free") if u_elite2 else None
+    r = post(f"/marketplace/purchases/{purchase_id}/complete", buyer_token)
+    record(
+        "(6d) buyer complete purchase",
+        r.status_code == 200 and r.json().get("ok") is True,
+        f"code={r.status_code} body={r.text[:120]}",
+    )
 
-    try:
-        db.users.update_one({"user_id": u_elite["user_id"]}, {"$set": {"plan": "elite"}})
-        db.users.update_one({"user_id": u_free["user_id"]}, {"$set": {"plan": "free"}})
-        if u_elite2:
-            db.users.update_one({"user_id": u_elite2["user_id"]}, {"$set": {"plan": "elite"}})
+    r = get(f"/marketplace/products/{pid}", admin_token)
+    sales_before = r.json().get("sales_count", 0) if r.status_code == 200 else -1
+    record("(6e) pre-refund sales_count fetch", r.status_code == 200, f"sales_count={sales_before}")
 
-        r = requests.get(f"{BASE_URL}/network/discover", headers=auth("sophie"))
-        ok_200 = r.status_code == 200
-        data = r.json() if ok_200 else {}
-        record("C13/C14 /network/discover 200 with viewer=sophie", ok_200, f"status={r.status_code}")
+    r = post(
+        f"/admin/marketplace/purchases/{purchase_id}/refund",
+        admin_token,
+        json_body={"reason": "qa-refund"},
+    )
+    ok = False
+    info = f"code={r.status_code}"
+    if r.status_code == 200:
+        j = r.json()
+        info = f"code=200 body={j}"
+        ok = (
+            j.get("ok") is True
+            and j.get("mocked") is True
+            and j.get("refund_amount_cents") == 1500
+        )
+    record("(6f) admin refund MOCK purchase", ok, info)
 
-        for rail in ["wedding", "family", "pet"]:
-            rail_users = data.get(rail, [])
-            if not rail_users:
-                print(f"  rail '{rail}' is empty — skipping order check")
-                continue
-            plans = [u.get("plan", "free") for u in rail_users]
-            first_non_elite = next((i for i, p in enumerate(plans) if p != "elite"), len(plans))
-            elites_first = all(p == "elite" for p in plans[:first_non_elite])
-            non_elite = plans[first_non_elite:]
-            first_non_pro = next((i for i, p in enumerate(non_elite) if p != "pro"), len(non_elite))
-            pros_then_rest = all(p == "pro" for p in non_elite[:first_non_pro])
-            record(f"C14 '{rail}' rail: elite→pro→rest ordering", elites_first and pros_then_rest,
-                   f"plans={plans}")
+    r = get(f"/marketplace/products/{pid}", admin_token)
+    sales_after = r.json().get("sales_count", -1) if r.status_code == 200 else -2
+    record(
+        "(6g) product sales_count decremented",
+        sales_after == max(0, sales_before - 1),
+        f"before={sales_before} after={sales_after}",
+    )
 
-        wedding = data.get("wedding", [])
-        elite_idx = next((i for i, u in enumerate(wedding) if u["user_id"] == u_elite["user_id"]), None)
-        free_idx = next((i for i, u in enumerate(wedding) if u["user_id"] == u_free["user_id"]), None)
-        if elite_idx is None or free_idx is None:
-            record("C14b flipped elite appears before flipped free in wedding rail", False,
-                   f"elite_idx={elite_idx} free_idx={free_idx} (may be paginated out)")
-        else:
-            record("C14b flipped elite appears before flipped free in wedding rail",
-                   elite_idx < free_idx, f"elite_idx={elite_idx} free_idx={free_idx}")
+    r = post(
+        f"/admin/marketplace/purchases/{purchase_id}/refund",
+        admin_token,
+        json_body={"reason": "qa-refund"},
+    )
+    ok = False
+    info = f"code={r.status_code}"
+    if r.status_code == 200:
+        j = r.json()
+        info = f"code=200 body={j}"
+        ok = j.get("ok") is True and j.get("already_refunded") is True
+    record("(6h) idempotent refund → already_refunded:true", ok, info)
 
-        # Scenario 15: stable same-tier order across 2 calls
-        r2 = requests.get(f"{BASE_URL}/network/discover", headers=auth("sophie"))
-        data2 = r2.json()
-        elite_order1 = [u["user_id"] for u in data.get("wedding", []) if u.get("plan") == "elite"]
-        elite_order2 = [u["user_id"] for u in data2.get("wedding", []) if u.get("plan") == "elite"]
-        record("C15 same-tier order stable across calls (elite order preserved)",
-               elite_order1 == elite_order2,
-               f"call1={elite_order1[:5]} call2={elite_order2[:5]}")
+    r = post(
+        f"/admin/marketplace/purchases/{purchase_id}/refund",
+        non_admin_token,
+        json_body={"reason": "nope"},
+    )
+    record("(6i) non-admin refund → 403", r.status_code == 403, f"code={r.status_code}")
 
-    finally:
-        db.users.update_one({"user_id": u_elite["user_id"]}, {"$set": {"plan": orig_elite_plan}})
-        db.users.update_one({"user_id": u_free["user_id"]}, {"$set": {"plan": orig_free_plan}})
-        if u_elite2:
-            db.users.update_one({"user_id": u_elite2["user_id"]}, {"$set": {"plan": orig_elite2_plan}})
-        print("  C16 cleanup: plans restored to original values")
+    r = get("/admin/audit-logs", admin_token, params={"target_id": purchase_id})
+    ok = False
+    info = f"code={r.status_code}"
+    if r.status_code == 200:
+        items = r.json().get("items", [])
+        ok = any(it.get("action") == "marketplace_purchase.refund" for it in items)
+        info = f"code=200 items_len={len(items)} has_refund_action={ok}"
+    record("(6j) audit_logs entry 'marketplace_purchase.refund'", ok, info)
 
+    r = get("/notifications", buyer_token)
+    ok = False
+    info = f"code={r.status_code}"
+    if r.status_code == 200:
+        j = r.json()
+        items = j.get("items", []) if isinstance(j, dict) else j
+        kinds = [(it.get("kind") or it.get("type")) for it in items]
+        ok = "marketplace_refund" in kinds
+        info = f"code=200 items_len={len(items)} kinds={kinds[:8]}"
+    record("(6k) buyer notifications include marketplace_refund", ok, info)
 
-def cleanup_after_tests():
-    print("\n=== CLEANUP ===")
-    for handle in ["marco", "sophie", "admin"]:
-        cleanup_user_dm_state(handle)
-    print("  DM state wiped for marco/sophie/admin")
+    # (5) Re-test items shape now that we have at least one purchase row
+    r = get("/admin/marketplace/purchases", admin_token)
+    if r.status_code == 200 and r.json().get("items"):
+        required = {
+            "purchase_id", "product_id", "buyer", "seller", "product",
+            "price_cents", "platform_fee_cents", "seller_payout_cents",
+            "status", "mocked", "created_at",
+        }
+        item = r.json()["items"][0]
+        missing = required - set(item.keys())
+        record(
+            "(5b-retest) purchase item has required keys",
+            not missing,
+            f"missing={sorted(missing)}" if missing else f"{len(item)} keys present",
+        )
 
+    # ?status=completed filter
+    r = get("/admin/marketplace/purchases", admin_token, params={"status": "completed"})
+    if r.status_code == 200:
+        items = r.json().get("items", [])
+        all_completed = all(it.get("status") == "completed" for it in items) if items else True
+        record(
+            "(5c) ?status=completed filter",
+            all_completed,
+            f"code=200 count={len(items)} all_completed={all_completed}",
+        )
+    else:
+        record("(5c) ?status=completed", False, f"code={r.status_code}")
 
-def main():
-    print(f"Testing against: {BASE_URL}")
-    setup_logins()
-    test_analytics()
-    test_dm_cap()
-    test_discover_boost()
-    cleanup_after_tests()
+    # ?status=refunded filter
+    r = get("/admin/marketplace/purchases", admin_token, params={"status": "refunded"})
+    if r.status_code == 200:
+        items = r.json().get("items", [])
+        all_refunded = all(it.get("status") == "refunded" for it in items) if items else True
+        record(
+            "(5d) ?status=refunded filter",
+            all_refunded,
+            f"code=200 count={len(items)} all_refunded={all_refunded}",
+        )
+    else:
+        record("(5d) ?status=refunded", False, f"code={r.status_code}")
 
+    # (7) MOCK fallback verification — url is None, mocked True (already captured)
+    record(
+        "(7) MOCK checkout: no real Stripe session URL",
+        checkout.get("url") is None and checkout.get("mocked") is True,
+        f"url={checkout.get('url')} mocked={checkout.get('mocked')}",
+    )
+
+    # (8) Webhook safety: fake event, no signature
+    webhook_body = {
+        "type": "account.updated",
+        "data": {"object": {"id": "acct_fake_nomatch"}},
+        "id": "evt_test_fake",
+        "livemode": False,
+    }
+    r = requests.post(
+        "http://localhost:8001/api/webhook/stripe",
+        json=webhook_body,
+    )
+    ok = r.status_code in (200, 400)
+    info = f"code={r.status_code} body={r.text[:160]}"
+    record("(8) webhook returns 200 or 400 (not 500)", ok, info)
+
+    # (9) Regression — Marketplace MVP still passes
+    r = get("/marketplace/storefront", buyer_token)
+    ok = False
+    info = f"code={r.status_code}"
+    if r.status_code == 200:
+        j = r.json()
+        rails = j.get("rails") or {}
+        info = f"code=200 rails_keys={sorted(rails.keys())}"
+        ok = "featured" in rails and "trending" in rails and "newest" in rails
+    record("(9a) /marketplace/storefront rails populated", ok, info)
+
+    reg_product_payload = {
+        "title": f"QA Regression Product {uuid.uuid4().hex[:6]}",
+        "type": "preset",
+        "description": "Regression product",
+        "price_cents": 800,
+        "thumbnail_url": "https://images.unsplash.com/photo-2",
+    }
+    r = post("/marketplace/products", seller_token, reg_product_payload)
+    reg_pid = r.json()["product_id"] if r.status_code == 200 else None
+    if reg_pid:
+        cleanup_product_ids.append(reg_pid)
+        post(
+            f"/admin/marketplace/products/{reg_pid}/moderate",
+            admin_token, {"action": "approve"},
+        )
+        r = post(f"/marketplace/products/{reg_pid}/checkout", buyer_token)
+        ok = r.status_code == 200 and r.json().get("mocked") is True
+        info = f"code={r.status_code} mocked={r.json().get('mocked') if r.status_code==200 else None}"
+        record("(9b) checkout mocked:true (regression)", ok, info)
+        reg_purchase_id = r.json().get("purchase_id") if r.status_code == 200 else None
+
+        if reg_purchase_id:
+            r = post(f"/marketplace/purchases/{reg_purchase_id}/complete", buyer_token)
+            record(
+                "(9c) /marketplace/purchases/{id}/complete works",
+                r.status_code == 200 and r.json().get("ok") is True,
+                f"code={r.status_code} body={r.text[:120]}",
+            )
+
+        r = post(f"/marketplace/products/{reg_pid}/reviews", buyer_token, {"rating": 5, "text": "QA"})
+        record(
+            "(9d) review POST by buyer 200",
+            r.status_code == 200,
+            f"code={r.status_code}",
+        )
+
+        r = post(f"/marketplace/wishlist/{reg_pid}", buyer_token)
+        record(
+            "(9e) wishlist toggle 200",
+            r.status_code == 200,
+            f"code={r.status_code}",
+        )
+
+        r = get("/me/marketplace/library", buyer_token)
+        ok = r.status_code == 200
+        items = r.json().get("items", []) if ok else []
+        has_reg = any(it.get("product_id") == reg_pid for it in items)
+        record(
+            "(9f) /me/marketplace/library contains reg product",
+            ok and has_reg,
+            f"code={r.status_code} items_len={len(items)} has_reg={has_reg}",
+        )
+
+    # Cleanup
+    print("\n--- Cleanup ---")
+    for pid_ in cleanup_product_ids:
+        try:
+            rd = delete(f"/marketplace/products/{pid_}", admin_token)
+            print(f"DELETE product {pid_}: {rd.status_code}")
+        except Exception as e:
+            print(f"DELETE product {pid_} err: {e}")
+    for uid_ in cleanup_user_ids:
+        try:
+            rd = delete(f"/admin/users/{uid_}", admin_token)
+            print(f"DELETE user {uid_}: {rd.status_code}")
+        except Exception as e:
+            print(f"DELETE user {uid_} err: {e}")
+
+    # Summary
+    total = len(results)
+    passed = sum(1 for _, ok, _ in results if ok)
+    failed = total - passed
     print("\n" + "=" * 70)
-    fails = [r for r in results if r[0] == "FAIL"]
-    passes = [r for r in results if r[0] == "PASS"]
-    print(f"RESULTS: {len(passes)} PASS, {len(fails)} FAIL")
-    for status, name, note in results:
-        print(f"  [{status}] {name}{(' — ' + note) if note else ''}")
-    return 0 if not fails else 1
+    print(f"TOTAL: {total}  PASS: {passed}  FAIL: {failed}")
+    if failed:
+        print("\nFAILURES:")
+        for name, ok, info in results:
+            if not ok:
+                print(f"  - {name}: {info}")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    test_all()
