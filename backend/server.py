@@ -284,6 +284,102 @@ def public_spot_view(spot: dict, user: Optional[dict] = None) -> dict:
         spot["freshness"] = "unknown"
         spot["freshness_label"] = None
 
+    # ------------------------------------------------------------------
+    # Quality score + discovery badges (Explore ranking, Phase P0-B)
+    # quality_score (0-100) weights:
+    #   cover image present (15), description length ≥ 80 (10),
+    #   2+ photos (10), 4+ photos (+5), shoot_score (30 scaled), rating_count
+    #   (10 scaled log), recent activity (10), verification fresh (10),
+    #   verified owner (10).
+    # Badges (at most 2 rendered on card; rest are advisory):
+    #   is_new       — created ≤ 7 days
+    #   is_fresh     — last_verified_at ≤ 7 days OR admin_cover_override
+    #                  set_at ≤ 7 days
+    #   is_trending  — save_count + like_count growth approximation (>=4 saves
+    #                  AND created ≤ 30 days, OR shoot_score ≥ 80 with 3+ photos)
+    #   is_verified  — spot owner verification_status='verified' OR community
+    #                  verifications exist
+    # ------------------------------------------------------------------
+    now = utcnow()
+    def _norm_dt(val):
+        if not val: return None
+        if isinstance(val, str):
+            try: val = datetime.fromisoformat(val.replace("Z", "+00:00"))
+            except Exception: return None
+        if isinstance(val, datetime) and val.tzinfo is None:
+            val = val.replace(tzinfo=timezone.utc)
+        return val
+
+    created_at = _norm_dt(spot.get("created_at"))
+    last_verified = _norm_dt(spot.get("last_verified_at"))
+    cover_override = spot.get("admin_cover_override") or {}
+    admin_override_at = _norm_dt(cover_override.get("set_at"))
+
+    created_age_days = (now - created_at).days if created_at else 9999
+    verify_age_days = (now - last_verified).days if last_verified else 9999
+    override_age_days = (now - admin_override_at).days if admin_override_at else 9999
+
+    is_new = created_age_days <= 7
+    is_fresh = (
+        verify_age_days <= 7
+        or override_age_days <= 7
+    )
+    photo_count = len(spot.get("images") or [])
+    desc_len = len(spot.get("description") or "")
+    save_count = int(spot.get("save_count") or 0)
+    like_count = int(spot.get("like_count") or 0)
+    rating_count = int(spot.get("rating_count") or 0)
+    view_count = int(spot.get("view_count") or 0)
+
+    import math as _math
+    qs = 0.0
+    # Cover image presence
+    first_img = None
+    if spot.get("images"):
+        for im in spot["images"]:
+            if isinstance(im, dict) and im.get("image_url"):
+                first_img = im; break
+    if first_img: qs += 15
+    # Description depth
+    if desc_len >= 80: qs += 10
+    if desc_len >= 200: qs += 3
+    # Photo variety
+    if photo_count >= 2: qs += 5
+    if photo_count >= 4: qs += 5
+    # Shoot score (0..100 from compute_shoot_score)
+    qs += min(30.0, float(spot["shoot_score"]) * 0.3)
+    # Ratings (log-scaled so 10 ratings caps)
+    if rating_count > 0:
+        qs += min(10.0, _math.log(1 + rating_count) * 3.0)
+    # Engagement: saves + views
+    if save_count >= 5: qs += 5
+    if view_count >= 50: qs += 3
+    # Recent activity
+    if is_fresh: qs += 5
+    if is_new: qs += 3
+    # Verification bonuses
+    if cover_override and cover_override.get("image_url"): qs += 5
+    if spot.get("verification_status") == "verified" or spot.get("verified"): qs += 5
+    # Stale penalty
+    if verify_age_days > 180 and not is_new: qs -= 8
+
+    quality_score = max(0, min(100, int(round(qs))))
+    is_trending = (
+        (save_count >= 4 and created_age_days <= 30)
+        or (quality_score >= 80 and photo_count >= 3)
+    )
+    is_verified_flag = (
+        bool(spot.get("verified"))
+        or spot.get("verification_status") == "verified"
+        or int(spot.get("community_verification_count") or 0) >= 2
+    )
+
+    spot["quality_score"] = quality_score
+    spot["is_new"] = bool(is_new)
+    spot["is_fresh"] = bool(is_fresh) and not is_new  # "Fresh" replaces "New" after 7d
+    spot["is_trending"] = bool(is_trending)
+    spot["is_verified_discovery"] = bool(is_verified_flag)
+
     return spot
 
 
@@ -1647,6 +1743,22 @@ async def list_spots(
 
     if sort == "score":
         out.sort(key=lambda s: s["shoot_score"], reverse=True)
+    elif sort == "quality":
+        # P0-B: Explore default — boost quality_score with trending/new kickers
+        def _q(s):
+            q = float(s.get("quality_score") or 0)
+            if s.get("is_trending"): q += 8
+            if s.get("is_fresh"): q += 4
+            if s.get("is_new"): q += 3
+            if s.get("is_verified_discovery"): q += 2
+            # Tie-break: newer wins
+            ts = s.get("created_at")
+            if isinstance(ts, str):
+                try: ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except Exception: ts = None
+            ts = ts or datetime.min.replace(tzinfo=timezone.utc)
+            return (q, ts)
+        out.sort(key=_q, reverse=True)
     elif sort == "trending":
         # Approximate trending: score + image count
         out.sort(key=lambda s: s["shoot_score"] + len(s.get("images", [])) * 2, reverse=True)

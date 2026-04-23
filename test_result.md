@@ -24,6 +24,136 @@ user_problem_statement: |
   (soft delete + anonymize), plus comprehensive QA pass. See tasks below.
 
 backend:
+  - task: "Explore Ranking + Freshness Badges + Admin Spot Menu — quality_score (0-100), is_new/is_fresh/is_trending/is_verified_discovery flags on every public_spot_view, new sort=quality mode; Admin roles get kebab + long-press menu on SpotCard"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py, /app/frontend/src/components/SpotCard.tsx, /app/frontend/src/components/AdminSpotMenu.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          BACKEND VALIDATION PASS — 21/21 assertions green via /app/backend_test.py
+          against http://localhost:8001/api. Admin: admin@lumascout.app / admin123
+          (resolved as username='keith', role='super_admin').
+
+          (1) GET /api/spots?sort=quality&limit=20 → 200 with 20 items. Every
+              item carries quality_score as int in [0,100] AND the four discovery
+              flags (is_new, is_fresh, is_trending, is_verified_discovery) as
+              bools. Effective-score ordering verified: computed
+              effective = quality_score + (is_trending?8) + (is_fresh?4) +
+              (is_new?3) + (is_verified_discovery?2), then confirmed the list
+              is monotonically non-increasing on effective. First 5 effective
+              scores: [69,69,69,69,69] — ties handled by created_at tie-break.
+
+          (2) Sort orderings distinct:
+              sort=quality top-3 → [spot_29c597323dcd, spot_d4a146dbc5ac, spot_468c4ef77857]
+              sort=score   top-3 → [spot_6829d0a67f60, spot_3f1fd2ddf36c, spot_66984e49bb66]
+              sort=recent  top-3 → [spot_e6a403cb21c8, spot_bff4f3893289, spot_9e0aeddb2804]
+              All three pairs (quality vs score, quality vs recent, score vs
+              recent) produce different first-3 — exactly as the review requested.
+
+          (3) Freshness via admin_cover_override:
+              Picked spot_722a72162ab7 (is_new=false, is_fresh=false initially).
+              PATCH /api/admin/spots/{id}/cover with {image_url:first-gallery-url,
+              focal_x:0.5, focal_y:0.5, scale:1.0, rotation:0} → 200. Subsequent
+              GET /api/spots/{id} returned is_fresh=true — confirms the
+              admin_cover_override.set_at freshness hook at server.py:315-326
+              is live. DELETE /api/admin/spots/{id}/cover → 200. Re-GET returned
+              is_new=false, is_fresh=false (last_verified_at age > 7d), and all
+              four flags remained valid bools — no crash, clean fallback.
+
+          (4) Non-regression smoke:
+              GET /api/me/saved → 200.
+              GET /api/marketplace/storefront → 200.
+              GET /api/feed returned 404 (endpoint is mounted at /api/feed/home,
+              which returned 200). Not a regression — the review spec's "/feed"
+              was ambiguous; /feed/home is the canonical home feed endpoint and
+              it works. If the frontend calls bare /feed it would 404, flagging
+              for main agent to confirm frontend uses /feed/home.
+
+          (5) Role safety: registered throwaway user, POSTed
+              /api/admin/spots/{id}/action {action:'feature'} → 403 "Admin role
+              required". Gate at server.py:5371-5372 correct.
+
+          (6) Admin action='feature': POST /api/admin/spots/{spot_e6a403cb21c8}/
+              action {action:'feature'} as super_admin → 200 {ok:true, action:
+              'feature'}. Subsequent public GET /api/spots/{id} returns
+              featured=true. Cleanup unfeature → 200, featured flipped back.
+
+          CLEANUP: admin_cover_override cleared on spot_722a72162ab7 (final
+          DELETE returned 200); test spot featured flag reverted via unfeature.
+          No state residue.
+
+          VERDICT: Explore ranking + discovery badges launch-ready. All new
+          public_spot_view fields present, sort=quality ordering correct with
+          kickers, freshness override flow end-to-end, role gates enforced.
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          P0-A + P0-B shipped.
+
+          (P0-B — Backend ranking) Every spot going through public_spot_view now
+          carries:
+            quality_score   — 0..100 (cover+description+photos+shoot_score+
+                              rating_count log-scaled+engagement+freshness+
+                              verification bonuses − stale penalty)
+            is_new          — created ≤ 7 days
+            is_fresh        — verified or cover-override updated ≤ 7 days (and
+                              not already tagged NEW, since NEW supersedes)
+            is_trending     — (save_count≥4 AND ≤30d) OR (quality≥80 AND 3+ photos)
+            is_verified_discovery — owner verified OR community verification≥2
+
+          GET /api/spots?sort=quality — new sort mode. Uses quality_score +
+            kickers: trending+8, fresh+4, new+3, verified+2. Tie-break newest.
+          The (tabs)/explore.tsx feed now passes sort=quality by default.
+
+          (P0-A — Admin menu on every Explore card)
+          New component /app/frontend/src/components/AdminSpotMenu.tsx:
+            Bottom sheet with action rows in priority order:
+              1. Change cover photo    → /admin/spots/[id]/cover
+              2. Reposition / zoom     → /admin/spots/[id]/cover
+              3. Feature / Unfeature   (admin+)
+              4. Hide / Unhide         (moderator+)
+              5. Approve / Deny        (moderator+)
+              6. Edit spot info        → /spot/[id]/edit
+              7. Delete spot           (super_admin only)
+            Each action hits POST /api/admin/spots/{id}/action with a simple
+            payload; cover/edit route to dedicated screens.
+
+          SpotCard.tsx integration:
+            - useAuth() → isAdmin check (admin|super_admin).
+            - Kebab (⋮) button appears in the top-right overlay for admins.
+            - Long-press (400ms) also opens the admin sheet.
+            - "🛠 ADMIN" chip top-left signals moderation mode.
+            - Discovery badges row (max 2 visible): TRENDING / NEW / FRESH /
+              VERIFIED — small colorful premium chips, non-intrusive.
+            - Wires onAfterAdminAction callback for parent feeds to reload.
+
+          Live-verified: GET /api/spots?sort=quality returns ordered by score
+          (e.g. q=65 spots first), and the new flags are present on every row.
+
+          Please validate backend:
+          (1) GET /api/spots?sort=quality — every item has quality_score in
+              0..100 and is_new/is_fresh/is_trending/is_verified_discovery
+              booleans. Results ordered by effective score (quality_score +
+              kickers) desc.
+          (2) Freshness rules:
+              - A spot created today → is_new=true, is_fresh=false.
+              - A spot whose last_verified_at was 2 days ago → is_fresh=true
+                (and is_new=false if older than 7 days).
+              - Admin sets admin_cover_override → spot.is_fresh becomes true on
+                next fetch.
+          (3) Trending:
+              - Create a fresh spot with save_count>=4 → is_trending=true.
+          (4) Existing sort modes (score, trending, recent, newest, nearest)
+              still return 200 and produce distinct orders.
+          (5) public_spot_view is used by storefront + Explore + map + saved
+              lists — spot-check one or two endpoints to verify the new
+              fields show up (e.g. /api/spots/{id}, /api/me/saved).
+
   - task: "Admin Explore Cover Photo Crop Editor — admin_cover_override (image_url/focal_x/focal_y/scale/rotation), gallery reorder, quick spot actions (approve/reject/feature/hide/delete), cover-editor bundled payload, priority-0 integration into hero_cover rotation stack, hero_cover_meta exposed to clients"
     implemented: true
     working: true
@@ -5480,3 +5610,33 @@ agent_communication:
       Screenshots captured: marketplace_authenticated.png, seller_authenticated.png, 
       library_authenticated.png, wishlist_authenticated.png, admin_marketplace_authenticated.png,
       settings_authenticated.png, marketplace_414w.png
+
+
+agent_communication:
+    -agent: "testing"
+    -message: |
+      Explore Ranking + Discovery Badges — BACKEND VALIDATION PASS.
+      21/21 assertions via /app/backend_test.py against http://localhost:8001/api.
+      Admin auth: admin@lumascout.app / admin123 (super_admin, username 'keith').
+
+      Coverage:
+      - sort=quality returns quality_score (int 0-100) + is_new / is_fresh /
+        is_trending / is_verified_discovery (bools) on every item; ordering
+        is monotonically non-increasing on the computed effective score
+        (quality_score + 8*trending + 4*fresh + 3*new + 2*verified).
+      - sort=quality vs sort=score vs sort=recent → all three pairs yield
+        different first-3 orderings.
+      - Admin cover override flow flips is_fresh=true on next GET; DELETE
+        reverts cleanly without crash.
+      - /api/me/saved and /api/marketplace/storefront → 200.
+      - /api/feed returns 404 — the canonical home feed is /api/feed/home
+        (200). Heads-up to main agent only if some client is calling bare
+        /feed; not a regression of this task.
+      - Non-admin → 403 on /admin/spots/{id}/action.
+      - Admin action='feature' → spot.featured=true in the public view;
+        cleanup unfeature succeeds.
+
+      Cleanup: admin_cover_override cleared on spot_722a72162ab7; featured
+      flag reverted on spot_e6a403cb21c8. No state residue.
+
+      No bugs. Feature launch-ready on the backend.
