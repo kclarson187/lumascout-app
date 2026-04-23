@@ -6958,13 +6958,127 @@ agent_communication:
       qa_u2_<stamp>@qatest.photoscout.app each run; no cleanup endpoint
       called, cumulative footprint ~1 KB / run).
 
+  - task: "Phase 4 route extraction — /app/backend/routes/users.py (9 endpoints + UpgradeIn): /users/{id} public profile, /users/{id}/report, /me/upgrade, /me/recent-locations, /me/drafts, /me/trends, /me/dashboard, /me/packs, /me/reviews-received + cross-domain restoration of ReportIn class in server.py for untouched POST /reports endpoint"
+    implemented: true
+    working: false
+    file: "/app/backend/routes/users.py, /app/backend/server.py (ReportIn restoration @ line 2542)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: false
+        -agent: "testing"
+        -comment: |
+          Phase 4 regression — routes/users.py extraction. 50/52 PASS, 2 FAIL.
+          Harness: /app/backend_test.py at
+          https://photo-finder-60.preview.emergentagent.com/api. Admin
+          admin@lumascout.app / admin123.
+
+          🔴 CRITICAL BUG — ReportIn class restoration in server.py is
+             INCOMPLETE. The restored class at server.py:2542-2544 only
+             defines:
+                 class ReportIn(BaseModel):
+                     target_type: str
+                     target_id: str
+             But the create_report endpoint at server.py:2548 uses
+             `body.reason` (line 2549) and `**body.dict()` (line 2566)
+             and REPORT_REASONS validation. The original class MUST have
+             had at least `reason: str` and likely `detail: Optional[str]`
+             to match the usage. Reproduction:
+                 POST /api/reports
+                   {"target_type":"spot","target_id":"spot_e5cd2d1204d4",
+                    "reason":"misinfo"}
+                 → 500 Internal Server Error
+             Backend err.log traceback:
+                 AttributeError: 'ReportIn' object has no attribute
+                 'reason'
+                 at server.py:2549 `if body.reason not in
+                 REPORT_REASONS:`
+             Because pydantic v2 drops undeclared fields, `reason` never
+             makes it onto the model instance. Every POST /reports call
+             (spot, user, or review targets) now 500s. Fix: add
+             `reason: str` (and any other fields the original had, likely
+             `detail: Optional[str] = None`) to the restored ReportIn
+             class. Check git history for server.py class ReportIn prior
+             to extraction, or cross-reference /api/admin/reports list
+             endpoint docs.
+
+          ✅ ALL OTHER 50 CHECKS GREEN — the extraction itself is clean:
+
+          (1) PUBLIC PROFILE (9/9):
+              · GET /users/{admin_uid} authed → 200 with name, plan, role,
+                stats{followers, following, spots/spots_count, spots_created,
+                posts_count, reviews_received}.
+              · GET /users/nonexistent → 404.
+              · GET /users/{admin_uid} unauthenticated → 200 (public,
+                matches original get_optional_user semantics).
+
+          (2) USER REPORT /users/{id}/report (3/3):
+              · POST {reason:"spam", notes:"..."} by U2 on admin → 200
+                {ok:true}. DMReportIn shape accepted.
+              · Self-report → 400 "Cannot report yourself".
+              · Unauth → 401.
+
+          (3) /me/* DASHBOARDS (12/12):
+              · /me/recent-locations → 200 with {count, items[]}.
+              · /me/drafts → 200 (list).
+              · /me/trends?days=7 → 200 with {days:7, series:[...],
+                totals:{spots, saves}}.
+              · /me/dashboard → 200 with total_spots, public_spots,
+                private_spots, saves_received, reviews_received,
+                followers, profile_views, top_spots.
+              · /me/packs → 200 (list).
+              · /me/reviews-received → 200 with {count, items[]}.
+
+          (4) /me/upgrade (4/4):
+              · POST {plan:"pro", cycle:"monthly"} → 200 (preview toggle
+                path, no Stripe call). NOT 500 ✓.
+              · POST {plan:"invalid_plan_xyz"} → 400 "Unknown plan".
+              · Unauth → 401.
+
+          (5) CROSS-DOMAIN /reports — FAILED (see CRITICAL BUG above).
+
+          (6) NON-REGRESSION SMOKE (14/14): /auth/me, /feed/home,
+              /spots?limit=5, /marketplace/storefront, /admin/overview,
+              /referrals, /referrals/rails, /dm/threads,
+              /me/notification-preferences, /notifications?limit=3,
+              /me/viewers?limit=3, /me/spots, /me/saved, /me/collections —
+              all 200.
+
+          (7) PERMISSION SANITY (7/7): /me/recent-locations, /me/drafts,
+              /me/trends, /me/dashboard, /me/packs, /me/reviews-received,
+              /me/upgrade — all unauth → 401.
+
+          No 500s observed on the 50 moved-endpoint paths. The single
+          500 is on POST /reports (NOT a moved endpoint — the create_report
+          function stayed in server.py). The bug is specifically in the
+          pre-flight "restore" step main agent did just before create_
+          report, and confirms the lesson noted in the review request:
+          models DEFINED in extracted file bodies must be checked against
+          ALL remaining server.py references, not just the extracted
+          endpoint references.
+
+          Test harness left throwaway user qa_users_reg_<hex>@lumascout.app
+          in DB (no DELETE /admin/users/{id} call — requires reason_code
+          body). Safe to ignore.
+
+          ACTION ITEM FOR MAIN AGENT (one-line fix):
+              Update server.py ReportIn (around line 2542) to:
+                  class ReportIn(BaseModel):
+                      target_type: str
+                      target_id: str
+                      reason: str
+                      detail: Optional[str] = None
+              Then restart backend and re-run only item (5) of the
+              harness to confirm POST /reports returns 200.
+
 metadata:
-  test_sequence: 8
+  test_sequence: 9
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Phase 3 route extraction — /app/backend/routes/spots.py (25 endpoints): spots CRUD, uploads, saves, trending fanout, reviews, checkins, collections, drafts, astronomy, shot-list, admin cover editor"
+    - "Phase 4 route extraction — /app/backend/routes/users.py (9 endpoints + UpgradeIn): /users/{id} public profile, /users/{id}/report, /me/upgrade, /me/recent-locations, /me/drafts, /me/trends, /me/dashboard, /me/packs, /me/reviews-received + cross-domain restoration of ReportIn class in server.py for untouched POST /reports endpoint"
   stuck_tasks: []
   test_all: false
   test_priority: "stuck_first"
