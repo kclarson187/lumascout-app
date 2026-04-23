@@ -2,6 +2,7 @@ import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
+import { router } from 'expo-router';
 import { api } from './api';
 
 /**
@@ -63,3 +64,34 @@ Notifications.setNotificationHandler({
     shouldShowList: true,
   }),
 });
+
+/**
+ * Wire up push-tap → deep link handling. Call once on app startup (root layout).
+ * When a user taps a push that carries `data.deep_link`, we route there.
+ */
+export function installPushDeepLinkHandler(): () => void {
+  const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+    try {
+      const data = response.notification.request.content.data as any;
+      const deep = data?.deep_link || data?.url;
+      if (typeof deep === 'string' && deep.startsWith('/')) {
+        // Route on next tick so navigation is mounted.
+        setTimeout(() => router.push(deep as any), 50);
+      }
+    } catch {}
+  });
+  // Also inspect the initial notification that may have cold-started the app.
+  (async () => {
+    try {
+      const last = await Notifications.getLastNotificationResponseAsync();
+      const data = last?.notification?.request?.content?.data as any;
+      const deep = data?.deep_link || data?.url;
+      if (typeof deep === 'string' && deep.startsWith('/')) {
+        setTimeout(() => router.push(deep as any), 400);
+      }
+    } catch {}
+  })();
+  return () => {
+    try { sub.remove(); } catch {}
+  };
+}
