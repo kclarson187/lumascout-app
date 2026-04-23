@@ -1469,10 +1469,15 @@ async def get_spot(spot_id: str, viewer: Optional[dict] = Depends(get_optional_u
     # --- Cover rotation priority stack ---
     chosen_cover: Optional[str] = None
     rotation_source: Optional[str] = None
+    cover_override = spot.get("admin_cover_override") or None
+    # 0. Admin-pinned cover (highest priority — bypasses all community logic)
+    if cover_override and cover_override.get("image_url"):
+        chosen_cover = cover_override["image_url"]; rotation_source = "admin_override"
     # 1. Admin-featured community upload
-    for u in community_uploads:
-        if u.get("featured") and u.get("image_url"):
-            chosen_cover = u["image_url"]; rotation_source = "admin_featured"; break
+    if not chosen_cover:
+        for u in community_uploads:
+            if u.get("featured") and u.get("image_url"):
+                chosen_cover = u["image_url"]; rotation_source = "admin_featured"; break
     # 2. Highest-reacted recent upload (within 90 days)
     if not chosen_cover:
         recent = [u for u in community_uploads if u.get("created_at") and (u["created_at"] if isinstance(u["created_at"], datetime) else datetime.fromisoformat(str(u["created_at"]).replace("Z", "+00:00"))) >= recent_cutoff.replace(tzinfo=None) if u.get("image_url")]
@@ -1506,6 +1511,12 @@ async def get_spot(spot_id: str, viewer: Optional[dict] = Depends(get_optional_u
             chosen_cover = imgs[0].get("image_url"); rotation_source = "first_image"
     view["hero_cover_image_url"] = chosen_cover
     view["hero_cover_source"] = rotation_source
+    view["hero_cover_meta"] = {
+        "focal_x": (cover_override or {}).get("focal_x", 0.5),
+        "focal_y": (cover_override or {}).get("focal_y", 0.5),
+        "scale":   (cover_override or {}).get("scale",   1.0),
+        "rotation": (cover_override or {}).get("rotation", 0),
+    } if cover_override else {"focal_x": 0.5, "focal_y": 0.5, "scale": 1.0, "rotation": 0}
 
     # --- Seasonal timeline ---
     seasonal_timeline: Dict[str, list] = {"spring": [], "summer": [], "fall": [], "winter": []}
@@ -5032,6 +5043,249 @@ async def admin_reject(spot_id: str, user: dict = Depends(require_role("moderato
         after={"visibility_status": "rejected"},
     )
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Admin Explore Cover-Photo Editor
+# Lets admins pick + crop the hero cover image used across Explore feed,
+# spot detail pages, and map markers. Uses the hero_cover_image_url
+# priority stack (see build_spot_detail_response) — admin_override wins.
+# ---------------------------------------------------------------------------
+class AdminSpotCoverIn(BaseModel):
+    image_url: str
+    focal_x: float = 0.5     # 0..1 horizontal focal point
+    focal_y: float = 0.5     # 0..1 vertical focal point
+    scale: float = 1.0       # 1.0 = fit; >1 zooms in
+    rotation: int = 0        # degrees, 0 | 90 | 180 | 270
+    caption: Optional[str] = None
+
+
+@api.patch("/admin/spots/{spot_id}/cover")
+async def admin_set_spot_cover(
+    spot_id: str, body: AdminSpotCoverIn,
+    user: dict = Depends(require_role("admin")),
+):
+    """Set an admin cover override on a spot. This takes priority 0 over the
+    community-driven rotation stack (see build_spot_detail_response) and
+    persists focal point + scale + rotation so the crop survives rehydration.
+
+    The image_url must already exist on the spot or in its community uploads —
+    we reject arbitrary URLs so admins can't inject off-platform media.
+    """
+    spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0})
+    if not spot:
+        raise HTTPException(status_code=404, detail="Spot not found")
+
+    # Validate image_url exists on spot.images[] or in community uploads
+    allowed_urls: set[str] = set()
+    for im in (spot.get("images") or []):
+        if isinstance(im, dict) and im.get("image_url"):
+            allowed_urls.add(im["image_url"])
+    uploads = await db.spot_community_uploads.find(
+        {"spot_id": spot_id, "moderation_status": "approved"},
+        {"_id": 0, "image_url": 1},
+    ).to_list(500)
+    for u in uploads:
+        if u.get("image_url"): allowed_urls.add(u["image_url"])
+    if body.image_url not in allowed_urls:
+        raise HTTPException(status_code=400, detail="image_url not part of this spot's gallery")
+
+    fx = max(0.0, min(1.0, float(body.focal_x)))
+    fy = max(0.0, min(1.0, float(body.focal_y)))
+    scale = max(1.0, min(3.5, float(body.scale)))
+    rot = int(body.rotation) % 360
+    if rot not in (0, 90, 180, 270): rot = 0
+
+    override = {
+        "image_url": body.image_url,
+        "focal_x": fx, "focal_y": fy,
+        "scale": scale, "rotation": rot,
+        "caption": (body.caption or "")[:200] or None,
+        "set_by_user_id": user["user_id"],
+        "set_at": utcnow(),
+    }
+    await db.spots.update_one(
+        {"spot_id": spot_id},
+        {"$set": {"admin_cover_override": override, "updated_at": utcnow()}},
+    )
+    await audit_log(
+        user, "spot.cover.override", "spot", spot_id,
+        before={"admin_cover_override": spot.get("admin_cover_override")},
+        after=override,
+    )
+    return {"ok": True, "admin_cover_override": override}
+
+
+@api.delete("/admin/spots/{spot_id}/cover")
+async def admin_clear_spot_cover(
+    spot_id: str, user: dict = Depends(require_role("admin")),
+):
+    """Remove the admin cover override — reverts to the community rotation."""
+    spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "admin_cover_override": 1})
+    if not spot:
+        raise HTTPException(status_code=404, detail="Spot not found")
+    await db.spots.update_one(
+        {"spot_id": spot_id},
+        {"$unset": {"admin_cover_override": ""}, "$set": {"updated_at": utcnow()}},
+    )
+    await audit_log(
+        user, "spot.cover.clear", "spot", spot_id,
+        before={"admin_cover_override": spot.get("admin_cover_override")},
+        after=None,
+    )
+    return {"ok": True}
+
+
+class AdminSpotGalleryReorderIn(BaseModel):
+    image_urls: list[str]    # full ordered list of URLs; first becomes the cover fallback
+
+
+@api.patch("/admin/spots/{spot_id}/gallery")
+async def admin_reorder_spot_gallery(
+    spot_id: str, body: AdminSpotGalleryReorderIn,
+    user: dict = Depends(require_role("admin")),
+):
+    """Reorder the spot.images[] array. First item becomes is_cover=True
+    (fallback cover when no admin_cover_override). Unknown URLs are ignored."""
+    spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "images": 1})
+    if not spot:
+        raise HTTPException(status_code=404, detail="Spot not found")
+    images = spot.get("images") or []
+    by_url = {}
+    for im in images:
+        if isinstance(im, dict) and im.get("image_url"):
+            by_url[im["image_url"]] = im
+    ordered = []
+    for u in body.image_urls:
+        if u in by_url:
+            im = dict(by_url[u])
+            im["is_cover"] = (len(ordered) == 0)
+            ordered.append(im)
+    # Preserve any images not in the requested order at the end
+    for u, im in by_url.items():
+        if u not in body.image_urls:
+            im2 = dict(im); im2["is_cover"] = False
+            ordered.append(im2)
+    await db.spots.update_one(
+        {"spot_id": spot_id},
+        {"$set": {"images": ordered, "updated_at": utcnow()}},
+    )
+    await audit_log(user, "spot.gallery.reorder", "spot", spot_id,
+                    before={"count": len(images)}, after={"count": len(ordered)})
+    return {"ok": True, "count": len(ordered)}
+
+
+@api.get("/admin/spots/{spot_id}/cover-editor")
+async def admin_spot_cover_editor(
+    spot_id: str, user: dict = Depends(require_role("admin")),
+):
+    """Bundled payload for the cover-editor UI: spot meta, all available
+    cover-candidate image URLs, current override, and admin quick actions."""
+    spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0})
+    if not spot:
+        raise HTTPException(status_code=404, detail="Spot not found")
+
+    images: list[dict] = []
+    for im in (spot.get("images") or []):
+        if isinstance(im, dict) and im.get("image_url"):
+            images.append({
+                "image_url": im["image_url"],
+                "caption": im.get("caption"),
+                "is_cover": im.get("is_cover", False),
+                "source": "spot",
+            })
+    uploads = await db.spot_community_uploads.find(
+        {"spot_id": spot_id, "moderation_status": "approved"},
+        {"_id": 0, "upload_id": 1, "image_url": 1, "caption": 1,
+         "user_id": 1, "featured": 1, "like_count": 1, "created_at": 1},
+    ).sort("created_at", -1).limit(60).to_list(60)
+    contrib_ids = list({u["user_id"] for u in uploads if u.get("user_id")})
+    contribs = {}
+    if contrib_ids:
+        async for u in db.users.find(
+            {"user_id": {"$in": contrib_ids}},
+            {"_id": 0, "user_id": 1, "name": 1, "avatar_url": 1},
+        ):
+            contribs[u["user_id"]] = u
+    for u in uploads:
+        images.append({
+            "image_url": u["image_url"],
+            "caption": u.get("caption"),
+            "is_cover": False,
+            "source": "community",
+            "featured": u.get("featured", False),
+            "like_count": u.get("like_count", 0),
+            "upload_id": u.get("upload_id"),
+            "contributor": contribs.get(u.get("user_id")),
+        })
+
+    return {
+        "spot": {
+            "spot_id": spot["spot_id"],
+            "title": spot.get("title"),
+            "city": spot.get("city"),
+            "state": spot.get("state"),
+            "country_code": spot.get("country_code"),
+            "visibility_status": spot.get("visibility_status"),
+            "featured": spot.get("featured", False),
+            "hidden_from_explore": spot.get("hidden_from_explore", False),
+        },
+        "images": images,
+        "admin_cover_override": spot.get("admin_cover_override"),
+    }
+
+
+class AdminSpotActionIn(BaseModel):
+    action: str   # feature | unfeature | hide | unhide | approve | reject | delete
+    reason: Optional[str] = None
+
+
+@api.post("/admin/spots/{spot_id}/action")
+async def admin_spot_action(
+    spot_id: str, body: AdminSpotActionIn,
+    user: dict = Depends(get_current_user),
+):
+    """Composite admin actions for the cover editor toolbar.
+    - moderator+ can approve, reject, hide, unhide
+    - admin+ can feature, unfeature
+    - super_admin can delete
+    """
+    role = user.get("role") or "user"
+    action = body.action
+    mod_roles = {"moderator", "admin", "super_admin"}
+    admin_roles = {"admin", "super_admin"}
+    if action in ("approve", "reject", "hide", "unhide") and role not in mod_roles:
+        raise HTTPException(status_code=403, detail="Moderator role required")
+    if action in ("feature", "unfeature") and role not in admin_roles:
+        raise HTTPException(status_code=403, detail="Admin role required")
+    if action == "delete" and role != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin only")
+
+    spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0})
+    if not spot:
+        raise HTTPException(status_code=404, detail="Spot not found")
+    before_snap = {k: spot.get(k) for k in ("visibility_status", "featured", "hidden_from_explore")}
+
+    if action == "approve":
+        await db.spots.update_one({"spot_id": spot_id}, {"$set": {"visibility_status": "approved", "moderated_by": user["user_id"], "moderated_at": utcnow()}})
+    elif action == "reject":
+        await db.spots.update_one({"spot_id": spot_id}, {"$set": {"visibility_status": "rejected", "moderated_by": user["user_id"], "moderated_at": utcnow()}})
+    elif action == "feature":
+        await db.spots.update_one({"spot_id": spot_id}, {"$set": {"featured": True, "updated_at": utcnow()}})
+    elif action == "unfeature":
+        await db.spots.update_one({"spot_id": spot_id}, {"$set": {"featured": False, "updated_at": utcnow()}})
+    elif action == "hide":
+        await db.spots.update_one({"spot_id": spot_id}, {"$set": {"hidden_from_explore": True, "updated_at": utcnow()}})
+    elif action == "unhide":
+        await db.spots.update_one({"spot_id": spot_id}, {"$set": {"hidden_from_explore": False, "updated_at": utcnow()}})
+    elif action == "delete":
+        await db.spots.update_one({"spot_id": spot_id}, {"$set": {"deleted_at": utcnow(), "visibility_status": "deleted"}})
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown action {action}")
+
+    await audit_log(user, f"spot.{action}", "spot", spot_id, before=before_snap, after={"action": action, "reason": body.reason})
+    return {"ok": True, "action": action}
+
 
 
 @api.get("/admin/reports")

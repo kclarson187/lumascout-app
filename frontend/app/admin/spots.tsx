@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, RefreshControl } from 'react-native';
-import { Check, X, ShieldCheck, Clock } from 'lucide-react-native';
+import { router } from 'expo-router';
+import { Check, X, ShieldCheck, Clock, Crop } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
 import SpotCard from '../../src/components/SpotCard';
@@ -89,7 +90,7 @@ export default function AdminSpots() {
               <Text style={styles.timeTxt}>Submitted {timeAgo(s.created_at)}</Text>
             </View>
           )}
-          <View style={{ flexDirection: 'row', gap: 8 }}>
+          <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
             <TouchableOpacity style={[styles.actBtn, { backgroundColor: colors.success }]} onPress={() => decide(s.spot_id, true)} testID={`admin-approve-${s.spot_id}`}>
               <Check size={16} color={colors.textInverse} />
               <Text style={styles.actTxt}>Approve</Text>
@@ -97,6 +98,14 @@ export default function AdminSpots() {
             <TouchableOpacity style={[styles.actBtn, { backgroundColor: colors.secondary }]} onPress={() => decide(s.spot_id, false)} testID={`admin-reject-${s.spot_id}`}>
               <X size={16} color="#fff" />
               <Text style={[styles.actTxt, { color: '#fff' }]}>Reject</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actBtn, { backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.primary }]}
+              onPress={() => router.push(`/admin/spots/${s.spot_id}/cover` as any)}
+              testID={`admin-cover-${s.spot_id}`}
+            >
+              <Crop size={16} color={colors.primary} />
+              <Text style={[styles.actTxt, { color: colors.primary }]}>Edit cover</Text>
             </TouchableOpacity>
           </View>
         </View>
