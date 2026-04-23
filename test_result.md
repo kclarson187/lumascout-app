@@ -969,7 +969,31 @@ backend:
         -comment: "RETEST after main agent tightened seed guard and added 2 more non-US spots (Montréal, Monterrey). GET /api/spots?limit=300 now returns 41 items with {US:31, CA:5, MX:5, missing:0}. CA+MX = 10 (>= 6 required). No legacy spots missing country_code. Both Phase A NA seed checks PASS."
 
 frontend:
-  - task: "Pack Marketplace MVP — Storefront / Product Detail / Mock Checkout / Seller Dashboard / My Purchases / Wishlist / Admin Moderation"
+  - task: "Pack Marketplace UI Polish — pill chips (fixed 40px height, 20px radius, no swollen selected state), results row, product card placeholder gradients, deleted-user fallback"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/marketplace/search.tsx, /app/frontend/app/marketplace/index.tsx, /app/frontend/src/components/ProductCard.tsx, /app/backend/server.py (_hydrate_seller)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          PILL POLISH VERIFIED. All category pills now render at identical
+          40px fixed height with 20px borderRadius — no oval / swollen
+          selected state. Shortened labels applied (Presets / Spot Packs
+          / Guides / Routes / LUTs / Templates / Mentorship). Results row
+          cleanly aligned ("1 Result" left, "Sort: Trending ↓" right).
+          ProductCard fallback now uses per-type gradient placeholder
+          (amber icon + type label) instead of flat gray. Seller name
+          falls back to "Marketplace Creator" with amber-initials avatar
+          when the user was soft-deleted — no more "Deleted user" on
+          storefront. Stripe Connect UI sub-flows verified: Seller
+          Dashboard (disconnected card + "Connect Stripe" CTA),
+          purchase-success polling page, admin marketplace-purchases
+          (3-tab refund center), REFUNDS link in admin header.
+
     implemented: true
     working: true
     file: "/app/frontend/app/marketplace/*, /app/frontend/app/me/*, /app/frontend/app/admin/marketplace.tsx"
