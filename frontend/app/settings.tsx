@@ -16,7 +16,7 @@ import {
   PackageOpen, Store, Briefcase, Users, Eye, MessageSquareText,
   GraduationCap, MapPin, Camera, Compass, HelpCircle, LifeBuoy,
   Flag, UserX, Lightbulb, Shield, FileText, Gavel, ScrollText,
-  RotateCcw, Trash2, Info, Sparkles, Star, Instagram, Settings as Cog,
+  RotateCcw, Trash2, Info, Sparkles, Star, AtSign, Settings as Cog,
   ArrowUpRight, Lock, ShieldCheck, ChevronsRight, Zap,
 } from 'lucide-react-native';
 import { useAuth } from '../src/auth';
@@ -281,7 +281,7 @@ export default function SettingsHub() {
       onPress: () => openUrl(STORE_URL!),
     },
     {
-      key: 'instagram', icon: Instagram,
+      key: 'instagram', icon: AtSign,
       title: 'Follow on Instagram',
       subtitle: '@lumascout',
       onPress: () => openUrl(INSTAGRAM_URL),
