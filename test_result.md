@@ -16,7 +16,7 @@
 backend:
   - task: "Push Notification Growth System — 8 core triggers + transactional cap bypass + quiet hours + daily cap + 10-min dedupe + deep-link routing + @mention parsing"
     implemented: true
-    working: false
+    working: true
     file: "/app/backend/server.py (send_growth_push, NOTIFICATION_CATEGORIES, BYPASS_CAP_KINDS, /api/me/notification-preferences, /api/me/notifications/test-push, profile_view emission @ toggle_save, trending_spot fanout @ 4 saves, referral_nearby fanout @ /referrals POST, comment_reply + comment_mention @ /posts/{id}/comments)"
     stuck_count: 0
     priority: "highest"
