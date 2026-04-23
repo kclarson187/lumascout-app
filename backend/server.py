@@ -507,14 +507,6 @@ class CheckinIn(BaseModel):
     checkin_image_url: Optional[str] = None
 
 
-
-
-
-
-    reason: str
-    details: Optional[str] = ""
-
-
 REPORT_REASONS = {
     "not_a_location",   # not a real place
     "unsafe",           # unsafe / private property
@@ -2542,6 +2534,8 @@ async def geocode_reverse(lat: float, lng: float):
 class ReportIn(BaseModel):
     target_type: str  # spot, user, review
     target_id: str
+    reason: str
+    details: Optional[str] = ""
 
 
 @api.post("/reports")
