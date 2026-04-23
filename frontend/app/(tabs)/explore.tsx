@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { useFocusEffect } from 'expo-router';
 import {
   View, Text, StyleSheet, TouchableOpacity, Platform,
   FlatList, ActivityIndicator, ScrollView, Modal, Switch,
@@ -67,6 +68,10 @@ export default function Explore() {
   }, [filters]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Refresh when the Explore tab regains focus (e.g., after returning from
+  // the Admin Cover Editor or Admin Spot Menu actions).
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
   // Request location on mount so the map opens tight and local, not a continent-wide view.
   useEffect(() => {

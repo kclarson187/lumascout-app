@@ -40,7 +40,16 @@ export default function SpotCard({
   const isAdmin = !!user && (user.role === 'admin' || user.role === 'super_admin');
   const [adminMenuOpen, setAdminMenuOpen] = useState(false);
 
-  const cover = (spot.images && (spot.images.find((i: any) => i.is_cover) || spot.images[0]))?.image_url || spot.hero_cover_image_url;
+  // Cover priority:
+  //   1. hero_cover_image_url (when admin_override OR rotation stack decided it)
+  //   2. spot.images[].is_cover=true
+  //   3. spot.images[0]
+  //
+  // PRIORITY FIX: hero_cover_image_url must win when present — otherwise
+  // an admin-pinned cover never shows on Explore because images[0] beats it.
+  const cover =
+    spot.hero_cover_image_url
+    || (spot.images && (spot.images.find((i: any) => i.is_cover) || spot.images[0]))?.image_url;
   const isPremium = spot.privacy_mode === 'premium';
   const isHydrated = !!(cover && spot?.title);
 

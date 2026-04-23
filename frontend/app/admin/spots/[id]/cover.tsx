@@ -357,19 +357,31 @@ export default function CoverEditor() {
 
           {/* Gallery selector */}
           <View style={styles.sectionRow}>
-            <Text style={styles.sectionLabel}>Gallery ({data.images.length})</Text>
+            <Text style={styles.sectionLabel}>All photos ({data.images.length})</Text>
             <Text style={styles.sectionHint}>Tap to use · hold to promote to cover</Text>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.galleryRow}>
             {data.images.map((img) => {
               const active = img.image_url === selectedUrl;
+              const isCurrentCover = !!data.admin_cover_override?.image_url
+                ? img.image_url === data.admin_cover_override.image_url
+                : img.is_cover;
               return (
                 <TouchableOpacity
                   key={img.upload_id || img.image_url}
                   onPress={() => {
                     setSelectedUrl(img.image_url);
-                    focalX.value = withSpring(0.5); focalY.value = withSpring(0.5);
-                    scale.value = withSpring(1.0); rotation.value = 0;
+                    // If the tapped image matches the saved override, restore its crop
+                    const ov = data.admin_cover_override;
+                    if (ov && ov.image_url === img.image_url) {
+                      focalX.value = ov.focal_x ?? 0.5;
+                      focalY.value = ov.focal_y ?? 0.5;
+                      scale.value = ov.scale ?? 1.0;
+                      rotation.value = ov.rotation ?? 0;
+                    } else {
+                      focalX.value = withSpring(0.5); focalY.value = withSpring(0.5);
+                      scale.value = withSpring(1.0); rotation.value = 0;
+                    }
                   }}
                   onLongPress={() => {
                     if (img.source === 'spot') promoteToCover(img.image_url);
@@ -384,13 +396,13 @@ export default function CoverEditor() {
                       <Text style={styles.sourceChipTxt}>UGC</Text>
                     </View>
                   )}
-                  {img.is_cover && (
-                    <View style={[styles.sourceChip, { backgroundColor: colors.primary, left: 4, right: undefined }]}>
+                  {isCurrentCover && (
+                    <View style={[styles.sourceChip, { backgroundColor: colors.primary, left: 4, right: undefined, top: 4 }]}>
                       <Text style={[styles.sourceChipTxt, { color: colors.textInverse }]}>COVER</Text>
                     </View>
                   )}
-                  {img.featured && (
-                    <View style={[styles.sourceChip, { backgroundColor: colors.success, left: 4, right: undefined, top: 22 }]}>
+                  {img.featured && !isCurrentCover && (
+                    <View style={[styles.sourceChip, { backgroundColor: colors.success, left: 4, right: undefined, top: 4 }]}>
                       <Text style={[styles.sourceChipTxt, { color: colors.textInverse }]}>FEATURED</Text>
                     </View>
                   )}
@@ -403,6 +415,12 @@ export default function CoverEditor() {
               );
             })}
           </ScrollView>
+          <View style={{ paddingHorizontal: space.lg, paddingTop: 10 }}>
+            <Text style={styles.tipTxt}>
+              💡 Tip: tap any photo above to preview it as cover. Drag / pinch to reposition.
+              Hit <Text style={{ color: colors.primary, fontFamily: font.bodyBold }}>Save</Text> to publish the new cover across Explore, Spot detail, and map thumbnails.
+            </Text>
+          </View>
         </ScrollView>
       </SafeAreaView>
     </GestureHandlerRootView>
@@ -587,5 +605,9 @@ const styles = StyleSheet.create({
     width: 22, height: 22, borderRadius: 11,
     backgroundColor: colors.primary,
     alignItems: 'center', justifyContent: 'center',
+  },
+  tipTxt: {
+    color: colors.textSecondary, fontFamily: font.body, fontSize: 12,
+    lineHeight: 17, marginTop: 4,
   },
 });

@@ -254,6 +254,32 @@ def public_spot_view(spot: dict, user: Optional[dict] = None) -> dict:
         spot["latitude"] = None
         spot["longitude"] = None
 
+    # --- Hero cover passthrough for Explore / map / list cards ---
+    # If an admin has pinned a cover, surface it here so every list/feed
+    # endpoint (not just /spots/{id}) picks it up. Fallback: first is_cover
+    # image, else images[0].
+    ov = spot.get("admin_cover_override") or {}
+    hero_cover = None
+    hero_src = None
+    if ov.get("image_url"):
+        hero_cover = ov["image_url"]; hero_src = "admin_override"
+    else:
+        for im in (spot.get("images") or []):
+            if isinstance(im, dict) and im.get("is_cover") and im.get("image_url"):
+                hero_cover = im["image_url"]; hero_src = "first_cover"; break
+        if not hero_cover:
+            imgs = spot.get("images") or []
+            if imgs and isinstance(imgs[0], dict):
+                hero_cover = imgs[0].get("image_url"); hero_src = "first_image"
+    spot["hero_cover_image_url"] = hero_cover
+    spot["hero_cover_source"] = hero_src
+    spot["hero_cover_meta"] = {
+        "focal_x": ov.get("focal_x", 0.5),
+        "focal_y": ov.get("focal_y", 0.5),
+        "scale":   ov.get("scale",   1.0),
+        "rotation": ov.get("rotation", 0),
+    } if ov else {"focal_x": 0.5, "focal_y": 0.5, "scale": 1.0, "rotation": 0}
+
     spot["shoot_score"] = compute_shoot_score(spot)
 
     # Freshness indicator based on last_verified_at
