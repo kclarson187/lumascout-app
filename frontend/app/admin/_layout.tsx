@@ -3,7 +3,7 @@ import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-nati
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Slot, router, usePathname } from 'expo-router';
 import {
-  LayoutDashboard, Users, Map, Flag, Activity, FileText, Settings, ChevronLeft, ShieldCheck, MessageSquare,
+  LayoutDashboard, Users, Map, Flag, Activity, FileText, Settings, ChevronLeft, ShieldCheck, MessageSquare, ShoppingBag,
 } from 'lucide-react-native';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
@@ -16,6 +16,7 @@ const TABS = [
   { key: 'spots',     label: 'Spots',      icon: Map,             path: '/admin/spots' },
   { key: 'posts',     label: 'Posts',      icon: MessageSquare,   path: '/admin/posts' },
   { key: 'reports',   label: 'Reports',    icon: Flag,            path: '/admin/reports' },
+  { key: 'marketplace', label: 'Marketplace', icon: ShoppingBag,  path: '/admin/marketplace' },
   { key: 'analytics', label: 'Analytics',  icon: Activity,        path: '/admin/analytics' },
   { key: 'audit',     label: 'Audit',      icon: FileText,        path: '/admin/audit', minRole: 'admin' },
   { key: 'settings',  label: 'Settings',   icon: Settings,        path: '/admin/settings', minRole: 'super_admin' },

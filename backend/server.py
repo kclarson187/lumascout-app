@@ -8435,18 +8435,122 @@ async def delete_product(product_id: str, user: dict = Depends(get_current_user)
 
 @api.post("/marketplace/products/{product_id}/checkout")
 async def product_checkout(product_id: str, request: Request, user: dict = Depends(get_current_user)):
-    """Stripe checkout (mode=payment, one-time) for a marketplace product.
-    Platform fee % recorded at session-create time; Stripe Connect split-payout
-    to be wired in a follow-up when sellers finish onboarding."""
-    if not _stripe_ready():
-        raise HTTPException(status_code=503, detail="Billing not configured")
+    """Checkout for a marketplace product (MVP: mocked payment).
+
+    For the launch MVP, we always run checkout through a MOCK flow because
+    real seller payouts require Stripe Connect onboarding (seller accepts
+    terms, bank detail collection, KYC) which is a follow-up phase.
+
+    The purchase is recorded with status='pending' and the client should
+    call POST /marketplace/purchases/{id}/complete to finalize — which
+    flips status to 'completed', increments sales_count, unlocks
+    contents_url, and notifies the seller.
+
+    Architecture is Stripe-ready: schema includes platform_fee_cents,
+    seller_payout_cents, mocked flag, and stripe_session_id slot. When
+    Connect is wired in a follow-up, only the body of this function +
+    the webhook handler change.
+    """
     p = await db.marketplace_products.find_one({"product_id": product_id})
     if not p: raise HTTPException(status_code=404, detail="Product not found")
     if p["status"] != "active":
         raise HTTPException(status_code=400, detail="Product is not available")
     if p["seller_user_id"] == user["user_id"]:
         raise HTTPException(status_code=400, detail="You can't buy your own product")
+    # Duplicate-purchase guard: if the buyer already owns this product, short-circuit.
+    existing_owned = await db.marketplace_purchases.find_one({
+        "buyer_user_id": user["user_id"],
+        "product_id": product_id,
+        "status": "completed",
+    })
+    if existing_owned:
+        return {
+            "already_owned": True,
+            "purchase_id": existing_owned["purchase_id"],
+            "url": None, "mocked": True,
+        }
+    # Free products skip checkout — auto-complete immediately.
+    free = (p["price_cents"] or 0) == 0
+    fee_cents = int(p["price_cents"] * PLATFORM_FEE_PCT / 100)
+    payout_cents = p["price_cents"] - fee_cents
+    purchase_id = f"mp_{uuid.uuid4().hex[:12]}"
 
+    now = utcnow()
+    await db.marketplace_purchases.insert_one({
+        "purchase_id": purchase_id,
+        "product_id": product_id,
+        "buyer_user_id": user["user_id"],
+        "seller_user_id": p["seller_user_id"],
+        "price_cents": p["price_cents"],
+        "platform_fee_cents": fee_cents,
+        "seller_payout_cents": payout_cents,
+        "stripe_session_id": None,
+        "status": "completed" if free else "pending",
+        "mocked": True,
+        "created_at": now,
+        "completed_at": now if free else None,
+    })
+    if free:
+        await db.marketplace_products.update_one(
+            {"product_id": product_id}, {"$inc": {"sales_count": 1}},
+        )
+    return {
+        "mocked": True,
+        "url": None,
+        "purchase_id": purchase_id,
+        "price_cents": p["price_cents"],
+        "platform_fee_cents": fee_cents,
+        "seller_payout_cents": payout_cents,
+        "auto_completed": free,
+    }
+    p = await db.marketplace_products.find_one({"product_id": product_id})
+    if not p: raise HTTPException(status_code=404, detail="Product not found")
+    if p["status"] != "active":
+        raise HTTPException(status_code=400, detail="Product is not available")
+    if p["seller_user_id"] == user["user_id"]:
+        raise HTTPException(status_code=400, detail="You can't buy your own product")
+    # Duplicate-purchase guard: if the buyer already owns this product, short-circuit.
+    existing_owned = await db.marketplace_purchases.find_one({
+        "buyer_user_id": user["user_id"],
+        "product_id": product_id,
+        "status": "completed",
+    })
+    if existing_owned:
+        return {
+            "already_owned": True,
+            "purchase_id": existing_owned["purchase_id"],
+            "url": None, "mocked": False,
+        }
+
+    fee_cents = int(p["price_cents"] * PLATFORM_FEE_PCT / 100)
+    payout_cents = p["price_cents"] - fee_cents
+    purchase_id = f"mp_{uuid.uuid4().hex[:12]}"
+
+    # MOCK path — no Stripe key configured
+    if not _stripe_ready():
+        await db.marketplace_purchases.insert_one({
+            "purchase_id": purchase_id,
+            "product_id": product_id,
+            "buyer_user_id": user["user_id"],
+            "seller_user_id": p["seller_user_id"],
+            "price_cents": p["price_cents"],
+            "platform_fee_cents": fee_cents,
+            "seller_payout_cents": payout_cents,
+            "stripe_session_id": None,
+            "status": "pending",
+            "mocked": True,
+            "created_at": utcnow(),
+        })
+        return {
+            "mocked": True,
+            "url": None,
+            "purchase_id": purchase_id,
+            "price_cents": p["price_cents"],
+            "platform_fee_cents": fee_cents,
+            "seller_payout_cents": payout_cents,
+        }
+
+    # Real Stripe path
     origin = str(request.base_url).rstrip("/")
     fwd_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
     if fwd_host and "localhost" not in fwd_host:
@@ -8454,8 +8558,6 @@ async def product_checkout(product_id: str, request: Request, user: dict = Depen
     success_url = f"{origin}/marketplace/{product_id}?status=success&session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{origin}/marketplace/{product_id}?status=cancelled"
 
-    fee_cents = int(p["price_cents"] * PLAN_PRICING_CENTS_BUFFER if False else (p["price_cents"] * PLATFORM_FEE_PCT / 100))
-    payout_cents = p["price_cents"] - fee_cents
     customer_id = await _ensure_stripe_customer(user)
     try:
         session = _stripe.checkout.Session.create(
@@ -8481,13 +8583,14 @@ async def product_checkout(product_id: str, request: Request, user: dict = Depen
                 "seller_user_id": p["seller_user_id"],
                 "platform_fee_cents": str(fee_cents),
                 "seller_payout_cents": str(payout_cents),
+                "purchase_id": purchase_id,
             },
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Stripe error: {e}")
 
     await db.marketplace_purchases.insert_one({
-        "purchase_id": f"mp_{uuid.uuid4().hex[:12]}",
+        "purchase_id": purchase_id,
         "product_id": product_id,
         "buyer_user_id": user["user_id"],
         "seller_user_id": p["seller_user_id"],
@@ -8496,9 +8599,10 @@ async def product_checkout(product_id: str, request: Request, user: dict = Depen
         "seller_payout_cents": payout_cents,
         "stripe_session_id": session.id,
         "status": "pending",
+        "mocked": False,
         "created_at": utcnow(),
     })
-    return {"url": session.url, "session_id": session.id}
+    return {"url": session.url, "session_id": session.id, "purchase_id": purchase_id, "mocked": False}
 
 
 # Simulate completion in non-production environments (e.g. emergent previews
@@ -8810,6 +8914,8 @@ async def on_startup():
     await backfill_freshness()
     await backfill_country_fields()
     await seed_na_content()
+    # Marketplace demo products (idempotent).
+    await seed_marketplace_demo()
     # Stripe products/prices (idempotent).
     await bootstrap_stripe_products()
 
@@ -9698,6 +9804,178 @@ async def backfill_country_fields():
         {"primary_country": {"$exists": False}},
         {"$set": {"primary_country": "US", "language_hint": "en"}},
     )
+
+
+# ----------------------------------------------------------------------------
+# Pack Marketplace — demo seed data (idempotent).
+# Ensures the storefront never looks empty in demos / previews.
+# ----------------------------------------------------------------------------
+DEMO_PRODUCTS = [
+    {
+        "key": "golden_hour_austin_presets",
+        "title": "Golden Hour Austin — Lightroom Preset Pack",
+        "type": "preset",
+        "description": "14 warm golden-hour presets handcrafted for Central Texas light. Dialed-in skin tones, desaturated greens, and creamy highlights. Includes desktop + mobile DNG files and a quick-start PDF.",
+        "price_cents": 2900,
+        "thumbnail_url": "https://images.unsplash.com/photo-1522682078546-47888fe04e81?w=1000&q=80",
+        "preview_urls": [
+            "https://images.unsplash.com/photo-1522682078546-47888fe04e81?w=1400&q=85",
+            "https://images.unsplash.com/photo-1502920917128-1aa500764cbd?w=1400&q=85",
+            "https://images.unsplash.com/photo-1539638254465-3db8a3a2f5ad?w=1400&q=85",
+        ],
+        "tags": ["austin", "preset", "portrait", "golden-hour"],
+        "category": "Presets",
+        "featured": True,
+    },
+    {
+        "key": "banff_city_guide",
+        "title": "Banff Photographer's Guide — Autumn Edition",
+        "type": "city_guide",
+        "description": "48-page PDF guide to every hidden trail, lookout, and dawn spot around Banff National Park. Written by a 7-year local photographer. Includes GPS pins, parking tips, best months, and permit requirements.",
+        "price_cents": 1900,
+        "thumbnail_url": "https://images.unsplash.com/photo-1503614472-8c93d56e92ce?w=1000&q=80",
+        "preview_urls": [
+            "https://images.unsplash.com/photo-1503614472-8c93d56e92ce?w=1400&q=85",
+            "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=1400&q=85",
+        ],
+        "tags": ["banff", "canada", "mountains", "guide"],
+        "category": "Guides",
+        "featured": True,
+    },
+    {
+        "key": "sedona_spot_pack",
+        "title": "Sedona Red Rocks — 12 Spot Pack",
+        "type": "spot_pack",
+        "description": "12 curated Sedona shooting locations with GPS pins, best times, composition notes, and sample images. Airdrop-ready .gpx file included.",
+        "price_cents": 1500,
+        "thumbnail_url": "https://images.unsplash.com/photo-1526481280695-3c469368c08a?w=1000&q=80",
+        "preview_urls": [
+            "https://images.unsplash.com/photo-1526481280695-3c469368c08a?w=1400&q=85",
+            "https://images.unsplash.com/photo-1472396961693-142e6e269027?w=1400&q=85",
+        ],
+        "tags": ["sedona", "arizona", "landscape", "gps"],
+        "category": "Spots",
+        "featured": False,
+    },
+    {
+        "key": "wedding_route_sf",
+        "title": "San Francisco Wedding Route — 8hr Itinerary",
+        "type": "route_pack",
+        "description": "A proven 8-hour itinerary for SF bay-area wedding couples: 6 scenic stops, drive times, lighting windows, and backup rainy-day spots. Battle-tested by 22 shoots.",
+        "price_cents": 3900,
+        "thumbnail_url": "https://images.unsplash.com/photo-1519741497674-611481863552?w=1000&q=80",
+        "preview_urls": [
+            "https://images.unsplash.com/photo-1519741497674-611481863552?w=1400&q=85",
+        ],
+        "tags": ["wedding", "san-francisco", "itinerary"],
+        "category": "Routes",
+        "featured": False,
+    },
+    {
+        "key": "cinematic_luts_pack",
+        "title": "Cinematic Teal & Orange LUTs (10 pack)",
+        "type": "lut",
+        "description": "10 broadcast-safe LUTs engineered for skin-tone preservation. Compatible with Premiere, DaVinci, FCPX, and log footage from Sony / Canon / Panasonic.",
+        "price_cents": 2400,
+        "thumbnail_url": "https://images.unsplash.com/photo-1518930259200-3e4c29f8d1d7?w=1000&q=80",
+        "preview_urls": [
+            "https://images.unsplash.com/photo-1518930259200-3e4c29f8d1d7?w=1400&q=85",
+        ],
+        "tags": ["lut", "cinematic", "video"],
+        "category": "LUTs",
+        "featured": False,
+    },
+    {
+        "key": "invoice_template",
+        "title": "Photographer Invoice + Contract Templates",
+        "type": "template",
+        "description": "Editable Google Doc + Notion templates: shoot contract, model release, deposit invoice, and late-payment reminder sequence. Reviewed by a photography-law attorney.",
+        "price_cents": 900,
+        "thumbnail_url": "https://images.unsplash.com/photo-1586281380349-632531db7ed4?w=1000&q=80",
+        "preview_urls": [
+            "https://images.unsplash.com/photo-1586281380349-632531db7ed4?w=1400&q=85",
+        ],
+        "tags": ["template", "business", "invoice"],
+        "category": "Templates",
+        "featured": False,
+    },
+    {
+        "key": "portfolio_review_call",
+        "title": "1-on-1 Portfolio Review (45 min)",
+        "type": "mentorship",
+        "description": "Book a Zoom session with a seasoned wedding + portrait pro. Walk through your portfolio, get editing pointers, SEO tips, and a pricing audit. Includes follow-up notes.",
+        "price_cents": 7900,
+        "thumbnail_url": "https://images.unsplash.com/photo-1498050108023-c5249f4df085?w=1000&q=80",
+        "preview_urls": [
+            "https://images.unsplash.com/photo-1498050108023-c5249f4df085?w=1400&q=85",
+        ],
+        "tags": ["mentorship", "coaching", "portfolio"],
+        "category": "Mentorship",
+        "featured": True,
+    },
+    {
+        "key": "moody_film_presets",
+        "title": "Moody Film — 20 Desktop + Mobile Presets",
+        "type": "preset",
+        "description": "Hand-tuned film emulation presets inspired by Portra 400 and Cinestill 800T. One-click mood; adjustable grain + fade sliders.",
+        "price_cents": 3200,
+        "thumbnail_url": "https://images.unsplash.com/photo-1509114397022-ed747cca3f65?w=1000&q=80",
+        "preview_urls": [
+            "https://images.unsplash.com/photo-1509114397022-ed747cca3f65?w=1400&q=85",
+        ],
+        "tags": ["preset", "film", "moody"],
+        "category": "Presets",
+        "featured": False,
+    },
+]
+
+
+async def seed_marketplace_demo():
+    """Idempotent seeder for marketplace demo products.
+
+    Distributes products round-robin across demo photographers so the
+    storefront feels like a multi-seller catalogue even on a fresh DB.
+    """
+    sellers = await db.users.find(
+        {"email": {"$regex": "@lumascout.app$"}, "role": {"$ne": "super_admin"}},
+        {"user_id": 1, "plan": 1, "_id": 0},
+    ).limit(12).to_list(12)
+    if not sellers:
+        return
+    created = 0
+    for i, p in enumerate(DEMO_PRODUCTS):
+        existing = await db.marketplace_products.find_one({"title": p["title"]})
+        if existing:
+            continue
+        seller = sellers[i % len(sellers)]
+        now = utcnow() - timedelta(days=(i * 3) % 45)
+        doc = {
+            "product_id": f"prod_demo_{uuid.uuid4().hex[:10]}",
+            "seller_user_id": seller["user_id"],
+            "seller_plan": seller.get("plan", "free"),
+            "title": p["title"],
+            "type": p["type"],
+            "description": p["description"],
+            "price_cents": p["price_cents"],
+            "currency": "USD",
+            "thumbnail_url": p["thumbnail_url"],
+            "preview_urls": p["preview_urls"],
+            "contents_url": "https://example.com/demo-content-placeholder.zip",
+            "tags": p["tags"],
+            "category": p["category"],
+            "status": "active",
+            "featured": p.get("featured", False),
+            "view_count": 40 + (i * 17) % 300,
+            "sales_count": (i * 3) % 24,
+            "rating_avg": round(4.2 + (i % 7) * 0.1, 2),
+            "rating_count": (i * 2 + 3) % 18,
+            "created_at": now,
+            "updated_at": now,
+        }
+        await db.marketplace_products.insert_one(doc)
+        created += 1
+    if created:
+        logger.info(f"Seeded {created} demo marketplace products.")
 
 
 @app.on_event("shutdown")
