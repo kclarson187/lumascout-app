@@ -8352,13 +8352,16 @@ async def list_products(
             {"description": {"$regex": q, "$options": "i"}},
             {"tags": {"$in": [q]}},
         ]
-    sort_spec: list = [("featured", -1)]
-    if sort == "newest": sort_spec += [("created_at", -1)]
-    elif sort == "top_rated": sort_spec += [("rating_avg", -1), ("rating_count", -1)]
-    elif sort == "price_low": sort_spec += [("price_cents", 1)]
-    elif sort == "price_high": sort_spec += [("price_cents", -1)]
-    else:  # trending: sales_count + recent
-        sort_spec += [("sales_count", -1), ("view_count", -1), ("created_at", -1)]
+    sort_spec: list = []
+    # For explicit price sorts we DON'T prepend featured -- the user asked
+    # for cheapest/most expensive first, honor that strictly. For all other
+    # sorts, feature-first is the desired product rule.
+    if sort == "newest": sort_spec = [("featured", -1), ("created_at", -1)]
+    elif sort == "top_rated": sort_spec = [("featured", -1), ("rating_avg", -1), ("rating_count", -1)]
+    elif sort == "price_low": sort_spec = [("price_cents", 1), ("created_at", -1)]
+    elif sort == "price_high": sort_spec = [("price_cents", -1), ("created_at", -1)]
+    else:  # trending: featured, then sales_count + views + recency
+        sort_spec = [("featured", -1), ("sales_count", -1), ("view_count", -1), ("created_at", -1)]
     limit = max(1, min(limit, 60))
     skip = max(0, skip)
     total = await db.marketplace_products.count_documents(filt)

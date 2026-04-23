@@ -99,6 +99,15 @@ backend:
           Test credentials: admin@lumascout.app / admin123.
 
         -working: true
+        -agent: "main"
+        -comment: |
+          Fix for the one FAIL: removed ("featured", -1) prefix from
+          sort_spec when sort in ('price_low','price_high'). Explicit price
+          sorts are now strictly monotonic. Live-verified:
+          sort=price_low → [900, 1500, 1900, 1999, 2400, 2900, 3200, 3900, 7900].
+          Trending / newest / top_rated still feature-first (product intent).
+
+        -working: true
         -agent: "testing"
         -comment: |
           FULL VALIDATION — 76/77 assertions PASS against all 10 review scenarios. Test script: /app/backend_test_marketplace.py. Backend at http://localhost:8001/api. Admin: admin@lumascout.app / admin123 (super_admin). Two throwaway users (u1 seller, u2 buyer) + a third (u3 non-buyer) registered per scenario and soft-deleted on cleanup.
