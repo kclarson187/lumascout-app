@@ -6960,12 +6960,56 @@ agent_communication:
 
   - task: "Phase 4 route extraction — /app/backend/routes/users.py (9 endpoints + UpgradeIn): /users/{id} public profile, /users/{id}/report, /me/upgrade, /me/recent-locations, /me/drafts, /me/trends, /me/dashboard, /me/packs, /me/reviews-received + cross-domain restoration of ReportIn class in server.py for untouched POST /reports endpoint"
     implemented: true
-    working: false
-    file: "/app/backend/routes/users.py, /app/backend/server.py (ReportIn restoration @ line 2542)"
+    working: true
+    file: "/app/backend/routes/users.py, /app/backend/server.py (ReportIn restoration @ line 2534)"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          FOCUSED RE-TEST after ReportIn fix — 7/7 PASS (2026-04-23).
+          Harness: /app/backend_test_reports_fix.py. Only the previously-
+          failing cross-domain POST /reports path was re-validated per
+          review scope.
+
+          Fix verified in server.py:2534-2538:
+              class ReportIn(BaseModel):
+                  target_type: str
+                  target_id: str
+                  reason: str
+                  details: Optional[str] = ""
+
+          Orphan lines 509-516 left behind from the prior AST extraction
+          have been cleaned up — REPORT_REASONS set is correctly present
+          at line 510 (no loose `reason: str` / `details: Optional[str]`
+          module-level declarations).
+
+          Results (all PASS):
+            1. POST /reports valid shape {target_type:"spot",target_id:
+               "spot_e5cd2d1204d4",reason:"spam",details:"..."} → 200
+               with {report_id:"rep_033d3c2710c2", status:"pending"}. ✓
+            2. POST /reports {reason:"invalid_reason"} → 400 with
+               "Invalid reason. Expected one of [...]". ✓
+            3. POST /reports missing `reason` field → 422 pydantic
+               validation error {type:"missing", loc:["body","reason"]}. ✓
+            4. GET /reports/reasons → 200 with 6 keys: not_a_location,
+               unsafe, inappropriate, spam, wrong_info, other. ✓
+            5. GET /admin/reports → 200 with queue (count=33 including
+               the freshly-created report from test 1). ✓
+            6. POST /users/{admin_uid}/report {reason:"spam", notes:"..."}
+               → 200 {ok:true} — confirms DMReportIn path in
+               routes/users.py still works (separate model, not ReportIn). ✓
+
+          No 500s, no AttributeError traces in backend.err.log during
+          the run. Cross-domain restoration is complete — the 50
+          previously-green items from the prior run were NOT re-tested
+          per review scope.
+
+          Throwaway users qa_report_retest_<hex>@lumascout.app (×2) left
+          in DB as inert rows. Safe to ignore.
+
         -working: false
         -agent: "testing"
         -comment: |
@@ -7077,11 +7121,39 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "Phase 4 route extraction — /app/backend/routes/users.py (9 endpoints + UpgradeIn): /users/{id} public profile, /users/{id}/report, /me/upgrade, /me/recent-locations, /me/drafts, /me/trends, /me/dashboard, /me/packs, /me/reviews-received + cross-domain restoration of ReportIn class in server.py for untouched POST /reports endpoint"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "stuck_first"
+
+agent_communication:
+    -agent: "testing"
+    -message: |
+      REPORTS FIX RE-TEST — 7/7 PASS (2026-04-23).
+      Focused re-verification of the one previously-failing Phase 4 item.
+      Harness: /app/backend_test_reports_fix.py.
+
+      Verified all 6 review checks pass:
+        1. POST /api/reports valid shape → 200 (report_id=rep_...,
+           status=pending). No more AttributeError on body.reason. ✓
+        2. POST /api/reports invalid_reason → 400 "Invalid reason. Expected
+           one of [...]". ✓
+        3. POST /api/reports missing `reason` → 422 pydantic {type:"missing",
+           loc:["body","reason"]}. ✓
+        4. GET /api/reports/reasons → 200 with 6 keys (not_a_location,
+           unsafe, inappropriate, spam, wrong_info, other). ✓
+        5. GET /api/admin/reports → 200, queue count=33 (includes the
+           fresh report from test 1). ✓
+        6. POST /api/users/{admin_uid}/report (DMReportIn in
+           routes/users.py) → 200 {ok:true}. ✓
+
+      Confirmed server.py:2534 ReportIn now declares target_type,
+      target_id, reason:str, details:Optional[str]="" — and the orphan
+      lines that were floating at module level (ex-509-516) are gone.
+      REPORT_REASONS set correctly at line 510.
+
+      The 50 previously-green items from the prior Phase 4 run were NOT
+      re-tested per review scope. Task is now fully green.
 
     -agent: "testing"
     -message: |
