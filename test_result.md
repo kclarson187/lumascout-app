@@ -7264,3 +7264,64 @@ agent_communication:
       created by the test were deleted by the owner-admin path where
       applicable; the owner-authored public spots (seeded by non-admin
       throwaway users) are still present but harmless.
+
+================================================================================
+# LumaScout Website V1 — Phase 1 Foundation (Apr 2026)
+================================================================================
+
+SCOPE: Parallel Next.js 15 web platform at `/app/web/` on port :3001.
+       Mobile Expo app (/app/frontend) and existing FastAPI backend
+       untouched. Additive-only.
+
+BACKEND DELTA: 1 additive endpoint added to routes/users.py:
+  • GET /api/users/by-username/{username}  →  resolves username → user_id
+    and delegates to existing get_user(user_id) handler. Read-only.
+    No behaviour change to any existing endpoint. Mobile app unaffected.
+
+WEB FILES ADDED:
+  • app/api/auth/{login,register,logout,me}/route.ts   HttpOnly cookie proxy
+  • app/login/{page.tsx,_client.tsx}                   Sign-in form
+  • app/register/{page.tsx,_client.tsx}                Sign-up form
+  • app/marketplace/page.tsx                           Public marketplace (SSR, live backend)
+  • app/u/[username]/page.tsx                          Public photographer profile (SSR, live backend, per-user OG tags)
+  • app/photographers/page.tsx                         Creators directory
+  • app/spots/[city]/page.tsx                          SEO city pages (generateStaticParams)
+  • app/privacy, app/terms, app/refund-policy          Legal pages
+  • components/legal-shell.tsx                         Shared legal wrapper
+  • /etc/supervisor/conf.d/supervisord_web.conf        Supervisor program for web
+
+SMOKE TEST RESULTS (manual, curl + screenshot):
+  S1  Home (/)                       → 200, 164KB, Playfair display, brand gold, glass nav ✅
+  S2  Pricing (/pricing)             → 200, plan matrix + monthly/annual toggle ✅
+  S3  Marketplace (/marketplace)     → 200, SSR from /api/marketplace/products ✅
+  S4  Photographers (/photographers) → 200 ✅
+  S5  City SEO (/spots/austin)       → 200, unique metadata ✅
+  S6  Legal (/privacy /terms /refund-policy) → 200 each ✅
+  S7  Login form (/login)            → 200 ✅
+  S8  Register form (/register)      → 200 ✅
+
+AUTH FLOW E2E (HttpOnly cookie, NO localStorage):
+  A1  POST /api/auth/login admin@lumascout.app/admin123 → 200, HttpOnly cookie set ✅
+  A2  GET  /api/auth/me with cookie → returns full user (role=super_admin) ✅
+  A3  POST /api/auth/login bad creds → 401 with JSON {error} ✅
+  A4  POST /api/auth/logout          → 200, cookie cleared ✅
+  A5  GET  /api/auth/me after logout → {user:null} ✅
+  A6  GET  /dashboard (protected, no cookie) → 307 → /login?next=/dashboard ✅
+
+LIVE BACKEND DRIVEN PUBLIC PROFILE:
+  U1  GET /api/users/by-username/keith → 200 (Keith Larson, ELITE, San Antonio TX,
+      7 spots / 2 followers / 1 post / 6 reviews, specialties Family/Pet/Portrait) ✅
+  U2  /u/keith SSR page rendered live data incl. banner + verified badge ✅
+  U3  /u/nonexistentusername → 404 ✅
+
+MOBILE INTEGRITY:
+  M1  supervisor: expo RUNNING (:3000 unchanged) ✅
+  M2  /app/frontend/app/settings.tsx & app.json untouched ✅
+
+OPEN ITEMS (Phase 2 candidates):
+  • Dashboard (/dashboard) — saved spots, collections, messages
+  • Large map planner with Mapbox GL JS
+  • Marketplace seller center + Stripe Connect
+  • Admin center (moderation, cover editor, marketplace approvals)
+  • Production routing (ingress /web/* → :3001 or subdomain)
+
