@@ -5121,8 +5121,8 @@ async def admin_clear_spot_cover(
     spot_id: str, user: dict = Depends(require_role("admin")),
 ):
     """Remove the admin cover override — reverts to the community rotation."""
-    spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "admin_cover_override": 1})
-    if not spot:
+    spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "spot_id": 1, "admin_cover_override": 1})
+    if spot is None:
         raise HTTPException(status_code=404, detail="Spot not found")
     await db.spots.update_one(
         {"spot_id": spot_id},

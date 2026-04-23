@@ -36,6 +36,15 @@ backend:
         -agent: "testing"
         -comment: |
           FULL VALIDATION PASS — 44/45 meaningful assertions green via /app/backend_test_cover_editor.py. Backend tested via public URL https://photo-finder-60.preview.emergentagent.com/api. Admin: admin@lumascout.app / admin123 (super_admin) confirmed.
+        -working: true
+        -agent: "main"
+        -comment: |
+          Fixed the idempotency bug called out in the test report:
+          DELETE /api/admin/spots/{id}/cover now projects spot_id alongside
+          admin_cover_override and guards with `if spot is None`. Live-verified:
+          - DELETE on spot with no override → 200
+          - DELETE twice consecutively → 200 / 200
+          - DELETE on bogus spot_id → 404 (correct).
 
           (1) GET /api/admin/spots/{id}/cover-editor — PASS (5/5).
              • 200 with admin token. Response shape validated: spot{spot_id,title,city,state,country_code,visibility_status,featured,hidden_from_explore}, images[] list, admin_cover_override key present.
