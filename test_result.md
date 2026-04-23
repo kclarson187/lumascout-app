@@ -12,6 +12,281 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+
+backend:
+  - task: "Push Notification Growth System — 8 core triggers + transactional cap bypass + quiet hours + daily cap + 10-min dedupe + deep-link routing + @mention parsing"
+    implemented: true
+    working: false
+    file: "/app/backend/server.py (send_growth_push, NOTIFICATION_CATEGORIES, BYPASS_CAP_KINDS, /api/me/notification-preferences, /api/me/notifications/test-push, profile_view emission @ toggle_save, trending_spot fanout @ 4 saves, referral_nearby fanout @ /referrals POST, comment_reply + comment_mention @ /posts/{id}/comments)"
+    stuck_count: 1
+    priority: "highest"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Push Notification Growth System complete. Changes landed this session:
+
+          (A) send_growth_push gate rewrite (server.py ~2960-3010):
+            - Master push_enabled gate → still always applies.
+            - Category opt-out → still applies.
+            - NEW: kind ∈ BYPASS_CAP_KINDS skips quiet-hours + daily-cap checks
+              (but still hits master gate + category + 10-min dedupe). Rationale:
+              transactional/revenue/safety pushes must be immediate.
+              BYPASS_CAP_KINDS = {new_message, new_message_request, dm_message,
+                dm_request, marketplace_sale, marketplace_refund, marketplace_payout,
+                referral_application_accepted, user_sanction_warning,
+                user_sanction_suspension, security_alert}.
+            - Daily-cap query updated to ONLY count non-transactional kinds
+              ({"$nin": list(BYPASS_CAP_KINDS)}) so a flurry of DMs doesn't
+              eat the growth-push budget.
+            - Quiet-hours check gated behind `if not is_bypass`.
+            - Default quiet hours: 22:00–07:00 local TZ. Default cap: 10/day.
+              User-overridable via PATCH /me/notification-preferences.
+
+          (B) Expanded NOTIFICATION_CATEGORIES map — every kind emitted anywhere
+              in server.py now has a category so toggles work correctly:
+                explore → new_spot_nearby, saved_spot_update, saved_spot_fresh_photo,
+                          saved_spot_verified, saved_spot_blooming, trending_spot,
+                          golden_hour
+                network → profile_view, new_follower, user_sanction_*, security_alert
+                messages → dm_request, dm_message, new_message, new_message_request
+                referrals → referral_nearby, referral_application,
+                            new_referral_applicant, referral_application_accepted
+                marketplace → marketplace_sale, marketplace_refund,
+                              marketplace_payout, wishlist_discount, featured_pack
+                community → upload_featured, upload_reaction, upload_approved,
+                            upload_rejected, reply_on_post, comment_reply,
+                            comment_mention, poll_update
+                promotions → upgrade_nudge, pack_creator_nudge
+
+          (C) Core 8 triggers wired:
+            1. marketplace_sale — exists at server.py ~8285 (webhook) + ~9594
+               (mock). deep_link=/marketplace/{product_id}. BYPASS cap.
+            2. new_follower — exists at server.py ~1402.
+               deep_link=/profile/{user_id}.
+            3. profile_view — NEW, at server.py ~1110 after profile_views insert.
+               Fires ONLY on new 1-hour window (not dedupe update), and ONLY if
+               the viewed user is Pro/Elite (perk-gated). deep_link=/network/viewers.
+               image_url=viewer.avatar_url for rich preview.
+            4. comment_reply + comment_mention — NEW, at server.py ~6600.
+               Replaced raw send_push with _emit_notification. Parses @handle
+               tokens via regex, resolves via users.username, emits comment_mention
+               to each with deep_link=/community/post/{post_id}. Author gets
+               comment_reply (skip if self-reply, skip if already in mention set).
+            5. trending_spot — NEW, at server.py ~3860 inside toggle_save.
+               Fires when saves_after == 4 AND spot.created_at ≤ 30d. Fans out
+               to users in same city (excluding existing savers + users already
+               pushed this spot in last 7d). Batch limit 40. Rich image_url.
+               deep_link=/spot/{spot_id}.
+            6. new_message_request + new_message — exist at ~3200 + ~3278.
+               BYPASS cap. deep_link=/inbox/{thread_id} or /inbox?tab=requests.
+            7. referral_nearby — NEW, at server.py ~8556 after referral_needs insert.
+               Fans out to users with available_for_referrals=true in same city
+               (excluding poster). Batch limit 50. deep_link=/referrals/{need_id}.
+            8. saved_spot_update — exists at ~2462/2476/2487 as
+               saved_spot_fresh_photo / _verified / _blooming. deep_link=/spot/{id}.
+
+          (D) GET /api/me/notification-preferences + PATCH + POST test-push:
+              All exist. Preferences screen at /settings/notifications fully wired.
+
+          (E) Dedupe: 10-min window on (user_id, kind, title) — unchanged, still
+              applies to ALL kinds (including bypass).
+
+          Please validate (use admin@lumascout.app / admin123):
+          (1) GET /api/me/notification-preferences → 200 with merged defaults.
+              quiet_hours default 22:00-07:00, daily_cap default 10,
+              push_enabled true, categories={explore:true, network:true,
+              messages:true, referrals:true, marketplace:true, community:true,
+              promotions:false}.
+          (2) PATCH /api/me/notification-preferences {categories:{explore:false}}
+              → 200, returns merged prefs with explore=false. Re-GET returns same.
+          (3) PATCH {quiet_hours:{enabled:true, start:"23:00", end:"08:00"}}
+              → 200 with trimmed HH:MM values. daily_cap clamped 1..50.
+          (4) POST /api/me/notifications/test-push → {delivered:bool}. With
+              promotions:false (default), returns delivered=false because the
+              test-push uses kind=upgrade_nudge (promotions category). Toggle
+              promotions on, retry → delivered=true.
+          (5) Category gate smoke:
+              - Follow admin from a throwaway user → admin receives new_follower
+                in /api/notifications. Toggle admin's network category off,
+                second user follows → no NEW notification push is queued (row
+                is still persisted but push blocked). Toggle back on.
+          (6) Referral nearby:
+              - Register 2 throwaway users; set city="Austin" on both + 
+                available_for_referrals=true on user B.
+              - User A POST /referrals {title, shoot_type:"portrait",
+                gig_type:"paid", city:"Austin"} → 200.
+              - GET /api/notifications on user B → should include a 
+                kind='referral_nearby' row with deep_link=/referrals/{need_id}
+                within seconds.
+          (7) Trending spot:
+              - Create a spot today as user A (fresh, created_at < 30d).
+              - Four distinct users save it (count saves=4 post-insert).
+              - Register user E with city = spot.city, not in savers → should
+                receive kind='trending_spot' push/notification row on the 4th
+                save trigger (not the 3rd or 5th). Second identical save flurry
+                on a different spot WITHIN 7 days must still fire (per-spot not
+                per-user dedupe).
+          (8) Comment reply + @mention:
+              - Create a community post as user A.
+              - User B POST /posts/{post_id}/comments {body:"@keith thanks!"}
+                → 200. Author A receives kind='comment_reply'; admin (username
+                keith) receives kind='comment_mention' with deep_link=
+                /community/post/{post_id}.
+              - Self-mention (user B mentions @userB handle in own reply) must
+                NOT notify themselves. Mentions of the post author must NOT
+                duplicate (already notified via comment_reply).
+          (9) Transactional bypass:
+              - Set quiet_hours enabled: start=now+0min, end=now+60min, daily_cap=1.
+              - Seed 1 growth push (kind='saved_spot_fresh_photo') for the user
+                → blocked (quiet-hours), OR counted against cap.
+              - User B sends a DM to the target → kind='new_message' MUST still
+                push (bypass). Marketplace mock-sale to target → marketplace_sale
+                MUST still push. Verify via db.push_log entries + /notifications.
+          (10) Dedupe:
+              - Fire two identical kind+title pushes within 10 min → second is
+                suppressed (check db.push_log has 1 row).
+
+          Non-regression:
+            - /api/feed/home, /api/spots, /api/marketplace/storefront still 200.
+            - GET /api/notifications?limit=30 still returns rows with
+              deep_link populated.
+
+        -working: false
+        -agent: "testing"
+        -comment: |
+          Push Notification Growth System — backend QA pass complete.
+          Test harness: /app/backend_test.py (admin@lumascout.app/admin123 + 25
+          throwaway users; direct Mongo verification on db.notifications and
+          db.push_log). 26 sub-checks, 23 PASS, 3 FAIL, 0 5xx.
+
+          ── PASSING ITEMS (per spec numbering) ─────────────────────────────
+          (1) GET /me/notification-preferences → returns merged defaults exactly
+              as specified: quiet_hours{enabled:true,start:'22:00',end:'07:00'},
+              daily_cap=10, push_enabled=true, categories.{explore,network,
+              messages,referrals,marketplace,community}=true, promotions=false.
+          (2) PATCH categories.explore=false → explore=false; network/messages/
+              referrals/marketplace/community/promotions intact (deep merge OK).
+          (3) PATCH quiet_hours{start:'23:00:12',end:'08:00:45'} → trimmed to
+              '23:00'/'08:00'. daily_cap=99 → 50; daily_cap=0 → 1.
+          (4) POST /me/notifications/test-push:
+                · promotions=false (default) → {delivered:false}.  ✅
+                · After PATCH categories.promotions=true → {delivered:true}
+                  AND db.push_log row inserted (kind='upgrade_nudge').  ✅
+          (5) Follower → new_follower:
+                · U1 follows U2 → /notifications shows kind='new_follower' with
+                  deep_link=/profile/{U1_user_id}.  ✅
+                · After U2 toggles network=false, U3 follows U2 → notification
+                  row IS still persisted (in-app inbox count goes 1→2)  ✅
+                  and no NEW push_log row is added (count remains 0 — but see
+                  caveat in §FAIL-2 below; the 0→0 result is consistent with
+                  expected behaviour even though we cannot positively confirm
+                  the first push *did* go through push_log because of the
+                  fire-and-forget bug in §FAIL-2).
+          (6) Referral nearby:
+                · Spec used gig_type='paid' which is NOT in GIG_TYPES (valid
+                  values: full_session_referral, second_shooter,
+                  associate_shooter, content_creator, pet_session,
+                  wedding_support, event_coverage). Spec clarification only,
+                  not a backend bug. Re-ran with gig_type='full_session_referral'.
+                · POST /referrals (city='Austin') by U1 → target U2 (city=Austin,
+                  available_for_referrals=true via direct Mongo set since
+                  /auth/me PATCH does not expose this field) receives
+                  kind='referral_nearby' with deep_link=/referrals/{need_id}.  ✅
+          (8) Comment reply + @mention:
+                · Spec category='photo' is invalid; valid POST_CATEGORIES are
+                  {win,question,tip,gear,critique,bts,referral,collab,meetup,
+                  intro,poll}. Used 'tip'. Spec clarification only.
+                · Admin post + U1 comment "@keith ..." → admin gets ONLY
+                  comment_reply (mention is correctly skipped because admin is
+                  also post-author and reply notification ran first; second
+                  branch of review-spec accepted).  ✅
+                · U2 post + admin comment "@u3 ..." → U3 receives
+                  comment_mention.  ✅
+                · Self-mention (U2 mentions @U2 on own post) → 0 self
+                  notifications.  ✅
+          (10) 10-min dedupe on (user, kind, title): two back-to-back test-
+               pushes → first delivered:true, second delivered:false, db.push_log
+               has exactly 1 'upgrade_nudge' row.  ✅
+
+          ── FAILURES (real backend bugs) ──────────────────────────────────
+          FAIL-1 — Item (7) trending_spot fanout NEVER fires.
+            Root cause (verified): in toggle_save (~server.py:3914):
+                age_days = (utcnow() - created_at).days
+            `created_at` is read from db.spots — Motor returns a *naive*
+            datetime, while utcnow() is timezone-aware. The subtraction raises
+                TypeError: can't subtract offset-naive and offset-aware
+                datetimes
+            and the surrounding `try: ... except Exception: pass` (lines 3883
+            / 3956) silently swallows the trending fanout. Reproduced by
+            (a) admin POST /spots in city='Austin', (b) 4 throwaway users save
+            it, (c) Sophie Reyes (existing Austin user) and a fresh user E
+            both with explore=true and quiet_hours=off → 0 notification rows
+            and 0 push_log rows for trending_spot. Pre-trip confirmed the
+            target_q matches Sophie via direct motor query, so the bug is
+            strictly the datetime arithmetic.
+            Fix: `age_days = (utcnow() - (created_at.replace(tzinfo=timezone.utc) if created_at and created_at.tzinfo is None else (created_at or utcnow()))).days`
+            (or normalise on insert).
+
+          FAIL-2 — Item (9) DM bypass push_log NOT written (root cause is
+            broader: ALL pushes routed through _emit_notification fail to
+            persist push_log).
+            Root cause (verified): _emit_notification uses
+                asyncio.create_task(send_growth_push(...))
+            without holding a strong reference. Per CPython docs, asyncio
+            keeps only weak refs to tasks; under FastAPI/uvicorn the create_
+            task is garbage-collected before the awaits inside send_growth_
+            push complete, so the final `await db.push_log.insert_one(...)`
+            never lands. Reproduction (db.notifications collection always has
+            the row, but db.push_log stays empty):
+                · 5 DMs from U1 → admin (QH=off, daily_cap=50, all categories
+                  on): db.notifications.count=6 (5 new_message + 5 request
+                  rows clipped by dedupe), db.push_log.count=0.
+                · U1 follows admin: db.push_log.count still 0 after 3s wait.
+            test-push works ONLY because the endpoint awaits
+            send_growth_push() directly (no create_task wrapper).
+            Implications:
+                · DM bypass test (item 9) cannot be verified via push_log.
+                · trending_spot 7-day per-spot dedupe (item 7) cannot be
+                  verified — and this dedupe relies on push_log rows existing
+                  in the first place, so even if FAIL-1 is fixed, the dedupe
+                  layer is currently broken.
+                · Item (5) 2nd-follower category-block "passed" only because
+                  the first follower's push_log row never landed either —
+                  the test cannot prove the gate is doing the right thing
+                  through this signal until FAIL-2 is patched.
+            Fix options:
+                a) Hold a module-level set: `_BG_TASKS = set(); t =
+                   asyncio.create_task(...); _BG_TASKS.add(t);
+                   t.add_done_callback(_BG_TASKS.discard)`
+                b) Or just `await send_growth_push(...)` — the function is
+                   already wrapped in try/except internally and send_push is
+                   itself fire-and-forget against Expo, so awaiting it adds
+                   only a few ms.
+
+          ── NON-REGRESSION ─────────────────────────────────────────────────
+          GET /api/auth/me, /api/feed/home, /api/spots?limit=3,
+          /api/marketplace/storefront → all 200.
+
+          ── CLEANUP NOTE ──────────────────────────────────────────────────
+          Spec asked for cleanup via DELETE /api/admin/users/{id} and
+          DELETE /api/admin/spots/{id} with body {reason_code:'spam_network',
+          reason:'qa cleanup'}. Neither endpoint exists in this codebase
+          (only POST /api/admin/users/{id}/sanction and POST /api/admin/
+          spots/{id}/action exist). Test harness fell back to direct
+          Mongo cleanup of throwaway users / spots / saves / follows /
+          dm_threads / dm_participants / dm_requests / post_comments /
+          community_posts / referral_needs / push_log / notifications.
+          Admin notification_preferences reset to defaults at end. If a
+          future ticket needs DELETE /admin/users/{id}, please flag.
+
+          ── RECOMMENDATION ────────────────────────────────────────────────
+          Two real bugs to patch (FAIL-1 & FAIL-2). Once patched, items 7
+          and 9 should green up and the category-gating proof in item 5
+          becomes meaningful. All other 23 sub-checks pass.
+
+
 user_problem_statement: |
   PhotoScout — Community Foundation (Phase 1 of 3)
   Posts, comments, likes, direct messaging, nearby photographers, extended

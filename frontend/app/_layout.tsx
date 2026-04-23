@@ -20,6 +20,23 @@ import { onPaywallNeeded } from '../src/api';
 import { Crown, X } from 'lucide-react-native';
 import { Button } from '../src/components/Button';
 
+/**
+ * Mount once at app root: wire push-notification tap handler so notifications
+ * with `data.deep_link` route into the app. Silent no-op on web.
+ */
+function PushDeepLinkMount() {
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    (async () => {
+      try {
+        const { installPushDeepLinkHandler } = await import('../src/push');
+        cleanup = installPushDeepLinkHandler();
+      } catch {}
+    })();
+    return () => { try { cleanup?.(); } catch {} };
+  }, []);
+  return null;
+}
 function Gate() {
   const { user, loading } = useAuth();
   const segments = useSegments();
@@ -71,6 +88,7 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <AuthProvider>
         <StatusBar style="light" />
+        <PushDeepLinkMount />
         <Gate />
         <PaywallOverlay />
         <Stack
