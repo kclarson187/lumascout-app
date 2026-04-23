@@ -1,0 +1,1 @@
+{"kind":"FETCH","data":{"headers":{"content-length":"52","content-type":"application/json","date":"Thu, 23 Apr 2026 20:59:30 GMT","server":"uvicorn"},"body":"eyJ0b3RhbCI6MCwicGFnZSI6MSwibGltaXQiOjIwLCJwYWdlcyI6MCwiaXRlbXMiOltdfQ==","status":200,"url":"http://localhost:8001/api/posts?limit=20&page=1&category=spot"},"revalidate":60,"tags":[]}

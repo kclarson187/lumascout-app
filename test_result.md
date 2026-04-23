@@ -7557,3 +7557,65 @@ that redirect.
 Backend Modularization Phase 5 (routes/auth.py) is the remaining item
 on the user's approved roadmap.
 
+
+================================================================================
+# Sync Gap Closure — Live city pages + Web Community (Apr 2026)
+================================================================================
+
+## What shipped
+- Live SEO city pages (gap #2): /spots/[city] now reads from live DB.
+- Web Community surfaces (gap #3): /community + /post/[id] + /dashboard/feed.
+
+## Web files added/changed (zero mobile, zero backend)
+  ADDED:
+    /app/web/app/community/page.tsx         Public feed w/ category chips
+    /app/web/app/community/_actions.ts      togglePostLike, commentOnPost,
+                                            voteOnPoll, reportPost (server
+                                            actions using cookie auth)
+    /app/web/app/post/[id]/page.tsx         Post detail SSR + SEO metadata
+    /app/web/app/post/[id]/_client.tsx      Comments composer (authed-only)
+    /app/web/app/dashboard/feed/page.tsx    Logged-in home feed
+    /app/web/components/post-card.tsx       Premium post card w/ like, poll
+                                            voting (optimistic), more-menu
+                                            (report/view profile)
+  OVERWRITTEN:
+    /app/web/app/spots/[city]/page.tsx      Now fetches /api/spots?city=X
+                                            live. Aggregates contributors,
+                                            fresh counts, top tags.
+  MINOR:
+    /app/web/components/dashboard-sidebar.tsx  Added "Community feed" link
+                                               + Sparkles import.
+
+## Live verification (public URL)
+  /community                                200 \u2713 (7 posts from DB, real
+                                                author QA 07LX @qa_xmfvcqsfmg)
+  /community?category=spot                  200 \u2713
+  /dashboard/feed                           200 \u2713 (uses /api/feed/home)
+  /post/pst_12c4ecc98218                    200 \u2713 (real post title,
+                                                conversion panel for guests)
+  /spots/austin                             200 \u2713 LIVE DB: 14 spots, 6
+                                                contributors, 6 fresh,
+                                                real images + 100.0 ratings
+  /spots/san-antonio                        200 \u2713
+  /spots/denver                             200 \u2713
+
+## SEO notes
+- Per-city SSR metadata with canonical URL + OG tags.
+- generateStaticParams lists 10 canonical cities; unknown slugs fall back
+  to free-text display and 404 only if the DB also returns empty.
+- Post detail metadata pulls title/description/og:image from the post doc.
+
+## Sync proof (one ecosystem)
+- Post created on mobile (QA test account) appears on web /community in
+  seconds after page refresh.
+- Liking a post on web posts /api/posts/:id/like which is the same
+  endpoint mobile uses \u2192 mobile sees the count bump on next refresh.
+- Spot approved on mobile admin \u2192 /spots/austin page picks it up
+  (revalidate: 300s, or hard refresh).
+
+## Mobile integrity
+- /app/frontend git status: clean (only pre-existing untracked .env +
+  yarn.lock).
+- expo-alt RUNNING, tunnel \"Tunnel ready\" confirmed twice in logs.
+- No backend changes. All additions are web-only reading existing APIs.
+
