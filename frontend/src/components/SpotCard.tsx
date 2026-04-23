@@ -1,11 +1,13 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, Image, TouchableOpacity, Pressable, Platform } from 'react-native';
 import { router } from 'expo-router';
-import { Bookmark, Star, Shield, Lock, EyeOff, MapPin, Sun } from 'lucide-react-native';
+import { Bookmark, Star, Shield, Lock, EyeOff, MapPin, Sun, MoreVertical, TrendingUp, Sparkles, ShieldCheck } from 'lucide-react-native';
 import { colors, radii, space, font } from '../theme';
 import { api } from '../api';
+import { useAuth } from '../auth';
 import FreshnessBadge from './FreshnessBadge';
 import VerifiedBadge from './VerifiedBadge';
+import AdminSpotMenu from './AdminSpotMenu';
 import { goldenHourLabel } from '../utils/sun';
 
 export type Spot = any;
@@ -23,26 +25,32 @@ export default function SpotCard({
   spot,
   onPress,
   onToggleSave,
+  onAfterAdminAction,
   width,
   testID,
 }: {
   spot: Spot;
   onPress?: () => void;
   onToggleSave?: () => void;
+  onAfterAdminAction?: () => void;
   width?: number | string;
   testID?: string;
 }) {
-  const cover = (spot.images && (spot.images.find((i: any) => i.is_cover) || spot.images[0]))?.image_url;
+  const { user } = useAuth();
+  const isAdmin = !!user && (user.role === 'admin' || user.role === 'super_admin');
+  const [adminMenuOpen, setAdminMenuOpen] = useState(false);
+
+  const cover = (spot.images && (spot.images.find((i: any) => i.is_cover) || spot.images[0]))?.image_url || spot.hero_cover_image_url;
   const isPremium = spot.privacy_mode === 'premium';
-  // FIX(2026-04): [Commit 4] Don't render badges (APPROX / PREMIUM / freshness / etc.)
-  // until the card has actually hydrated with both a cover image and a title.
-  // This prevents floating badges on blank placeholder cards when the feed is
-  // still resolving sparse rows.
   const isHydrated = !!(cover && spot?.title);
 
   const handlePress = () => {
     if (onPress) return onPress();
     router.push(`/spot/${spot.spot_id}`);
+  };
+
+  const handleLongPress = () => {
+    if (isAdmin) setAdminMenuOpen(true);
   };
 
   const handleSave = async (e: any) => {
@@ -53,8 +61,23 @@ export default function SpotCard({
     } catch {}
   };
 
+  // Build discovery badges — max 2 rendered, priority: TRENDING > NEW > FRESH > VERIFIED
+  const badges: { kind: string; label: string; color: string; icon: any }[] = [];
+  if (spot.is_trending) badges.push({ kind: 'trending', label: 'TRENDING', color: colors.primary, icon: TrendingUp });
+  if (spot.is_new) badges.push({ kind: 'new', label: 'NEW', color: colors.success, icon: Sparkles });
+  if (spot.is_fresh && !spot.is_new) badges.push({ kind: 'fresh', label: 'FRESH', color: '#3b82f6', icon: Sparkles });
+  if (spot.is_verified_discovery) badges.push({ kind: 'verified', label: 'VERIFIED', color: colors.success, icon: ShieldCheck });
+  const visibleBadges = badges.slice(0, 2);
+
   return (
-    <Pressable onPress={handlePress} style={[styles.card, { width: width ?? '100%' }]} testID={testID}>
+    <>
+    <Pressable
+      onPress={handlePress}
+      onLongPress={handleLongPress}
+      delayLongPress={400}
+      style={[styles.card, { width: width ?? '100%' }]}
+      testID={testID}
+    >
       <View style={styles.imageWrap}>
         {cover ? (
           <Image source={{ uri: cover }} style={styles.image} />
@@ -62,6 +85,11 @@ export default function SpotCard({
           <View style={[styles.image, { backgroundColor: colors.surface2 }]} />
         )}
         <View style={styles.overlayTop}>
+          {isHydrated && isAdmin && (
+            <View style={styles.adminChip}>
+              <Text style={styles.adminChipTxt}>🛠 ADMIN</Text>
+            </View>
+          )}
           {isHydrated && isPremium && (
             <View style={styles.premiumBadge}>
               <Text style={styles.premiumText}>PREMIUM</Text>
@@ -85,6 +113,16 @@ export default function SpotCard({
             </View>
           )}
           <View style={{ flex: 1 }} />
+          {isHydrated && isAdmin && (
+            <TouchableOpacity
+              onPress={(e) => { e.stopPropagation(); setAdminMenuOpen(true); }}
+              style={styles.kebabBtn}
+              testID={testID ? `${testID}-admin` : 'spot-admin-menu'}
+              hitSlop={6}
+            >
+              <MoreVertical size={16} color="#fff" />
+            </TouchableOpacity>
+          )}
           {isHydrated && (
             <TouchableOpacity
               onPress={handleSave}
@@ -95,6 +133,22 @@ export default function SpotCard({
             </TouchableOpacity>
           )}
         </View>
+
+        {/* Discovery badges — max 2, top of image stacked below the top row */}
+        {isHydrated && visibleBadges.length > 0 && (
+          <View style={styles.discoveryRow}>
+            {visibleBadges.map((b) => {
+              const Icon = b.icon;
+              return (
+                <View key={b.kind} style={[styles.discoveryBadge, { borderColor: b.color, backgroundColor: colorHex(b.color, 0.85) }]}>
+                  <Icon size={9} color="#fff" strokeWidth={2.5} />
+                  <Text style={styles.discoveryBadgeTxt}>{b.label}</Text>
+                </View>
+              );
+            })}
+          </View>
+        )}
+
         {isHydrated && (
           <View style={styles.overlayBottom}>
             <ScoreBadge score={spot.shoot_score || 0} />
@@ -137,7 +191,26 @@ export default function SpotCard({
         </View>
       </View>
     </Pressable>
+    {isAdmin && (
+      <AdminSpotMenu
+        visible={adminMenuOpen}
+        spot={spot}
+        role={user.role}
+        onClose={() => setAdminMenuOpen(false)}
+        onAfterChange={() => onAfterAdminAction?.()}
+      />
+    )}
+    </>
   );
+}
+
+function colorHex(hex: string, alpha: number) {
+  if (!hex || !hex.startsWith('#') || (hex.length !== 7 && hex.length !== 4)) return `rgba(245,166,35,${alpha})`;
+  const h = hex.length === 4 ? `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}` : hex;
+  const r = parseInt(h.slice(1, 3), 16);
+  const g = parseInt(h.slice(3, 5), 16);
+  const b = parseInt(h.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 const styles = StyleSheet.create({
@@ -170,7 +243,34 @@ const styles = StyleSheet.create({
     right: space.sm,
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 5,
   },
+  adminChip: {
+    backgroundColor: 'rgba(245,166,35,0.9)',
+    paddingHorizontal: 7, paddingVertical: 3,
+    borderRadius: radii.sm,
+    borderWidth: 1, borderColor: colors.primary,
+  },
+  adminChipTxt: { color: '#0A0A0A', fontFamily: font.bodyBold, fontSize: 8, letterSpacing: 0.8 },
+  kebabBtn: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  discoveryRow: {
+    position: 'absolute',
+    top: space.sm + 32,
+    left: space.sm,
+    flexDirection: 'row', gap: 4, flexWrap: 'wrap',
+    maxWidth: '75%',
+  },
+  discoveryBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    paddingHorizontal: 7, paddingVertical: 3,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+  },
+  discoveryBadgeTxt: { color: '#fff', fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.6 },
   overlayBottom: {
     position: 'absolute',
     bottom: space.sm,

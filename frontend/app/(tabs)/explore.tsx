@@ -57,7 +57,7 @@ export default function Explore() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const params: any = { limit: 200, sort: 'score' };
+      const params: any = { limit: 200, sort: 'quality' };
       Object.entries(filters).forEach(([k, v]) => {
         if (v != null && v !== '' && v !== false) params[k] = v;
       });
