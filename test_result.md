@@ -6682,3 +6682,212 @@ agent_communication:
       throwaway users/spots/posts/reports/products each run).
 
       No action items for main agent — refactor is shippable.
+
+
+#====================================================================================================
+# Phase 2 route extraction regression — network + referrals + push
+#====================================================================================================
+
+backend:
+  - task: "Phase 2 route extraction — /app/backend/routes/network.py (22 endpoints), /app/backend/routes/referrals.py (10 endpoints), /app/backend/routes/push.py (7 endpoints)"
+    implemented: true
+    working: false
+    file: "/app/backend/routes/network.py, /app/backend/routes/referrals.py, /app/backend/routes/push.py"
+    stuck_count: 0
+    priority: "highest"
+    needs_retesting: true
+    status_history:
+        -working: false
+        -agent: "testing"
+        -comment: |
+          PHASE-2 REGRESSION — /app/backend_test.py, BASE http://localhost:8001/api.
+          Results: 67 PASS / 1 FAIL / 1 × 5xx.
+
+          🔴 EXTRACTION BUG (CRITICAL, BLOCKING) — routes/referrals.py is
+          missing three module-level constants in its `from server import (…)`
+          block:
+              • GIG_TYPES                       (used in ReferralCreateIn._gig_guard)
+              • REFERRAL_STATUSES               (used in ReferralUpdateIn._s_guard)
+              • REFERRAL_APPLY_CAP_FREE_MONTH   (used in apply_to_referral)
+
+          Reproduced:
+              POST /api/referrals
+                  {"title":"Need second shooter Austin QA",
+                   "shoot_type":"portrait",
+                   "gig_type":"full_session_referral",
+                   "city":"Austin","state":"TX"}
+              → 500 Internal Server Error
+
+          Stack trace in /var/log/supervisor/backend.err.log:
+              File "/app/backend/routes/referrals.py", line 64, in _gig_guard
+                  if v not in GIG_TYPES:
+                              ^^^^^^^^^
+              NameError: name 'GIG_TYPES' is not defined
+
+          EVERY flow that hits POST /referrals is broken:
+              • POST /referrals — CANNOT create a need
+              • All the sub-tests that depended on a fresh need (GET by id,
+                PATCH {notes:…}, PATCH non-poster 403, POST /apply,
+                /applications/{id}/accept|/reject, DELETE by poster, DELETE
+                non-poster 403) COULD NOT RUN — blocked by the 500 above.
+              • Cross-module "referral_nearby fanout" test also blocked.
+
+          Same bug will trigger on:
+              • PATCH /referrals/{id} with {status:"open"|…} — will hit
+                ReferralUpdateIn._s_guard → NameError REFERRAL_STATUSES.
+              • POST /referrals/{id}/apply as a free-tier user with ≥5 apps
+                in the current calendar month — NameError
+                REFERRAL_APPLY_CAP_FREE_MONTH.
+
+          FIX (trivial, 3 lines — main agent ONLY, testing agent not
+          fixing): add to the `from server import (…)` block at
+          /app/backend/routes/referrals.py:21:
+              GIG_TYPES,
+              REFERRAL_STATUSES,
+              REFERRAL_APPLY_CAP_FREE_MONTH,
+
+          After the fix please retest POST /referrals + /apply + /accept +
+          /reject + PATCH + DELETE + the non-poster 403 path.
+
+          ✅ EVERYTHING ELSE PASSED (67 / 68 sub-checks):
+
+          PUSH module (15 checks, ALL PASS):
+              - GET  /me/notification-preferences → 200 with merged defaults
+                {push_enabled, daily_cap, quiet_hours{enabled,start,end},
+                categories}.
+              - PATCH categories.promotions=true → persists, re-GET confirms.
+              - PATCH daily_cap=99 → clamped to 50.
+              - PATCH daily_cap=0  → clamped to 1.
+              - PATCH quiet_hours{enabled:true, start:'23:00', end:'08:00'} → persisted.
+              - POST /me/notifications/test-push (promotions=true)  → delivered=true.
+              - POST /me/notifications/test-push (promotions=false) → delivered=false.
+              - GET  /notifications?limit=5 → 200 with items[] (5 items, unread_count present).
+              - POST /notifications/mark-read {} → 200 {ok:true}.
+              - POST /me/push-token {token:"ExponentPushToken[QA…]", platform:"ios"} → 200.
+              - DELETE /me/push-token?token=… → 200.
+
+              NOTE for main agent (behaviour drift vs review spec, not a
+              bug — current behaviour matches the pre-extraction code):
+                · DELETE /me/push-token requires ?token=<value> query param.
+                  Review said "DELETE /me/push-token → 200" (no param). The
+                  endpoint will 422 if called without it.
+                · POST /notifications/mark-read uses `notification_id` query
+                  param, not body field `notification_ids:[…]`. Both forms
+                  work when body is empty (marks all). Passing the array
+                  form from the review would be silently ignored.
+                · Response body is {items:[…], unread_count} — no "tab" or
+                  pagination meta. Matches pre-extraction shape.
+
+          NETWORK module (22 checks, ALL PASS):
+              - GET  /me/viewers?limit=10 → 200. Shape = {plan, total_views,
+                viewers[], teaser|analytics}. (Note: review expected
+                `items[]` and `upgrade_required` — actual code returns
+                `viewers[]`; tier gating is done via shape, not a top-level
+                flag. Pre-existing behaviour preserved.)
+              - GET  /me/viewers/summary → 200 {total_7d, total_30d, plan}.
+                (Review expected count_7d/count_30d/can_see_details — actual
+                code returns total_7d/total_30d/plan. Not a regression.)
+              - GET  /me/analytics/networking → 200 with profile_views_7d,
+                profile_views_30d, follows_gained, applications_sent,
+                acceptance_rate_pct, needs_posted, applicants_received,
+                active_threads.
+              - POST /users/{u2}/follow (u1) → 200 {following:true}; re-POST
+                → 200 {following:false}.
+              - POST /dm/threads/start {user_id:u2, opening_body:"hi"} → 200
+                {thread_id, is_request:true, opening_preview:"hi from u1"}.
+              - POST /dm/threads/{id}/messages {type:"text", body:"second hi"}
+                → 200 with full message doc.
+              - GET  /dm/threads → 200 {items:[…], tab:"all"} with 1 thread.
+              - POST /dm/requests/{id}/accept → 200 {ok:true, thread_id}.
+              - GET  /network/discover?limit_per_rail=5 → 200 with rails
+                near_you/popular_in_city/pet/wedding/family/new_members/
+                top_contributors/verified_pros/available_for_referrals/
+                available_for_second_shooter.
+              - GET  /network/search?q=admin → 200 {items:[admin], total:1}.
+              - GET  /mentors?limit=3 → 200.
+              - GET  /users/{admin_id}/trust → 200 with trust metrics.
+              - POST /conversations {participant_user_id:u2} → 200 idempotent
+                (second call returns same conversation_id).
+              - GET  /me/conversations → 200.
+              - POST /conversations/{id}/messages {body:"hi legacy"} → 200.
+
+          CROSS-MODULE integration (PASS):
+              - u1 POST /users/{admin_id}/follow → admin GET /notifications
+                shows kind='new_follower' row within 1.5 s. Proves
+                _emit_notification cross-module path still fires end-to-end
+                from the moved network.py module into the shared
+                push-dispatch infra in server.py.
+
+          NON-REGRESSION (8/8 PASS):
+              - GET /auth/me, /feed/home, /spots?limit=3,
+                /marketplace/storefront, /me/marketplace/sales,
+                /admin/overview, /admin/users?limit=3, /admin/audit-logs
+                → all 200.
+
+          PERMISSION sanity (3/3 PASS):
+              - non-admin GET /admin/overview → 403.
+              - unauth  GET /me/notification-preferences → 401.
+              - unauth  POST /me/push-token → 401.
+
+          CLEANUP:
+              Throwaway users qa_u1_<stamp>@qatest.photoscout.app +
+              qa_u2_<stamp>@qatest.photoscout.app remain in DB as inert
+              rows. No referral_needs created (POST 500'd). DM thread +
+              follow edges from u1→u2/admin left in place (cumulative
+              footprint ~1 KB / run).
+
+          VERDICT:
+              Phase 2 extraction of network.py (22 eps) and push.py (7 eps)
+              is clean — no behaviour drift, no missing imports, no 500s.
+              Phase 2 extraction of referrals.py has ONE missing-import
+              bug (GIG_TYPES / REFERRAL_STATUSES / REFERRAL_APPLY_CAP_
+              FREE_MONTH not added to the `from server import (…)` block),
+              breaking POST /referrals and dependent flows. Add those
+              three names to the import and retest.
+
+agent_communication:
+    -agent: "testing"
+    -message: |
+      Phase 2 regression — 67/68 sub-checks pass. ONE extraction bug found.
+
+      🔴 CRITICAL: /app/backend/routes/referrals.py references three
+      module-level constants (GIG_TYPES, REFERRAL_STATUSES,
+      REFERRAL_APPLY_CAP_FREE_MONTH) without importing them from server.
+      POST /api/referrals currently 500s with NameError on GIG_TYPES at
+      line 64. PATCH /referrals/{id} with a `status` field will 500 on
+      REFERRAL_STATUSES. POST /referrals/{id}/apply as a free-tier user
+      with 5+ apps this month will 500 on REFERRAL_APPLY_CAP_FREE_MONTH.
+
+      Fix (one line, 3 names) at routes/referrals.py:21:
+          from server import (
+              db, get_current_user, get_optional_user,
+              utcnow, plan_of, _effective_plan,
+              _emit_notification, send_growth_push,
+              _dm_get_or_create_thread, _dm_insert_message,
+              _hydrate_poster,
+              GIG_TYPES, REFERRAL_STATUSES, REFERRAL_APPLY_CAP_FREE_MONTH,
+          )
+
+      After the fix, retest POST /referrals + /apply + /accept + /reject +
+      PATCH + DELETE + non-poster 403 path. All other 67 checks across
+      network.py (22 eps), push.py (7 eps), cross-module integration
+      (new_follower notification), non-regression (auth/me, feed/home,
+      spots, marketplace, admin overview/users/audit-logs) and permission
+      sanity (non-admin 403, unauth 401) are green — no 500s anywhere
+      else, no behaviour drift.
+
+      Test harness: /app/backend_test.py (idempotent — creates two
+      throwaway users qa_u1_<stamp>@qatest.photoscout.app +
+      qa_u2_<stamp>@qatest.photoscout.app each run; no cleanup endpoint
+      called, cumulative footprint ~1 KB / run).
+
+metadata:
+  test_sequence: 7
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "Phase 2 route extraction — /app/backend/routes/network.py (22 endpoints), /app/backend/routes/referrals.py (10 endpoints), /app/backend/routes/push.py (7 endpoints)"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "stuck_first"

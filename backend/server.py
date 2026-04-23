@@ -1139,297 +1139,12 @@ async def get_user(user_id: str, viewer: Optional[dict] = Depends(get_optional_u
 # Elite:  full list + analytics (top cities, specialty breakdown, repeat
 #         viewers, trend line)
 # ============================================================================
-@api.get("/me/viewers")
-async def get_my_viewers(
-    limit: int = 50,
-    since_days: int = 30,
-    user: dict = Depends(get_current_user),
-):
-    """List photographers who viewed my profile.
-
-    Response shape (tier-gated):
-      {
-        "plan": "free" | "pro" | "elite",
-        "total_views": int,              # distinct viewers in window
-        "total_impressions": int,        # sum of `count`s
-        "period_days": int,
-        "viewers": [                     # empty for free; full list for pro/elite
-          {
-            "user_id", "name", "username", "avatar_url", "city", "state",
-            "specialties", "verification_status", "plan",
-            "last_viewed_at", "view_count", "is_following"
-          }, ...
-        ],
-        "teaser": {                      # present for free tier only
-          "blurred_avatars": [ "data:..." | null, ...],   # up to 3
-          "blurred_initials": ["SC", "MA", ...],
-          "message": "12 photographers viewed your profile this week"
-        },
-        "analytics": {...}               # present for elite only
-      }
-    """
-    uid = user["user_id"]
-    plan = plan_of(user)
-    tier = _effective_plan(plan)  # free | pro | elite
-    cutoff = utcnow() - timedelta(days=max(1, min(since_days, 90)))
-    # Collect distinct-viewer rows (most recent first), bounded by cutoff
-    cursor = db.profile_views.find(
-        {"viewed_user_id": uid, "last_viewed_at": {"$gte": cutoff}},
-        {"_id": 0},
-    ).sort("last_viewed_at", -1).limit(max(1, min(limit, 200)))
-    rows = await cursor.to_list(length=max(1, min(limit, 200)))
-    total_views = len(rows)
-    total_impressions = sum(int(r.get("count") or 1) for r in rows)
-
-    # Free tier: teaser only (blurred)
-    if tier == "free":
-        teaser_rows = rows[:3]
-        teaser_avatars: List[Optional[str]] = []
-        teaser_initials: List[str] = []
-        for r in teaser_rows:
-            v = await db.users.find_one(
-                {"user_id": r["viewer_user_id"]},
-                {"_id": 0, "avatar_url": 1, "name": 1},
-            ) or {}
-            teaser_avatars.append(v.get("avatar_url"))
-            nm = (v.get("name") or "").strip()
-            teaser_initials.append("".join([w[0].upper() for w in nm.split()[:2] if w]) or "?")
-        return {
-            "plan": plan,
-            "total_views": total_views,
-            "total_impressions": total_impressions,
-            "period_days": since_days,
-            "viewers": [],
-            "teaser": {
-                "blurred_avatars": teaser_avatars,
-                "blurred_initials": teaser_initials,
-                "message": (
-                    f"{total_views} photographer{'s' if total_views != 1 else ''} "
-                    f"viewed your profile this {'week' if since_days <= 7 else 'month'}"
-                ),
-            },
-        }
-
-    # Pro / Elite — hydrate viewer profiles and enrich with is_following
-    viewers_out: List[dict] = []
-    for r in rows:
-        v = await db.users.find_one(
-            {"user_id": r["viewer_user_id"]},
-            {"_id": 0, "password_hash": 0, "email": 0},
-        )
-        if not v:
-            continue
-        is_following = await db.follows.count_documents({
-            "follower_user_id": uid,
-            "followed_user_id": r["viewer_user_id"],
-        }) > 0
-        viewers_out.append({
-            "user_id": v.get("user_id"),
-            "name": v.get("name"),
-            "username": v.get("username"),
-            "avatar_url": v.get("avatar_url"),
-            "city": v.get("city"),
-            "state": v.get("state"),
-            "specialties": v.get("specialties") or [],
-            "verification_status": v.get("verification_status"),
-            "plan": plan_of(v),
-            "last_viewed_at": r.get("last_viewed_at"),
-            "view_count": int(r.get("count") or 1),
-            "is_following": is_following,
-        })
-
-    resp = {
-        "plan": plan,
-        "total_views": total_views,
-        "total_impressions": total_impressions,
-        "period_days": since_days,
-        "viewers": viewers_out,
-    }
-
-    # Elite — add analytics block
-    if tier == "elite":
-        # Top cities
-        city_counts: Dict[str, int] = {}
-        for r in rows:
-            c = (r.get("viewer_city") or "").strip()
-            if c:
-                city_counts[c] = city_counts.get(c, 0) + int(r.get("count") or 1)
-        top_cities = sorted(
-            [{"city": k, "views": v} for k, v in city_counts.items()],
-            key=lambda x: -x["views"],
-        )[:5]
-        # Specialty breakdown
-        spec_counts: Dict[str, int] = {}
-        for r in rows:
-            for s in (r.get("viewer_specialties") or []):
-                if s:
-                    spec_counts[s] = spec_counts.get(s, 0) + 1
-        top_specialties = sorted(
-            [{"specialty": k, "viewers": v} for k, v in spec_counts.items()],
-            key=lambda x: -x["viewers"],
-        )[:5]
-        # Repeat viewers (count >= 2)
-        repeat_viewers = sum(1 for r in rows if int(r.get("count") or 1) >= 2)
-        # 7-day trend (counts per day for last 7 days)
-        today = utcnow().date()
-        trend: List[dict] = []
-        for i in range(6, -1, -1):
-            d = today - timedelta(days=i)
-            d_start = datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc)
-            d_end = d_start + timedelta(days=1)
-            c = await db.profile_views.count_documents({
-                "viewed_user_id": uid,
-                "last_viewed_at": {"$gte": d_start, "$lt": d_end},
-            })
-            trend.append({"date": d.isoformat(), "views": c})
-        resp["analytics"] = {
-            "top_cities": top_cities,
-            "top_specialties": top_specialties,
-            "repeat_viewers": repeat_viewers,
-            "trend_7d": trend,
-        }
-
-    return resp
 
 
-@api.get("/me/viewers/summary")
-async def get_my_viewers_summary(user: dict = Depends(get_current_user)):
-    """Lightweight teaser for home/profile badges.
-    Returns {total_7d, total_30d} so the UI can render "3 new viewers"
-    without pulling the full list.
-    """
-    uid = user["user_id"]
-    now = utcnow()
-    t7 = await db.profile_views.count_documents({
-        "viewed_user_id": uid,
-        "last_viewed_at": {"$gte": now - timedelta(days=7)},
-    })
-    t30 = await db.profile_views.count_documents({
-        "viewed_user_id": uid,
-        "last_viewed_at": {"$gte": now - timedelta(days=30)},
-    })
-    return {"total_7d": t7, "total_30d": t30, "plan": plan_of(user)}
 
 
-@api.get("/me/analytics/networking")
-async def my_networking_analytics(
-    since_days: int = 30,
-    user: dict = Depends(get_current_user),
-):
-    """Phase B.3 — Elite networking analytics dashboard.
-    Pro tier gets a read-only preview with a single headline stat.
-    Elite gets full numbers. Free tier gets a teaser shape.
-    """
-    uid = user["user_id"]
-    tier = _effective_plan(plan_of(user))
-    now = utcnow()
-    cutoff = now - timedelta(days=max(1, min(since_days, 90)))
-
-    # Baseline counts — shared across all tiers (cheap)
-    views_7d = await db.profile_views.count_documents({
-        "viewed_user_id": uid, "last_viewed_at": {"$gte": now - timedelta(days=7)},
-    })
-    views_30d = await db.profile_views.count_documents({
-        "viewed_user_id": uid, "last_viewed_at": {"$gte": now - timedelta(days=30)},
-    })
-    follows_gained = await db.follows.count_documents({
-        "followed_user_id": uid, "created_at": {"$gte": cutoff},
-    }) if True else 0  # follows collection may lack created_at on older docs
-
-    # Marketplace — applications sent + acceptance rate
-    apps_sent = await db.referral_applications.count_documents({
-        "applicant_user_id": uid, "created_at": {"$gte": cutoff},
-    })
-    apps_accepted = await db.referral_applications.count_documents({
-        "applicant_user_id": uid, "status": "accepted", "created_at": {"$gte": cutoff},
-    })
-    acceptance_rate = round((apps_accepted / apps_sent) * 100, 1) if apps_sent > 0 else 0.0
-
-    # Needs posted + applicants received
-    needs_posted = await db.referral_needs.count_documents({
-        "poster_user_id": uid, "posted_at": {"$gte": cutoff},
-    })
-    applicants_received = 0
-    if needs_posted > 0:
-        need_ids = [n["need_id"] async for n in db.referral_needs.find(
-            {"poster_user_id": uid, "posted_at": {"$gte": cutoff}}, {"need_id": 1, "_id": 0}
-        )]
-        applicants_received = await db.referral_applications.count_documents({
-            "need_id": {"$in": need_ids},
-        })
-
-    # Messaging — threads created + conversion (we count distinct thread starts via dm_requests)
-    threads_active = await db.dm_threads.count_documents({
-        "participant_user_ids": uid, "last_message_at": {"$ne": None},
-        "last_message_at": {"$gte": cutoff},
-    })
-
-    base = {
-        "plan": plan_of(user),
-        "period_days": max(1, min(since_days, 90)),
-        "profile_views_7d": views_7d,
-        "profile_views_30d": views_30d,
-        "follows_gained": follows_gained,
-        "applications_sent": apps_sent,
-        "applications_accepted": apps_accepted,
-        "acceptance_rate_pct": acceptance_rate,
-        "needs_posted": needs_posted,
-        "applicants_received": applicants_received,
-        "active_threads": threads_active,
-    }
-
-    # Elite-only extras: 7-day trend + funnel
-    if tier == "elite":
-        today = now.date()
-        trend: List[dict] = []
-        for i in range(6, -1, -1):
-            d = today - timedelta(days=i)
-            d_start = datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc)
-            d_end = d_start + timedelta(days=1)
-            cnt = await db.profile_views.count_documents({
-                "viewed_user_id": uid,
-                "last_viewed_at": {"$gte": d_start, "$lt": d_end},
-            })
-            trend.append({"date": d.isoformat(), "views": cnt})
-        base["trend_7d"] = trend
-        base["funnel"] = {
-            "views_to_follow_pct": round((follows_gained / views_30d) * 100, 1) if views_30d > 0 else 0.0,
-            "applications_to_acceptance_pct": acceptance_rate,
-        }
-
-    return base
 
 
-@api.post("/users/{user_id}/follow")
-async def follow_user(user_id: str, user: dict = Depends(get_current_user)):
-    if user_id == user["user_id"]:
-        raise HTTPException(status_code=400, detail="Cannot follow yourself")
-    target = await db.users.find_one({"user_id": user_id}, {"_id": 0})
-    if not target:
-        raise HTTPException(status_code=404, detail="User not found")
-    existing = await db.follows.find_one({"follower_user_id": user["user_id"], "followed_user_id": user_id})
-    if existing:
-        await db.follows.delete_one({"follower_user_id": user["user_id"], "followed_user_id": user_id})
-        return {"following": False}
-    await db.follows.insert_one({
-        "follow_id": f"follow_{uuid.uuid4().hex[:12]}",
-        "follower_user_id": user["user_id"],
-        "followed_user_id": user_id,
-        "created_at": utcnow(),
-    })
-    # Notify followed user (non-blocking)
-    try:
-        await _emit_notification(
-            user_id,
-            "new_follower",
-            f"{user.get('name') or 'Someone'} followed you",
-            f"@{user.get('username') or ''} just hit follow",
-            actor_user_id=user["user_id"],
-            deep_link=f"/profile/{user['user_id']}",
-        )
-    except Exception:
-        pass
-    return {"following": True}
 
 
 # ============================================================================
@@ -2991,112 +2706,16 @@ async def send_growth_push(
     return True
 
 
-class NotificationPrefsIn(BaseModel):
-    categories: Optional[Dict[str, bool]] = None
-    quiet_hours: Optional[Dict[str, Any]] = None  # {enabled, start, end}
-    timezone: Optional[str] = None
-    daily_cap: Optional[int] = None
-    push_enabled: Optional[bool] = None
 
 
-@api.get("/me/notification-preferences")
-async def get_notification_prefs(user: dict = Depends(get_current_user)):
-    """Returns the caller's notification preferences (merged with defaults)."""
-    stored = user.get("notification_preferences") or {}
-    merged = {**DEFAULT_NOTIFICATION_PREFERENCES, **stored}
-    # Deep-merge categories so new categories added later auto-appear as True.
-    merged["categories"] = {**DEFAULT_NOTIFICATION_PREFERENCES["categories"],
-                             **(stored.get("categories") or {})}
-    return merged
 
 
-@api.patch("/me/notification-preferences")
-async def update_notification_prefs(body: NotificationPrefsIn, user: dict = Depends(get_current_user)):
-    """Partial-update of notification_preferences. Each field is optional."""
-    current = user.get("notification_preferences") or {}
-    merged = {**DEFAULT_NOTIFICATION_PREFERENCES, **current}
-    merged["categories"] = {**DEFAULT_NOTIFICATION_PREFERENCES["categories"],
-                             **(current.get("categories") or {})}
-    if body.categories is not None:
-        merged["categories"] = {**merged["categories"], **body.categories}
-    if body.quiet_hours is not None:
-        # Sanitize time strings to HH:MM
-        qh = body.quiet_hours
-        merged["quiet_hours"] = {
-            "enabled": bool(qh.get("enabled", merged["quiet_hours"]["enabled"])),
-            "start":   str(qh.get("start", merged["quiet_hours"]["start"]))[:5],
-            "end":     str(qh.get("end",   merged["quiet_hours"]["end"]))[:5],
-        }
-    if body.timezone is not None:
-        merged["timezone"] = body.timezone[:60]
-    if body.daily_cap is not None:
-        merged["daily_cap"] = max(1, min(50, int(body.daily_cap)))
-    if body.push_enabled is not None:
-        merged["push_enabled"] = bool(body.push_enabled)
-    await db.users.update_one(
-        {"user_id": user["user_id"]},
-        {"$set": {"notification_preferences": merged, "updated_at": utcnow()}},
-    )
-    return merged
 
 
-@api.post("/me/notifications/test-push")
-async def test_push(user: dict = Depends(get_current_user)):
-    """Send a test push to the caller to verify device-level delivery.
-    Respects quiet-hours / category gating to make debugging obvious."""
-    ok = await send_growth_push(
-        user["user_id"], kind="upgrade_nudge",
-        title="Notifications are working 🎉",
-        body="This is a test push from LumaScout. Tap to see recent activity.",
-        deep_link="/notifications",
-    )
-    return {"delivered": ok}
 
 
-@api.get("/notifications")
-async def list_notifications(
-    limit: int = 30,
-    unread_only: bool = False,
-    user: dict = Depends(get_current_user),
-):
-    q: dict = {"user_id": user["user_id"]}
-    if unread_only:
-        q["read_at"] = None
-    limit = max(1, min(100, limit))
-    items = await db.notifications.find(q, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
-    # Hydrate actor (name + avatar) for nicer UI
-    actor_ids = list({n.get("actor_user_id") for n in items if n.get("actor_user_id")})
-    amap: Dict[str, dict] = {}
-    if actor_ids:
-        rows = await db.users.find(
-            {"user_id": {"$in": actor_ids}},
-            {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1},
-        ).to_list(len(actor_ids))
-        amap = {r["user_id"]: r for r in rows}
-    for n in items:
-        n["actor"] = amap.get(n.get("actor_user_id"))
-    unread = await db.notifications.count_documents({"user_id": user["user_id"], "read_at": None})
-    return {"items": items, "unread_count": unread}
 
 
-@api.post("/notifications/mark-read")
-async def mark_notifications_read(
-    notification_id: Optional[str] = None,
-    user: dict = Depends(get_current_user),
-):
-    """Mark one by id, or ALL unread if no id is supplied."""
-    now = utcnow()
-    if notification_id:
-        await db.notifications.update_one(
-            {"notification_id": notification_id, "user_id": user["user_id"]},
-            {"$set": {"read_at": now}},
-        )
-    else:
-        await db.notifications.update_many(
-            {"user_id": user["user_id"], "read_at": None},
-            {"$set": {"read_at": now}},
-        )
-    return {"ok": True}
 
 
 # ============================================================================
@@ -3192,101 +2811,6 @@ async def _emit_dm_notification(recipient_id: str, sender: dict, preview: str, t
     )
 
 
-@api.post("/dm/threads/start")
-async def dm_start_thread(
-    body: DMStartIn,
-    user: dict = Depends(get_current_user),
-):
-    """Return the 1:1 thread with `user_id` (creates if needed). If the
-    other user does not follow the sender, a pending message_request is
-    created so recipient can accept/ignore/block from the Requests tab.
-
-    Supports quick-start kinds (refer / collab) that pre-fill the first
-    message body when the caller doesn't supply one.
-    """
-    target_id = body.user_id
-    if target_id == user["user_id"]:
-        raise HTTPException(status_code=400, detail="Cannot message yourself")
-    target = await db.users.find_one({"user_id": target_id}, {"_id": 0})
-    if not target:
-        raise HTTPException(status_code=404, detail="User not found")
-    # Safety: if recipient has blocked sender, refuse.
-    blocked = await db.dm_blocks.find_one({"blocker_user_id": target_id, "blocked_user_id": user["user_id"]})
-    if blocked:
-        raise HTTPException(status_code=403, detail="You cannot message this user")
-    thread = await _dm_get_or_create_thread(user["user_id"], target_id)
-    # Message request if recipient doesn't follow sender and hasn't accepted
-    target_follows_sender = await db.follows.find_one({
-        "follower_user_id": target_id, "followed_user_id": user["user_id"],
-    })
-    accepted = await _thread_is_accepted(thread, target_id)
-    is_request = not target_follows_sender and not accepted
-    if is_request:
-        # Phase B.3 — Free-tier gate: max 5 concurrent PENDING requests.
-        # Pro/Elite are unlimited. Rate limit still applies (5/hr).
-        tier = _effective_plan(plan_of(user))
-        if tier == "free":
-            pending_total = await db.dm_requests.count_documents({
-                "from_user_id": user["user_id"], "status": "pending",
-            })
-            if pending_total >= 5:
-                raise HTTPException(
-                    status_code=402,
-                    detail="Free plan limit: 5 pending message requests. Upgrade to Pro for unlimited.",
-                )
-        # Rate limit: max 5 pending requests per hour from free-tier senders.
-        # Pro / Elite are not rate-limited (feature they pay for).
-        if tier == "free":
-            hour_ago = utcnow() - timedelta(hours=1)
-            sent = await db.dm_requests.count_documents({
-                "from_user_id": user["user_id"], "status": "pending",
-                "created_at": {"$gte": hour_ago},
-            })
-            if sent >= 5:
-                raise HTTPException(status_code=429, detail="Too many new requests. Try again later.")
-        existing_req = await db.dm_requests.find_one({
-            "from_user_id": user["user_id"], "to_user_id": target_id,
-            "status": {"$in": ["pending", "ignored"]},
-        })
-        if not existing_req:
-            await db.dm_requests.insert_one({
-                "request_id": f"dmr_{uuid.uuid4().hex[:12]}",
-                "from_user_id": user["user_id"],
-                "to_user_id": target_id,
-                "thread_id": thread["thread_id"],
-                "status": "pending",
-                "kind": body.kind or "message",
-                "created_at": utcnow(),
-            })
-            try:
-                await _emit_notification(
-                    target_id,
-                    "new_message_request",
-                    f"Message request from {user.get('name') or 'a photographer'}",
-                    (body.opening_body or '')[:140] or "Tap to review and accept",
-                    actor_user_id=user["user_id"],
-                    image_url=user.get("avatar_url"),
-                    deep_link=f"/inbox?tab=requests",
-                )
-            except Exception:
-                pass
-    # Optional opening body → post as first message via the /messages endpoint logic
-    opening_preview = None
-    if body.opening_body and body.opening_body.strip():
-        # Pre-filled templates for refer/collab kinds
-        if not body.opening_body.strip() and body.kind == "refer":
-            body.opening_body = "Hey! I may have a client to refer to you — are you available?"
-        if not body.opening_body.strip() and body.kind == "collab":
-            body.opening_body = "Loved your work. Open to a collab shoot?"
-        msg_doc = await _dm_insert_message(
-            thread, user, {"type": "text", "body": body.opening_body.strip()},
-        )
-        opening_preview = msg_doc["body"]
-    return {
-        "thread_id": thread["thread_id"],
-        "is_request": is_request,
-        "opening_preview": opening_preview,
-    }
 
 
 async def _dm_insert_message(thread: dict, sender: dict, payload: dict) -> dict:
@@ -3346,219 +2870,22 @@ async def _dm_insert_message(thread: dict, sender: dict, payload: dict) -> dict:
     return doc
 
 
-@api.post("/dm/threads/{thread_id}/messages")
-async def dm_send_message(
-    thread_id: str,
-    body: DMSendIn,
-    user: dict = Depends(get_current_user),
-):
-    thread = await db.dm_threads.find_one({"thread_id": thread_id})
-    if not thread or user["user_id"] not in thread["participant_user_ids"]:
-        raise HTTPException(status_code=404, detail="Thread not found")
-    # Block check on the recipient side
-    other_ids = [u for u in thread["participant_user_ids"] if u != user["user_id"]]
-    if other_ids:
-        blk = await db.dm_blocks.find_one({"blocker_user_id": other_ids[0], "blocked_user_id": user["user_id"]})
-        if blk:
-            raise HTTPException(status_code=403, detail="Cannot send to this user")
-    msg = await _dm_insert_message(thread, user, body.model_dump())
-    msg.pop("_id", None)
-    return msg
 
 
-@api.get("/dm/threads")
-async def dm_list_threads(
-    tab: str = "all",   # "all" | "requests" | "accepted"
-    limit: int = 30,
-    user: dict = Depends(get_current_user),
-):
-    """List my threads grouped/filtered by tab.
-
-    - 'accepted' ⇒ exclude threads whose last_message_at is null AND we
-      have a pending request from the other side.
-    - 'requests' ⇒ only pending inbound requests.
-    """
-    limit = max(1, min(100, limit))
-    if tab == "requests":
-        pending = await db.dm_requests.find(
-            {"to_user_id": user["user_id"], "status": "pending"}, {"_id": 0}
-        ).sort("created_at", -1).limit(limit).to_list(limit)
-        # Hydrate sender
-        sids = list({r["from_user_id"] for r in pending})
-        users = await db.users.find({"user_id": {"$in": sids}},
-            {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
-             "verification_status": 1, "plan": 1, "city": 1, "specialties": 1}).to_list(len(sids))
-        umap = {u["user_id"]: u for u in users}
-        for r in pending:
-            r["sender"] = umap.get(r["from_user_id"])
-        return {"items": pending, "tab": "requests"}
-
-    # Accepted / all
-    part_filter = {"user_id": user["user_id"], "hidden": {"$ne": True}}
-    myparts = await db.dm_participants.find(part_filter, {"_id": 0}).to_list(500)
-    tids = [p["thread_id"] for p in myparts]
-    threads = await db.dm_threads.find(
-        {"thread_id": {"$in": tids}}, {"_id": 0}
-    ).sort("last_message_at", -1).to_list(limit)
-    # Drop threads with no messages that still have pending inbound requests
-    # (those live in Requests tab)
-    pending_from_me_ids = await db.dm_requests.find(
-        {"from_user_id": user["user_id"], "status": "pending"}, {"_id": 0, "thread_id": 1}
-    ).to_list(500)
-    pending_thread_ids = {r["thread_id"] for r in pending_from_me_ids}
-    # Hydrate other participant + unread counts
-    other_ids: list = []
-    for t in threads: other_ids += [u for u in t["participant_user_ids"] if u != user["user_id"]]
-    other_ids = list(set(other_ids))
-    ulist = await db.users.find({"user_id": {"$in": other_ids}},
-        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
-         "verification_status": 1, "plan": 1, "city": 1, "specialties": 1}).to_list(len(other_ids))
-    umap = {u["user_id"]: u for u in ulist}
-    my_map = {p["thread_id"]: p for p in myparts}
-    out = []
-    for t in threads:
-        others = [u for u in t["participant_user_ids"] if u != user["user_id"]]
-        other = umap.get(others[0]) if others else None
-        last_read = (my_map.get(t["thread_id"]) or {}).get("last_read_at")
-        q_unread: dict = {"thread_id": t["thread_id"], "sender_user_id": {"$ne": user["user_id"]}}
-        if last_read:
-            q_unread["created_at"] = {"$gt": last_read}
-        unread = await db.dm_messages.count_documents(q_unread)
-        row = {
-            **t,
-            "other": other,
-            "unread_count": unread,
-            "is_muted": (my_map.get(t["thread_id"]) or {}).get("is_muted", False),
-            "is_pending_from_me": t["thread_id"] in pending_thread_ids,
-        }
-        out.append(row)
-    return {"items": out, "tab": tab}
 
 
-@api.get("/dm/threads/{thread_id}")
-async def dm_get_thread(
-    thread_id: str,
-    limit: int = 50,
-    before: Optional[str] = None,  # ISO timestamp for pagination
-    user: dict = Depends(get_current_user),
-):
-    thread = await db.dm_threads.find_one({"thread_id": thread_id}, {"_id": 0})
-    if not thread or user["user_id"] not in thread["participant_user_ids"]:
-        raise HTTPException(status_code=404, detail="Not found")
-    limit = max(1, min(100, limit))
-    q: dict = {"thread_id": thread_id, "is_deleted": {"$ne": True}}
-    if before:
-        try:
-            q["created_at"] = {"$lt": datetime.fromisoformat(before.replace("Z", "+00:00"))}
-        except Exception:
-            pass
-    msgs = await db.dm_messages.find(q, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
-    msgs.reverse()  # chronological
-    # Hydrate refs (spot_share + profile_share)
-    ref_spot_ids = list({m["ref_spot_id"] for m in msgs if m.get("ref_spot_id")})
-    ref_user_ids = list({m["ref_user_id"] for m in msgs if m.get("ref_user_id")})
-    smap, umap = {}, {}
-    if ref_spot_ids:
-        rows = await db.spots.find({"spot_id": {"$in": ref_spot_ids}},
-            {"_id": 0, "spot_id": 1, "title": 1, "city": 1, "state": 1, "images": 1}).to_list(len(ref_spot_ids))
-        for s in rows:
-            imgs = s.get("images") or []
-            cover = next((i.get("image_url") for i in imgs if isinstance(i, dict) and i.get("is_cover")), None) or (imgs[0].get("image_url") if imgs and isinstance(imgs[0], dict) else None)
-            smap[s["spot_id"]] = {"spot_id": s["spot_id"], "title": s.get("title"), "city": s.get("city"), "state": s.get("state"), "cover_image_url": cover}
-    if ref_user_ids:
-        rows = await db.users.find({"user_id": {"$in": ref_user_ids}},
-            {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "city": 1, "specialties": 1}).to_list(len(ref_user_ids))
-        umap = {u["user_id"]: u for u in rows}
-    for m in msgs:
-        if m.get("ref_spot_id"): m["spot_ref"] = smap.get(m["ref_spot_id"])
-        if m.get("ref_user_id"): m["user_ref"] = umap.get(m["ref_user_id"])
-    # Hydrate other + last_read
-    others = [u for u in thread["participant_user_ids"] if u != user["user_id"]]
-    other_u = await db.users.find_one({"user_id": others[0]} if others else {"user_id": "__none__"},
-        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1, "plan": 1, "city": 1, "specialties": 1}) if others else None
-    other_part = await db.dm_participants.find_one({"thread_id": thread_id, "user_id": others[0]}, {"_id": 0}) if others else None
-    return {
-        "thread": thread,
-        "other": other_u,
-        "other_last_read_at": (other_part or {}).get("last_read_at"),
-        "messages": msgs,
-    }
 
 
-@api.post("/dm/threads/{thread_id}/mark-read")
-async def dm_mark_read(thread_id: str, user: dict = Depends(get_current_user)):
-    thread = await db.dm_threads.find_one({"thread_id": thread_id})
-    if not thread or user["user_id"] not in thread["participant_user_ids"]:
-        raise HTTPException(status_code=404, detail="Not found")
-    await db.dm_participants.update_one(
-        {"thread_id": thread_id, "user_id": user["user_id"]},
-        {"$set": {"last_read_at": utcnow()}},
-    )
-    return {"ok": True}
 
 
-@api.post("/dm/threads/{thread_id}/mute")
-async def dm_mute_toggle(thread_id: str, user: dict = Depends(get_current_user)):
-    p = await db.dm_participants.find_one({"thread_id": thread_id, "user_id": user["user_id"]})
-    if not p:
-        raise HTTPException(status_code=404, detail="Not found")
-    new_val = not p.get("is_muted", False)
-    await db.dm_participants.update_one(
-        {"thread_id": thread_id, "user_id": user["user_id"]},
-        {"$set": {"is_muted": new_val}},
-    )
-    return {"is_muted": new_val}
 
 
-@api.delete("/dm/threads/{thread_id}")
-async def dm_delete_thread(thread_id: str, user: dict = Depends(get_current_user)):
-    """Soft-delete for this viewer only — re-appears on next inbound message."""
-    await db.dm_participants.update_one(
-        {"thread_id": thread_id, "user_id": user["user_id"]},
-        {"$set": {"hidden": True, "last_read_at": utcnow()}},
-    )
-    return {"ok": True}
 
 
-@api.post("/dm/requests/{request_id}/accept")
-async def dm_accept_request(request_id: str, user: dict = Depends(get_current_user)):
-    r = await db.dm_requests.find_one({"request_id": request_id})
-    if not r or r["to_user_id"] != user["user_id"]:
-        raise HTTPException(status_code=404, detail="Not found")
-    await db.dm_requests.update_one({"request_id": request_id}, {"$set": {"status": "accepted", "acted_at": utcnow()}})
-    return {"ok": True, "thread_id": r["thread_id"]}
 
 
-@api.post("/dm/requests/{request_id}/ignore")
-async def dm_ignore_request(request_id: str, user: dict = Depends(get_current_user)):
-    r = await db.dm_requests.find_one({"request_id": request_id})
-    if not r or r["to_user_id"] != user["user_id"]:
-        raise HTTPException(status_code=404, detail="Not found")
-    await db.dm_requests.update_one({"request_id": request_id}, {"$set": {"status": "ignored", "acted_at": utcnow()}})
-    # Hide the thread for the recipient until further action
-    await db.dm_participants.update_one(
-        {"thread_id": r["thread_id"], "user_id": user["user_id"]},
-        {"$set": {"hidden": True}},
-    )
-    return {"ok": True}
 
 
-@api.post("/dm/requests/{request_id}/block")
-async def dm_block_from_request(request_id: str, user: dict = Depends(get_current_user)):
-    r = await db.dm_requests.find_one({"request_id": request_id})
-    if not r or r["to_user_id"] != user["user_id"]:
-        raise HTTPException(status_code=404, detail="Not found")
-    await db.dm_blocks.update_one(
-        {"blocker_user_id": user["user_id"], "blocked_user_id": r["from_user_id"]},
-        {"$set": {"blocker_user_id": user["user_id"], "blocked_user_id": r["from_user_id"], "created_at": utcnow()}},
-        upsert=True,
-    )
-    await db.dm_requests.update_one({"request_id": request_id}, {"$set": {"status": "blocked", "acted_at": utcnow()}})
-    await db.dm_participants.update_one(
-        {"thread_id": r["thread_id"], "user_id": user["user_id"]},
-        {"$set": {"hidden": True}},
-    )
-    return {"ok": True}
 
 
 @api.post("/users/{user_id}/report")
@@ -3649,127 +2976,10 @@ async def _compute_trust_metrics(user_id: str) -> dict:
     }
 
 
-@api.get("/users/{user_id}/trust")
-async def get_user_trust(user_id: str):
-    m = await _compute_trust_metrics(user_id)
-    u = await db.users.find_one({"user_id": user_id}, {"_id": 0, "created_at": 1, "verification_status": 1, "city": 1, "state": 1, "specialties": 1})
-    return {**m, **(u or {})}
 
 
-@api.get("/network/discover")
-async def network_discover(
-    limit_per_rail: int = 10,
-    viewer: Optional[dict] = Depends(get_optional_user),
-):
-    """Return the 'Network' discovery rails in one call."""
-    limit_per_rail = max(1, min(20, limit_per_rail))
-    proj = {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
-            "verification_status": 1, "plan": 1, "city": 1, "state": 1,
-            "specialties": 1, "is_bot": 1, "is_official": 1, "created_at": 1,
-            "available_for_referrals": 1, "available_for_second_shooter": 1,
-            "years_experience": 1, "bio": 1}
-    base = {"is_bot": {"$ne": True}, "is_official": {"$ne": True}}
-    if viewer: base["user_id"] = {"$ne": viewer["user_id"]}
-
-    near_rail: list = []
-    if viewer and viewer.get("city"):
-        near_rail = await db.users.find({**base, "city": viewer["city"]}, proj).limit(limit_per_rail).to_list(limit_per_rail)
-    # Popular in city
-    popular_in_city: list = []
-    if viewer and viewer.get("city"):
-        popular_in_city = await db.users.find({**base, "city": viewer["city"]}, proj).sort("created_at", -1).limit(limit_per_rail).to_list(limit_per_rail)
-
-    async def _niche(tag: str) -> list:
-        return await db.users.find({**base, "specialties": {"$regex": tag, "$options": "i"}}, proj).limit(limit_per_rail).to_list(limit_per_rail)
-    pet = await _niche("pet")
-    wedding = await _niche("wedding")
-    family = await _niche("family")
-    # New members (joined last 30d)
-    cutoff = utcnow() - timedelta(days=30)
-    new_members = await db.users.find({**base, "created_at": {"$gte": cutoff}}, proj).sort("created_at", -1).limit(limit_per_rail).to_list(limit_per_rail)
-    # Top contributors: users with the most approved community uploads
-    pipeline = [
-        {"$match": {"moderation_status": "approved"}},
-        {"$group": {"_id": "$user_id", "uploads": {"$sum": 1}}},
-        {"$sort": {"uploads": -1}},
-        {"$limit": limit_per_rail},
-    ]
-    top_ids = [r["_id"] async for r in db.spot_community_uploads.aggregate(pipeline)]
-    top_contribs = await db.users.find({**base, "user_id": {"$in": top_ids}}, proj).to_list(limit_per_rail) if top_ids else []
-    # Verified pros
-    verified = await db.users.find({**base, "verification_status": "verified"}, proj).limit(limit_per_rail).to_list(limit_per_rail)
-    # Available for referrals / second shooter
-    avail_refer = await db.users.find({**base, "available_for_referrals": True}, proj).limit(limit_per_rail).to_list(limit_per_rail)
-    avail_second = await db.users.find({**base, "available_for_second_shooter": True}, proj).limit(limit_per_rail).to_list(limit_per_rail)
-
-    # Phase B.3 — Elite discovery boost.
-    # Moderate boost so Elite photographers surface first in every rail
-    # without feeling spammy. Preserves existing order within each tier.
-    def _elite_boost(lst: list) -> list:
-        elites = [u for u in lst if (u.get("plan") or "free") == "elite"]
-        pros = [u for u in lst if (u.get("plan") or "free") == "pro"]
-        rest = [u for u in lst if (u.get("plan") or "free") not in ("elite", "pro")]
-        return elites + pros + rest
-
-    near_rail = _elite_boost(near_rail)
-    popular_in_city = _elite_boost(popular_in_city)
-    pet = _elite_boost(pet)
-    wedding = _elite_boost(wedding)
-    family = _elite_boost(family)
-    new_members = _elite_boost(new_members)
-    top_contribs = _elite_boost(top_contribs)
-    verified = _elite_boost(verified)
-    avail_refer = _elite_boost(avail_refer)
-    avail_second = _elite_boost(avail_second)
-    return {
-        "near_you": [_user_public_view(u) for u in near_rail],
-        "popular_in_city": [_user_public_view(u) for u in popular_in_city],
-        "pet": [_user_public_view(u) for u in pet],
-        "wedding": [_user_public_view(u) for u in wedding],
-        "family": [_user_public_view(u) for u in family],
-        "new_members": [_user_public_view(u) for u in new_members],
-        "top_contributors": [_user_public_view(u) for u in top_contribs],
-        "verified_pros": [_user_public_view(u) for u in verified],
-        "available_for_referrals": [_user_public_view(u) for u in avail_refer],
-        "available_for_second_shooter": [_user_public_view(u) for u in avail_second],
-    }
 
 
-@api.get("/network/search")
-async def network_search(
-    q: Optional[str] = None,
-    city: Optional[str] = None,
-    niche: Optional[str] = None,
-    min_years: Optional[int] = None,
-    available_for_referrals: Optional[bool] = None,
-    available_for_second_shooter: Optional[bool] = None,
-    verified_only: bool = False,
-    plan: Optional[str] = None,  # "pro"|"elite"
-    limit: int = 30,
-    viewer: Optional[dict] = Depends(get_optional_user),
-):
-    limit = max(1, min(60, limit))
-    query: dict = {"is_bot": {"$ne": True}, "is_official": {"$ne": True}}
-    if viewer: query["user_id"] = {"$ne": viewer["user_id"]}
-    if q:
-        query["$or"] = [
-            {"name": {"$regex": q, "$options": "i"}},
-            {"username": {"$regex": q, "$options": "i"}},
-            {"bio": {"$regex": q, "$options": "i"}},
-            {"specialties": {"$regex": q, "$options": "i"}},
-        ]
-    if city: query["city"] = {"$regex": f"^{city}", "$options": "i"}
-    if niche: query["specialties"] = {"$regex": niche, "$options": "i"}
-    if min_years is not None: query["years_experience"] = {"$gte": min_years}
-    if available_for_referrals: query["available_for_referrals"] = True
-    if available_for_second_shooter: query["available_for_second_shooter"] = True
-    if verified_only: query["verification_status"] = "verified"
-    if plan in ("pro", "elite"): query["plan"] = plan
-    rows = await db.users.find(query, {"_id": 0, "user_id": 1, "name": 1, "username": 1,
-        "avatar_url": 1, "verification_status": 1, "plan": 1, "city": 1, "state": 1,
-        "specialties": 1, "years_experience": 1, "bio": 1, "available_for_referrals": 1,
-        "available_for_second_shooter": 1}).limit(limit).to_list(limit)
-    return {"items": rows, "total": len(rows)}
 
 
 # ============================================================================
@@ -5717,30 +4927,6 @@ async def revoke_poll_vote(post_id: str, user: dict = Depends(get_current_user))
 
 
 # ----- Mentorship matching ------------------------------------------------
-@api.get("/mentors")
-async def list_mentors(
-    specialty: Optional[str] = None,
-    city: Optional[str] = None,
-    limit: int = 50,
-    user: dict = Depends(get_current_user),
-):
-    """List photographers offering mentorship. Excludes viewer + suspended."""
-    q: Dict[str, Any] = {
-        "mentorship_available": True,
-        "user_id": {"$ne": user["user_id"]},
-        "plan": {"$ne": "suspended"},
-    }
-    if specialty:
-        q["specialties"] = specialty
-    if city:
-        q["city"] = city
-    items = await db.users.find(
-        q,
-        {
-            "_id": 0, "password_hash": 0,
-        },
-    ).sort([("verification_status", -1), ("created_at", -1)]).limit(min(limit, 100)).to_list(100)
-    return {"count": len(items), "items": items}
 
 
 @api.get("/mentees")
@@ -6096,102 +5282,16 @@ async def photographers_nearby(
 
 
 # ----- Direct Messaging ------------------------------------------------------
-class ConversationCreateIn(BaseModel):
-    participant_user_id: str
 
 
-@api.post("/conversations")
-async def create_or_get_conversation(body: ConversationCreateIn, user: dict = Depends(get_current_user)):
-    """Idempotent — returns existing 1:1 conversation if already created."""
-    if body.participant_user_id == user["user_id"]:
-        raise HTTPException(status_code=400, detail="Cannot DM yourself")
-    target = await db.users.find_one({"user_id": body.participant_user_id})
-    if not target:
-        raise HTTPException(status_code=404, detail="Recipient not found")
-    ids = sorted([user["user_id"], body.participant_user_id])
-    convo = await db.conversations.find_one({"participant_key": "|".join(ids)}, {"_id": 0})
-    if convo:
-        return convo
-    convo = {
-        "conversation_id": f"conv_{uuid.uuid4().hex[:12]}",
-        "participant_user_ids": ids,
-        "participant_key": "|".join(ids),
-        "last_message": None,
-        "last_message_at": utcnow(),
-        "created_at": utcnow(),
-    }
-    await db.conversations.insert_one(convo)
-    convo.pop("_id", None)
-    return convo
 
 
-@api.get("/me/conversations")
-async def list_my_conversations(user: dict = Depends(get_current_user)):
-    convos = await db.conversations.find(
-        {"participant_user_ids": user["user_id"]}, {"_id": 0},
-    ).sort("last_message_at", -1).to_list(100)
-    # Attach other participant summary + unread count
-    other_ids = []
-    for c in convos:
-        other = next((p for p in c["participant_user_ids"] if p != user["user_id"]), None)
-        c["other_user_id"] = other
-        other_ids.append(other)
-    others = await db.users.find(
-        {"user_id": {"$in": [o for o in other_ids if o]}},
-        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1},
-    ).to_list(200)
-    umap = {u["user_id"]: u for u in others}
-    for c in convos:
-        c["other"] = umap.get(c["other_user_id"])
-        c["unread"] = await db.messages.count_documents({
-            "conversation_id": c["conversation_id"],
-            "sender_user_id": {"$ne": user["user_id"]},
-            "read_by": {"$ne": user["user_id"]},
-        })
-    return convos
 
 
-@api.get("/conversations/{conversation_id}/messages")
-async def list_messages(conversation_id: str, user: dict = Depends(get_current_user)):
-    convo = await db.conversations.find_one({"conversation_id": conversation_id})
-    if not convo or user["user_id"] not in convo["participant_user_ids"]:
-        raise HTTPException(status_code=404, detail="Not found")
-    msgs = await db.messages.find({"conversation_id": conversation_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
-    # Mark all read by this viewer in one shot
-    await db.messages.update_many(
-        {"conversation_id": conversation_id, "sender_user_id": {"$ne": user["user_id"]}, "read_by": {"$ne": user["user_id"]}},
-        {"$addToSet": {"read_by": user["user_id"]}},
-    )
-    return msgs
 
 
-class MessageIn(BaseModel):
-    body: str
 
 
-@api.post("/conversations/{conversation_id}/messages")
-async def send_message(conversation_id: str, body: MessageIn, user: dict = Depends(get_current_user)):
-    check_rate_limit("review_create", user["user_id"])
-    convo = await db.conversations.find_one({"conversation_id": conversation_id})
-    if not convo or user["user_id"] not in convo["participant_user_ids"]:
-        raise HTTPException(status_code=404, detail="Not found")
-    if not body.body.strip():
-        raise HTTPException(status_code=400, detail="Empty message")
-    doc = {
-        "message_id": f"msg_{uuid.uuid4().hex[:12]}",
-        "conversation_id": conversation_id,
-        "sender_user_id": user["user_id"],
-        "body": body.body.strip()[:2000],
-        "read_by": [user["user_id"]],
-        "created_at": utcnow(),
-    }
-    await db.messages.insert_one(doc)
-    await db.conversations.update_one(
-        {"conversation_id": conversation_id},
-        {"$set": {"last_message": doc["body"][:120], "last_message_at": doc["created_at"]}},
-    )
-    doc.pop("_id", None)
-    return doc
 
 
 @api.get("/community/onboarding-status")
@@ -6313,39 +5413,10 @@ async def spot_astronomy(spot_id: str, date: Optional[str] = None):
 # Push notifications — Expo push tokens + sender helper
 # ----------------------------------------------------------------------------
 
-class PushTokenIn(BaseModel):
-    token: str
-    platform: Optional[str] = None   # "ios" | "android" | "web"
-    device_id: Optional[str] = None
 
 
-@api.post("/me/push-token")
-async def register_push_token(body: PushTokenIn, user: dict = Depends(get_current_user)):
-    if not body.token or not body.token.startswith("ExponentPushToken"):
-        raise HTTPException(status_code=400, detail="Not a valid Expo push token")
-    now = utcnow()
-    set_doc = {
-        "user_id": user["user_id"],
-        "token": body.token,
-        "platform": body.platform or "unknown",
-        "device_id": body.device_id,
-        "updated_at": now,
-    }
-    # Upsert by (user_id, token) so reinstalls don't duplicate.
-    # created_at lives only in $setOnInsert so it's preserved on updates and
-    # doesn't conflict with $set on the same path.
-    await db.push_tokens.update_one(
-        {"user_id": user["user_id"], "token": body.token},
-        {"$set": set_doc, "$setOnInsert": {"created_at": now}},
-        upsert=True,
-    )
-    return {"ok": True}
 
 
-@api.delete("/me/push-token")
-async def unregister_push_token(token: str, user: dict = Depends(get_current_user)):
-    await db.push_tokens.delete_one({"user_id": user["user_id"], "token": token})
-    return {"ok": True}
 
 
 async def send_push(user_ids: List[str], title: str, body: str, data: Optional[dict] = None):
@@ -7434,81 +6505,10 @@ REFERRAL_STATUSES = ["open", "reviewing", "filled", "closed", "expired"]
 REFERRAL_APPLY_CAP_FREE_MONTH = 5
 
 
-class ReferralCreateIn(BaseModel):
-    title: str
-    shoot_type: str
-    gig_type: str
-    city: str
-    state: Optional[str] = None
-    country: Optional[str] = "US"
-    event_date: Optional[str] = None           # ISO date (YYYY-MM-DD)
-    duration_hours: Optional[float] = None
-    budget_min: Optional[float] = None
-    budget_max: Optional[float] = None
-    budget_currency: Optional[str] = "USD"
-    notes: Optional[str] = None
-    reference_images: Optional[List[str]] = None  # base64 data: urls (up to 4)
-    urgency: Optional[str] = "normal"          # "urgent" | "normal"
-    expires_in_days: Optional[int] = 30        # 1..90
-
-    @field_validator("title")
-    @classmethod
-    def _title_guard(cls, v: str) -> str:
-        v = (v or "").strip()
-        if len(v) < 4:
-            raise ValueError("Title must be at least 4 characters.")
-        if len(v) > 140:
-            raise ValueError("Title must be 140 characters or fewer.")
-        return v
-
-    @field_validator("gig_type")
-    @classmethod
-    def _gig_guard(cls, v: str) -> str:
-        if v not in GIG_TYPES:
-            raise ValueError(f"gig_type must be one of {', '.join(GIG_TYPES)}")
-        return v
-
-    @field_validator("urgency")
-    @classmethod
-    def _urgency_guard(cls, v: Optional[str]) -> str:
-        v = (v or "normal").lower()
-        return "urgent" if v == "urgent" else "normal"
-
-    @field_validator("reference_images")
-    @classmethod
-    def _refs_guard(cls, v: Optional[List[str]]) -> Optional[List[str]]:
-        if not v:
-            return None
-        if len(v) > 4:
-            raise ValueError("Up to 4 reference images allowed.")
-        return v
 
 
-class ReferralUpdateIn(BaseModel):
-    status: Optional[str] = None               # open | reviewing | filled | closed
-    notes: Optional[str] = None
-    urgency: Optional[str] = None
-
-    @field_validator("status")
-    @classmethod
-    def _s_guard(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return None
-        if v not in REFERRAL_STATUSES:
-            raise ValueError("Invalid status")
-        return v
 
 
-class ReferralApplyIn(BaseModel):
-    pitch: Optional[str] = None
-
-    @field_validator("pitch")
-    @classmethod
-    def _pitch_guard(cls, v: Optional[str]) -> Optional[str]:
-        v = (v or "").strip() or None
-        if v and len(v) > 1000:
-            raise ValueError("Pitch must be 1000 characters or fewer.")
-        return v
 
 
 async def _hydrate_poster(uid: str) -> Optional[dict]:
@@ -7531,436 +6531,28 @@ async def _hydrate_poster(uid: str) -> Optional[dict]:
     }
 
 
-async def _shape_need(need: dict, viewer: Optional[dict] = None) -> dict:
-    """Public-safe representation; hydrates poster + applicant_count + is_mine
-    + my_application (for viewer). Never leaks email/password_hash."""
-    need = dict(need)
-    need.pop("_id", None)
-    need["poster"] = await _hydrate_poster(need.get("poster_user_id"))
-    need["applicant_count"] = await db.referral_applications.count_documents(
-        {"need_id": need["need_id"]}
-    )
-    need["is_mine"] = bool(viewer and viewer.get("user_id") == need.get("poster_user_id"))
-    need["my_application"] = None
-    if viewer and not need["is_mine"]:
-        app = await db.referral_applications.find_one(
-            {"need_id": need["need_id"], "applicant_user_id": viewer["user_id"]},
-            {"_id": 0},
-        )
-        if app:
-            need["my_application"] = {
-                "app_id": app.get("app_id"),
-                "status": app.get("status"),
-                "created_at": app.get("created_at"),
-                "thread_id": app.get("thread_id"),
-            }
-    return need
 
 
-@api.post("/referrals")
-async def create_referral_need(
-    body: ReferralCreateIn, user: dict = Depends(get_current_user),
-):
-    now = utcnow()
-    exp_days = max(1, min(int(body.expires_in_days or 30), 90))
-    event_date_dt = None
-    if body.event_date:
-        try:
-            event_date_dt = datetime.fromisoformat(body.event_date.replace("Z", "+00:00"))
-        except Exception:
-            event_date_dt = None
-    doc = {
-        "need_id": f"need_{uuid.uuid4().hex[:12]}",
-        "poster_user_id": user["user_id"],
-        "poster_plan": plan_of(user),
-        "title": body.title,
-        "shoot_type": body.shoot_type,
-        "gig_type": body.gig_type,
-        "city": body.city,
-        "state": body.state,
-        "country": body.country or "US",
-        "event_date": event_date_dt,
-        "duration_hours": body.duration_hours,
-        "budget_min": body.budget_min,
-        "budget_max": body.budget_max,
-        "budget_currency": (body.budget_currency or "USD").upper(),
-        "notes": (body.notes or "").strip() or None,
-        "reference_images": body.reference_images or [],
-        "urgency": body.urgency,
-        "status": "open",
-        "accepted_user_id": None,
-        "posted_at": now,
-        "updated_at": now,
-        "expires_at": now + timedelta(days=exp_days),
-        # Elite posters get a featured flag for rail sorting
-        "is_featured": plan_of(user) == "elite",
-    }
-    await db.referral_needs.insert_one(doc)
-
-    # Push "referral opportunity nearby" to available photographers in the
-    # same city (excluding the poster). 1-hr same-city dedupe handled by
-    # send_growth_push's 10-min dedupe on (user_id, kind, title). Cap batch
-    # to 50 to respect Expo limits + platform quiet-hours.
-    try:
-        city = (body.city or "").strip()
-        if city:
-            q_targets = {
-                "available_for_referrals": True,
-                "user_id": {"$ne": user["user_id"]},
-                "city": city,
-            }
-            cursor = db.users.find(q_targets, {"_id": 0, "user_id": 1}).limit(50)
-            async for tgt in cursor:
-                tid = tgt.get("user_id")
-                if not tid:
-                    continue
-                shoot = (body.shoot_type or "shoot").replace("_", " ")
-                await _emit_notification(
-                    tid,
-                    "referral_nearby",
-                    f"New {shoot} gig in {city}",
-                    f"{(body.title or 'A photographer')[:80]} — tap to apply",
-                    actor_user_id=user["user_id"],
-                    deep_link=f"/referrals/{doc['need_id']}",
-                )
-    except Exception:
-        pass
-
-    return await _shape_need(doc, user)
 
 
-@api.get("/referrals")
-async def list_referral_needs(
-    q: Optional[str] = None,
-    city: Optional[str] = None,
-    gig_type: Optional[str] = None,
-    shoot_type: Optional[str] = None,
-    status: Optional[str] = None,            # defaults to "open" below
-    urgent: Optional[bool] = None,
-    sort: Optional[str] = "recent",          # recent | soonest | oldest
-    limit: int = 30,
-    viewer: Optional[dict] = Depends(get_optional_user),
-):
-    """Browse referral needs. Default filters to status=open."""
-    filt: dict = {}
-    if status:
-        filt["status"] = status
-    else:
-        filt["status"] = "open"
-    if city:
-        filt["city"] = {"$regex": f"^{city}$", "$options": "i"}
-    if gig_type:
-        filt["gig_type"] = gig_type
-    if shoot_type:
-        filt["shoot_type"] = shoot_type
-    if urgent:
-        filt["urgency"] = "urgent"
-    if q:
-        filt["$or"] = [
-            {"title": {"$regex": q, "$options": "i"}},
-            {"notes": {"$regex": q, "$options": "i"}},
-            {"shoot_type": {"$regex": q, "$options": "i"}},
-            {"city": {"$regex": q, "$options": "i"}},
-        ]
-    # Auto-expire: mark anything past expires_at as expired (non-blocking)
-    try:
-        await db.referral_needs.update_many(
-            {"status": "open", "expires_at": {"$lt": utcnow()}},
-            {"$set": {"status": "expired", "updated_at": utcnow()}},
-        )
-    except Exception:
-        pass
-    # Sort: featured first, then chosen order
-    if sort == "soonest":
-        cur = db.referral_needs.find(filt, {"_id": 0}).sort(
-            [("is_featured", -1), ("event_date", 1), ("posted_at", -1)]
-        )
-    elif sort == "oldest":
-        cur = db.referral_needs.find(filt, {"_id": 0}).sort(
-            [("is_featured", -1), ("posted_at", 1)]
-        )
-    else:
-        cur = db.referral_needs.find(filt, {"_id": 0}).sort(
-            [("is_featured", -1), ("posted_at", -1)]
-        )
-    rows = await cur.limit(max(1, min(limit, 100))).to_list(length=max(1, min(limit, 100)))
-    items = [await _shape_need(r, viewer) for r in rows]
-    return {"items": items, "count": len(items)}
 
 
-@api.get("/referrals/rails")
-async def referral_rails(
-    city: Optional[str] = None,
-    viewer: Optional[dict] = Depends(get_optional_user),
-):
-    """Return 6 horizontal rails of referral needs for the Network tab.
-       Each rail caps at 10 items, filtered to open+non-expired."""
-    viewer_city = city or (viewer or {}).get("city")
-    base = {"status": "open"}
-    try:
-        await db.referral_needs.update_many(
-            {"status": "open", "expires_at": {"$lt": utcnow()}},
-            {"$set": {"status": "expired", "updated_at": utcnow()}},
-        )
-    except Exception:
-        pass
-
-    async def _fetch(q: dict, sort_fields: list, limit: int = 10) -> list:
-        cur = db.referral_needs.find(q, {"_id": 0}).sort(sort_fields)
-        rows = await cur.limit(limit).to_list(length=limit)
-        return [await _shape_need(r, viewer) for r in rows]
-
-    rails = {
-        "urgent": await _fetch(
-            {**base, "urgency": "urgent"},
-            [("is_featured", -1), ("posted_at", -1)],
-        ),
-        "nearby": await _fetch(
-            {**base, "city": {"$regex": f"^{viewer_city}$", "$options": "i"}}
-            if viewer_city else base,
-            [("is_featured", -1), ("posted_at", -1)],
-        ),
-        "wedding": await _fetch(
-            {**base, "$or": [
-                {"gig_type": "wedding_support"},
-                {"shoot_type": {"$regex": "wedding", "$options": "i"}},
-            ]},
-            [("is_featured", -1), ("posted_at", -1)],
-        ),
-        "pet": await _fetch(
-            {**base, "$or": [
-                {"gig_type": "pet_session"},
-                {"shoot_type": {"$regex": "pet", "$options": "i"}},
-            ]},
-            [("is_featured", -1), ("posted_at", -1)],
-        ),
-        "second_shooter": await _fetch(
-            {**base, "gig_type": {"$in": ["second_shooter", "associate_shooter"]}},
-            [("is_featured", -1), ("posted_at", -1)],
-        ),
-        "new_today": await _fetch(
-            {**base, "posted_at": {"$gte": utcnow() - timedelta(days=1)}},
-            [("is_featured", -1), ("posted_at", -1)],
-        ),
-    }
-    return rails
 
 
-@api.get("/me/referrals")
-async def my_referral_needs(user: dict = Depends(get_current_user)):
-    cur = db.referral_needs.find({"poster_user_id": user["user_id"]}, {"_id": 0}).sort("posted_at", -1)
-    rows = await cur.to_list(length=200)
-    items = [await _shape_need(r, user) for r in rows]
-    return {"items": items, "count": len(items)}
 
 
-@api.get("/me/applications")
-async def my_referral_applications(user: dict = Depends(get_current_user)):
-    cur = db.referral_applications.find(
-        {"applicant_user_id": user["user_id"]}, {"_id": 0}
-    ).sort("created_at", -1)
-    apps = await cur.to_list(length=200)
-    items: List[dict] = []
-    for a in apps:
-        need = await db.referral_needs.find_one({"need_id": a["need_id"]}, {"_id": 0})
-        if not need:
-            continue
-        items.append({
-            **a,
-            "need": await _shape_need(need, user),
-        })
-    return {"items": items, "count": len(items)}
 
 
-@api.get("/referrals/{need_id}")
-async def get_referral_need(
-    need_id: str,
-    viewer: Optional[dict] = Depends(get_optional_user),
-):
-    need = await db.referral_needs.find_one({"need_id": need_id}, {"_id": 0})
-    if not need:
-        raise HTTPException(status_code=404, detail="Referral not found")
-    shaped = await _shape_need(need, viewer)
-    # If viewer is the poster, include the full applicant list
-    if viewer and viewer.get("user_id") == need.get("poster_user_id"):
-        cur = db.referral_applications.find({"need_id": need_id}, {"_id": 0}).sort("created_at", -1)
-        apps = await cur.to_list(length=500)
-        hydrated_apps: List[dict] = []
-        for a in apps:
-            hydrated_apps.append({
-                **a,
-                "applicant": await _hydrate_poster(a.get("applicant_user_id")),
-            })
-        shaped["applications"] = hydrated_apps
-    return shaped
 
 
-@api.patch("/referrals/{need_id}")
-async def update_referral_need(
-    need_id: str, body: ReferralUpdateIn,
-    user: dict = Depends(get_current_user),
-):
-    need = await db.referral_needs.find_one({"need_id": need_id})
-    if not need:
-        raise HTTPException(status_code=404, detail="Referral not found")
-    if need["poster_user_id"] != user["user_id"] and user.get("role") not in ("admin", "super_admin", "moderator"):
-        raise HTTPException(status_code=403, detail="Not authorized")
-    patch = {"updated_at": utcnow()}
-    if body.status is not None:
-        patch["status"] = body.status
-    if body.notes is not None:
-        patch["notes"] = body.notes.strip() or None
-    if body.urgency is not None:
-        patch["urgency"] = "urgent" if body.urgency == "urgent" else "normal"
-    await db.referral_needs.update_one({"need_id": need_id}, {"$set": patch})
-    need = await db.referral_needs.find_one({"need_id": need_id}, {"_id": 0})
-    return await _shape_need(need, user)
 
 
-@api.delete("/referrals/{need_id}")
-async def delete_referral_need(need_id: str, user: dict = Depends(get_current_user)):
-    need = await db.referral_needs.find_one({"need_id": need_id})
-    if not need:
-        raise HTTPException(status_code=404, detail="Referral not found")
-    if need["poster_user_id"] != user["user_id"] and user.get("role") not in ("admin", "super_admin"):
-        raise HTTPException(status_code=403, detail="Not authorized")
-    await db.referral_needs.delete_one({"need_id": need_id})
-    await db.referral_applications.delete_many({"need_id": need_id})
-    return {"ok": True}
 
 
-@api.post("/referrals/{need_id}/apply")
-async def apply_to_referral(
-    need_id: str, body: ReferralApplyIn,
-    user: dict = Depends(get_current_user),
-):
-    need = await db.referral_needs.find_one({"need_id": need_id})
-    if not need:
-        raise HTTPException(status_code=404, detail="Referral not found")
-    if need["poster_user_id"] == user["user_id"]:
-        raise HTTPException(status_code=400, detail="You cannot apply to your own referral")
-    if need.get("status") not in ("open", "reviewing"):
-        raise HTTPException(status_code=400, detail="This referral is no longer accepting applicants")
-    # Dedupe — one application per (need, applicant)
-    existing = await db.referral_applications.find_one({
-        "need_id": need_id, "applicant_user_id": user["user_id"],
-    })
-    if existing:
-        raise HTTPException(status_code=409, detail="You have already applied to this referral")
-    # Tier-based monthly cap (free = 5 / month)
-    tier = _effective_plan(plan_of(user))
-    if tier == "free":
-        month_start = utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        used = await db.referral_applications.count_documents({
-            "applicant_user_id": user["user_id"],
-            "created_at": {"$gte": month_start},
-        })
-        if used >= REFERRAL_APPLY_CAP_FREE_MONTH:
-            raise HTTPException(
-                status_code=402,
-                detail=f"Free plan limit: {REFERRAL_APPLY_CAP_FREE_MONTH} applications per month. Upgrade to Pro for unlimited.",
-            )
-    # Auto-create DM thread so poster + applicant can chat
-    thread = await _dm_get_or_create_thread(user["user_id"], need["poster_user_id"])
-    opening_body = (body.pitch or "").strip() or (
-        f"Hi! I'd love to apply for \"{need.get('title')}\"."
-    )
-    try:
-        await _dm_insert_message(thread, user, {
-            "type": "text",
-            "body": f"📌 Applied to your referral: \"{need.get('title')}\"\n\n{opening_body}",
-        })
-    except Exception:
-        pass
-    now = utcnow()
-    app_doc = {
-        "app_id": f"app_{uuid.uuid4().hex[:12]}",
-        "need_id": need_id,
-        "applicant_user_id": user["user_id"],
-        "pitch": opening_body,
-        "status": "pending",
-        "thread_id": thread["thread_id"],
-        "created_at": now,
-        "updated_at": now,
-    }
-    await db.referral_applications.insert_one(app_doc)
-    # Flip need to "reviewing" on first applicant
-    await db.referral_needs.update_one(
-        {"need_id": need_id, "status": "open"},
-        {"$set": {"status": "reviewing", "updated_at": now}},
-    )
-    # Notify the poster
-    try:
-        await _emit_notification(
-            need["poster_user_id"],
-            "new_referral_applicant",
-            f"New applicant: {user.get('name') or 'Someone'}",
-            (opening_body[:140] + "…") if len(opening_body) > 140 else opening_body,
-            actor_user_id=user["user_id"],
-            deep_link=f"/referrals/{need_id}",
-        )
-    except Exception:
-        pass
-    app_doc.pop("_id", None)
-    return app_doc
 
 
-@api.post("/referrals/{need_id}/applications/{app_id}/accept")
-async def accept_referral_application(
-    need_id: str, app_id: str,
-    user: dict = Depends(get_current_user),
-):
-    need = await db.referral_needs.find_one({"need_id": need_id})
-    if not need:
-        raise HTTPException(status_code=404, detail="Referral not found")
-    if need["poster_user_id"] != user["user_id"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    app = await db.referral_applications.find_one({"app_id": app_id, "need_id": need_id})
-    if not app:
-        raise HTTPException(status_code=404, detail="Application not found")
-    now = utcnow()
-    await db.referral_applications.update_one(
-        {"app_id": app_id}, {"$set": {"status": "accepted", "updated_at": now}},
-    )
-    # Auto-reject any other pending apps for this need
-    await db.referral_applications.update_many(
-        {"need_id": need_id, "app_id": {"$ne": app_id}, "status": "pending"},
-        {"$set": {"status": "rejected", "updated_at": now}},
-    )
-    await db.referral_needs.update_one(
-        {"need_id": need_id},
-        {"$set": {"status": "filled", "accepted_user_id": app["applicant_user_id"], "updated_at": now}},
-    )
-    # Notify the applicant
-    try:
-        await _emit_notification(
-            app["applicant_user_id"],
-            "referral_application_accepted",
-            "You got the job! 🎉",
-            f"{user.get('name') or 'A photographer'} accepted your application for \"{need.get('title')}\"",
-            actor_user_id=user["user_id"],
-            deep_link=f"/referrals/{need_id}",
-        )
-    except Exception:
-        pass
-    return {"ok": True, "need_id": need_id, "accepted_app_id": app_id}
 
 
-@api.post("/referrals/{need_id}/applications/{app_id}/reject")
-async def reject_referral_application(
-    need_id: str, app_id: str,
-    user: dict = Depends(get_current_user),
-):
-    need = await db.referral_needs.find_one({"need_id": need_id})
-    if not need:
-        raise HTTPException(status_code=404, detail="Referral not found")
-    if need["poster_user_id"] != user["user_id"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    await db.referral_applications.update_one(
-        {"app_id": app_id, "need_id": need_id},
-        {"$set": {"status": "rejected", "updated_at": utcnow()}},
-    )
-    return {"ok": True}
 
 
 # ============================================================================
@@ -9238,6 +7830,9 @@ from routes import super_admin as _super_admin_routes  # noqa: E402
 from routes import brand as _brand_routes  # noqa: E402
 from routes import marketplace as _marketplace_routes  # noqa: E402
 from routes import admin as _admin_routes  # noqa: E402
+from routes import network as _network_routes  # noqa: E402
+from routes import referrals as _referrals_routes  # noqa: E402
+from routes import push as _push_routes  # noqa: E402
 
 app.include_router(_scout_ai_routes.router)
 app.include_router(_support_routes.router)
@@ -9245,3 +7840,6 @@ app.include_router(_super_admin_routes.router)
 app.include_router(_brand_routes.router)
 app.include_router(_marketplace_routes.router)
 app.include_router(_admin_routes.router)
+app.include_router(_network_routes.router)
+app.include_router(_referrals_routes.router)
+app.include_router(_push_routes.router)

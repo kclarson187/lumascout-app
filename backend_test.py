@@ -1,8 +1,6 @@
 """
-Phase 1B regression test — verify the 33 admin endpoints extracted into
-/app/backend/routes/admin.py all still respond correctly. No 500s anywhere.
-
-Also smoke-check non-admin + previously-migrated marketplace endpoints.
+Phase 2 regression test — verify routes extracted from server.py into
+/app/backend/routes/{network,referrals,push}.py still respond correctly.
 
 Run: python3 /app/backend_test.py
 """
@@ -12,7 +10,7 @@ import random
 import string
 import sys
 import time
-from typing import Any, Optional, Tuple
+from typing import Any, Optional
 
 import requests
 
@@ -20,516 +18,471 @@ BASE = "http://localhost:8001/api"
 ADMIN_EMAIL = "admin@lumascout.app"
 ADMIN_PASSWORD = "admin123"
 
-session = requests.Session()
-session.headers.update({"Content-Type": "application/json"})
-
 PASS = 0
 FAIL = 0
 FAIL_MSGS: list[str] = []
 FIVE_HUNDREDS: list[str] = []
 
 
-def log(msg: str) -> None:
-    print(msg, flush=True)
-
-
-def check(ok: bool, desc: str, extra: Any = "") -> bool:
-    global PASS, FAIL
-    if ok:
-        PASS += 1
-        log(f"  OK  {desc}")
-        return True
-    FAIL += 1
-    msg = f"  FAIL {desc}  {extra}"
-    log(msg)
-    FAIL_MSGS.append(msg)
-    return False
-
-
-def req(method: str, path: str, token: Optional[str] = None,
-        body: Any = None, params: Any = None) -> Tuple[int, Any]:
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    url = f"{BASE}{path}"
-    try:
-        r = session.request(method, url, headers=headers,
-                            json=body if body is not None else None,
-                            params=params, timeout=30)
-    except Exception as e:
-        log(f"  network error {method} {path}: {e}")
-        return 0, {"error": str(e)}
-    if r.status_code >= 500:
-        FIVE_HUNDREDS.append(f"{method} {path} -> {r.status_code} body={r.text[:400]}")
-    try:
-        data = r.json()
-    except Exception:
-        data = {"_raw": r.text}
-    return r.status_code, data
-
-
-def rand(n: int = 8) -> str:
+def _rand(n: int = 6) -> str:
     return "".join(random.choices(string.ascii_lowercase + string.digits, k=n))
 
 
+def log_pass(label: str) -> None:
+    global PASS
+    PASS += 1
+    print(f"  ✅ {label}")
+
+
+def log_fail(label: str, detail: str = "") -> None:
+    global FAIL
+    FAIL += 1
+    msg = f"{label}: {detail}" if detail else label
+    FAIL_MSGS.append(msg)
+    print(f"  ❌ {msg}")
+
+
+def req(
+    method: str, path: str, *, token: Optional[str] = None,
+    json_body: Optional[dict] = None, params: Optional[dict] = None,
+    expected_status: Optional[int] = None, label: str = "",
+) -> tuple[int, Any]:
+    url = f"{BASE}{path}"
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        r = requests.request(method, url, headers=headers, json=json_body, params=params, timeout=30)
+    except Exception as e:
+        log_fail(label or f"{method} {path}", f"connection error: {e}")
+        return 0, None
+    body: Any
+    try:
+        body = r.json()
+    except Exception:
+        body = r.text
+    if r.status_code >= 500:
+        FIVE_HUNDREDS.append(f"{method} {path} → {r.status_code}: {str(body)[:200]}")
+    if expected_status is not None:
+        if r.status_code == expected_status:
+            log_pass(f"{label or method + ' ' + path} → {r.status_code}")
+        else:
+            log_fail(label or f"{method} {path}", f"expected {expected_status}, got {r.status_code}: {str(body)[:200]}")
+    return r.status_code, body
+
+
+# --------------------------------------------------------------------------
+# Auth helpers
+# --------------------------------------------------------------------------
 def login(email: str, password: str) -> Optional[str]:
-    sc, data = req("POST", "/auth/login", body={"email": email, "password": password})
-    if sc == 200 and data.get("token"):
-        return data["token"]
-    log(f"  login failed for {email}: {sc} {data}")
+    s, b = req("POST", "/auth/login", json_body={"email": email, "password": password})
+    if s == 200 and isinstance(b, dict):
+        return b.get("token") or b.get("access_token")
+    print(f"  (login {email} failed: {s} {str(b)[:160]})")
     return None
 
 
-def register_throwaway(city: str = "Austin") -> Tuple[str, str, str]:
-    email = f"qa_{rand(10)}@qamail.lumascout.app"
-    password = "QAtest123!"
-    name = f"QA {rand(4).upper()}"
-    sc, data = req("POST", "/auth/register", body={
-        "email": email, "password": password, "name": name,
-        "city": city, "state": "TX", "country_code": "US",
+def register(name: str, email: str, password: str, city: str = "Austin", state: str = "TX") -> Optional[dict]:
+    s, b = req("POST", "/auth/register", json_body={
+        "name": name, "email": email, "password": password,
+        "city": city, "state": state,
     })
-    if sc not in (200, 201):
-        log(f"  register fail {sc} {data}")
-        return "", "", email
-    return data.get("token", ""), (data.get("user") or {}).get("user_id", ""), email
+    if s == 200 and isinstance(b, dict):
+        return b
+    print(f"  (register {email} failed: {s} {str(b)[:160]})")
+    return None
 
 
-def create_spot(tok: str, title: str) -> Optional[str]:
-    sc, body = req("POST", "/spots", token=tok, body={
-        "title": title,
-        "description": "QA regression spot",
-        "latitude": 30.27 + random.uniform(-0.05, 0.05),
-        "longitude": -97.74 + random.uniform(-0.05, 0.05),
-        "city": "Austin",
-        "state": "TX",
-        "country": "USA",
-        "shoot_types": ["portrait"],
-        "privacy_mode": "public",
-    })
-    if sc not in (200, 201):
-        log(f"    spot create failed {sc} {body}")
-        return None
-    return body.get("spot_id")
+# --------------------------------------------------------------------------
+# Main
+# --------------------------------------------------------------------------
+def main() -> int:
+    print("=" * 70)
+    print("Phase 2 regression — network / referrals / push route extraction")
+    print("=" * 70)
 
-
-def run() -> None:
-    log("\n===== Phase 1B ADMIN REGRESSION SUITE =====\n")
-
+    # Bootstrap admin token
     admin_tok = login(ADMIN_EMAIL, ADMIN_PASSWORD)
     if not admin_tok:
-        log("FATAL: cannot log in as admin. Aborting.")
-        sys.exit(1)
+        print("ABORT — cannot login admin")
+        return 1
+    s, me = req("GET", "/auth/me", token=admin_tok, expected_status=200, label="admin /auth/me")
+    admin_id = me.get("user_id") if isinstance(me, dict) else None
+    print(f"  (admin_id={admin_id})")
 
-    sc, me = req("GET", "/auth/me", token=admin_tok)
-    check(sc == 200 and me.get("email") == ADMIN_EMAIL, "admin /auth/me -> 200")
-    admin_user_id = me.get("user_id")
+    # Create two throwaway users u1, u2 in same city for cross tests
+    stamp = _rand(5)
+    u1_email = f"qa_u1_{stamp}@qatest.photoscout.app"
+    u2_email = f"qa_u2_{stamp}@qatest.photoscout.app"
+    u1_reg = register("QA One", u1_email, "Passw0rd!", city="Austin", state="TX")
+    u2_reg = register("QA Two", u2_email, "Passw0rd!", city="Austin", state="TX")
+    if not (u1_reg and u2_reg):
+        print("ABORT — cannot create throwaway users")
+        return 1
+    u1_tok = u1_reg.get("token") or u1_reg.get("access_token") or login(u1_email, "Passw0rd!")
+    u2_tok = u2_reg.get("token") or u2_reg.get("access_token") or login(u2_email, "Passw0rd!")
+    s, u1_me = req("GET", "/auth/me", token=u1_tok)
+    s, u2_me = req("GET", "/auth/me", token=u2_tok)
+    u1_id = u1_me["user_id"]; u2_id = u2_me["user_id"]
+    print(f"  (u1_id={u1_id}  u2_id={u2_id})")
 
-    non_admin_tok, non_admin_id, _ = register_throwaway()
-    check(bool(non_admin_tok), "non-admin throwaway registered")
+    # ======================================================================
+    # PUSH module
+    # ======================================================================
+    print("\n--- PUSH module ---")
+    s, prefs = req("GET", "/me/notification-preferences", token=admin_tok,
+                   expected_status=200, label="GET /me/notification-preferences")
+    if isinstance(prefs, dict):
+        have = {"push_enabled", "daily_cap", "quiet_hours", "categories"}.issubset(prefs.keys())
+        if have:
+            log_pass("prefs has push_enabled/daily_cap/quiet_hours/categories")
+            if {"enabled", "start", "end"}.issubset(prefs.get("quiet_hours", {}).keys()):
+                log_pass("quiet_hours has enabled/start/end")
+            else:
+                log_fail("prefs quiet_hours shape", str(prefs.get("quiet_hours")))
+        else:
+            log_fail("prefs keys", str(list(prefs.keys()) if isinstance(prefs, dict) else prefs))
 
-    # §1 Triage / dashboards
-    log("\n-- §1 Triage / dashboards --")
-    sc, body = req("GET", "/admin/overview", token=admin_tok)
-    check(sc == 200 and "users" in body and "moderation" in body,
-          "GET /admin/overview -> 200",
-          f"sc={sc}")
-
-    sc, body = req("GET", "/admin/pending", token=admin_tok)
-    check(sc == 200 and isinstance(body, list),
-          "GET /admin/pending -> 200 list", f"sc={sc}")
-
-    sc, body = req("GET", "/admin/stats/recent-approvals", token=admin_tok)
-    check(sc == 200 and "count" in body and "days" in body,
-          "GET /admin/stats/recent-approvals -> 200", f"sc={sc} body={body}")
-
-    sc, body = req("GET", "/admin/analytics", token=admin_tok, params={"days": 14})
-    n14 = len(body.get("series", [])) if isinstance(body, dict) else 0
-    check(sc == 200 and n14 == 14, "GET /admin/analytics?days=14 -> 14 buckets",
-          f"sc={sc} n={n14}")
-
-    sc, body = req("GET", "/admin/analytics", token=admin_tok, params={"days": 30})
-    n30 = len(body.get("series", [])) if isinstance(body, dict) else 0
-    check(sc == 200 and n30 == 30, "GET /admin/analytics?days=30 -> 30 buckets",
-          f"sc={sc} n={n30}")
-
-    sc, body = req("GET", "/admin/audit-logs", token=admin_tok, params={"limit": 5})
-    items = body.get("items") if isinstance(body, dict) else None
-    check(sc == 200 and isinstance(items, list),
-          "GET /admin/audit-logs?limit=5 -> 200 items[]",
-          f"sc={sc}")
-
-    # §2 User management
-    log("\n-- §2 User management --")
-    sc, body = req("GET", "/admin/users", token=admin_tok, params={"limit": 5})
-    check(sc == 200 and isinstance(body.get("items"), list),
-          "GET /admin/users?limit=5 -> 200", f"sc={sc}")
-
-    sc, body = req("GET", "/admin/users", token=admin_tok, params={"q": "admin"})
-    check(sc == 200 and isinstance(body.get("items"), list),
-          "GET /admin/users?q=admin -> 200", f"sc={sc}")
-
-    sc, body = req("GET", f"/admin/users/{admin_user_id}", token=admin_tok)
-    check(sc == 200 and body.get("user_id") == admin_user_id,
-          "GET /admin/users/{admin_id} -> 200", f"sc={sc}")
-
-    # AdminUserPatch schema: plan/role/status/verification_status/
-    # suspension_reason/comp_expiration/reason. display_name/city are
-    # NOT in the schema — skipped in favour of a real field.
-    sc, body = req("PATCH", f"/admin/users/{non_admin_id}", token=admin_tok,
-                   body={"verification_status": "verified", "reason": "qa test"})
-    check(sc == 200, "PATCH /admin/users/{id} (verification_status) -> 200",
-          f"sc={sc} body={body}")
-
-    sc, body = req("POST", f"/admin/users/{non_admin_id}/notes", token=admin_tok,
-                   body={"body": "qa note"})
-    check(sc == 200 and body.get("note_id"),
-          "POST /admin/users/{id}/notes -> 200", f"sc={sc}")
-
-    # Grant plan schema: {plan, duration_days, reason}
-    sc, body = req("POST", f"/admin/users/{non_admin_id}/grant-plan",
-                   token=admin_tok,
-                   body={"plan": "pro", "duration_days": 30, "reason": "qa"})
-    check(sc == 200 and (body.get("user") or {}).get("plan") == "pro",
-          "POST /admin/users/{id}/grant-plan {pro} -> 200", f"sc={sc}")
-
-    sc, body = req("POST", f"/admin/users/{non_admin_id}/grant-plan",
-                   token=admin_tok, body={"plan": "free", "reason": "qa revoke"})
-    check(sc == 200 and (body.get("user") or {}).get("plan") == "free",
-          "POST /admin/users/{id}/grant-plan {free} -> 200", f"sc={sc}")
-
-    # §3 Sanctions
-    log("\n-- §3 Sanctions --")
-    sc, body = req("POST", f"/admin/users/{non_admin_id}/sanction",
-                   token=admin_tok,
-                   body={"type": "warn", "reason": "qa test warning"})
-    sanction_id = body.get("sanction_id") if isinstance(body, dict) else None
-    check(sc == 200 and sanction_id,
-          "POST /admin/users/{id}/sanction {warn} -> 200",
-          f"sc={sc} body={body}")
-
-    sc, body = req("GET", f"/admin/users/{non_admin_id}/sanctions",
-                   token=admin_tok)
-    items = body.get("items") if isinstance(body, dict) else []
-    found = any(s.get("sanction_id") == sanction_id for s in items)
-    check(sc == 200 and found,
-          "GET /admin/users/{id}/sanctions includes new sanction",
-          f"sc={sc} found={found}")
-
-    sc, body = req("POST", f"/admin/users/{non_admin_id}/unsanction",
-                   token=admin_tok, body={})
-    check(sc == 200 and body.get("revoked_sanction_id") == sanction_id,
-          "POST /admin/users/{id}/unsanction -> 200", f"sc={sc} body={body}")
-
-    sc, body = req("GET", "/admin/audit-logs", token=admin_tok,
-                   params={"target_id": non_admin_id, "limit": 20})
-    actions = {i.get("action") for i in (body.get("items") or [])}
-    check(sc == 200 and "user.warn" in actions and "user.unsanction" in actions,
-          "audit_logs contains user.warn + user.unsanction",
-          f"actions={actions}")
-
-    time.sleep(1.0)
-    sc, notif_body = req("GET", "/notifications", token=non_admin_tok,
-                         params={"limit": 20})
-    n_items = notif_body.get("items", []) if isinstance(notif_body, dict) else []
-    kinds = {n.get("kind") for n in n_items}
-    check(sc == 200 and "user_sanction_warn" in kinds,
-          "sanctioned user got 'user_sanction_warn' notification",
-          f"kinds={kinds}")
-
-    # §4 Spot moderation
-    log("\n-- §4 Spot moderation --")
-    sc, body = req("GET", "/admin/spot-uploads/pending", token=admin_tok)
-    check(sc == 200 and isinstance(body.get("items"), list),
-          "GET /admin/spot-uploads/pending -> 200", f"sc={sc}")
-
-    spot_approve = create_spot(non_admin_tok, f"QA Approve {rand(4)}")
-    spot_reject = create_spot(non_admin_tok, f"QA Reject {rand(4)}")
-    spot_action = create_spot(non_admin_tok, f"QA Action {rand(4)}")
-    check(all([spot_approve, spot_reject, spot_action]),
-          f"3 throwaway spots created ({spot_approve},{spot_reject},{spot_action})")
-
-    if spot_approve:
-        sc, body = req("POST", f"/admin/spots/{spot_approve}/approve",
-                       token=admin_tok, body={})
-        check(sc == 200 and body.get("ok"),
-              "POST /admin/spots/{id}/approve -> 200", f"sc={sc}")
-        sc, body = req("GET", f"/spots/{spot_approve}")
-        check(sc == 200 and body.get("spot_id") == spot_approve,
-              "public GET /spots/{id} after approve -> 200", f"sc={sc}")
-
-    if spot_reject:
-        sc, body = req("POST", f"/admin/spots/{spot_reject}/reject",
-                       token=admin_tok, body={})
-        check(sc == 200 and body.get("ok"),
-              "POST /admin/spots/{id}/reject -> 200", f"sc={sc}")
-
-    if spot_action:
-        sc, body = req("POST", f"/admin/spots/{spot_action}/action",
-                       token=admin_tok, body={"action": "feature"})
-        check(sc == 200 and body.get("ok"),
-              "POST /admin/spots/{id}/action feature -> 200", f"sc={sc}")
-
-    # Cover editor — find a spot with images
-    cover_spot_id = None
-    first_img = None
-    sc, body = req("GET", "/spots", token=admin_tok, params={"limit": 20})
-    for s in (body if isinstance(body, list) else []):
-        imgs = s.get("images") or []
-        if imgs:
-            first = imgs[0]
-            url = first.get("image_url") if isinstance(first, dict) else first
-            if url:
-                cover_spot_id = s.get("spot_id")
-                first_img = url
-                break
-    if cover_spot_id and first_img:
-        sc, body = req("GET", f"/admin/spots/{cover_spot_id}/cover-editor",
-                       token=admin_tok)
-        check(sc == 200 and isinstance(body.get("images"), list),
-              "GET /admin/spots/{id}/cover-editor -> 200", f"sc={sc}")
-
-        sc, body = req("PATCH", f"/admin/spots/{cover_spot_id}/cover",
-                       token=admin_tok,
-                       body={"image_url": first_img, "focal_x": 0.5,
-                             "focal_y": 0.5, "scale": 1.2, "rotation": 0})
-        check(sc == 200 and body.get("ok"),
-              "PATCH /admin/spots/{id}/cover -> 200",
-              f"sc={sc} body={str(body)[:200]}")
-
-        sc, editor = req("GET", f"/admin/spots/{cover_spot_id}/cover-editor",
-                         token=admin_tok)
-        urls = [i["image_url"] for i in (editor.get("images") or [])
-                if i.get("source") == "spot"]
-        if urls:
-            sc, body = req("PATCH", f"/admin/spots/{cover_spot_id}/gallery",
-                           token=admin_tok, body={"image_urls": urls})
-            check(sc == 200 and body.get("ok"),
-                  "PATCH /admin/spots/{id}/gallery -> 200",
-                  f"sc={sc} body={body}")
-
-        sc, body = req("DELETE", f"/admin/spots/{cover_spot_id}/cover",
-                       token=admin_tok)
-        check(sc == 200 and body.get("ok"),
-              "DELETE /admin/spots/{id}/cover -> 200", f"sc={sc}")
+    # PATCH categories.promotions=true
+    s, p2 = req("PATCH", "/me/notification-preferences", token=admin_tok,
+                json_body={"categories": {"promotions": True}}, expected_status=200,
+                label="PATCH prefs categories.promotions=true")
+    if isinstance(p2, dict) and p2.get("categories", {}).get("promotions") is True:
+        log_pass("categories.promotions persisted true")
     else:
-        log("  WARN: no spot with images found; cover-editor tests skipped")
+        log_fail("categories.promotions persisted", str(p2.get("categories") if isinstance(p2, dict) else p2))
 
-    # §5 Community moderation
-    log("\n-- §5 Community moderation --")
-    sc, body = req("GET", "/admin/posts", token=admin_tok, params={"limit": 3})
-    check(sc == 200 and isinstance(body.get("items"), list),
-          "GET /admin/posts?limit=3 -> 200", f"sc={sc}")
-
-    sc, body = req("POST", "/posts", token=non_admin_tok, body={
-        "kind": "post",
-        "title": f"QA Post {rand(4)}",
-        "body": "qa regression content",
-        "category": "tip",
-    })
-    post_id = body.get("post_id") if isinstance(body, dict) else None
-    if post_id:
-        sc, body = req("DELETE", f"/admin/posts/{post_id}", token=admin_tok,
-                       params={"reason": "qa delete"})
-        check(sc == 200 and body.get("status") == "removed",
-              "DELETE /admin/posts/{id} -> 200", f"sc={sc}")
-
-        sc, body = req("POST", f"/admin/posts/{post_id}/restore",
-                       token=admin_tok, body={})
-        check(sc == 200 and body.get("status") == "active",
-              "POST /admin/posts/{id}/restore -> 200", f"sc={sc}")
-
-        sc, body = req("POST", "/admin/community/moderate", token=admin_tok,
-                       body={"type": "post", "id": post_id,
-                             "action": "soft_delete", "reason": "qa"})
-        check(sc == 200, "POST /admin/community/moderate soft_delete -> 200",
-              f"sc={sc} body={body}")
-
-        sc, body = req("POST", "/admin/community/bulk-moderate",
-                       token=admin_tok,
-                       body={"type": "post", "ids": [post_id],
-                             "action": "restore", "reason": "qa bulk"})
+    # Re-GET returns same
+    s, p2g = req("GET", "/me/notification-preferences", token=admin_tok)
+    if isinstance(p2g, dict) and p2g.get("categories", {}).get("promotions") is True:
+        log_pass("re-GET shows promotions=true")
     else:
-        sc, body = req("POST", "/admin/community/bulk-moderate",
-                       token=admin_tok,
-                       body={"type": "post", "ids": ["nonexistent_xxx"],
-                             "action": "remove", "reason": "qa bulk"})
-    check(sc == 200 and "applied" in body,
-          "POST /admin/community/bulk-moderate -> 200", f"sc={sc}")
+        log_fail("re-GET promotions", "not persisted")
 
-    sc, body = req("GET", "/admin/community/content", token=admin_tok,
-                   params={"type": "post", "limit": 5})
-    check(sc == 200 and isinstance(body.get("items"), list),
-          "GET /admin/community/content -> 200", f"sc={sc}")
+    # Clamping daily_cap → 50
+    s, p3 = req("PATCH", "/me/notification-preferences", token=admin_tok,
+                json_body={"daily_cap": 99}, expected_status=200,
+                label="PATCH daily_cap=99")
+    if isinstance(p3, dict) and p3.get("daily_cap") == 50:
+        log_pass("daily_cap clamped 99→50")
+    else:
+        log_fail("daily_cap clamp 99→50", str(p3.get("daily_cap") if isinstance(p3, dict) else p3))
 
-    sc, body = req("GET", "/admin/community/summary", token=admin_tok)
-    check(sc == 200 and "posts" in body and "reports" in body,
-          "GET /admin/community/summary -> 200", f"sc={sc}")
+    # Clamping daily_cap → 1
+    s, p4 = req("PATCH", "/me/notification-preferences", token=admin_tok,
+                json_body={"daily_cap": 0}, expected_status=200,
+                label="PATCH daily_cap=0")
+    if isinstance(p4, dict) and p4.get("daily_cap") == 1:
+        log_pass("daily_cap clamped 0→1")
+    else:
+        log_fail("daily_cap clamp 0→1", str(p4.get("daily_cap") if isinstance(p4, dict) else p4))
 
-    # §6 Reports
-    log("\n-- §6 Reports --")
-    sc, body = req("GET", "/admin/reports", token=admin_tok,
-                   params={"status": "pending"})
-    check(sc == 200 and isinstance(body, list),
-          "GET /admin/reports?status=pending -> 200", f"sc={sc}")
+    # quiet_hours set
+    s, p5 = req("PATCH", "/me/notification-preferences", token=admin_tok,
+                json_body={"quiet_hours": {"enabled": True, "start": "23:00", "end": "08:00"}},
+                expected_status=200, label="PATCH quiet_hours")
+    if isinstance(p5, dict) and p5.get("quiet_hours", {}).get("start") == "23:00" \
+            and p5.get("quiet_hours", {}).get("end") == "08:00" \
+            and p5.get("quiet_hours", {}).get("enabled") is True:
+        log_pass("quiet_hours persisted 23:00-08:00 enabled")
+    else:
+        log_fail("quiet_hours persisted", str(p5.get("quiet_hours") if isinstance(p5, dict) else p5))
 
-    if spot_approve:
-        sc, rbody = req("POST", "/reports", token=non_admin_tok, body={
-            "target_type": "spot", "target_id": spot_approve,
-            "reason": "other",
-        })
-        rep_id = rbody.get("report_id") if isinstance(rbody, dict) else None
-        check(sc == 200 and rep_id,
-              "POST /reports (throwaway report for resolve flow) -> 200",
-              f"sc={sc} body={rbody}")
-        if rep_id:
-            # Actual schema: {action: dismissed|removed|warned}
-            sc, body = req("POST", f"/admin/reports/{rep_id}/resolve",
-                           token=admin_tok, body={"action": "dismissed"})
-            check(sc == 200 and body.get("ok"),
-                  "POST /admin/reports/{id}/resolve -> 200",
-                  f"sc={sc} body={body}")
+    # Ensure promotions=true + daily_cap reasonable + quiet_hours off for test-push
+    req("PATCH", "/me/notification-preferences", token=admin_tok,
+        json_body={"categories": {"promotions": True}, "daily_cap": 50,
+                   "quiet_hours": {"enabled": False, "start": "22:00", "end": "07:00"}})
 
-    # §7 Platform settings
-    log("\n-- §7 Platform settings --")
-    sc, before = req("GET", "/admin/settings", token=admin_tok)
-    check(sc == 200 and isinstance(before, dict),
-          "GET /admin/settings -> 200", f"sc={sc}")
-    orig_app_name = before.get("app_name")
+    # test-push with promotions=true → delivered:true (but subject to 10-min dedupe)
+    s, tp1 = req("POST", "/me/notifications/test-push", token=admin_tok,
+                 expected_status=200, label="POST /me/notifications/test-push (promotions on)")
+    if isinstance(tp1, dict) and "delivered" in tp1:
+        log_pass(f"test-push returns delivered={tp1.get('delivered')}")
+    else:
+        log_fail("test-push shape", str(tp1))
 
-    # PlatformSettingsPatch supports: app_name, support_email, maintenance_mode,
-    # public_registration, etc. Not maintenance_banner.
-    new_name = f"QA-{rand(4)}"
-    sc, body = req("PATCH", "/admin/settings", token=admin_tok,
-                   body={"app_name": new_name})
-    check(sc == 200, "PATCH /admin/settings {app_name} -> 200", f"sc={sc}")
+    # test-push with promotions=false
+    req("PATCH", "/me/notification-preferences", token=admin_tok,
+        json_body={"categories": {"promotions": False}})
+    s, tp2 = req("POST", "/me/notifications/test-push", token=admin_tok,
+                 expected_status=200)
+    if isinstance(tp2, dict) and tp2.get("delivered") is False:
+        log_pass("test-push promotions=false → delivered=false")
+    else:
+        log_fail("test-push promotions=false", str(tp2))
+    # Restore
+    req("PATCH", "/me/notification-preferences", token=admin_tok,
+        json_body={"categories": {"promotions": True}, "daily_cap": 10,
+                   "quiet_hours": {"enabled": True, "start": "22:00", "end": "07:00"}})
 
-    sc, confirm = req("GET", "/admin/settings", token=admin_tok)
-    check(sc == 200 and confirm.get("app_name") == new_name,
-          "re-GET settings shows new value",
-          f"app_name={confirm.get('app_name')}")
+    # GET /notifications
+    s, nlist = req("GET", "/notifications", token=admin_tok, params={"limit": 5},
+                   expected_status=200, label="GET /notifications?limit=5")
+    if isinstance(nlist, dict) and "items" in nlist:
+        log_pass(f"/notifications items={len(nlist['items'])}")
+    else:
+        log_fail("/notifications shape", str(nlist)[:200])
 
-    if orig_app_name is not None:
-        sc, _ = req("PATCH", "/admin/settings", token=admin_tok,
-                    body={"app_name": orig_app_name})
-        check(sc == 200, "PATCH /admin/settings revert -> 200", f"sc={sc}")
+    # mark-read without body
+    s, mr = req("POST", "/notifications/mark-read", token=admin_tok, json_body={},
+                expected_status=200, label="POST /notifications/mark-read {}")
+    if isinstance(mr, dict) and mr.get("ok") is True:
+        log_pass("mark-read ok")
 
-    # §8 Permission guard
-    log("\n-- §8 Permission guard --")
-    sc, _ = req("GET", "/admin/overview")
-    check(sc == 401, "no-token GET /admin/overview -> 401", f"sc={sc}")
+    # push-token register
+    fake_token = f"ExponentPushToken[QA{stamp}]"
+    s, pt = req("POST", "/me/push-token", token=admin_tok,
+                json_body={"token": fake_token, "device_type": "ios", "platform": "ios"},
+                expected_status=200, label="POST /me/push-token")
+    # push-token delete (endpoint requires token query param)
+    s, ptd = req("DELETE", "/me/push-token", token=admin_tok,
+                 params={"token": fake_token}, expected_status=200,
+                 label="DELETE /me/push-token")
 
-    sc, _ = req("GET", "/admin/overview", token=non_admin_tok)
-    check(sc == 403, "non-admin GET /admin/overview -> 403", f"sc={sc}")
+    # ======================================================================
+    # NETWORK module
+    # ======================================================================
+    print("\n--- NETWORK module ---")
+    # /me/viewers
+    s, v = req("GET", "/me/viewers", token=admin_tok, params={"limit": 10},
+               expected_status=200, label="GET /me/viewers?limit=10")
+    if isinstance(v, dict) and "plan" in v and "viewers" in v:
+        log_pass(f"/me/viewers plan={v.get('plan')} viewers_count={len(v.get('viewers', []))}")
+    else:
+        log_fail("/me/viewers shape", str(v)[:200])
 
-    sc, _ = req("GET", "/admin/overview", token=admin_tok)
-    check(sc == 200, "admin GET /admin/overview -> 200", f"sc={sc}")
+    # /me/viewers/summary
+    s, vs = req("GET", "/me/viewers/summary", token=admin_tok, expected_status=200,
+                label="GET /me/viewers/summary")
+    if isinstance(vs, dict) and ("total_7d" in vs or "count_7d" in vs):
+        log_pass(f"viewers/summary total_7d={vs.get('total_7d') or vs.get('count_7d')}")
+    else:
+        log_fail("viewers/summary shape", str(vs)[:200])
 
-    sc, _ = req("POST", f"/admin/users/{non_admin_id}/sanction",
-                token=non_admin_tok,
-                body={"type": "warn", "reason": "noop"})
-    check(sc == 403, "non-admin sanction -> 403", f"sc={sc}")
+    # /me/analytics/networking
+    s, an = req("GET", "/me/analytics/networking", token=admin_tok, expected_status=200,
+                label="GET /me/analytics/networking")
+    if isinstance(an, dict) and "profile_views_30d" in an:
+        log_pass(f"analytics/networking profile_views_30d={an.get('profile_views_30d')}")
+    else:
+        log_fail("analytics/networking shape", str(an)[:200])
 
-    sc, _ = req("DELETE", "/admin/posts/fake_post_xxx", token=non_admin_tok,
-                params={"reason": "noop"})
-    check(sc == 403, "non-admin DELETE /admin/posts/{id} -> 403", f"sc={sc}")
+    # Follow toggle: u1 → u2
+    s, f1 = req("POST", f"/users/{u2_id}/follow", token=u1_tok, expected_status=200,
+                label="POST /users/{u2}/follow (u1)")
+    if isinstance(f1, dict) and f1.get("following") is True:
+        log_pass("follow → {following:true}")
+    else:
+        log_fail("follow response", str(f1))
+    s, f2 = req("POST", f"/users/{u2_id}/follow", token=u1_tok, expected_status=200,
+                label="POST /users/{u2}/follow (toggle)")
+    if isinstance(f2, dict) and f2.get("following") is False:
+        log_pass("re-follow → {following:false}")
+    else:
+        log_fail("unfollow response", str(f2))
+    # Re-follow so we get a follower row for u2
+    req("POST", f"/users/{u2_id}/follow", token=u1_tok)
 
-    sc, _ = req("PATCH", "/admin/settings", token=non_admin_tok,
-                body={"app_name": "nope"})
-    check(sc == 403, "non-admin PATCH /admin/settings -> 403", f"sc={sc}")
+    # DM /dm/threads/start u1 → u2
+    s, dmstart = req("POST", "/dm/threads/start", token=u1_tok,
+                     json_body={"user_id": u2_id, "opening_body": "hi from u1"},
+                     expected_status=200, label="POST /dm/threads/start")
+    thread_id = (dmstart or {}).get("thread_id") if isinstance(dmstart, dict) else None
+    if thread_id:
+        log_pass(f"thread_id={thread_id}")
+    else:
+        log_fail("dm start thread_id missing", str(dmstart))
 
-    # §9 Non-regression
-    log("\n-- §9 Non-regression --")
-    for endpoint in ("/auth/me", "/feed/home", "/notifications",
-                     "/me/seller/connect-status"):
-        sc, _ = req("GET", endpoint, token=admin_tok,
-                    params={"limit": 3} if endpoint == "/notifications" else None)
-        check(sc == 200, f"GET {endpoint} -> 200", f"sc={sc}")
+    # Send message on thread
+    if thread_id:
+        s, msg = req("POST", f"/dm/threads/{thread_id}/messages", token=u1_tok,
+                     json_body={"type": "text", "body": "second hi"},
+                     expected_status=200, label="POST /dm/threads/{id}/messages")
+        if isinstance(msg, dict) and msg.get("body"):
+            log_pass("dm message sent")
 
-    sc, body = req("GET", "/spots", token=admin_tok, params={"limit": 3})
-    check(sc == 200 and isinstance(body, list) and len(body) <= 3,
-          "GET /spots?limit=3 -> 200", f"sc={sc}")
+    # GET /dm/threads
+    s, tlist = req("GET", "/dm/threads", token=u1_tok, expected_status=200,
+                   label="GET /dm/threads")
+    if isinstance(tlist, dict) and "items" in tlist:
+        log_pass(f"dm threads items={len(tlist['items'])}")
 
-    sc, body = req("GET", "/marketplace/storefront", token=admin_tok)
-    check(sc == 200 and "rails" in body,
-          "GET /marketplace/storefront -> 200", f"sc={sc}")
+    # DM requests: u2 can accept, ignore, block. Fetch pending requests for u2
+    s, req_list = req("GET", "/dm/threads", token=u2_tok, params={"tab": "requests"})
+    req_items = (req_list or {}).get("items", []) if isinstance(req_list, dict) else []
+    req_id = req_items[0]["request_id"] if req_items else None
+    if req_id:
+        s, acc = req("POST", f"/dm/requests/{req_id}/accept", token=u2_tok,
+                     expected_status=200, label="POST /dm/requests/{id}/accept")
 
-    new_spot = create_spot(non_admin_tok, f"QA NonReg {rand(4)}")
-    check(bool(new_spot), "non-admin POST /spots -> spot_id",
-          f"spot_id={new_spot}")
+    # /network/discover
+    s, disc = req("GET", "/network/discover", token=admin_tok, params={"limit_per_rail": 5},
+                  expected_status=200, label="GET /network/discover")
+    if isinstance(disc, dict) and any(k in disc for k in ("near_you", "verified_pros", "new_members")):
+        log_pass(f"discover rails keys={list(disc.keys())[:5]}")
 
-    _, other_id, _ = register_throwaway()
-    if other_id:
-        # POST /users/{id}/follow toggles — call twice for follow+unfollow
-        sc, b1 = req("POST", f"/users/{other_id}/follow",
-                     token=non_admin_tok, body={})
-        check(sc in (200, 201) and b1.get("following") is True,
-              "POST /users/{id}/follow (toggle ON) -> 200", f"sc={sc} {b1}")
-        sc, b2 = req("POST", f"/users/{other_id}/follow",
-                     token=non_admin_tok, body={})
-        check(sc == 200 and b2.get("following") is False,
-              "POST /users/{id}/follow (toggle OFF) -> 200", f"sc={sc} {b2}")
+    # /network/search
+    s, sr = req("GET", "/network/search", token=admin_tok, params={"q": "admin"},
+                expected_status=200, label="GET /network/search?q=admin")
+    if isinstance(sr, dict) and "items" in sr:
+        log_pass(f"search items={len(sr['items'])}")
 
-    sc, body = req("PATCH", "/me/notification-preferences", token=admin_tok,
-                   body={"daily_cap": 10})
-    check(sc == 200, "PATCH /me/notification-preferences -> 200", f"sc={sc}")
+    # /mentors
+    s, mn = req("GET", "/mentors", token=admin_tok, params={"limit": 3},
+                expected_status=200, label="GET /mentors?limit=3")
 
-    # Marketplace checkout MOCK end-to-end
-    sc, body = req("POST", "/marketplace/products", token=admin_tok, body={
-        "title": f"QA Pack {rand(4)}",
-        "description": "qa regression content pack",
-        "price_cents": 1000,
-        "type": "preset",
-        "thumbnail_url": "https://example.com/thumb.jpg",
-        "contents_url": "https://example.com/qa.zip",
-    })
-    product_id = body.get("product_id") if isinstance(body, dict) else None
-    if product_id:
-        sc, _ = req("POST",
-                    f"/admin/marketplace/products/{product_id}/moderate",
-                    token=admin_tok, body={"action": "approve"})
-        check(sc == 200, "admin moderate product approve -> 200", f"sc={sc}")
+    # /users/{admin_id}/trust
+    s, tr = req("GET", f"/users/{admin_id}/trust", expected_status=200,
+                label="GET /users/{admin_id}/trust")
 
-        sc, body = req("POST",
-                       f"/marketplace/products/{product_id}/checkout",
-                       token=non_admin_tok, body={})
-        purchase_id = body.get("purchase_id") if isinstance(body, dict) else None
-        mocked = body.get("mocked") if isinstance(body, dict) else None
-        check(sc == 200 and purchase_id and mocked,
-              "marketplace checkout MOCK -> 200 mocked=True",
-              f"sc={sc} body={body}")
-        if purchase_id:
-            sc, body = req("POST",
-                           f"/marketplace/purchases/{purchase_id}/complete",
-                           token=non_admin_tok, body={})
-            check(sc == 200 and body.get("ok"),
-                  "marketplace complete -> 200", f"sc={sc}")
+    # /conversations legacy
+    s, cv = req("POST", "/conversations", token=u1_tok,
+                json_body={"participant_user_id": u2_id}, expected_status=200,
+                label="POST /conversations")
+    conv_id = (cv or {}).get("conversation_id") if isinstance(cv, dict) else None
+    # idempotent re-POST
+    s, cv2 = req("POST", "/conversations", token=u1_tok,
+                 json_body={"participant_user_id": u2_id}, expected_status=200,
+                 label="POST /conversations (idempotent)")
+    if conv_id and isinstance(cv2, dict) and cv2.get("conversation_id") == conv_id:
+        log_pass("conversations idempotent")
 
-    # §10 Marketplace spot check
-    log("\n-- §10 Marketplace spot check --")
-    sc, _ = req("GET", "/marketplace/storefront")
-    check(sc == 200, "GET /marketplace/storefront (unauth) -> 200", f"sc={sc}")
+    s, myconv = req("GET", "/me/conversations", token=u1_tok, expected_status=200,
+                    label="GET /me/conversations")
 
-    sc, _ = req("GET", "/me/marketplace/sales", token=admin_tok)
-    check(sc == 200, "GET /me/marketplace/sales -> 200", f"sc={sc}")
+    if conv_id:
+        s, cmsg = req("POST", f"/conversations/{conv_id}/messages", token=u1_tok,
+                      json_body={"body": "hi legacy"}, expected_status=200,
+                      label="POST /conversations/{id}/messages")
 
-    sc, _ = req("GET", "/admin/marketplace/pending", token=admin_tok)
-    check(sc == 200, "GET /admin/marketplace/pending -> 200", f"sc={sc}")
+    # ======================================================================
+    # REFERRALS module
+    # ======================================================================
+    print("\n--- REFERRALS module ---")
+    # NOTE: Review spec used gig_type='paid' but valid values are in GIG_TYPES
+    # constant (full_session_referral, second_shooter, etc). Use valid one.
+    ref_body = {
+        "title": "Need second shooter Austin QA",
+        "shoot_type": "portrait",
+        "gig_type": "full_session_referral",
+        "city": "Austin",
+        "state": "TX",
+    }
+    s, rn = req("POST", "/referrals", token=u1_tok, json_body=ref_body,
+                expected_status=200, label="POST /referrals")
+    need_id = (rn or {}).get("need_id") if isinstance(rn, dict) else None
+    if need_id:
+        log_pass(f"need_id={need_id}")
 
+    s, rlist = req("GET", "/referrals", params={"city": "Austin"}, expected_status=200,
+                   label="GET /referrals?city=Austin")
+    s, rails = req("GET", "/referrals/rails", expected_status=200,
+                   label="GET /referrals/rails")
+    s, mine = req("GET", "/me/referrals", token=u1_tok, expected_status=200,
+                  label="GET /me/referrals")
+
+    if need_id:
+        s, gr = req("GET", f"/referrals/{need_id}", token=u1_tok, expected_status=200,
+                    label="GET /referrals/{id}")
+        # PATCH as poster → 200 (note: ReferralUpdateIn only allows status/notes/urgency;
+        # 'title' will be ignored silently, but request should succeed)
+        s, pr = req("PATCH", f"/referrals/{need_id}", token=u1_tok,
+                    json_body={"notes": "updated notes"}, expected_status=200,
+                    label="PATCH /referrals/{id} (poster)")
+        # PATCH as non-poster → 403
+        s, pr2 = req("PATCH", f"/referrals/{need_id}", token=u2_tok,
+                     json_body={"notes": "hack"}, expected_status=403,
+                     label="PATCH /referrals/{id} (non-poster)")
+        # u2 applies to u1's need
+        s, ap = req("POST", f"/referrals/{need_id}/apply", token=u2_tok,
+                    json_body={"pitch": "I'd love to"}, expected_status=200,
+                    label="POST /referrals/{id}/apply")
+        app_id = (ap or {}).get("app_id") if isinstance(ap, dict) else None
+        if app_id:
+            log_pass(f"app_id={app_id}")
+            # u1 accepts
+            s, acc = req("POST", f"/referrals/{need_id}/applications/{app_id}/accept",
+                         token=u1_tok, expected_status=200,
+                         label="POST accept application")
+        # Apply a second need for reject test
+        ref_body2 = {**ref_body, "title": "Second gig for reject test"}
+        s2, rn2 = req("POST", "/referrals", token=u1_tok, json_body=ref_body2)
+        need2 = (rn2 or {}).get("need_id") if isinstance(rn2, dict) else None
+        if need2:
+            s, ap2 = req("POST", f"/referrals/{need2}/apply", token=u2_tok,
+                         json_body={"pitch": "reject me"})
+            app2 = (ap2 or {}).get("app_id") if isinstance(ap2, dict) else None
+            if app2:
+                req("POST", f"/referrals/{need2}/applications/{app2}/reject",
+                    token=u1_tok, expected_status=200, label="POST reject application")
+            # Non-poster DELETE → 403
+            req("DELETE", f"/referrals/{need2}", token=u2_tok,
+                expected_status=403, label="DELETE non-poster → 403")
+            # Poster DELETE → 200
+            req("DELETE", f"/referrals/{need2}", token=u1_tok,
+                expected_status=200, label="DELETE poster → 200")
+
+        # Cleanup — delete first need
+        if need_id:
+            req("DELETE", f"/referrals/{need_id}", token=u1_tok)
+
+    # ======================================================================
+    # CROSS-MODULE integration (send_growth_push + notifications)
+    # ======================================================================
+    print("\n--- CROSS-MODULE integration ---")
+    # Follow u1→admin so admin gets new_follower notification
+    s, _ = req("POST", f"/users/{admin_id}/follow", token=u1_tok, expected_status=200,
+               label="u1 follows admin")
+    time.sleep(1.5)
+    s, nf = req("GET", "/notifications", token=admin_tok, params={"limit": 10})
+    kinds = [n.get("kind") for n in (nf or {}).get("items", [])] if isinstance(nf, dict) else []
+    if "new_follower" in kinds:
+        log_pass("admin received new_follower notification")
+    else:
+        log_fail("new_follower cross-module", f"kinds recent: {kinds[:8]}")
+    # unfollow
+    req("POST", f"/users/{admin_id}/follow", token=u1_tok)
+
+    # ======================================================================
+    # NON-REGRESSION
+    # ======================================================================
+    print("\n--- NON-REGRESSION ---")
+    req("GET", "/auth/me", token=admin_tok, expected_status=200, label="GET /auth/me")
+    req("GET", "/feed/home", token=admin_tok, expected_status=200, label="GET /feed/home")
+    req("GET", "/spots", params={"limit": 3}, expected_status=200, label="GET /spots?limit=3")
+    req("GET", "/marketplace/storefront", expected_status=200, label="GET /marketplace/storefront")
+    req("GET", "/me/marketplace/sales", token=admin_tok, expected_status=200, label="GET /me/marketplace/sales")
+    req("GET", "/admin/overview", token=admin_tok, expected_status=200, label="GET /admin/overview")
+    req("GET", "/admin/users", token=admin_tok, params={"limit": 3}, expected_status=200, label="GET /admin/users")
+    req("GET", "/admin/audit-logs", token=admin_tok, params={"limit": 3}, expected_status=200, label="GET /admin/audit-logs")
+
+    # ======================================================================
+    # PERMISSION sanity
+    # ======================================================================
+    print("\n--- PERMISSION sanity ---")
+    # Non-admin hitting admin endpoint → 403
+    req("GET", "/admin/overview", token=u1_tok, expected_status=403, label="non-admin /admin/overview → 403")
+    # Unauth /me/* → 401
+    req("GET", "/me/notification-preferences", expected_status=401, label="unauth /me/notification-preferences → 401")
+    req("POST", "/me/push-token", json_body={"token": "x"}, expected_status=401,
+        label="unauth /me/push-token → 401")
+
+    # ======================================================================
     # Summary
-    log("\n===== SUMMARY =====")
-    log(f"PASS: {PASS}")
-    log(f"FAIL: {FAIL}")
-    log(f"500s encountered: {len(FIVE_HUNDREDS)}")
+    # ======================================================================
+    print("\n" + "=" * 70)
+    print(f"RESULTS: {PASS} passed, {FAIL} failed")
     if FIVE_HUNDREDS:
-        log("\n500 errors:")
-        for m in FIVE_HUNDREDS:
-            log(f"  {m}")
+        print(f"\n🔴 5xx errors ({len(FIVE_HUNDREDS)}):")
+        for e in FIVE_HUNDREDS:
+            print(f"  - {e}")
     if FAIL_MSGS:
-        log("\nFailures:")
+        print(f"\n❌ Failures:")
         for m in FAIL_MSGS:
-            log(f"  {m}")
-    sys.exit(0 if FAIL == 0 and not FIVE_HUNDREDS else 1)
+            print(f"  - {m}")
+    print("=" * 70)
+    return 0 if FAIL == 0 and not FIVE_HUNDREDS else 1
 
 
 if __name__ == "__main__":
-    run()
+    sys.exit(main())
