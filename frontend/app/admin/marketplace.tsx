@@ -96,6 +96,9 @@ export default function AdminMarketplace() {
           <Text style={styles.headerTitle}>Marketplace Moderation</Text>
           <Text style={styles.headerSub}>{items.length} in {tab}</Text>
         </View>
+        <TouchableOpacity onPress={() => router.push('/admin/marketplace-purchases' as any)} style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, marginRight: 6 }}>
+          <Text style={{ color: colors.primary, fontFamily: font.bodyBold, fontSize: 11 }}>REFUNDS</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.tabRow}>

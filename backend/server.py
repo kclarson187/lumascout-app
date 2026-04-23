@@ -7632,7 +7632,8 @@ async def stripe_webhook(request: Request):
         if etype == "checkout.session.completed":
             # Link customer to user if missing, mark payment_transactions paid.
             session_id = obj.get("id")
-            uid = (obj.get("metadata") or {}).get("user_id")
+            metadata = obj.get("metadata") or {}
+            uid = metadata.get("user_id")
             customer = obj.get("customer")
             if uid and customer:
                 await db.users.update_one(
@@ -7643,7 +7644,72 @@ async def stripe_webhook(request: Request):
                 {"session_id": session_id},
                 {"$set": {"status": "completed", "payment_status": "paid", "completed_at": utcnow()}},
             )
-            # The subscription.created event that follows will set plan/dates.
+            # Marketplace purchase fulfillment
+            if metadata.get("kind") == "marketplace_purchase":
+                purchase_id = metadata.get("purchase_id")
+                purchase = None
+                if purchase_id:
+                    purchase = await db.marketplace_purchases.find_one({"purchase_id": purchase_id})
+                if not purchase:
+                    purchase = await db.marketplace_purchases.find_one({"stripe_session_id": session_id})
+                if purchase and purchase.get("status") != "completed":
+                    now = utcnow()
+                    await db.marketplace_purchases.update_one(
+                        {"purchase_id": purchase["purchase_id"]},
+                        {"$set": {
+                            "status": "completed",
+                            "completed_at": now,
+                            "stripe_payment_intent": obj.get("payment_intent"),
+                        }},
+                    )
+                    await db.marketplace_products.update_one(
+                        {"product_id": purchase["product_id"]},
+                        {"$inc": {"sales_count": 1}},
+                    )
+                    try:
+                        await _emit_notification(
+                            purchase["seller_user_id"],
+                            "marketplace_sale",
+                            "You made a sale! 🎉",
+                            f"+${purchase['seller_payout_cents'] / 100:.2f} — {purchase['product_id']}",
+                            actor_user_id=purchase["buyer_user_id"],
+                            deep_link=f"/marketplace/{purchase['product_id']}",
+                        )
+                    except Exception: pass
+
+        elif etype == "charge.refunded":
+            # Mark any purchase tied to this charge as refunded.
+            charge_id = obj.get("id")
+            pi = obj.get("payment_intent")
+            q = {"$or": [{"stripe_charge_id": charge_id}, {"stripe_payment_intent": pi}]} if pi else {"stripe_charge_id": charge_id}
+            purchase = await db.marketplace_purchases.find_one(q)
+            if purchase:
+                await db.marketplace_purchases.update_one(
+                    {"purchase_id": purchase["purchase_id"]},
+                    {"$set": {"status": "refunded", "refunded_at": utcnow()}},
+                )
+                # Reverse sales_count (floor at 0)
+                await db.marketplace_products.update_one(
+                    {"product_id": purchase["product_id"], "sales_count": {"$gt": 0}},
+                    {"$inc": {"sales_count": -1}},
+                )
+                try:
+                    await _emit_notification(
+                        purchase["buyer_user_id"],
+                        "marketplace_refund",
+                        "Refund processed",
+                        f"Your purchase was refunded — ${purchase['price_cents']/100:.2f}",
+                        deep_link=f"/marketplace/{purchase['product_id']}",
+                    )
+                except Exception: pass
+
+        elif etype == "account.updated":
+            # Connect account status changed — refresh cache.
+            acct_id = obj.get("id")
+            if acct_id:
+                seller = await db.users.find_one({"stripe_connect_account_id": acct_id}, {"_id": 0, "user_id": 1})
+                if seller:
+                    await _refresh_connect_status(seller["user_id"], acct_id)
 
         elif etype in ("customer.subscription.created", "customer.subscription.updated"):
             await _apply_subscription_to_user(obj)
@@ -8220,6 +8286,199 @@ MARKETPLACE_TYPES = {
 MARKETPLACE_STATUSES = {"pending", "active", "denied", "suspended", "removed"}
 PLATFORM_FEE_PCT = 15  # percent
 
+# ---------------------------------------------------------------------------
+# Stripe Connect (Express) — seller onboarding + payouts.
+# Sellers must connect a Stripe account to receive payouts. We use Express
+# because it's the fastest path (Stripe handles KYC/bank collection via
+# hosted pages). Platform takes 15% via application_fee_amount; 85% is
+# transferred to the seller's connected account.
+# ---------------------------------------------------------------------------
+CONNECT_COUNTRY = "US"   # MVP: US-only
+CONNECT_STATUS_DISCONNECTED = "disconnected"
+CONNECT_STATUS_ONBOARDING   = "onboarding"
+CONNECT_STATUS_RESTRICTED   = "restricted"
+CONNECT_STATUS_ACTIVE       = "active"
+
+
+def _app_origin(request: Request) -> str:
+    """Best-effort resolver for the public app origin (for redirect URLs)."""
+    fwd_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    fwd_proto = request.headers.get("x-forwarded-proto") or "https"
+    if fwd_host and "localhost" not in fwd_host and "0.0.0.0" not in fwd_host:
+        return f"{fwd_proto}://{fwd_host}"
+    # Fall back to request.base_url (dev / local)
+    return str(request.base_url).rstrip("/")
+
+
+async def _refresh_connect_status(user_id: str, acct_id: Optional[str] = None) -> dict:
+    """Pull latest account state from Stripe and cache onto the user doc.
+    Returns {status, charges_enabled, payouts_enabled, details_submitted,
+    requirements, acct_id}. Best-effort: errors downgrade to 'disconnected'.
+    """
+    if not _stripe_ready():
+        return {"status": CONNECT_STATUS_DISCONNECTED, "acct_id": None}
+    if not acct_id:
+        u = await db.users.find_one({"user_id": user_id}, {"_id": 0, "stripe_connect_account_id": 1})
+        acct_id = (u or {}).get("stripe_connect_account_id")
+    if not acct_id:
+        return {"status": CONNECT_STATUS_DISCONNECTED, "acct_id": None}
+    try:
+        acct = _stripe.Account.retrieve(acct_id)
+    except Exception as e:  # noqa: BLE001
+        print(f"[connect] retrieve failed for {acct_id}: {e}")
+        return {"status": CONNECT_STATUS_DISCONNECTED, "acct_id": acct_id}
+    charges_enabled = bool(acct.get("charges_enabled"))
+    payouts_enabled = bool(acct.get("payouts_enabled"))
+    details_submitted = bool(acct.get("details_submitted"))
+    req = acct.get("requirements") or {}
+    currently_due = req.get("currently_due") or []
+    if charges_enabled and payouts_enabled:
+        status = CONNECT_STATUS_ACTIVE
+    elif details_submitted and (not charges_enabled or not payouts_enabled):
+        status = CONNECT_STATUS_RESTRICTED
+    elif details_submitted:
+        status = CONNECT_STATUS_RESTRICTED
+    else:
+        status = CONNECT_STATUS_ONBOARDING
+    await db.users.update_one(
+        {"user_id": user_id},
+        {"$set": {
+            "stripe_connect_account_id": acct_id,
+            "stripe_connect_status": status,
+            "stripe_connect_charges_enabled": charges_enabled,
+            "stripe_connect_payouts_enabled": payouts_enabled,
+            "stripe_connect_details_submitted": details_submitted,
+            "stripe_connect_requirements": currently_due,
+            "stripe_connect_updated_at": utcnow(),
+            "updated_at": utcnow(),
+        }},
+    )
+    return {
+        "status": status,
+        "acct_id": acct_id,
+        "charges_enabled": charges_enabled,
+        "payouts_enabled": payouts_enabled,
+        "details_submitted": details_submitted,
+        "requirements": currently_due,
+    }
+
+
+@api.post("/me/seller/onboard")
+async def seller_onboard(request: Request, user: dict = Depends(get_current_user)):
+    """Start (or resume) Stripe Express seller onboarding.
+
+    Idempotent: if the user already has a connected account, we return a
+    fresh Account Link pointing back to the existing account so onboarding
+    can be resumed or completed. Returns {url, acct_id, status}.
+    """
+    if not _stripe_ready():
+        raise HTTPException(status_code=503, detail="Billing is not configured")
+    # Reuse existing account if present
+    acct_id = user.get("stripe_connect_account_id")
+    try:
+        if not acct_id:
+            acct = _stripe.Account.create(
+                type="express",
+                country=CONNECT_COUNTRY,
+                email=user.get("email"),
+                capabilities={
+                    "card_payments": {"requested": True},
+                    "transfers": {"requested": True},
+                },
+                business_profile={
+                    "name": user.get("name") or user.get("username") or "LumaScout Creator",
+                    "product_description": "Photography presets, guides, and digital packs sold via LumaScout Marketplace.",
+                    "mcc": "7333",  # Commercial Photography, Art & Graphics
+                },
+                metadata={"user_id": user["user_id"], "source": "lumascout_marketplace"},
+            )
+            acct_id = acct.id
+            await db.users.update_one(
+                {"user_id": user["user_id"]},
+                {"$set": {
+                    "stripe_connect_account_id": acct_id,
+                    "stripe_connect_status": CONNECT_STATUS_ONBOARDING,
+                    "stripe_connect_created_at": utcnow(),
+                    "updated_at": utcnow(),
+                }},
+            )
+        origin = _app_origin(request)
+        link = _stripe.AccountLink.create(
+            account=acct_id,
+            refresh_url=f"{origin}/me/seller?connect_refresh=1",
+            return_url=f"{origin}/me/seller?connect_return=1",
+            type="account_onboarding",
+        )
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Stripe error: {e}")
+    return {"url": link.url, "acct_id": acct_id, "status": CONNECT_STATUS_ONBOARDING}
+
+
+@api.get("/me/seller/connect-status")
+async def seller_connect_status(user: dict = Depends(get_current_user)):
+    """Returns live Stripe Connect status for the caller (cached + refreshed)."""
+    if not _stripe_ready():
+        return {"status": CONNECT_STATUS_DISCONNECTED, "stripe_ready": False}
+    info = await _refresh_connect_status(user["user_id"])
+    return {**info, "stripe_ready": True}
+
+
+@api.post("/me/seller/dashboard-link")
+async def seller_dashboard_link(user: dict = Depends(get_current_user)):
+    """Create a Stripe Express login link — takes the seller to their
+    Stripe-hosted dashboard to manage payouts, taxes, and bank account.
+    """
+    if not _stripe_ready():
+        raise HTTPException(status_code=503, detail="Billing is not configured")
+    acct_id = user.get("stripe_connect_account_id")
+    if not acct_id:
+        raise HTTPException(status_code=400, detail="Connect your account first")
+    try:
+        link = _stripe.Account.create_login_link(acct_id)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Stripe error: {e}")
+    return {"url": link.url}
+
+
+@api.get("/me/seller/payouts")
+async def seller_payouts(limit: int = 20, user: dict = Depends(get_current_user)):
+    """List seller's Stripe payouts (from the connected account)."""
+    acct_id = user.get("stripe_connect_account_id")
+    if not _stripe_ready() or not acct_id:
+        return {"items": [], "total": 0, "connected": False}
+    try:
+        resp = _stripe.Payout.list(limit=min(max(limit, 1), 100), stripe_account=acct_id)
+        items = [{
+            "id": p.get("id"),
+            "amount": p.get("amount"),
+            "currency": (p.get("currency") or "usd").upper(),
+            "status": p.get("status"),
+            "arrival_date": p.get("arrival_date"),
+            "method": p.get("method"),
+            "created": p.get("created"),
+        } for p in (resp.get("data") or [])]
+    except Exception as e:  # noqa: BLE001
+        print(f"[connect] payout list error: {e}")
+        items = []
+    # Also compute pending balance via Balance.retrieve (available + pending)
+    pending_cents = 0
+    available_cents = 0
+    try:
+        bal = _stripe.Balance.retrieve(stripe_account=acct_id)
+        for p in (bal.get("pending") or []):
+            if p.get("currency") == "usd": pending_cents += int(p.get("amount") or 0)
+        for a in (bal.get("available") or []):
+            if a.get("currency") == "usd": available_cents += int(a.get("amount") or 0)
+    except Exception:
+        pass
+    return {
+        "items": items,
+        "count": len(items),
+        "connected": True,
+        "pending_cents": pending_cents,
+        "available_cents": available_cents,
+    }
+
 
 class MarketplaceProductIn(BaseModel):
     title: str
@@ -8438,21 +8697,20 @@ async def delete_product(product_id: str, user: dict = Depends(get_current_user)
 
 @api.post("/marketplace/products/{product_id}/checkout")
 async def product_checkout(product_id: str, request: Request, user: dict = Depends(get_current_user)):
-    """Checkout for a marketplace product (MVP: mocked payment).
+    """Real Stripe Connect checkout for a marketplace product.
 
-    For the launch MVP, we always run checkout through a MOCK flow because
-    real seller payouts require Stripe Connect onboarding (seller accepts
-    terms, bank detail collection, KYC) which is a follow-up phase.
+    Creates a hosted Checkout Session in payment mode with a direct charge
+    on the seller's connected Express account, collecting a 15% platform
+    fee via `payment_intent_data.application_fee_amount`. 85% is net to
+    the seller's balance on their connected account.
 
-    The purchase is recorded with status='pending' and the client should
-    call POST /marketplace/purchases/{id}/complete to finalize — which
-    flips status to 'completed', increments sales_count, unlocks
-    contents_url, and notifies the seller.
+    If the seller hasn't completed Stripe Express onboarding (charges_enabled
+    = False) we return 400 with a user-friendly error.
 
-    Architecture is Stripe-ready: schema includes platform_fee_cents,
-    seller_payout_cents, mocked flag, and stripe_session_id slot. When
-    Connect is wired in a follow-up, only the body of this function +
-    the webhook handler change.
+    Backwards-compat: when the platform has no STRIPE_API_KEY or the seller
+    hasn't onboarded yet, we fall back to MOCK mode so local/test envs can
+    still demo the full funnel. The `mocked` flag in the response tells
+    the client which path ran.
     """
     p = await db.marketplace_products.find_one({"product_id": product_id})
     if not p: raise HTTPException(status_code=404, detail="Product not found")
@@ -8460,7 +8718,6 @@ async def product_checkout(product_id: str, request: Request, user: dict = Depen
         raise HTTPException(status_code=400, detail="Product is not available")
     if p["seller_user_id"] == user["user_id"]:
         raise HTTPException(status_code=400, detail="You can't buy your own product")
-    # Duplicate-purchase guard: if the buyer already owns this product, short-circuit.
     existing_owned = await db.marketplace_purchases.find_one({
         "buyer_user_id": user["user_id"],
         "product_id": product_id,
@@ -8470,26 +8727,102 @@ async def product_checkout(product_id: str, request: Request, user: dict = Depen
         return {
             "already_owned": True,
             "purchase_id": existing_owned["purchase_id"],
-            "url": None, "mocked": True,
+            "url": None, "mocked": existing_owned.get("mocked", False),
         }
-    # Free products skip checkout — auto-complete immediately.
+
     free = (p["price_cents"] or 0) == 0
     fee_cents = int(p["price_cents"] * PLATFORM_FEE_PCT / 100)
     payout_cents = p["price_cents"] - fee_cents
     purchase_id = f"mp_{uuid.uuid4().hex[:12]}"
-
     now = utcnow()
+
+    # --- Try real Stripe Connect path ---
+    seller = await db.users.find_one({"user_id": p["seller_user_id"]},
+        {"_id": 0, "stripe_connect_account_id": 1, "stripe_connect_charges_enabled": 1})
+    seller_acct = (seller or {}).get("stripe_connect_account_id")
+    seller_ready = bool(seller_acct) and bool((seller or {}).get("stripe_connect_charges_enabled"))
+    use_real_stripe = _stripe_ready() and seller_ready and not free
+
+    if use_real_stripe:
+        origin = _app_origin(request)
+        success_url = f"{origin}/marketplace/purchase-success?purchase_id={purchase_id}&session_id={{CHECKOUT_SESSION_ID}}"
+        cancel_url = f"{origin}/marketplace/{product_id}?status=cancelled"
+        customer_id = await _ensure_stripe_customer(user)
+        try:
+            session = _stripe.checkout.Session.create(
+                mode="payment",
+                customer=customer_id,
+                line_items=[{
+                    "price_data": {
+                        "currency": "usd",
+                        "unit_amount": p["price_cents"],
+                        "product_data": {
+                            "name": p["title"],
+                            "description": (p.get("description") or "")[:180],
+                            "images": [p["thumbnail_url"]] if p.get("thumbnail_url", "").startswith("http") else [],
+                        },
+                    },
+                    "quantity": 1,
+                }],
+                payment_intent_data={
+                    "application_fee_amount": fee_cents,
+                    "transfer_data": {"destination": seller_acct},
+                    "metadata": {
+                        "kind": "marketplace_purchase",
+                        "product_id": product_id,
+                        "buyer_user_id": user["user_id"],
+                        "seller_user_id": p["seller_user_id"],
+                        "purchase_id": purchase_id,
+                    },
+                },
+                success_url=success_url,
+                cancel_url=cancel_url,
+                metadata={
+                    "kind": "marketplace_purchase",
+                    "product_id": product_id,
+                    "buyer_user_id": user["user_id"],
+                    "seller_user_id": p["seller_user_id"],
+                    "purchase_id": purchase_id,
+                },
+            )
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"Stripe error: {e}")
+
+        await db.marketplace_purchases.insert_one({
+            "purchase_id": purchase_id,
+            "product_id": product_id,
+            "buyer_user_id": user["user_id"],
+            "seller_user_id": p["seller_user_id"],
+            "seller_connect_acct_id": seller_acct,
+            "price_cents": p["price_cents"],
+            "platform_fee_cents": fee_cents,
+            "seller_payout_cents": payout_cents,
+            "stripe_session_id": session.id,
+            "status": "pending",
+            "mocked": False,
+            "created_at": now,
+        })
+        return {
+            "url": session.url,
+            "session_id": session.id,
+            "purchase_id": purchase_id,
+            "mocked": False,
+        }
+
+    # --- Fallback: MOCK mode (free products, or seller not yet onboarded) ---
     await db.marketplace_purchases.insert_one({
         "purchase_id": purchase_id,
         "product_id": product_id,
         "buyer_user_id": user["user_id"],
         "seller_user_id": p["seller_user_id"],
+        "seller_connect_acct_id": seller_acct,
         "price_cents": p["price_cents"],
         "platform_fee_cents": fee_cents,
         "seller_payout_cents": payout_cents,
         "stripe_session_id": None,
         "status": "completed" if free else "pending",
         "mocked": True,
+        "mock_reason": "free_product" if free else ("seller_not_onboarded" if not seller_ready else "stripe_not_configured"),
         "created_at": now,
         "completed_at": now if free else None,
     })
@@ -8505,6 +8838,7 @@ async def product_checkout(product_id: str, request: Request, user: dict = Depen
         "platform_fee_cents": fee_cents,
         "seller_payout_cents": payout_cents,
         "auto_completed": free,
+        "seller_not_onboarded": not seller_ready and not free,
     }
     p = await db.marketplace_products.find_one({"product_id": product_id})
     if not p: raise HTTPException(status_code=404, detail="Product not found")
@@ -8841,6 +9175,97 @@ async def admin_pending_products(me: dict = Depends(require_role("moderator"))):
     rows = await cur.to_list(100)
     for r in rows:
         r["seller"] = await _hydrate_seller(r.get("seller_user_id"))
+    return {"items": rows, "count": len(rows)}
+
+
+class AdminRefundIn(BaseModel):
+    reason: Optional[str] = None
+    amount_cents: Optional[int] = None   # partial; defaults to full
+
+
+@api.post("/admin/marketplace/purchases/{purchase_id}/refund")
+async def admin_refund_purchase(
+    purchase_id: str, body: AdminRefundIn,
+    me: dict = Depends(require_role("admin")),
+):
+    """Admin refund a marketplace purchase. Full refund by default; pass
+    amount_cents for partial. Refunds application_fee + seller transfer so
+    the platform and seller both lose the money (matches Stripe Connect
+    refund semantics)."""
+    purchase = await db.marketplace_purchases.find_one({"purchase_id": purchase_id})
+    if not purchase:
+        raise HTTPException(status_code=404, detail="Purchase not found")
+    if purchase.get("status") == "refunded":
+        return {"ok": True, "already_refunded": True}
+    pi = purchase.get("stripe_payment_intent")
+    refund_amount = body.amount_cents or purchase["price_cents"]
+    refund_obj = None
+    if _stripe_ready() and pi and not purchase.get("mocked"):
+        try:
+            refund_obj = _stripe.Refund.create(
+                payment_intent=pi,
+                amount=refund_amount,
+                reverse_transfer=True,     # Pull money back from seller's Connect balance
+                refund_application_fee=True,  # Refund the 15% platform fee too
+                metadata={
+                    "purchase_id": purchase_id,
+                    "admin_user_id": me["user_id"],
+                    "reason": (body.reason or "")[:200],
+                },
+            )
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"Stripe error: {e}")
+    # Update local records (webhook charge.refunded will also run, but we
+    # flip status immediately for responsive UX)
+    await db.marketplace_purchases.update_one(
+        {"purchase_id": purchase_id},
+        {"$set": {
+            "status": "refunded",
+            "refunded_at": utcnow(),
+            "refund_reason": body.reason,
+            "refund_amount_cents": refund_amount,
+            "refund_actor_user_id": me["user_id"],
+            "stripe_refund_id": (refund_obj or {}).get("id") if refund_obj else None,
+        }},
+    )
+    await db.marketplace_products.update_one(
+        {"product_id": purchase["product_id"], "sales_count": {"$gt": 0}},
+        {"$inc": {"sales_count": -1}},
+    )
+    await audit_log(
+        me, "marketplace_purchase.refund", "marketplace_purchase", purchase_id,
+        before={"status": purchase.get("status")},
+        after={"status": "refunded", "amount_cents": refund_amount},
+        notes=body.reason,
+    )
+    try:
+        await _emit_notification(
+            purchase["buyer_user_id"],
+            "marketplace_refund",
+            "Refund processed",
+            f"${refund_amount / 100:.2f} refunded — {body.reason or 'Admin decision'}",
+            deep_link=f"/marketplace/{purchase['product_id']}",
+        )
+    except Exception: pass
+    return {"ok": True, "refund_amount_cents": refund_amount, "mocked": bool(purchase.get("mocked"))}
+
+
+@api.get("/admin/marketplace/purchases")
+async def admin_list_purchases(
+    status: Optional[str] = None, limit: int = 50,
+    me: dict = Depends(require_role("admin")),
+):
+    """Admin view of recent purchases. Filter by status (pending, completed,
+    refunded). Hydrates buyer + seller + product summaries for the UI."""
+    filt: dict = {}
+    if status: filt["status"] = status
+    cur = db.marketplace_purchases.find(filt, {"_id": 0}).sort("created_at", -1).limit(max(1, min(limit, 200)))
+    rows = await cur.to_list(200)
+    for r in rows:
+        r["buyer"] = await _hydrate_seller(r.get("buyer_user_id"))
+        r["seller"] = await _hydrate_seller(r.get("seller_user_id"))
+        prod = await db.marketplace_products.find_one({"product_id": r.get("product_id")}, {"_id": 0, "title": 1, "thumbnail_url": 1})
+        r["product"] = prod or {}
     return {"items": rows, "count": len(rows)}
 
 

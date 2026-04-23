@@ -109,6 +109,13 @@ export default function ProductDetail() {
           router.push('/me/library' as any);
           return;
         }
+        if (r.seller_not_onboarded) {
+          Alert.alert(
+            'Seller not ready yet',
+            'This creator hasn\'t finished Stripe onboarding, so payouts can\'t be sent yet. Reach out to them or try again soon.',
+          );
+          return;
+        }
         setMockMeta({ ...r, title: product.title });
         setShowMockModal(true);
         return;
