@@ -2870,12 +2870,16 @@ async def _emit_notification(
     except Exception:
         pass
     # Dispatch push (fire-and-forget). Schedule as a task so long webhooks
-    # don't await on network I/O.
+    # don't await on network I/O. Hold a strong reference to the task until
+    # it completes — otherwise the asyncio loop may GC the coroutine before
+    # its inner awaits (db.push_log.insert_one, httpx post) complete.
     try:
-        asyncio.create_task(send_growth_push(
+        t = asyncio.create_task(send_growth_push(
             user_id=user_id, kind=kind, title=title, body=body,
             deep_link=deep_link, image_url=image_url,
         ))
+        _BG_PUSH_TASKS.add(t)
+        t.add_done_callback(_BG_PUSH_TASKS.discard)
     except Exception:
         pass
 
@@ -2950,6 +2954,11 @@ BYPASS_CAP_KINDS: set = {
     # Security / account safety
     "user_sanction_warning", "user_sanction_suspension", "security_alert",
 }
+
+# Strong references for fire-and-forget push tasks. Without this, Python may
+# GC the task before its inner db.push_log insert + httpx POST complete,
+# causing silent push drops and missing log entries (observed 2026-04-23 QA).
+_BG_PUSH_TASKS: set = set()
 DEFAULT_NOTIFICATION_PREFERENCES: Dict[str, Any] = {
     "categories": {
         "explore": True, "network": True, "messages": True,
@@ -3911,7 +3920,16 @@ async def toggle_save(spot_id: str, user: dict = Depends(get_current_user)):
         # plus the 7-day per-spot dedupe via push_log.
         if spot and saves_after == 4:
             created_at = spot.get("created_at") or utcnow()
-            age_days = (utcnow() - created_at).days if created_at else 999
+            # Motor returns naive datetimes from MongoDB — normalise to UTC
+            # before subtracting a tz-aware `utcnow()` to avoid TypeError that
+            # the surrounding try/except would silently swallow.
+            try:
+                if created_at.tzinfo is None:
+                    from datetime import timezone as _tz
+                    created_at = created_at.replace(tzinfo=_tz.utc)
+            except Exception:
+                created_at = utcnow()
+            age_days = (utcnow() - created_at).days
             if age_days <= 30:
                 spot_city = (spot.get("city") or "").strip()
                 spot_title = (spot.get("title") or "a new spot")[:60]
