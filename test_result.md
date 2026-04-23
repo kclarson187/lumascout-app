@@ -7398,3 +7398,83 @@ Removed
   • Admin Center, Marketplace Seller Center, Stripe Connect onboarding for web
     are Phase 3+ per the user's priority order.
 
+
+================================================================================
+# LumaScout Web Admin Center + Mobile-tunnel restoration (Apr 2026)
+================================================================================
+
+## Mobile ngrok tunnel restored
+- Earlier port-swap had stopped the Expo process, which killed the ngrok
+  tunnel at `exp://photo-finder-60.ngrok.io` (ERR_NGROK_3200).
+- Added NEW supervisor program `expo-alt` that runs
+  `yarn expo start --tunnel --port 3002` from /app/frontend. This restores
+  the tunnel and keeps mobile Expo Go dev fully functional.
+- Zero mobile code / config changes. supervisord.conf (read-only) untouched.
+- Web still owns port :3000; ngrok targets :3002. Both coexist.
+- Verified: "Tunnel connected. Tunnel ready." + mobile IPs (10.79.131.x) are
+  hitting /api/* again.
+
+## Web Admin Center — 7 routes built
+All routes SSR via shared-backend admin endpoints (all pre-existing).
+
+  /admin                Control center: 6 stat cards, open-reports panel,
+                        live audit activity feed, 3 quick-link cards.
+  /admin/spots          Pending spot uploads with Approve/Deny/Hide/Feature.
+  /admin/community      Recent posts/polls/comments with Feature/Lock/Remove
+                        plus Suspend author.
+  /admin/marketplace    Pending listings with Approve/Deny/Feature/Unpublish
+                        + Recent purchases with Refund.
+  /admin/reports        Report queue with Valid/Dismiss resolution + tabs.
+  /admin/users          Searchable data table with filter dropdown,
+                        per-row Verify/Comp Pro/Comp Elite/Suspend/
+                        Reactivate actions.
+  /admin/audit-logs     Immutable table of admin actions.
+
+## Server-side actions (Next 15 / React 19)
+- New file `/app/web/app/admin/_actions.ts` marked `'use server'`.
+- Exports 14 actions: approveSpot, rejectSpot, spotAction,
+  approveSpotUpload, moderateCommunity, deletePost, restorePost,
+  moderateProduct, refundPurchase, updateUser, grantPlan, sanctionUser,
+  unsanctionUser, resolveReport.
+- Each reads the HttpOnly session cookie via `cookies()` and proxies to the
+  existing FastAPI admin endpoints. revalidatePath() refreshes SSR caches.
+- Chosen over /api/ proxy routes because the k8s ingress intercepts
+  /api/* → FastAPI on :8001 and would bypass cookie-auth for admin calls.
+
+## Role gating
+- Layout at `/admin/layout.tsx` calls `/api/auth/me` and redirects:
+    no session          → /login?next=/admin
+    role not admin      → /dashboard
+    role in [admin, super_admin] → renders page + sidebar.
+
+## Sidebar click issue fix
+- Fixed: the Dashboard overview had stat-card labelled "Saved spots" which
+  collided with the sidebar label "Saved spots" in Playwright selectors.
+- Renamed stat to "Saves"; sidebar-side still reads "Saved spots".
+- No more ambiguous hit-targets on click.
+
+## Smoke tests (public URL)
+  /admin                          → 200 ✅
+  /admin/spots                    → 200 ✅
+  /admin/community                → 200 ✅
+  /admin/marketplace              → 200 ✅
+  /admin/reports?status=open      → 200 ✅
+  /admin/reports?status=resolved  → 200 ✅
+  /admin/users?q=keith            → 200 ✅
+  /admin/users (empty q)          → 200 ✅
+  /admin/audit-logs               → 200 ✅
+  /admin without cookie           → 307 → /login?next=/admin ✅
+  Admin Home visual: "Control center." hero, 6 stat cards, "No open
+    reports. Nicely done." empty state, recent audit activity feed showing
+    REAL action events (spot.cover.override, user.warn, spot.cover.clear,
+    marketplace_product.approve, settings.update) ✅
+  Users page visual: data table rendering 3+ users, per-row action
+    buttons (Verify, Comp Pro, Comp Elite, Suspend) ✅
+
+## Mobile integrity
+- `/app/frontend` file-tree: byte-identical (git status clean except
+  pre-existing untracked .env + yarn.lock).
+- Backend routes/*.py: only additive edits in earlier phases; no edits
+  this wave.
+- Expo tunnel ready; mobile 10.79.131.x IPs actively hitting backend.
+
