@@ -7325,3 +7325,76 @@ OPEN ITEMS (Phase 2 candidates):
   • Admin center (moderation, cover editor, marketplace approvals)
   • Production routing (ingress /web/* → :3001 or subdomain)
 
+
+================================================================================
+# LumaScout Website V2 — Production Routing + Phase 2 Dashboard (Apr 2026)
+================================================================================
+
+## 1. Production Routing
+- Next.js web app now owns **public preview URL** on port :3000.
+- Expo mobile-web preview was moved out of the default port. A supervisor
+  `expo-blocker` keeps the `[program:expo]` entry in the read-only
+  supervisord.conf from reclaiming port 3000 across restarts.
+- Mobile iOS/Android dev still works via `yarn expo start --port 3002` manually.
+- Mobile apps themselves (iOS, Android) are fully untouched.
+
+## 2. CRITICAL INGRESS DISCOVERY (resolved)
+- Symptom: After the port swap, login via the preview URL returned 200 but
+  no `lumascout_session` cookie was set in the browser.
+- Root cause: Kubernetes ingress routes **all /api/\* requests directly to
+  FastAPI backend on :8001**, completely bypassing Next.js. My auth proxy
+  at `/api/auth/*` was invisible from the public URL.
+- Fix: Moved auth proxy to `/session/{login,register,logout,me}` (not under
+  `/api/*`). Server-side `apiFetch()` calls (lib/api.ts) still hit
+  `http://localhost:8001/api/*` directly from the Next.js container and are
+  unaffected. Only client-side fetches were updated.
+
+## 3. Backend additions (purely additive, no regressions)
+- `GET /api/me/followers`  — list who follows the current user.
+- `GET /api/me/following`  — list whom the current user follows.
+- Responses: `[{user_id, name, username, avatar_url, city, state, verification_status, plan, followed_at}]`.
+
+## 4. Files added in this wave
+Web
+  • app/dashboard/layout.tsx               Server-guarded dashboard shell
+  • app/dashboard/page.tsx                 Overview w/ live stats + recent saves
+  • app/dashboard/saved/page.tsx           /api/me/saved
+  • app/dashboard/collections/page.tsx     /api/me/collections
+  • app/dashboard/viewers/page.tsx         /api/me/viewers + summary
+  • app/dashboard/followers/page.tsx       /api/me/followers + following (tabs)
+  • app/dashboard/messages/page.tsx        /api/me/conversations (list)
+  • app/dashboard/map/page.tsx             Mapbox GL JS planner
+  • app/session/{login,logout,register,me}/route.ts  Cookie proxy
+  • components/dashboard-sidebar.tsx       Responsive rail w/ drawer on mobile
+  • components/dashboard-parts.tsx         DashboardHeader + EmptyState
+  • components/map-planner.tsx             Mapbox client component, filter
+                                           chips, spot preview panel
+Backend
+  • routes/network.py  +2 endpoints (followers, following) additive only
+
+Removed
+  • app/api/auth/*     (moved to /session/ per the ingress rule)
+
+## 5. END-TO-END AUTH + DASHBOARD VERIFICATION
+  V1  POST /session/login (public URL) admin@lumascout.app/admin123 → 200 + HttpOnly cookie `lumascout_session` ✅
+  V2  GET /session/me with cookie → {email: admin@lumascout.app, role: super_admin} ✅
+  V3  GET /dashboard with cookie → 200 ✅
+  V4  /dashboard middleware redirect when no cookie → 307 → /login?next=/dashboard ✅
+  V5  All 6 dashboard sub-pages rendered 200 via cookie-auth SSR ✅
+  V6  Map planner: 45 spots rendered as brand-gold markers on dark Mapbox style, filter chips All/Saved/My/Public wired, preview panel on click ✅
+  V7  Recent saves tile rendered real user photos from /api/me/saved ✅
+
+## 6. Mobile app integrity
+- supervisorctl: `expo` STOPPED (blocked by expo-blocker), `web` RUNNING :3000, backend :8001, mongodb RUNNING, nginx-code-proxy RUNNING.
+- `/app/frontend/app/*.tsx` untouched. `/app/frontend/app.json` untouched.
+- iOS/Android codebase 100% unchanged.
+
+## 7. Known limitations / Phase 3 candidates
+  • Messages UI is list-only; compose/thread still lives in mobile apps.
+  • Map planner: clicking pin opens preview but doesn't yet add to a
+    collection from web. Route planning (multi-stop / day order) pending.
+  • Viewer avatars may render blank when API returns cached viewers without
+    denormalized avatar_url. Non-blocking.
+  • Admin Center, Marketplace Seller Center, Stripe Connect onboarding for web
+    are Phase 3+ per the user's priority order.
+

@@ -25,6 +25,11 @@ export function Nav() {
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
+  // Hide the public marketing nav in logged-in app shell contexts.
+  if (pathname.startsWith('/dashboard') || pathname.startsWith('/admin') || pathname.startsWith('/seller')) {
+    return null;
+  }
+
   return (
     <header
       className={cn(

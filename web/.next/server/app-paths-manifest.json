@@ -1,1 +1,16 @@
-{}
+{
+  "/session/login/route": "app/session/login/route.js",
+  "/login/page": "app/login/page.js",
+  "/page": "app/page.js",
+  "/pricing/page": "app/pricing/page.js",
+  "/marketplace/page": "app/marketplace/page.js",
+  "/photographers/page": "app/photographers/page.js",
+  "/u/[username]/page": "app/u/[username]/page.js",
+  "/spots/[city]/page": "app/spots/[city]/page.js",
+  "/privacy/page": "app/privacy/page.js",
+  "/terms/page": "app/terms/page.js",
+  "/refund-policy/page": "app/refund-policy/page.js",
+  "/register/page": "app/register/page.js",
+  "/dashboard/map/page": "app/dashboard/map/page.js",
+  "/dashboard/page": "app/dashboard/page.js"
+}
