@@ -427,6 +427,11 @@ function Section({ title, rows }: { title: string; rows: RowSpec[] }) {
 
 function Row({ row, last }: { row: RowSpec; last: boolean }) {
   const Icon = row.icon;
+  // Defensive: if an icon resolves to undefined (e.g. lucide version mismatch),
+  // fall back to a dot instead of crashing the whole Settings screen.
+  if (!Icon) {
+    if (__DEV__) console.warn(`[settings] missing icon for row "${row.key}"`);
+  }
   return (
     <TouchableOpacity
       activeOpacity={0.6}
@@ -435,7 +440,11 @@ function Row({ row, last }: { row: RowSpec; last: boolean }) {
       testID={`settings-row-${row.key}`}
     >
       <View style={[styles.iconBox, row.destructive && styles.iconBoxDestructive]}>
-        <Icon size={17} color={row.destructive ? '#FF5F56' : colors.text} />
+        {Icon ? (
+          <Icon size={17} color={row.destructive ? '#FF5F56' : colors.text} />
+        ) : (
+          <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: colors.textTertiary }} />
+        )}
       </View>
       <View style={{ flex: 1 }}>
         <Text style={[styles.rowTitle, row.destructive && { color: '#FF5F56' }]} numberOfLines={1}>
