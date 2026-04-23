@@ -299,6 +299,58 @@ async def my_networking_analytics(
 
     return base
 
+
+# --- my_followers / my_following (added for web dashboard) ---
+# Additive-only. Returns lightweight user cards for the current user's
+# followers and who they're following. No change to existing /follow endpoint.
+@router.get("/me/followers")
+async def my_followers(user: dict = Depends(get_current_user), limit: int = 100):
+    rows = await db.follows.find(
+        {"followed_user_id": user["user_id"]},
+        {"_id": 0, "follower_user_id": 1, "created_at": 1},
+    ).sort("created_at", -1).to_list(max(1, min(limit, 500)))
+    user_ids = [r["follower_user_id"] for r in rows]
+    if not user_ids:
+        return []
+    users_map = {
+        u["user_id"]: u async for u in db.users.find(
+            {"user_id": {"$in": user_ids}},
+            {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
+             "city": 1, "state": 1, "verification_status": 1, "plan": 1},
+        )
+    }
+    result = []
+    for r in rows:
+        u = users_map.get(r["follower_user_id"])
+        if u:
+            result.append({**u, "followed_at": r.get("created_at")})
+    return result
+
+
+@router.get("/me/following")
+async def my_following(user: dict = Depends(get_current_user), limit: int = 100):
+    rows = await db.follows.find(
+        {"follower_user_id": user["user_id"]},
+        {"_id": 0, "followed_user_id": 1, "created_at": 1},
+    ).sort("created_at", -1).to_list(max(1, min(limit, 500)))
+    user_ids = [r["followed_user_id"] for r in rows]
+    if not user_ids:
+        return []
+    users_map = {
+        u["user_id"]: u async for u in db.users.find(
+            {"user_id": {"$in": user_ids}},
+            {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
+             "city": 1, "state": 1, "verification_status": 1, "plan": 1},
+        )
+    }
+    result = []
+    for r in rows:
+        u = users_map.get(r["followed_user_id"])
+        if u:
+            result.append({**u, "followed_at": r.get("created_at")})
+    return result
+
+
 # --- follow_user (server.py:1403-1432) ---
 @router.post("/users/{user_id}/follow")
 async def follow_user(user_id: str, user: dict = Depends(get_current_user)):

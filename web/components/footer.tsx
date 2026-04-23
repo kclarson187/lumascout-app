@@ -1,8 +1,18 @@
+'use client';
+
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { Instagram, Youtube, Twitter, Apple } from 'lucide-react';
 
 export function Footer() {
+  const pathname = usePathname();
   const y = new Date().getFullYear();
+
+  // Hide the public marketing footer in logged-in app shell contexts.
+  if (pathname.startsWith('/dashboard') || pathname.startsWith('/admin') || pathname.startsWith('/seller')) {
+    return null;
+  }
+
   return (
     <footer className="border-t border-border bg-bg">
       <div className="mx-auto max-w-7xl px-6 py-16 lg:px-8">
