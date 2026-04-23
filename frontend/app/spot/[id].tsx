@@ -45,6 +45,7 @@ export default function SpotDetail() {
   const params = useLocalSearchParams<{ id: string }>();
   const id = String(params.id || '');
   const { user } = useAuth();
+  const isAdminUser = user?.role === 'admin' || user?.role === 'super_admin';
   const [spot, setSpot] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [galleryIdx, setGalleryIdx] = useState(0);
@@ -150,6 +151,16 @@ export default function SpotDetail() {
             <TouchableOpacity onPress={onReport} style={styles.headBtn} testID="spot-report">
               <Flag color={colors.text} size={18} />
             </TouchableOpacity>
+            {isAdminUser && (
+              <TouchableOpacity
+                onPress={() => router.push(`/admin/spots/${id}/cover`)}
+                style={[styles.headBtn, styles.headBtnAdmin]}
+                testID="spot-admin-edit-cover"
+                accessibilityLabel="Edit cover photo (admin)"
+              >
+                <Wand2 color={colors.textInverse} size={16} />
+              </TouchableOpacity>
+            )}
             <TouchableOpacity onPress={toggleSave} style={[styles.headBtn, { backgroundColor: spot.is_saved ? colors.primary : 'rgba(0,0,0,0.5)' }]} testID="spot-save">
               <Bookmark color={spot.is_saved ? colors.textInverse : colors.text} size={18} fill={spot.is_saved ? colors.textInverse : 'transparent'} />
             </TouchableOpacity>
@@ -591,6 +602,11 @@ const styles = StyleSheet.create({
   headBtn: {
     width: 40, height: 40, borderRadius: 20,
     backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center',
+  },
+  headBtnAdmin: {
+    backgroundColor: colors.primary,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
   },
   dots: {
     position: 'absolute', bottom: space.md, alignSelf: 'center',
