@@ -4,7 +4,11 @@
  */
 import React from 'react';
 import { View, Text, StyleSheet, Image, TouchableOpacity } from 'react-native';
-import { Star, Package, ShieldCheck } from 'lucide-react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import {
+  Star, Package, ShieldCheck, Palette, Map as MapIcon, FileText,
+  Route, Film, Layout, Headphones,
+} from 'lucide-react-native';
 import { colors, font, space, radii } from '../theme';
 
 export type Product = {
@@ -46,10 +50,31 @@ const TYPE_LABELS: Record<string, string> = {
   mentorship: 'Mentorship',
 };
 
+const TYPE_GRADIENTS: Record<string, [string, string]> = {
+  preset:     ['#3a2d1e', '#15100a'],
+  spot_pack:  ['#1e2f3a', '#0a1015'],
+  city_guide: ['#2d2540', '#100d1c'],
+  route_pack: ['#1a3633', '#081010'],
+  lut:        ['#3a1e2f', '#150a12'],
+  template:   ['#2f331c', '#101208'],
+  mentorship: ['#33261e', '#120e0a'],
+};
+
+const TYPE_ICONS: Record<string, any> = {
+  preset: Palette, spot_pack: MapIcon, city_guide: FileText,
+  route_pack: Route, lut: Film, template: Layout, mentorship: Headphones,
+};
+
 function fmtPrice(cents: number, currency = 'USD'): string {
   if (cents === 0) return 'Free';
   const dollars = (cents / 100).toFixed(2);
   return currency === 'USD' ? `$${dollars}` : `${dollars} ${currency}`;
+}
+
+function initials(name: string | undefined): string {
+  if (!name) return 'LS';
+  const parts = name.trim().split(/\s+/).slice(0, 2);
+  return parts.map((p) => p[0] || '').join('').toUpperCase() || 'LS';
 }
 
 export default function ProductCard({
@@ -59,6 +84,11 @@ export default function ProductCard({
 }) {
   const isVerified = product.seller?.verification_status === 'verified';
   const isElite = product.seller?.plan === 'elite';
+  const gradient = TYPE_GRADIENTS[product.type] || ['#2a2a2d', '#0f0f10'];
+  const TypeIcon = TYPE_ICONS[product.type] || Package;
+  const displayName = product.seller?.name && product.seller.name.trim() !== ''
+    ? product.seller.name
+    : 'Marketplace Creator';
   return (
     <TouchableOpacity
       style={[styles.card, compact && styles.cardCompact, product.featured && styles.cardFeatured]}
@@ -70,9 +100,10 @@ export default function ProductCard({
         {product.thumbnail_url ? (
           <Image source={{ uri: product.thumbnail_url }} style={styles.thumb} />
         ) : (
-          <View style={[styles.thumb, styles.thumbFallback]}>
-            <Package size={28} color={colors.textTertiary} />
-          </View>
+          <LinearGradient colors={gradient} style={[styles.thumb, styles.thumbFallback]}>
+            <TypeIcon size={36} color="rgba(245,166,35,0.75)" strokeWidth={1.5} />
+            <Text style={styles.thumbFallbackTxt}>{TYPE_LABELS[product.type] || 'Pack'}</Text>
+          </LinearGradient>
         )}
         {product.featured ? (
           <View style={styles.featuredPill}>
@@ -90,10 +121,12 @@ export default function ProductCard({
           {product.seller?.avatar_url ? (
             <Image source={{ uri: product.seller.avatar_url }} style={styles.sellerAvatar} />
           ) : (
-            <View style={[styles.sellerAvatar, { backgroundColor: colors.surface2 }]} />
+            <View style={[styles.sellerAvatar, styles.sellerAvatarFallback]}>
+              <Text style={styles.sellerInitials}>{initials(displayName)}</Text>
+            </View>
           )}
           <Text style={styles.sellerName} numberOfLines={1}>
-            {product.seller?.name}
+            {displayName}
           </Text>
           {isVerified ? <ShieldCheck size={10} color="#3b82f6" /> : null}
           {isElite ? (
@@ -130,7 +163,11 @@ const styles = StyleSheet.create({
 
   thumbWrap: { position: 'relative', aspectRatio: 4 / 3, backgroundColor: colors.surface2 },
   thumb: { width: '100%', height: '100%' },
-  thumbFallback: { alignItems: 'center', justifyContent: 'center' },
+  thumbFallback: { alignItems: 'center', justifyContent: 'center', gap: 6 },
+  thumbFallbackTxt: {
+    color: 'rgba(245,166,35,0.55)',
+    fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 1.4,
+  },
   featuredPill: {
     position: 'absolute', top: 8, left: 8,
     paddingHorizontal: 8, paddingVertical: 3,
@@ -148,6 +185,12 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14, lineHeight: 18 },
   sellerRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   sellerAvatar: { width: 18, height: 18, borderRadius: 9 },
+  sellerAvatarFallback: {
+    backgroundColor: 'rgba(245,166,35,0.15)',
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.35)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  sellerInitials: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 8 },
   sellerName: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, flex: 1 },
 
   footerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 },

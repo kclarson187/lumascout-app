@@ -24,11 +24,11 @@ import ProductCard, { Product } from '../../src/components/ProductCard';
 const TYPES: { key: string; label: string }[] = [
   { key: '',            label: 'All' },
   { key: 'preset',      label: 'Presets' },
-  { key: 'spot_pack',   label: 'Spot packs' },
+  { key: 'spot_pack',   label: 'Spot Packs' },
   { key: 'city_guide',  label: 'Guides' },
   { key: 'route_pack',  label: 'Routes' },
-  { key: 'lut',         label: 'LUTs' },
   { key: 'template',    label: 'Templates' },
+  { key: 'lut',         label: 'LUTs' },
   { key: 'mentorship',  label: 'Mentorship' },
 ];
 
@@ -88,27 +88,41 @@ export default function MarketplaceSearch() {
         </View>
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-        {TYPES.map((t) => (
-          <TouchableOpacity
-            key={t.key || 'all'}
-            style={[styles.chip, type === t.key && styles.chipActive]}
-            onPress={() => setType(t.key)}
-          >
-            <Text style={[styles.chipTxt, type === t.key && styles.chipTxtActive]}>{t.label}</Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+      <View style={styles.chipRowWrap}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.chipRow}
+        >
+          {TYPES.map((t) => {
+            const active = type === t.key;
+            return (
+              <TouchableOpacity
+                key={t.key || 'all'}
+                activeOpacity={0.75}
+                style={[styles.chip, active && styles.chipActive]}
+                onPress={() => setType(t.key)}
+              >
+                <Text style={[styles.chipTxt, active && styles.chipTxtActive]} numberOfLines={1}>{t.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </View>
 
       <View style={styles.sortRow}>
-        <Text style={styles.resultsTxt}>{total} {total === 1 ? 'result' : 'results'}</Text>
+        <Text style={styles.resultsTxt}>
+          {total} {total === 1 ? 'Result' : 'Results'}
+        </Text>
         <TouchableOpacity
+          activeOpacity={0.7}
           style={styles.sortBtn}
           onPress={() => {
             const i = SORTS.findIndex((s) => s.key === sort);
             setSort(SORTS[(i + 1) % SORTS.length].key);
           }}
         >
+          <Text style={styles.sortLabel}>Sort: </Text>
           <Text style={styles.sortTxt}>{SORTS.find((s) => s.key === sort)?.label}</Text>
           <ChevronDown size={14} color={colors.textSecondary} />
         </TouchableOpacity>
@@ -162,24 +176,39 @@ const styles = StyleSheet.create({
   },
   searchInput: { flex: 1, color: colors.text, fontFamily: font.body, fontSize: 13 },
 
-  chipRow: { paddingHorizontal: space.md, gap: 6, paddingBottom: 6 },
+  chipRowWrap: {
+    height: 60,
+    borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  chipRow: {
+    paddingHorizontal: space.lg,
+    alignItems: 'center',
+    gap: 8,
+  },
   chip: {
-    paddingHorizontal: 12, paddingVertical: 7,
-    borderRadius: radii.pill,
+    height: 40,
+    paddingHorizontal: 18,
+    borderRadius: 20,
     backgroundColor: colors.surface1,
     borderWidth: 1, borderColor: colors.border,
+    alignItems: 'center', justifyContent: 'center',
   },
   chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  chipTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },
+  chipTxt: {
+    color: colors.text, fontFamily: font.bodyMedium, fontSize: 14,
+    lineHeight: 18, textAlign: 'center',
+    includeFontPadding: false,
+  },
   chipTxtActive: { color: colors.textInverse, fontFamily: font.bodyBold },
 
   sortRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: space.lg, paddingVertical: 8,
+    paddingHorizontal: space.lg, height: 44,
   },
-  resultsTxt: { color: colors.textTertiary, fontFamily: font.body, fontSize: 12 },
-  sortBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  sortTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
+  resultsTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13 },
+  sortBtn: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  sortLabel: { color: colors.textTertiary, fontFamily: font.body, fontSize: 13 },
+  sortTxt: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13, marginRight: 4 },
 
   empty: { alignItems: 'center', gap: 10, padding: space.xxl },
   emptyHead: { color: colors.text, fontFamily: font.bodyBold, fontSize: 15 },

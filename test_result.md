@@ -2818,6 +2818,55 @@ agent_communication:
       Please retest the geocode endpoints + confirm Add Spot save-to-DB
       with the canonical Joshua Springs example no longer lands in the ocean.
 
+    -agent: "testing"
+    -message: |
+      PACK MARKETPLACE UI POLISH & STRIPE CONNECT QA COMPLETE
+
+      Tested Pack Marketplace UI polish fixes and Stripe Connect UI on mobile viewport (390×844 and 414×896).
+      Login: admin@lumascout.app / admin123 successful.
+
+      ✅ VERIFIED FIXES:
+      1. Marketplace storefront (/marketplace) category pills:
+         - All 7 category pills have consistent 40px height
+         - Pills show shortened labels: Presets, Spot Packs, Guides, Routes, LUTs, Templates, Mentorship
+         - No oval/swollen selected state observed
+         - Pills use proper 20px border radius
+
+      2. Product cards functionality:
+         - Cards show proper thumbnails when available
+         - Gradient fallback with type icons working for missing thumbnails
+         - Seller names display correctly (saw "Marketplace Creator" for appropriate cases)
+         - No "Deleted user" issues observed in test data
+
+      3. Stripe Connect UI (/me/seller):
+         - "Get paid with Stripe" card renders correctly
+         - "Connect Stripe" button present and functional
+         - Note: Connect Stripe button did not show expected error alert, suggesting Stripe Connect may actually be enabled on this platform
+
+      4. Admin marketplace features:
+         - /admin/marketplace-purchases shows all three tabs: COMPLETED, PENDING, REFUNDED
+         - /admin/marketplace has REFUNDS pill in header that navigates correctly
+         - Purchase success page loads properly
+
+      ❌ ISSUES FOUND:
+      1. Search page (/marketplace/search?type=spot_pack) accessibility:
+         - Page redirects to onboarding when accessed directly
+         - Category pills not accessible for testing due to authentication redirect
+         - Unable to verify the specific "sloppy pills" fix mentioned in review
+
+      2. Session persistence:
+         - User session doesn't persist across direct navigation to marketplace routes
+         - This prevents testing of the specific search page UI polish fixes
+
+      📸 SCREENSHOTS CAPTURED:
+      - marketplace-search-mobile.png (390×844)
+      - marketplace-storefront-mobile.png (390×844) 
+      - marketplace-search-414x896.png (414×896)
+
+      RECOMMENDATION: The storefront category pills are working correctly with 40px height consistency. 
+      However, the search page authentication flow needs investigation to properly test the specific 
+      "sloppy pills" fixes mentioned in the review request.
+
 #====================================================================================================
 # Commit 8 / 2026-04 — Pre-launch sweep (golden-hour TZ, home pills, spot attachments, test hygiene)
 #====================================================================================================
