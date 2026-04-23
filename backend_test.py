@@ -1,664 +1,535 @@
 """
-Post-modularization regression test — Pack Marketplace.
+Phase 1B regression test — verify the 33 admin endpoints extracted into
+/app/backend/routes/admin.py all still respond correctly. No 500s anywhere.
 
-All marketplace endpoints have been moved from server.py to
-routes/marketplace.py via `app.include_router(_marketplace_routes.router)`.
-Goal: verify zero behavior changes and zero 500s / route 404s.
+Also smoke-check non-admin + previously-migrated marketplace endpoints.
 
-Base URL: http://localhost:8001/api
-Admin:    admin@lumascout.app / admin123 (super_admin, username keith)
-
-Covers all 14 scenarios in the review brief. Uses throwaway users for
-creates/purchases, cleans up via direct Mongo at the end.
+Run: python3 /app/backend_test.py
 """
-import os
+from __future__ import annotations
+
+import random
+import string
 import sys
 import time
-import uuid
-import asyncio
+from typing import Any, Optional, Tuple
+
 import requests
-from typing import Optional, Dict, Any, List
 
 BASE = "http://localhost:8001/api"
 ADMIN_EMAIL = "admin@lumascout.app"
-ADMIN_PASS = "admin123"
+ADMIN_PASSWORD = "admin123"
 
-PASS: List[str] = []
-FAIL: List[tuple] = []
+session = requests.Session()
+session.headers.update({"Content-Type": "application/json"})
 
-
-def ok(name: str, cond: bool, detail: str = ""):
-    if cond:
-        PASS.append(name)
-        print(f"  PASS  {name}")
-    else:
-        FAIL.append((name, detail))
-        print(f"  FAIL  {name}  -- {detail}")
+PASS = 0
+FAIL = 0
+FAIL_MSGS: list[str] = []
+FIVE_HUNDREDS: list[str] = []
 
 
-def H(t: str) -> dict: return {"Authorization": f"Bearer {t}"}
+def log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def check(ok: bool, desc: str, extra: Any = "") -> bool:
+    global PASS, FAIL
+    if ok:
+        PASS += 1
+        log(f"  OK  {desc}")
+        return True
+    FAIL += 1
+    msg = f"  FAIL {desc}  {extra}"
+    log(msg)
+    FAIL_MSGS.append(msg)
+    return False
+
+
+def req(method: str, path: str, token: Optional[str] = None,
+        body: Any = None, params: Any = None) -> Tuple[int, Any]:
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    url = f"{BASE}{path}"
+    try:
+        r = session.request(method, url, headers=headers,
+                            json=body if body is not None else None,
+                            params=params, timeout=30)
+    except Exception as e:
+        log(f"  network error {method} {path}: {e}")
+        return 0, {"error": str(e)}
+    if r.status_code >= 500:
+        FIVE_HUNDREDS.append(f"{method} {path} -> {r.status_code} body={r.text[:400]}")
+    try:
+        data = r.json()
+    except Exception:
+        data = {"_raw": r.text}
+    return r.status_code, data
+
+
+def rand(n: int = 8) -> str:
+    return "".join(random.choices(string.ascii_lowercase + string.digits, k=n))
 
 
 def login(email: str, password: str) -> Optional[str]:
-    r = requests.post(f"{BASE}/auth/login", json={"email": email, "password": password}, timeout=15)
-    if r.status_code != 200:
-        print(f"LOGIN FAIL {email} -> {r.status_code} {r.text[:200]}")
+    sc, data = req("POST", "/auth/login", body={"email": email, "password": password})
+    if sc == 200 and data.get("token"):
+        return data["token"]
+    log(f"  login failed for {email}: {sc} {data}")
+    return None
+
+
+def register_throwaway(city: str = "Austin") -> Tuple[str, str, str]:
+    email = f"qa_{rand(10)}@qamail.lumascout.app"
+    password = "QAtest123!"
+    name = f"QA {rand(4).upper()}"
+    sc, data = req("POST", "/auth/register", body={
+        "email": email, "password": password, "name": name,
+        "city": city, "state": "TX", "country_code": "US",
+    })
+    if sc not in (200, 201):
+        log(f"  register fail {sc} {data}")
+        return "", "", email
+    return data.get("token", ""), (data.get("user") or {}).get("user_id", ""), email
+
+
+def create_spot(tok: str, title: str) -> Optional[str]:
+    sc, body = req("POST", "/spots", token=tok, body={
+        "title": title,
+        "description": "QA regression spot",
+        "latitude": 30.27 + random.uniform(-0.05, 0.05),
+        "longitude": -97.74 + random.uniform(-0.05, 0.05),
+        "city": "Austin",
+        "state": "TX",
+        "country": "USA",
+        "shoot_types": ["portrait"],
+        "privacy_mode": "public",
+    })
+    if sc not in (200, 201):
+        log(f"    spot create failed {sc} {body}")
         return None
-    return r.json()["token"]
+    return body.get("spot_id")
 
 
-def register() -> Dict[str, Any]:
-    uid = uuid.uuid4().hex[:8]
-    email = f"qa_mp_{uid}@photoscout-qa.com"
-    r = requests.post(f"{BASE}/auth/register", json={
-        "email": email, "password": "TestPass123!", "name": f"QA {uid[:4].upper()}",
-    }, timeout=15)
-    assert r.status_code == 200, f"register: {r.status_code} {r.text}"
-    d = r.json()
-    return {
-        "email": email, "token": d["token"], "user": d["user"],
-        "user_id": d["user"]["user_id"],
-    }
+def run() -> None:
+    log("\n===== Phase 1B ADMIN REGRESSION SUITE =====\n")
 
-
-def section(n): print(f"\n=== {n} ===")
-
-
-CREATED_USERS: List[str] = []
-CREATED_PRODUCTS: List[str] = []
-CREATED_PURCHASES: List[str] = []
-
-
-def main() -> int:
-    section("Setup: admin login")
-    admin_tok = login(ADMIN_EMAIL, ADMIN_PASS)
-    ok("admin login", admin_tok is not None)
+    admin_tok = login(ADMIN_EMAIL, ADMIN_PASSWORD)
     if not admin_tok:
-        return 1
+        log("FATAL: cannot log in as admin. Aborting.")
+        sys.exit(1)
 
-    # ---------------------------------------------------------------- (1)
-    section("(1) GET /marketplace/storefront")
-    r = requests.get(f"{BASE}/marketplace/storefront", timeout=15)
-    ok("storefront 200", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
-    sample = None
-    if r.status_code == 200:
-        body = r.json()
-        rails = body.get("rails") or {}
-        ok("rails has featured/trending/newest",
-           all(k in rails for k in ("featured", "trending", "newest")),
-           f"keys={list(rails.keys())}")
-        ok("by_type present", "by_type" in body, f"body_keys={list(body.keys())}")
-        for k in ("trending", "newest", "featured"):
-            if rails.get(k):
-                sample = rails[k][0]; break
-        if not sample:
-            for v in (body.get("by_type") or {}).values():
-                if v: sample = v[0]; break
-        if sample:
-            req = {"seller", "rating_avg", "in_wishlist", "has_purchased"}
-            missing = req - set(sample.keys())
-            ok("item carries seller/rating_avg/in_wishlist/has_purchased",
-               not missing, f"missing={missing}")
+    sc, me = req("GET", "/auth/me", token=admin_tok)
+    check(sc == 200 and me.get("email") == ADMIN_EMAIL, "admin /auth/me -> 200")
+    admin_user_id = me.get("user_id")
 
-    # ---------------------------------------------------------------- (2)
-    section("(2) GET /marketplace/products — search + sorts + pagination")
-    r = requests.get(f"{BASE}/marketplace/products",
-                     params={"q": "preset", "limit": 20}, timeout=15)
-    ok("products q=preset 200", r.status_code == 200, f"{r.status_code}")
+    non_admin_tok, non_admin_id, _ = register_throwaway()
+    check(bool(non_admin_tok), "non-admin throwaway registered")
 
-    r = requests.get(f"{BASE}/marketplace/products",
-                     params={"type": "mentorship"}, timeout=15)
-    if r.status_code == 200:
-        items = r.json().get("items") or []
-        ok("type=mentorship returns only mentorship",
-           all(it.get("type") == "mentorship" for it in items),
-           f"types={[it.get('type') for it in items]}")
+    # §1 Triage / dashboards
+    log("\n-- §1 Triage / dashboards --")
+    sc, body = req("GET", "/admin/overview", token=admin_tok)
+    check(sc == 200 and "users" in body and "moderation" in body,
+          "GET /admin/overview -> 200",
+          f"sc={sc}")
+
+    sc, body = req("GET", "/admin/pending", token=admin_tok)
+    check(sc == 200 and isinstance(body, list),
+          "GET /admin/pending -> 200 list", f"sc={sc}")
+
+    sc, body = req("GET", "/admin/stats/recent-approvals", token=admin_tok)
+    check(sc == 200 and "count" in body and "days" in body,
+          "GET /admin/stats/recent-approvals -> 200", f"sc={sc} body={body}")
+
+    sc, body = req("GET", "/admin/analytics", token=admin_tok, params={"days": 14})
+    n14 = len(body.get("series", [])) if isinstance(body, dict) else 0
+    check(sc == 200 and n14 == 14, "GET /admin/analytics?days=14 -> 14 buckets",
+          f"sc={sc} n={n14}")
+
+    sc, body = req("GET", "/admin/analytics", token=admin_tok, params={"days": 30})
+    n30 = len(body.get("series", [])) if isinstance(body, dict) else 0
+    check(sc == 200 and n30 == 30, "GET /admin/analytics?days=30 -> 30 buckets",
+          f"sc={sc} n={n30}")
+
+    sc, body = req("GET", "/admin/audit-logs", token=admin_tok, params={"limit": 5})
+    items = body.get("items") if isinstance(body, dict) else None
+    check(sc == 200 and isinstance(items, list),
+          "GET /admin/audit-logs?limit=5 -> 200 items[]",
+          f"sc={sc}")
+
+    # §2 User management
+    log("\n-- §2 User management --")
+    sc, body = req("GET", "/admin/users", token=admin_tok, params={"limit": 5})
+    check(sc == 200 and isinstance(body.get("items"), list),
+          "GET /admin/users?limit=5 -> 200", f"sc={sc}")
+
+    sc, body = req("GET", "/admin/users", token=admin_tok, params={"q": "admin"})
+    check(sc == 200 and isinstance(body.get("items"), list),
+          "GET /admin/users?q=admin -> 200", f"sc={sc}")
+
+    sc, body = req("GET", f"/admin/users/{admin_user_id}", token=admin_tok)
+    check(sc == 200 and body.get("user_id") == admin_user_id,
+          "GET /admin/users/{admin_id} -> 200", f"sc={sc}")
+
+    # AdminUserPatch schema: plan/role/status/verification_status/
+    # suspension_reason/comp_expiration/reason. display_name/city are
+    # NOT in the schema — skipped in favour of a real field.
+    sc, body = req("PATCH", f"/admin/users/{non_admin_id}", token=admin_tok,
+                   body={"verification_status": "verified", "reason": "qa test"})
+    check(sc == 200, "PATCH /admin/users/{id} (verification_status) -> 200",
+          f"sc={sc} body={body}")
+
+    sc, body = req("POST", f"/admin/users/{non_admin_id}/notes", token=admin_tok,
+                   body={"body": "qa note"})
+    check(sc == 200 and body.get("note_id"),
+          "POST /admin/users/{id}/notes -> 200", f"sc={sc}")
+
+    # Grant plan schema: {plan, duration_days, reason}
+    sc, body = req("POST", f"/admin/users/{non_admin_id}/grant-plan",
+                   token=admin_tok,
+                   body={"plan": "pro", "duration_days": 30, "reason": "qa"})
+    check(sc == 200 and (body.get("user") or {}).get("plan") == "pro",
+          "POST /admin/users/{id}/grant-plan {pro} -> 200", f"sc={sc}")
+
+    sc, body = req("POST", f"/admin/users/{non_admin_id}/grant-plan",
+                   token=admin_tok, body={"plan": "free", "reason": "qa revoke"})
+    check(sc == 200 and (body.get("user") or {}).get("plan") == "free",
+          "POST /admin/users/{id}/grant-plan {free} -> 200", f"sc={sc}")
+
+    # §3 Sanctions
+    log("\n-- §3 Sanctions --")
+    sc, body = req("POST", f"/admin/users/{non_admin_id}/sanction",
+                   token=admin_tok,
+                   body={"type": "warn", "reason": "qa test warning"})
+    sanction_id = body.get("sanction_id") if isinstance(body, dict) else None
+    check(sc == 200 and sanction_id,
+          "POST /admin/users/{id}/sanction {warn} -> 200",
+          f"sc={sc} body={body}")
+
+    sc, body = req("GET", f"/admin/users/{non_admin_id}/sanctions",
+                   token=admin_tok)
+    items = body.get("items") if isinstance(body, dict) else []
+    found = any(s.get("sanction_id") == sanction_id for s in items)
+    check(sc == 200 and found,
+          "GET /admin/users/{id}/sanctions includes new sanction",
+          f"sc={sc} found={found}")
+
+    sc, body = req("POST", f"/admin/users/{non_admin_id}/unsanction",
+                   token=admin_tok, body={})
+    check(sc == 200 and body.get("revoked_sanction_id") == sanction_id,
+          "POST /admin/users/{id}/unsanction -> 200", f"sc={sc} body={body}")
+
+    sc, body = req("GET", "/admin/audit-logs", token=admin_tok,
+                   params={"target_id": non_admin_id, "limit": 20})
+    actions = {i.get("action") for i in (body.get("items") or [])}
+    check(sc == 200 and "user.warn" in actions and "user.unsanction" in actions,
+          "audit_logs contains user.warn + user.unsanction",
+          f"actions={actions}")
+
+    time.sleep(1.0)
+    sc, notif_body = req("GET", "/notifications", token=non_admin_tok,
+                         params={"limit": 20})
+    n_items = notif_body.get("items", []) if isinstance(notif_body, dict) else []
+    kinds = {n.get("kind") for n in n_items}
+    check(sc == 200 and "user_sanction_warn" in kinds,
+          "sanctioned user got 'user_sanction_warn' notification",
+          f"kinds={kinds}")
+
+    # §4 Spot moderation
+    log("\n-- §4 Spot moderation --")
+    sc, body = req("GET", "/admin/spot-uploads/pending", token=admin_tok)
+    check(sc == 200 and isinstance(body.get("items"), list),
+          "GET /admin/spot-uploads/pending -> 200", f"sc={sc}")
+
+    spot_approve = create_spot(non_admin_tok, f"QA Approve {rand(4)}")
+    spot_reject = create_spot(non_admin_tok, f"QA Reject {rand(4)}")
+    spot_action = create_spot(non_admin_tok, f"QA Action {rand(4)}")
+    check(all([spot_approve, spot_reject, spot_action]),
+          f"3 throwaway spots created ({spot_approve},{spot_reject},{spot_action})")
+
+    if spot_approve:
+        sc, body = req("POST", f"/admin/spots/{spot_approve}/approve",
+                       token=admin_tok, body={})
+        check(sc == 200 and body.get("ok"),
+              "POST /admin/spots/{id}/approve -> 200", f"sc={sc}")
+        sc, body = req("GET", f"/spots/{spot_approve}")
+        check(sc == 200 and body.get("spot_id") == spot_approve,
+              "public GET /spots/{id} after approve -> 200", f"sc={sc}")
+
+    if spot_reject:
+        sc, body = req("POST", f"/admin/spots/{spot_reject}/reject",
+                       token=admin_tok, body={})
+        check(sc == 200 and body.get("ok"),
+              "POST /admin/spots/{id}/reject -> 200", f"sc={sc}")
+
+    if spot_action:
+        sc, body = req("POST", f"/admin/spots/{spot_action}/action",
+                       token=admin_tok, body={"action": "feature"})
+        check(sc == 200 and body.get("ok"),
+              "POST /admin/spots/{id}/action feature -> 200", f"sc={sc}")
+
+    # Cover editor — find a spot with images
+    cover_spot_id = None
+    first_img = None
+    sc, body = req("GET", "/spots", token=admin_tok, params={"limit": 20})
+    for s in (body if isinstance(body, list) else []):
+        imgs = s.get("images") or []
+        if imgs:
+            first = imgs[0]
+            url = first.get("image_url") if isinstance(first, dict) else first
+            if url:
+                cover_spot_id = s.get("spot_id")
+                first_img = url
+                break
+    if cover_spot_id and first_img:
+        sc, body = req("GET", f"/admin/spots/{cover_spot_id}/cover-editor",
+                       token=admin_tok)
+        check(sc == 200 and isinstance(body.get("images"), list),
+              "GET /admin/spots/{id}/cover-editor -> 200", f"sc={sc}")
+
+        sc, body = req("PATCH", f"/admin/spots/{cover_spot_id}/cover",
+                       token=admin_tok,
+                       body={"image_url": first_img, "focal_x": 0.5,
+                             "focal_y": 0.5, "scale": 1.2, "rotation": 0})
+        check(sc == 200 and body.get("ok"),
+              "PATCH /admin/spots/{id}/cover -> 200",
+              f"sc={sc} body={str(body)[:200]}")
+
+        sc, editor = req("GET", f"/admin/spots/{cover_spot_id}/cover-editor",
+                         token=admin_tok)
+        urls = [i["image_url"] for i in (editor.get("images") or [])
+                if i.get("source") == "spot"]
+        if urls:
+            sc, body = req("PATCH", f"/admin/spots/{cover_spot_id}/gallery",
+                           token=admin_tok, body={"image_urls": urls})
+            check(sc == 200 and body.get("ok"),
+                  "PATCH /admin/spots/{id}/gallery -> 200",
+                  f"sc={sc} body={body}")
+
+        sc, body = req("DELETE", f"/admin/spots/{cover_spot_id}/cover",
+                       token=admin_tok)
+        check(sc == 200 and body.get("ok"),
+              "DELETE /admin/spots/{id}/cover -> 200", f"sc={sc}")
     else:
-        ok("type=mentorship 200", False, f"{r.status_code}")
+        log("  WARN: no spot with images found; cover-editor tests skipped")
 
-    # price_low strictly ascending
-    r = requests.get(f"{BASE}/marketplace/products",
-                     params={"sort": "price_low", "limit": 30}, timeout=15)
-    if r.status_code == 200:
-        prices = [it.get("price_cents", 0) for it in r.json().get("items") or []]
-        asc = all(prices[i] <= prices[i+1] for i in range(len(prices)-1))
-        ok("sort=price_low ascending", asc, f"prices={prices[:10]}")
+    # §5 Community moderation
+    log("\n-- §5 Community moderation --")
+    sc, body = req("GET", "/admin/posts", token=admin_tok, params={"limit": 3})
+    check(sc == 200 and isinstance(body.get("items"), list),
+          "GET /admin/posts?limit=3 -> 200", f"sc={sc}")
+
+    sc, body = req("POST", "/posts", token=non_admin_tok, body={
+        "kind": "post",
+        "title": f"QA Post {rand(4)}",
+        "body": "qa regression content",
+        "category": "tip",
+    })
+    post_id = body.get("post_id") if isinstance(body, dict) else None
+    if post_id:
+        sc, body = req("DELETE", f"/admin/posts/{post_id}", token=admin_tok,
+                       params={"reason": "qa delete"})
+        check(sc == 200 and body.get("status") == "removed",
+              "DELETE /admin/posts/{id} -> 200", f"sc={sc}")
+
+        sc, body = req("POST", f"/admin/posts/{post_id}/restore",
+                       token=admin_tok, body={})
+        check(sc == 200 and body.get("status") == "active",
+              "POST /admin/posts/{id}/restore -> 200", f"sc={sc}")
+
+        sc, body = req("POST", "/admin/community/moderate", token=admin_tok,
+                       body={"type": "post", "id": post_id,
+                             "action": "soft_delete", "reason": "qa"})
+        check(sc == 200, "POST /admin/community/moderate soft_delete -> 200",
+              f"sc={sc} body={body}")
+
+        sc, body = req("POST", "/admin/community/bulk-moderate",
+                       token=admin_tok,
+                       body={"type": "post", "ids": [post_id],
+                             "action": "restore", "reason": "qa bulk"})
     else:
-        ok("sort=price_low 200", False, f"{r.status_code}")
+        sc, body = req("POST", "/admin/community/bulk-moderate",
+                       token=admin_tok,
+                       body={"type": "post", "ids": ["nonexistent_xxx"],
+                             "action": "remove", "reason": "qa bulk"})
+    check(sc == 200 and "applied" in body,
+          "POST /admin/community/bulk-moderate -> 200", f"sc={sc}")
 
-    for s in ("trending", "newest", "top_rated"):
-        r = requests.get(f"{BASE}/marketplace/products",
-                         params={"sort": s, "limit": 5}, timeout=15)
-        ok(f"sort={s} 200", r.status_code == 200, f"{r.status_code}")
+    sc, body = req("GET", "/admin/community/content", token=admin_tok,
+                   params={"type": "post", "limit": 5})
+    check(sc == 200 and isinstance(body.get("items"), list),
+          "GET /admin/community/content -> 200", f"sc={sc}")
 
-    # pagination
-    r1 = requests.get(f"{BASE}/marketplace/products",
-                      params={"limit": 2, "skip": 0}, timeout=15)
-    r2 = requests.get(f"{BASE}/marketplace/products",
-                      params={"limit": 2, "skip": 2}, timeout=15)
-    if r1.status_code == 200 and r2.status_code == 200:
-        ids1 = [it["product_id"] for it in r1.json().get("items") or []]
-        ids2 = [it["product_id"] for it in r2.json().get("items") or []]
-        ok("pagination returns different items", set(ids1).isdisjoint(set(ids2)),
-           f"ids1={ids1} ids2={ids2}")
+    sc, body = req("GET", "/admin/community/summary", token=admin_tok)
+    check(sc == 200 and "posts" in body and "reports" in body,
+          "GET /admin/community/summary -> 200", f"sc={sc}")
 
-    # ---------------------------------------------------------------- (3)
-    section("(3) GET /marketplace/products/{id}")
-    # bogus
-    r = requests.get(f"{BASE}/marketplace/products/prod_doesnotexist123", timeout=15)
-    ok("bogus id -> 404", r.status_code == 404, f"{r.status_code}")
+    # §6 Reports
+    log("\n-- §6 Reports --")
+    sc, body = req("GET", "/admin/reports", token=admin_tok,
+                   params={"status": "pending"})
+    check(sc == 200 and isinstance(body, list),
+          "GET /admin/reports?status=pending -> 200", f"sc={sc}")
 
-    # Real product view increments
-    r = requests.get(f"{BASE}/marketplace/products",
-                     params={"limit": 1}, timeout=15)
-    real_pid = None
-    if r.status_code == 200 and r.json().get("items"):
-        real_pid = r.json()["items"][0]["product_id"]
-    if real_pid:
-        r1 = requests.get(f"{BASE}/marketplace/products/{real_pid}", timeout=15)
-        r2 = requests.get(f"{BASE}/marketplace/products/{real_pid}", timeout=15)
-        ok("product detail 200 (unauth)", r1.status_code == 200 and r2.status_code == 200)
-        v1 = r1.json().get("view_count", 0)
-        v2 = r2.json().get("view_count", 0)
-        ok("view_count increments", v2 > v1, f"v1={v1} v2={v2}")
-        ok("unauth GET does NOT include contents_url",
-           "contents_url" not in r1.json(),
-           f"keys={[k for k in r1.json().keys() if 'content' in k.lower()]}")
+    if spot_approve:
+        sc, rbody = req("POST", "/reports", token=non_admin_tok, body={
+            "target_type": "spot", "target_id": spot_approve,
+            "reason": "other",
+        })
+        rep_id = rbody.get("report_id") if isinstance(rbody, dict) else None
+        check(sc == 200 and rep_id,
+              "POST /reports (throwaway report for resolve flow) -> 200",
+              f"sc={sc} body={rbody}")
+        if rep_id:
+            # Actual schema: {action: dismissed|removed|warned}
+            sc, body = req("POST", f"/admin/reports/{rep_id}/resolve",
+                           token=admin_tok, body={"action": "dismissed"})
+            check(sc == 200 and body.get("ok"),
+                  "POST /admin/reports/{id}/resolve -> 200",
+                  f"sc={sc} body={body}")
 
-    # ---------------------------------------------------------------- (4)
-    section("(4) POST /marketplace/products — create + approve + PATCH + DELETE")
-    seller = register(); CREATED_USERS.append(seller["user_id"])
-    buyer = register();  CREATED_USERS.append(buyer["user_id"])
-    other = register();  CREATED_USERS.append(other["user_id"])
+    # §7 Platform settings
+    log("\n-- §7 Platform settings --")
+    sc, before = req("GET", "/admin/settings", token=admin_tok)
+    check(sc == 200 and isinstance(before, dict),
+          "GET /admin/settings -> 200", f"sc={sc}")
+    orig_app_name = before.get("app_name")
 
-    payload = {
-        "title": f"QA Preset {uuid.uuid4().hex[:6]}",
+    # PlatformSettingsPatch supports: app_name, support_email, maintenance_mode,
+    # public_registration, etc. Not maintenance_banner.
+    new_name = f"QA-{rand(4)}"
+    sc, body = req("PATCH", "/admin/settings", token=admin_tok,
+                   body={"app_name": new_name})
+    check(sc == 200, "PATCH /admin/settings {app_name} -> 200", f"sc={sc}")
+
+    sc, confirm = req("GET", "/admin/settings", token=admin_tok)
+    check(sc == 200 and confirm.get("app_name") == new_name,
+          "re-GET settings shows new value",
+          f"app_name={confirm.get('app_name')}")
+
+    if orig_app_name is not None:
+        sc, _ = req("PATCH", "/admin/settings", token=admin_tok,
+                    body={"app_name": orig_app_name})
+        check(sc == 200, "PATCH /admin/settings revert -> 200", f"sc={sc}")
+
+    # §8 Permission guard
+    log("\n-- §8 Permission guard --")
+    sc, _ = req("GET", "/admin/overview")
+    check(sc == 401, "no-token GET /admin/overview -> 401", f"sc={sc}")
+
+    sc, _ = req("GET", "/admin/overview", token=non_admin_tok)
+    check(sc == 403, "non-admin GET /admin/overview -> 403", f"sc={sc}")
+
+    sc, _ = req("GET", "/admin/overview", token=admin_tok)
+    check(sc == 200, "admin GET /admin/overview -> 200", f"sc={sc}")
+
+    sc, _ = req("POST", f"/admin/users/{non_admin_id}/sanction",
+                token=non_admin_tok,
+                body={"type": "warn", "reason": "noop"})
+    check(sc == 403, "non-admin sanction -> 403", f"sc={sc}")
+
+    sc, _ = req("DELETE", "/admin/posts/fake_post_xxx", token=non_admin_tok,
+                params={"reason": "noop"})
+    check(sc == 403, "non-admin DELETE /admin/posts/{id} -> 403", f"sc={sc}")
+
+    sc, _ = req("PATCH", "/admin/settings", token=non_admin_tok,
+                body={"app_name": "nope"})
+    check(sc == 403, "non-admin PATCH /admin/settings -> 403", f"sc={sc}")
+
+    # §9 Non-regression
+    log("\n-- §9 Non-regression --")
+    for endpoint in ("/auth/me", "/feed/home", "/notifications",
+                     "/me/seller/connect-status"):
+        sc, _ = req("GET", endpoint, token=admin_tok,
+                    params={"limit": 3} if endpoint == "/notifications" else None)
+        check(sc == 200, f"GET {endpoint} -> 200", f"sc={sc}")
+
+    sc, body = req("GET", "/spots", token=admin_tok, params={"limit": 3})
+    check(sc == 200 and isinstance(body, list) and len(body) <= 3,
+          "GET /spots?limit=3 -> 200", f"sc={sc}")
+
+    sc, body = req("GET", "/marketplace/storefront", token=admin_tok)
+    check(sc == 200 and "rails" in body,
+          "GET /marketplace/storefront -> 200", f"sc={sc}")
+
+    new_spot = create_spot(non_admin_tok, f"QA NonReg {rand(4)}")
+    check(bool(new_spot), "non-admin POST /spots -> spot_id",
+          f"spot_id={new_spot}")
+
+    _, other_id, _ = register_throwaway()
+    if other_id:
+        # POST /users/{id}/follow toggles — call twice for follow+unfollow
+        sc, b1 = req("POST", f"/users/{other_id}/follow",
+                     token=non_admin_tok, body={})
+        check(sc in (200, 201) and b1.get("following") is True,
+              "POST /users/{id}/follow (toggle ON) -> 200", f"sc={sc} {b1}")
+        sc, b2 = req("POST", f"/users/{other_id}/follow",
+                     token=non_admin_tok, body={})
+        check(sc == 200 and b2.get("following") is False,
+              "POST /users/{id}/follow (toggle OFF) -> 200", f"sc={sc} {b2}")
+
+    sc, body = req("PATCH", "/me/notification-preferences", token=admin_tok,
+                   body={"daily_cap": 10})
+    check(sc == 200, "PATCH /me/notification-preferences -> 200", f"sc={sc}")
+
+    # Marketplace checkout MOCK end-to-end
+    sc, body = req("POST", "/marketplace/products", token=admin_tok, body={
+        "title": f"QA Pack {rand(4)}",
+        "description": "qa regression content pack",
+        "price_cents": 1000,
         "type": "preset",
-        "description": "Regression-test preset pack for post-modularization QA.",
-        "price_cents": 1500,
-        "thumbnail_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-        "contents_url": "https://example.com/qa/pack.zip",
-    }
-    r = requests.post(f"{BASE}/marketplace/products",
-                      headers=H(seller["token"]), json=payload, timeout=15)
-    ok("seller create product 200", r.status_code == 200,
-       f"{r.status_code} {r.text[:200]}")
-    pid = None
-    if r.status_code == 200:
-        pid = r.json()["product_id"]
-        CREATED_PRODUCTS.append(pid)
-        ok("new product status == pending",
-           r.json().get("status") == "pending",
-           f"status={r.json().get('status')}")
+        "thumbnail_url": "https://example.com/thumb.jpg",
+        "contents_url": "https://example.com/qa.zip",
+    })
+    product_id = body.get("product_id") if isinstance(body, dict) else None
+    if product_id:
+        sc, _ = req("POST",
+                    f"/admin/marketplace/products/{product_id}/moderate",
+                    token=admin_tok, body={"action": "approve"})
+        check(sc == 200, "admin moderate product approve -> 200", f"sc={sc}")
 
-    if pid:
-        # Non-owner PATCH -> 403
-        r = requests.patch(f"{BASE}/marketplace/products/{pid}",
-                           headers=H(other["token"]),
-                           json={"title": "hijack"}, timeout=15)
-        ok("non-owner PATCH -> 403", r.status_code == 403, f"{r.status_code}")
+        sc, body = req("POST",
+                       f"/marketplace/products/{product_id}/checkout",
+                       token=non_admin_tok, body={})
+        purchase_id = body.get("purchase_id") if isinstance(body, dict) else None
+        mocked = body.get("mocked") if isinstance(body, dict) else None
+        check(sc == 200 and purchase_id and mocked,
+              "marketplace checkout MOCK -> 200 mocked=True",
+              f"sc={sc} body={body}")
+        if purchase_id:
+            sc, body = req("POST",
+                           f"/marketplace/purchases/{purchase_id}/complete",
+                           token=non_admin_tok, body={})
+            check(sc == 200 and body.get("ok"),
+                  "marketplace complete -> 200", f"sc={sc}")
 
-        # Owner PATCH title -> stays pending
-        r = requests.patch(f"{BASE}/marketplace/products/{pid}",
-                           headers=H(seller["token"]),
-                           json={"title": payload["title"] + " v2"}, timeout=15)
-        ok("owner PATCH title 200", r.status_code == 200,
-           f"{r.status_code} {r.text[:150]}")
-        if r.status_code == 200:
-            ok("status stays pending after title PATCH",
-               r.json().get("status") == "pending",
-               f"status={r.json().get('status')}")
+    # §10 Marketplace spot check
+    log("\n-- §10 Marketplace spot check --")
+    sc, _ = req("GET", "/marketplace/storefront")
+    check(sc == 200, "GET /marketplace/storefront (unauth) -> 200", f"sc={sc}")
 
-        # Admin approve
-        r = requests.post(f"{BASE}/admin/marketplace/products/{pid}/moderate",
-                          headers=H(admin_tok), json={"action": "approve"}, timeout=15)
-        ok("admin approve 200", r.status_code == 200,
-           f"{r.status_code} {r.text[:200]}")
-        # Verify status flip
-        r = requests.get(f"{BASE}/marketplace/products/{pid}", timeout=15)
-        if r.status_code == 200:
-            ok("after approve, status='active'",
-               r.json().get("status") == "active",
-               f"status={r.json().get('status')}")
+    sc, _ = req("GET", "/me/marketplace/sales", token=admin_tok)
+    check(sc == 200, "GET /me/marketplace/sales -> 200", f"sc={sc}")
 
-        # Owner PATCH price -> auto-revert to pending
-        r = requests.patch(f"{BASE}/marketplace/products/{pid}",
-                           headers=H(seller["token"]),
-                           json={"price_cents": 1800}, timeout=15)
-        if r.status_code == 200:
-            ok("owner PATCH price -> auto-reverts to pending",
-               r.json().get("status") == "pending",
-               f"status={r.json().get('status')}")
+    sc, _ = req("GET", "/admin/marketplace/pending", token=admin_tok)
+    check(sc == 200, "GET /admin/marketplace/pending -> 200", f"sc={sc}")
 
-        # Re-approve
-        r = requests.post(f"{BASE}/admin/marketplace/products/{pid}/moderate",
-                          headers=H(admin_tok), json={"action": "approve"}, timeout=15)
-        ok("admin re-approve 200", r.status_code == 200, f"{r.status_code}")
-
-    # ---------------------------------------------------------------- (5)
-    section("(5) Checkout MOCK path (seller not onboarded)")
-    first_pid = None
-    if pid:
-        # Seller buying own product -> 400
-        r = requests.post(f"{BASE}/marketplace/products/{pid}/checkout",
-                          headers=H(seller["token"]), timeout=15)
-        ok("seller buys own product -> 400", r.status_code == 400,
-           f"{r.status_code} {r.text[:150]}")
-
-        # Buyer checkout -> mocked:true, 15% fee math
-        r = requests.post(f"{BASE}/marketplace/products/{pid}/checkout",
-                          headers=H(buyer["token"]), timeout=15)
-        ok("buyer checkout 200", r.status_code == 200,
-           f"{r.status_code} {r.text[:200]}")
-        if r.status_code == 200:
-            cb = r.json()
-            ok("checkout mocked=true", cb.get("mocked") is True, f"{cb}")
-            ok("platform_fee_cents = 15% of 1800 = 270",
-               cb.get("platform_fee_cents") == 270, f"{cb.get('platform_fee_cents')}")
-            ok("seller_payout_cents = 85% of 1800 = 1530",
-               cb.get("seller_payout_cents") == 1530, f"{cb.get('seller_payout_cents')}")
-            first_pid = cb.get("purchase_id")
-            if first_pid: CREATED_PURCHASES.append(first_pid)
-
-    # ---------------------------------------------------------------- (6)
-    section("(6) POST /marketplace/purchases/{id}/complete")
-    if first_pid:
-        r = requests.post(f"{BASE}/marketplace/purchases/{first_pid}/complete",
-                          headers=H(buyer["token"]), timeout=15)
-        ok("complete purchase 200", r.status_code == 200,
-           f"{r.status_code} {r.text[:200]}")
-
-        # sales_count incremented
-        pg = requests.get(f"{BASE}/marketplace/products/{pid}", timeout=15)
-        if pg.status_code == 200:
-            ok("product.sales_count >= 1 after complete",
-               (pg.json().get("sales_count") or 0) >= 1,
-               f"sales_count={pg.json().get('sales_count')}")
-
-        # buyer GET now sees contents_url
-        pg2 = requests.get(f"{BASE}/marketplace/products/{pid}",
-                           headers=H(buyer["token"]), timeout=15)
-        if pg2.status_code == 200:
-            ok("buyer GET product includes contents_url",
-               bool(pg2.json().get("contents_url")),
-               f"contents_url={pg2.json().get('contents_url')}")
-
-        # Duplicate checkout after completion -> already_owned
-        r = requests.post(f"{BASE}/marketplace/products/{pid}/checkout",
-                          headers=H(buyer["token"]), timeout=15)
-        if r.status_code == 200:
-            ok("duplicate checkout after complete -> already_owned:true",
-               r.json().get("already_owned") is True,
-               f"{r.json()}")
-        else:
-            ok("duplicate checkout 200", False, f"{r.status_code}")
-
-        # Notification for seller (marketplace_sale)
-        rn = requests.get(f"{BASE}/notifications", headers=H(seller["token"]),
-                          params={"limit": 20}, timeout=15)
-        if rn.status_code == 200:
-            items = rn.json() if isinstance(rn.json(), list) else rn.json().get("items") or []
-            kinds = [it.get("kind") for it in items]
-            ok("seller receives marketplace_sale notification",
-               "marketplace_sale" in kinds, f"kinds={kinds[:10]}")
-
-    # ---------------------------------------------------------------- (7)
-    section("(7) POST /marketplace/products/{id}/reviews")
-    if pid and first_pid:
-        r = requests.post(f"{BASE}/marketplace/products/{pid}/reviews",
-                          headers=H(buyer["token"]),
-                          json={"rating": 5, "text": "Great"}, timeout=15)
-        ok("buyer POST review 200", r.status_code == 200,
-           f"{r.status_code} {r.text[:200]}")
-
-        # Verify rating_avg/rating_count updated
-        pg = requests.get(f"{BASE}/marketplace/products/{pid}", timeout=15)
-        if pg.status_code == 200:
-            j = pg.json()
-            ok("rating_count == 1 after review",
-               j.get("rating_count") == 1, f"rating_count={j.get('rating_count')}")
-            ok("rating_avg > 0 after review",
-               (j.get("rating_avg") or 0) > 0, f"rating_avg={j.get('rating_avg')}")
-
-        # rating=0 -> 422
-        r = requests.post(f"{BASE}/marketplace/products/{pid}/reviews",
-                          headers=H(buyer["token"]),
-                          json={"rating": 0}, timeout=15)
-        ok("rating=0 -> 422", r.status_code == 422, f"{r.status_code}")
-        # rating=6 -> 422
-        r = requests.post(f"{BASE}/marketplace/products/{pid}/reviews",
-                          headers=H(buyer["token"]),
-                          json={"rating": 6}, timeout=15)
-        ok("rating=6 -> 422", r.status_code == 422, f"{r.status_code}")
-
-        # Non-buyer -> 403
-        r = requests.post(f"{BASE}/marketplace/products/{pid}/reviews",
-                          headers=H(other["token"]),
-                          json={"rating": 5, "text": "drive-by"}, timeout=15)
-        ok("non-buyer -> 403", r.status_code == 403, f"{r.status_code}")
-
-        # Re-post updates existing (count stays 1)
-        r = requests.post(f"{BASE}/marketplace/products/{pid}/reviews",
-                          headers=H(buyer["token"]),
-                          json={"rating": 4, "text": "Updated"}, timeout=15)
-        ok("re-post review 200", r.status_code == 200, f"{r.status_code}")
-        pg = requests.get(f"{BASE}/marketplace/products/{pid}", timeout=15)
-        if pg.status_code == 200:
-            ok("rating_count stays 1 on re-post",
-               pg.json().get("rating_count") == 1,
-               f"rating_count={pg.json().get('rating_count')}")
-
-    # ---------------------------------------------------------------- (8)
-    section("(8) GET /marketplace/products/{id}/reviews")
-    if pid:
-        r = requests.get(f"{BASE}/marketplace/products/{pid}/reviews", timeout=15)
-        ok("reviews list 200", r.status_code == 200, f"{r.status_code}")
-        if r.status_code == 200:
-            items = r.json().get("items") or []
-            if items:
-                first = items[0]
-                ok("review has hydrated reviewer (name+username)",
-                   "reviewer" in first and all(k in first["reviewer"]
-                                                for k in ("name", "username")),
-                   f"first={first}")
-
-    # ---------------------------------------------------------------- (9)
-    section("(9) Wishlist toggle + GET /me/wishlist")
-    if pid:
-        r1 = requests.post(f"{BASE}/marketplace/wishlist/{pid}",
-                           headers=H(other["token"]), timeout=15)
-        ok("wishlist add 200 + in_wishlist=true",
-           r1.status_code == 200 and r1.json().get("in_wishlist") is True,
-           f"{r1.status_code} {r1.text[:150]}")
-        r2 = requests.post(f"{BASE}/marketplace/wishlist/{pid}",
-                           headers=H(other["token"]), timeout=15)
-        ok("wishlist remove 200 + in_wishlist=false",
-           r2.status_code == 200 and r2.json().get("in_wishlist") is False,
-           f"{r2.status_code}")
-        # Re-add and list
-        requests.post(f"{BASE}/marketplace/wishlist/{pid}",
-                      headers=H(other["token"]), timeout=15)
-        rl = requests.get(f"{BASE}/me/wishlist",
-                          headers=H(other["token"]), timeout=15)
-        ok("GET /me/wishlist 200", rl.status_code == 200, f"{rl.status_code}")
-        if rl.status_code == 200:
-            items = rl.json().get("items") or []
-            ok("wishlist contains product",
-               any(it.get("product_id") == pid for it in items),
-               f"ids={[it.get('product_id') for it in items]}")
-
-    # ---------------------------------------------------------------- (10)
-    section("(10) GET /me/marketplace/sales")
-    r = requests.get(f"{BASE}/me/marketplace/sales",
-                     headers=H(seller["token"]), timeout=15)
-    ok("sales dashboard 200", r.status_code == 200, f"{r.status_code}")
-    if r.status_code == 200:
-        sb = r.json()
-        for k in ("total_sales", "gross_cents", "net_cents",
-                  "platform_fee_cents", "platform_fee_pct", "products",
-                  "recent_purchases"):
-            ok(f"sales has key '{k}'", k in sb, f"got keys={list(sb.keys())}")
-        ok("platform_fee_pct == 15", sb.get("platform_fee_pct") == 15,
-           f"pct={sb.get('platform_fee_pct')}")
-        ok("net = gross - fee",
-           sb.get("net_cents") == (sb.get("gross_cents", 0) - sb.get("platform_fee_cents", 0)),
-           f"gross={sb.get('gross_cents')} fee={sb.get('platform_fee_cents')} net={sb.get('net_cents')}")
-        ok("total_sales >= 1",
-           (sb.get("total_sales") or 0) >= 1,
-           f"total_sales={sb.get('total_sales')}")
-
-    # ---------------------------------------------------------------- (11)
-    section("(11) GET /me/marketplace/library")
-    r = requests.get(f"{BASE}/me/marketplace/library",
-                     headers=H(buyer["token"]), timeout=15)
-    ok("library 200", r.status_code == 200, f"{r.status_code}")
-    if r.status_code == 200:
-        items = r.json().get("items") or []
-        ok("buyer library has the completed purchase",
-           any(it.get("product", {}).get("product_id") == pid for it in items),
-           f"ids={[it.get('product', {}).get('product_id') for it in items]}")
-        if items:
-            prods = [it.get("product", {}) for it in items
-                     if it.get("product", {}).get("product_id") == pid]
-            if prods:
-                ok("library product includes unlocked contents_url",
-                   bool(prods[0].get("contents_url")),
-                   f"product_keys={list(prods[0].keys())}")
-
-    # ---------------------------------------------------------------- (12)
-    section("(12) Seller endpoints (Stripe Connect disabled on platform)")
-    fresh = register(); CREATED_USERS.append(fresh["user_id"])
-
-    # connect-status
-    r = requests.get(f"{BASE}/me/seller/connect-status",
-                     headers=H(fresh["token"]), timeout=15)
-    ok("connect-status 200", r.status_code == 200, f"{r.status_code}")
-    if r.status_code == 200:
-        j = r.json()
-        ok("connect-status.status == 'disconnected'",
-           j.get("status") == "disconnected", f"{j}")
-        ok("connect-status.acct_id is null/absent",
-           j.get("acct_id") is None, f"acct_id={j.get('acct_id')}")
-        ok("connect-status.stripe_ready == true",
-           j.get("stripe_ready") is True, f"stripe_ready={j.get('stripe_ready')}")
-
-    # onboard -> expected 400 with "Stripe error:" ... "Connect"
-    r = requests.post(f"{BASE}/me/seller/onboard",
-                      headers=H(fresh["token"]), timeout=30)
-    ok("onboard != 500", r.status_code != 500, f"{r.status_code} {r.text[:200]}")
-    ok("onboard -> 400", r.status_code == 400, f"{r.status_code}")
-    if r.status_code == 400:
-        detail = (r.json() or {}).get("detail", "")
-        ok("onboard detail starts with 'Stripe error:'",
-           detail.startswith("Stripe error:"), f"detail={detail[:200]}")
-        ok("onboard detail mentions 'Connect'",
-           "Connect" in detail, f"detail={detail[:200]}")
-
-    # payouts (disconnected)
-    r = requests.get(f"{BASE}/me/seller/payouts",
-                     headers=H(fresh["token"]), timeout=15)
-    ok("payouts 200", r.status_code == 200, f"{r.status_code}")
-    if r.status_code == 200:
-        j = r.json()
-        ok("payouts.items == []", j.get("items") == [], f"items={j.get('items')}")
-        # Spec accepts count:0 OR total:0
-        ok("payouts count==0 or total==0",
-           j.get("count") == 0 or j.get("total") == 0,
-           f"count={j.get('count')} total={j.get('total')}")
-        ok("payouts.connected == false",
-           j.get("connected") is False, f"connected={j.get('connected')}")
-
-    # dashboard-link without account -> 400 "Connect your account first"
-    r = requests.post(f"{BASE}/me/seller/dashboard-link",
-                      headers=H(fresh["token"]), timeout=15)
-    ok("dashboard-link no-account -> 400", r.status_code == 400, f"{r.status_code}")
-    if r.status_code == 400:
-        detail = (r.json() or {}).get("detail", "")
-        ok("dashboard-link detail == 'Connect your account first'",
-           detail == "Connect your account first", f"detail={detail}")
-
-    # ---------------------------------------------------------------- (13)
-    section("(13) Admin endpoints")
-    # pending 403 for non-staff
-    r = requests.get(f"{BASE}/admin/marketplace/pending",
-                     headers=H(seller["token"]), timeout=15)
-    ok("/admin/marketplace/pending non-staff -> 403",
-       r.status_code == 403, f"{r.status_code}")
-    r = requests.get(f"{BASE}/admin/marketplace/pending",
-                     headers=H(admin_tok), timeout=15)
-    ok("/admin/marketplace/pending admin -> 200",
-       r.status_code == 200, f"{r.status_code}")
-
-    # Create a separate product to exercise every moderate action
-    payload2 = {
-        "title": f"QA ModPack {uuid.uuid4().hex[:6]}",
-        "type": "preset",
-        "description": "Moderation action coverage.",
-        "price_cents": 999,
-        "thumbnail_url": "data:image/png;base64,AAAA",
-    }
-    r = requests.post(f"{BASE}/marketplace/products",
-                      headers=H(seller["token"]), json=payload2, timeout=15)
-    mod_pid = r.json().get("product_id") if r.status_code == 200 else None
-    if mod_pid: CREATED_PRODUCTS.append(mod_pid)
-
-    audit_actions_seen = set()
-    if mod_pid:
-        for action in ("approve", "feature", "unfeature", "suspend",
-                       "unsuspend"):
-            rm = requests.post(f"{BASE}/admin/marketplace/products/{mod_pid}/moderate",
-                               headers=H(admin_tok),
-                               json={"action": action,
-                                     "reason": f"qa-{action}"}, timeout=15)
-            ok(f"moderate action={action} -> 200",
-               rm.status_code == 200, f"{rm.status_code} {rm.text[:200]}")
-
-        # deny on a fresh pending product
-        payload3 = dict(payload2)
-        payload3["title"] = f"QA DenyPack {uuid.uuid4().hex[:6]}"
-        r = requests.post(f"{BASE}/marketplace/products",
-                          headers=H(seller["token"]), json=payload3, timeout=15)
-        deny_pid = r.json().get("product_id") if r.status_code == 200 else None
-        if deny_pid:
-            CREATED_PRODUCTS.append(deny_pid)
-            rm = requests.post(f"{BASE}/admin/marketplace/products/{deny_pid}/moderate",
-                               headers=H(admin_tok),
-                               json={"action": "deny", "reason": "qa-deny"}, timeout=15)
-            ok("moderate action=deny -> 200",
-               rm.status_code == 200, f"{rm.status_code} {rm.text[:200]}")
-
-        # Audit log check
-        rau = requests.get(f"{BASE}/admin/audit-logs", headers=H(admin_tok),
-                           params={"target_id": mod_pid, "limit": 50}, timeout=15)
-        if rau.status_code == 200:
-            actions = [it.get("action") for it in rau.json().get("items") or []]
-            audit_actions_seen = set(actions)
-            ok("audit_logs has marketplace_product.* entries for moderation",
-               any("marketplace_product" in (a or "") for a in actions),
-               f"actions={actions[:10]}")
-
-    # Admin purchases listing
-    for status_filter in ("completed", "refunded", "pending"):
-        r = requests.get(f"{BASE}/admin/marketplace/purchases",
-                         headers=H(admin_tok),
-                         params={"status": status_filter, "limit": 20}, timeout=15)
-        ok(f"/admin/marketplace/purchases?status={status_filter} 200",
-           r.status_code == 200, f"{r.status_code}")
-
-    # Refund test
-    if first_pid:
-        # Non-admin -> 403
-        r = requests.post(f"{BASE}/admin/marketplace/purchases/{first_pid}/refund",
-                          headers=H(seller["token"]),
-                          json={"reason": "hijack"}, timeout=15)
-        ok("refund non-admin -> 403", r.status_code == 403, f"{r.status_code}")
-
-        # Admin refund on mock -> 200
-        r = requests.post(f"{BASE}/admin/marketplace/purchases/{first_pid}/refund",
-                          headers=H(admin_tok),
-                          json={"reason": "qa-refund"}, timeout=15)
-        ok("admin refund mock 200", r.status_code == 200,
-           f"{r.status_code} {r.text[:200]}")
-        if r.status_code == 200:
-            j = r.json()
-            ok("refund ok=true", j.get("ok") is True, f"{j}")
-
-        # Verify purchase now refunded
-        r = requests.get(f"{BASE}/admin/marketplace/purchases",
-                         headers=H(admin_tok),
-                         params={"status": "refunded", "limit": 50}, timeout=15)
-        if r.status_code == 200:
-            ids = [it.get("purchase_id") for it in r.json().get("items") or []]
-            ok("refunded purchase appears in status=refunded listing",
-               first_pid in ids, f"ids={ids[:10]}")
-
-        # sales_count decremented
-        pg = requests.get(f"{BASE}/marketplace/products/{pid}", timeout=15)
-        if pg.status_code == 200:
-            ok("product.sales_count decremented to 0 after refund",
-               (pg.json().get("sales_count") or 0) == 0,
-               f"sales_count={pg.json().get('sales_count')}")
-
-        # Idempotency
-        r = requests.post(f"{BASE}/admin/marketplace/purchases/{first_pid}/refund",
-                          headers=H(admin_tok),
-                          json={"reason": "qa-refund-again"}, timeout=15)
-        ok("refund idempotent -> 200",
-           r.status_code == 200, f"{r.status_code}")
-        if r.status_code == 200:
-            ok("refund second call -> already_refunded:true",
-               r.json().get("already_refunded") is True, f"{r.json()}")
-
-        # Buyer notification
-        rn = requests.get(f"{BASE}/notifications", headers=H(buyer["token"]),
-                          params={"limit": 20}, timeout=15)
-        if rn.status_code == 200:
-            raw = rn.json()
-            items = raw if isinstance(raw, list) else raw.get("items") or []
-            kinds = [it.get("kind") for it in items]
-            ok("buyer receives marketplace_refund notification",
-               "marketplace_refund" in kinds, f"kinds={kinds[:10]}")
-
-    # ---------------------------------------------------------------- (14)
-    section("(14) NON-REGRESSION smoke")
-    for path, name in [
-        ("/auth/me", "/api/auth/me"),
-        ("/feed/home", "/api/feed/home"),
-        ("/spots?limit=3", "/api/spots?limit=3"),
-        ("/notifications?limit=5", "/api/notifications?limit=5"),
-    ]:
-        r = requests.get(f"{BASE}{path}", headers=H(admin_tok), timeout=15)
-        ok(f"{name} 200", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
-
-    # Check backend.err.log for any 500s during our run
-    try:
-        with open("/var/log/supervisor/backend.err.log", "r") as f:
-            tail = f.read()[-50000:]
-        # grep for "Internal Server Error" occurrences since test start isn't
-        # cleanly separable, but count 500 status codes in access-log style
-        bad = tail.count(' 500 ')
-        ok(f"backend.err.log contains no '500' occurrences (got {bad})",
-           bad == 0 or bad < 3, f"count={bad}")
-    except Exception as e:
-        ok("read backend.err.log", False, str(e))
-
-    # ---------------------------------------------------------------- CLEANUP
-    section("CLEANUP — direct mongo")
-    try:
-        from motor.motor_asyncio import AsyncIOMotorClient
-        MONGO = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-        client = AsyncIOMotorClient(MONGO)
-        DB_NAME = os.environ.get("DB_NAME", "photoscout")
-        dbm = client[DB_NAME]
-
-        async def _cleanup():
-            # Soft-delete users (mark deleted_at to mirror app semantics)
-            if CREATED_USERS:
-                await dbm.users.update_many(
-                    {"user_id": {"$in": CREATED_USERS}},
-                    {"$set": {"deleted_at": time.time()}},
-                )
-            if CREATED_PRODUCTS:
-                await dbm.marketplace_products.update_many(
-                    {"product_id": {"$in": CREATED_PRODUCTS}},
-                    {"$set": {"status": "removed"}},
-                )
-            print(f"  cleaned {len(CREATED_USERS)} users, {len(CREATED_PRODUCTS)} products")
-
-        asyncio.get_event_loop().run_until_complete(_cleanup())
-    except Exception as e:
-        print(f"  cleanup failed (non-fatal): {e}")
-
-    # ---------------------------------------------------------------- SUMMARY
-    print("\n=== SUMMARY ===")
-    print(f"PASS: {len(PASS)}")
-    print(f"FAIL: {len(FAIL)}")
-    if FAIL:
-        print("\nFailures:")
-        for n, d in FAIL:
-            print(f"  - {n}: {d}")
-    return 0 if not FAIL else 1
+    # Summary
+    log("\n===== SUMMARY =====")
+    log(f"PASS: {PASS}")
+    log(f"FAIL: {FAIL}")
+    log(f"500s encountered: {len(FIVE_HUNDREDS)}")
+    if FIVE_HUNDREDS:
+        log("\n500 errors:")
+        for m in FIVE_HUNDREDS:
+            log(f"  {m}")
+    if FAIL_MSGS:
+        log("\nFailures:")
+        for m in FAIL_MSGS:
+            log(f"  {m}")
+    sys.exit(0 if FAIL == 0 and not FIVE_HUNDREDS else 1)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    run()
