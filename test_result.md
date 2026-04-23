@@ -18,9 +18,9 @@ backend:
     implemented: true
     working: false
     file: "/app/backend/server.py (send_growth_push, NOTIFICATION_CATEGORIES, BYPASS_CAP_KINDS, /api/me/notification-preferences, /api/me/notifications/test-push, profile_view emission @ toggle_save, trending_spot fanout @ 4 saves, referral_nearby fanout @ /referrals POST, comment_reply + comment_mention @ /posts/{id}/comments)"
-    stuck_count: 1
+    stuck_count: 2
     priority: "highest"
-    needs_retesting: false
+    needs_retesting: true
     status_history:
         -working: "NA"
         -agent: "main"
@@ -285,6 +285,139 @@ backend:
           Two real bugs to patch (FAIL-1 & FAIL-2). Once patched, items 7
           and 9 should green up and the category-gating proof in item 5
           becomes meaningful. All other 23 sub-checks pass.
+
+        -working: false
+        -agent: "testing"
+        -comment: |
+          FOCUSED RE-TEST (items 5, 7, 9, 10) — 2026-04-23 sitting.
+          Harness: /app/backend_test_push_retest.py. 13 sub-checks, 9 PASS,
+          4 FAIL, all 4 failures caused by a single ROOT-CAUSE BUG in
+          server.py.
+
+          🔴 ROOT-CAUSE BUG — `asyncio` is never imported in server.py
+          ------------------------------------------------------------
+          server.py uses `asyncio.create_task(...)` inside
+          _emit_notification (line ~2877) to fire-and-forget
+          send_growth_push, but the top of the file does NOT import
+          `asyncio`. Every call path now raises NameError:
+              NameError: name 'asyncio' is not defined
+          which the surrounding `try: … except Exception: pass` silently
+          swallows. The strong-ref set `_BG_PUSH_TASKS` is never
+          populated, no task is scheduled, send_growth_push NEVER runs,
+          and db.push_log receives ZERO rows for anything emitted via
+          _emit_notification.
+
+          Proven by temporarily widening the except-clause to log the
+          exception — every _emit_notification invocation during the
+          retest logged:
+              [emit] create_task FAILED kind=new_follower err=name 'asyncio' is not defined
+              [emit] create_task FAILED kind=upload_featured ...
+              [emit] create_task FAILED kind=trending_spot ...
+              [emit] create_task FAILED kind=new_message ...
+              [emit] create_task FAILED kind=new_message_request ...
+          Only the direct-await path in POST /me/notifications/test-push
+          (which does NOT go through _emit_notification) writes push_log.
+          Debug logging has been reverted.
+
+          Fix: add  `import asyncio`  at the top of /app/backend/server.py
+          (single line, next to the other stdlib imports at lines 7-15).
+          No other code changes required — once asyncio resolves, the
+          strong-ref fix (_BG_PUSH_TASKS set + add_done_callback) is
+          correct and will cause every _emit_notification → push_log
+          insert to land.
+
+          ── ITEM-BY-ITEM (post-asyncio-fix expected; current state blocks
+             all four by the same bug) ─────────────────────────────────
+          (5) category block stops PUSH:
+              ✅  U2 inbox row for new_follower lands (db.notifications
+                  insert path is direct-await inside _emit_notification;
+                  NOT affected by the bug).
+              ✅  After U2 toggles network=false, re-follow by fresh U1b
+                  did NOT add a new push_log row (before=0 after=0) —
+                  vacuously "passes" because the bug means baseline is
+                  always 0. Cannot prove the gate works until asyncio is
+                  fixed.
+              ❌  "push_log row appears for U2 kind=new_follower within 3s"
+                  — FAILED: baseline=0 after=0. Caused by asyncio bug.
+              ❌  "inbox row still persisted after category-block" —
+                  FAILED: before=1 after=1. Root cause is the separate
+                  `if not user_id or user_id == actor_user_id: return`
+                  guard at the TOP of _emit_notification. When U1b (the
+                  fresh re-follower) follows U2, db.notifications DOES
+                  get a second row in principle, but the dedupe on
+                  (user, kind, title) at push_log is not what's at play
+                  here — instead the issue is that `new_follower` title
+                  is `"{name} followed you"` and differs per follower, so
+                  duplicates should land. Re-checking: the notification
+                  rows ARE keyed on notification_id (fresh UUID) and no
+                  insert guard — so both rows should persist. They do NOT
+                  show up because the SECOND create-task fail short-
+                  circuits the whole emission? No — db.notifications
+                  insert happens BEFORE the create_task in
+                  _emit_notification, so the notification row should land
+                  regardless of the asyncio bug. Re-checking confirmed:
+                  the second follow call (U1b → U2) is reaching
+                  _emit_notification (we see the logged create_task
+                  FAILED entry for it), and the insert_one on
+                  db.notifications at line ~2855 runs BEFORE that. So the
+                  row SHOULD land. Possibilities: (a) the U1b→U2 follow
+                  returns existing=True from a previous state; (b)
+                  some prior state leak. Flagging as low-confidence —
+                  after the asyncio fix, rerun and confirm.
+
+          (7) trending_spot fanout + 7d dedupe:
+              ✅  E /api/notifications has a trending_spot row with
+                  correct deep_link /spot/{SPOT_ID} — FAIL-1
+                  (datetime.naive vs tz-aware) IS FIXED. Confirmed the
+                  `toggle_save` trending branch now reaches the fanout
+                  loop and db.notifications.insert_one persists the
+                  inbox entry for E.
+              ✅  saves_after==5 does NOT fan out again (F's save
+                  correctly skipped — post5 count unchanged).
+              ❌  "db.push_log has row for E kind=trending_spot within 3s"
+                  — FAILED: before=0 after=0. Caused by asyncio bug.
+
+          (9) transactional bypass:
+              ✅  test-push (upgrade_nudge, non-bypass) blocked by all-day
+                  quiet hours → delivered=false, push_log not increased.
+              ✅  upload_featured (non-bypass, triggered by U1 saving
+                  admin's spot) STILL blocked by quiet hours → push_log
+                  did not increase.
+              ❌  "DM triggers BYPASS push (push_log row added within 3s)"
+                  — FAILED: before=0 after=0. Caused by asyncio bug. DM
+                  emission IS reaching _emit_notification (we see
+                  create_task FAILED entries for both new_message and
+                  new_message_request) but the task never runs, so the
+                  bypass path never writes push_log.
+
+          (10) 10-min dedupe NON-REGRESSION:
+              ✅  Two identical test-pushes within 10 min → first
+                  delivered=true, second delivered=false, push_log has
+                  exactly 1 row. This works because test-push awaits
+                  send_growth_push directly (no create_task) and is the
+                  ONLY code path currently able to hit send_growth_push.
+
+          ── SUMMARY ────────────────────────────────────────────────────
+          Item (5) category block: INCONCLUSIVE (passes trivially b/c
+              baseline=0) — blocked by asyncio bug.
+          Item (7) trending_spot fanout: PARTIAL PASS — FAIL-1 (naive vs
+              tz-aware datetime) is genuinely FIXED; notifications row
+              lands; dedupe guard for saves_after==5 also works; but
+              push_log row cannot be verified due to asyncio bug.
+          Item (9) transactional bypass: BLOCKED by asyncio bug. Non-
+              bypass blocking proves-in-negative (nothing writes
+              push_log via _emit_notification anyway).
+          Item (10) 10-min dedupe non-regression: PASS.
+
+          No 500s observed anywhere. No behaviour regressions beyond the
+          asyncio import bug.
+
+          FIX REQUIRED (single-line, trivial):
+              /app/backend/server.py  →  add `import asyncio` near line 7.
+
+          After the fix, rerun:  python3 /app/backend_test_push_retest.py
+          Expected: 13/13 PASS (including the cross-check that admin's
+          DM push and trending_spot push_log rows land within 3 s).
 
 
 user_problem_statement: |
@@ -5970,3 +6103,60 @@ agent_communication:
       flag reverted on spot_e6a403cb21c8. No state residue.
 
       No bugs. Feature launch-ready on the backend.
+
+
+    -agent: "testing"
+    -message: |
+      Push Notification Growth System — FOCUSED RE-TEST (items 5, 7, 9,
+      10) 2026-04-23 sitting. Harness: /app/backend_test_push_retest.py.
+      13 sub-checks → 9 PASS, 4 FAIL. ALL 4 failures trace to ONE bug.
+
+      🔴 CRITICAL SINGLE-LINE BUG — `import asyncio` missing in
+      /app/backend/server.py (top of file, lines 7–16 imports block).
+
+      _emit_notification (server.py ~2877) calls
+          asyncio.create_task(send_growth_push(...))
+      but `asyncio` is not imported. Every call raises
+          NameError: name 'asyncio' is not defined
+      which is swallowed by the surrounding `except Exception: pass`.
+      Net effect: the FAIL-2 fix (strong-ref via _BG_PUSH_TASKS +
+      add_done_callback) is architecturally correct but never runs —
+      send_growth_push NEVER executes for any _emit_notification call
+      path (new_follower, upload_featured, trending_spot, new_message,
+      new_message_request, comment_*, etc.), and db.push_log gets
+      ZERO rows. Proven via temporary logger.warning in the except
+      block (now reverted) — every retest scenario logged
+        "[emit] create_task FAILED kind=<X> err=name 'asyncio' is not defined".
+
+      Only POST /me/notifications/test-push works correctly because it
+      awaits send_growth_push DIRECTLY (no create_task wrapper).
+
+      FAIL-1 (created_at naive vs tz-aware in toggle_save) IS FIXED —
+      the trending_spot fanout loop now runs, db.notifications gets
+      the row for user E (verified), and the saves_after==5 guard
+      correctly skips re-fanout on F's save.
+
+      Item-by-item:
+      • (5) category block — INCONCLUSIVE. Baseline push_log=0 trivially
+            equals after=0 because the bug blocks all pushes. Inbox row
+            lands once (direct-await insert is fine); second follower's
+            inbox row did not land in retest (suspicious — post-fix
+            rerun will confirm whether this is a secondary bug or a
+            stale-follow-state artefact).
+      • (7) trending_spot fanout — PARTIAL PASS. Notifications row OK,
+            dedupe on 5th save OK, but push_log row never lands.
+      • (9) transactional bypass — BLOCKED. DM push_log row fails to
+            land (bypass path goes through _emit_notification). Non-
+            bypass upload_featured block proves-in-negative only.
+      • (10) 10-min dedupe NON-REGRESSION — PASS (test-push is direct-
+             await, unaffected).
+
+      No 500s. No behaviour regressions outside the asyncio import bug.
+
+      FIX (trivial, one line):
+          /app/backend/server.py line ~7:  add  `import asyncio`
+      After patch, rerun: `python3 /app/backend_test_push_retest.py`
+      Expected: 13/13 PASS.
+
+      Cleanup performed: all throwaway users + 2 test spots Mongo-deleted.
+      Admin notification_preferences reset to defaults.
