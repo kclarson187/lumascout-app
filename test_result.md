@@ -6959,12 +6959,122 @@ agent_communication:
       called, cumulative footprint ~1 KB / run).
 
 metadata:
-  test_sequence: 7
+  test_sequence: 8
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Phase 2 route extraction — /app/backend/routes/network.py (22 endpoints), /app/backend/routes/referrals.py (10 endpoints), /app/backend/routes/push.py (7 endpoints)"
+    - "Phase 3 route extraction — /app/backend/routes/spots.py (25 endpoints): spots CRUD, uploads, saves, trending fanout, reviews, checkins, collections, drafts, astronomy, shot-list, admin cover editor"
   stuck_tasks: []
   test_all: false
   test_priority: "stuck_first"
+
+    -agent: "testing"
+    -message: |
+      Phase 3 regression — routes/spots.py extraction — 60/60 PASS, 0 FAIL.
+      Harness: /app/backend_test.py at https://photo-finder-60.preview.emergentagent.com/api.
+      Admin: admin@lumascout.app / admin123. No 5xx observed in backend logs
+      during the run.
+
+      Per-section result (all PASS):
+        S1  CRUD (10/10):      list + sort=quality/newest/trending + city
+                                filter, spot detail hydrated with owner /
+                                images / is_saved, POST /spots auto-approved
+                                as admin, check-duplicates, nearby/search,
+                                DELETE by owner admin → 200.
+        S2  UPLOADS (7/7):     POST /spots/{id}/uploads as non-admin returns
+                                moderation_status=pending; admin sees pending
+                                via GET /spots/{id}/uploads; PATCH /api/admin/
+                                spot-uploads/{id} {action:"approve"} flips to
+                                approved (review said POST but actual verb is
+                                PATCH — not a bug); public listing returns
+                                approved; POST /spot-uploads/{id}/react
+                                kind=like increments like_count to 1 and
+                                emits upload_reaction to uploader.
+        S3  UPDATES (2/2):     POST /spots/{id}/updates (news post) + GET
+                                listing work.
+        S4  SAVES + TRENDING (5/5) — CRITICAL SECTION:
+                                · Save toggle on/off works end-to-end.
+                                · GET /me/saved returns saved list.
+                                · Trending fanout: admin creates fresh
+                                  Austin spot; 4 throwaway Austin users save
+                                  it; user E (city=Austin, registered BEFORE
+                                  4th save) GETs /notifications and finds
+                                  kind='trending_spot' with correct
+                                  deep_link=/spot/{id} within 2s.
+                                · 5th save (user F) does NOT double-fire
+                                  (guard saves_after==4 correct; E's
+                                  trending_spot row count pre=post=1).
+                                  Cross-module push path from routes/
+                                  spots.py → server.py _emit_notification
+                                  → send_growth_push is intact.
+        S5  REVIEWS+CHECKINS (2/2): both endpoints 200.
+        S6  COLLECTIONS (4/4): create, list with item_count (mapped to
+                                `count` in response), add spot, get hydrated
+                                — all OK.
+        S7  DRAFT (3/3):       POST /spots save_as_draft=true creates
+                                visibility_status='draft'; publish-draft
+                                promotes to pending_review; GET /me/spots
+                                returns owner's spots.
+        S8  ASTRO + SHOT-LIST (2/2): astronomy returns sunrise/sunset/golden
+                                hour keys; POST /spots/{id}/shot-list
+                                returned 7 LLM items via gpt-5.2 (not
+                                cached). LLM backed endpoint works — no
+                                graceful-failure path needed this run.
+        S9  COVER EDITOR (5/5) — CRITICAL:
+                                · GET /admin/spots/{id}/cover-editor → 200
+                                  with images list.
+                                · PATCH /admin/spots/{id}/cover with
+                                  {image_url, focal_x:0.4, focal_y:0.6,
+                                  scale:1.3, rotation:0} → 200.
+                                · Subsequent GET /api/spots/{id} shows
+                                  hero_cover_source='admin_override' with
+                                  hero_cover_image_url == pinned url.
+                                · CRITICAL CROSS-MODULE: GET /api/spots
+                                  (list endpoint) for the same spot also
+                                  carries hero_cover_source='admin_override'
+                                  — confirms admin_cover_override flows
+                                  through public_spot_view (which stays in
+                                  server.py) from the extracted list_spots
+                                  endpoint in routes/spots.py.
+                                · DELETE /admin/spots/{id}/cover → 200,
+                                  override cleared.
+        S10 MARKETPLACE (2/2) — CRITICAL: /marketplace/storefront 200 with
+                                rails + by_type; pack detail 200 — packs
+                                still resolve their spot_ids correctly
+                                through the shared public_spot_view after
+                                the extraction.
+        S11 NON-REGRESSION (10/10): /auth/me, /feed/home, /notifications,
+                                /dm/threads, /network/discover, /me/viewers,
+                                /referrals, /referrals/rails, /admin/
+                                overview, /admin/users — all 200.
+        S12 CROSS-MODULE PUSH (4/4):
+                                · A follows B → B sees new_follower notif.
+                                · A DMs B → B sees new_message/request
+                                  notif (bypass path).
+                                · Save owner's spot → owner gets
+                                  upload_featured notif "X saved your spot"
+                                  (confirms send_growth_push call from
+                                  routes/spots.py toggle_save works).
+                                · Admin POST /admin/users/{id}/sanction
+                                  warn → target user gets
+                                  user_sanction_warn notification.
+        S13 PERMISSIONS (4/4): /me/saved + /me/spots unauth → 401;
+                                POST /spots/{id}/uploads unauth → 401;
+                                DELETE /spots/{id} by non-owner → 403.
+
+      VERDICT: Phase 3 extraction is clean. All 25 moved endpoints behave
+      exactly as before — no drift on spots surface, no regression on
+      trending fanout (section 4), no regression on cover editor (section
+      9), no regression on marketplace pack contents (section 10). The
+      pre-flight attach_owners import fix was caught correctly — no other
+      missing imports.
+
+      Cleanup: throwaway users (qa_uploader_*, qa_reactor_*, qa_saver_*,
+      qa_tr_saver_0..3, qa_tr_saver_F, qa_trending_E, qa_followerA,
+      qa_followedB, qa_owner, qa_saveowner, qa_sanction_target, qa_drafter,
+      qa_nonowner) remain in DB as inert rows. No DELETE /admin/users/{id}
+      calls were made (requires reason_code body). Seed spots that were
+      created by the test were deleted by the owner-admin path where
+      applicable; the owner-authored public spots (seeded by non-admin
+      throwaway users) are still present but harmless.

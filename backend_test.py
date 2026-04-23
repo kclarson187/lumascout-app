@@ -1,487 +1,643 @@
+#!/usr/bin/env python3
 """
-Phase 2 regression test — verify routes extracted from server.py into
-/app/backend/routes/{network,referrals,push}.py still respond correctly.
-
-Run: python3 /app/backend_test.py
+Phase 3 regression — /app/backend/routes/spots.py extraction.
+Covers 13 sections from the review request. Hits the PUBLIC base URL.
 """
-from __future__ import annotations
-
-import random
-import string
+import os
 import sys
 import time
-from typing import Any, Optional
-
+import uuid
+import json
+import random
+import string
 import requests
+from pathlib import Path
 
-BASE = "http://localhost:8001/api"
+BASE = "https://photo-finder-60.preview.emergentagent.com/api"
 ADMIN_EMAIL = "admin@lumascout.app"
 ADMIN_PASSWORD = "admin123"
 
-PASS = 0
-FAIL = 0
-FAIL_MSGS: list[str] = []
-FIVE_HUNDREDS: list[str] = []
+RESULTS = []  # list of (section, label, ok, details)
 
 
-def _rand(n: int = 6) -> str:
-    return "".join(random.choices(string.ascii_lowercase + string.digits, k=n))
+def _log(section, label, ok, details=""):
+    status = "PASS" if ok else "FAIL"
+    print(f"[{status}] {section} :: {label}" + (f"  -- {details}" if details else ""))
+    RESULTS.append((section, label, ok, details))
 
 
-def log_pass(label: str) -> None:
-    global PASS
-    PASS += 1
-    print(f"  ✅ {label}")
-
-
-def log_fail(label: str, detail: str = "") -> None:
-    global FAIL
-    FAIL += 1
-    msg = f"{label}: {detail}" if detail else label
-    FAIL_MSGS.append(msg)
-    print(f"  ❌ {msg}")
-
-
-def req(
-    method: str, path: str, *, token: Optional[str] = None,
-    json_body: Optional[dict] = None, params: Optional[dict] = None,
-    expected_status: Optional[int] = None, label: str = "",
-) -> tuple[int, Any]:
-    url = f"{BASE}{path}"
-    headers = {"Content-Type": "application/json"}
+def _req(method, path, token=None, **kwargs):
+    url = BASE + path
+    headers = kwargs.pop("headers", {}) or {}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
-        r = requests.request(method, url, headers=headers, json=json_body, params=params, timeout=30)
+        r = requests.request(method, url, headers=headers, timeout=30, **kwargs)
+        return r
     except Exception as e:
-        log_fail(label or f"{method} {path}", f"connection error: {e}")
-        return 0, None
-    body: Any
-    try:
-        body = r.json()
-    except Exception:
-        body = r.text
-    if r.status_code >= 500:
-        FIVE_HUNDREDS.append(f"{method} {path} → {r.status_code}: {str(body)[:200]}")
-    if expected_status is not None:
-        if r.status_code == expected_status:
-            log_pass(f"{label or method + ' ' + path} → {r.status_code}")
-        else:
-            log_fail(label or f"{method} {path}", f"expected {expected_status}, got {r.status_code}: {str(body)[:200]}")
-    return r.status_code, body
+        print(f"EXC {method} {path} → {e}")
+        class _F:
+            status_code = 0
+            text = str(e)
+            def json(self):
+                return {}
+        return _F()
 
 
-# --------------------------------------------------------------------------
-# Auth helpers
-# --------------------------------------------------------------------------
-def login(email: str, password: str) -> Optional[str]:
-    s, b = req("POST", "/auth/login", json_body={"email": email, "password": password})
-    if s == 200 and isinstance(b, dict):
-        return b.get("token") or b.get("access_token")
-    print(f"  (login {email} failed: {s} {str(b)[:160]})")
-    return None
+def register_user(email_prefix, name=None, city="Austin", state="TX", country="US"):
+    email = f"{email_prefix}_{uuid.uuid4().hex[:8]}@qatest.photoscout.app"
+    pw = "TestPass!234"
+    r = _req("POST", "/auth/register", json={"email": email, "password": pw, "name": name or email_prefix.title()})
+    if r.status_code != 200:
+        print(f"register FAIL {email} → {r.status_code} {r.text[:200]}")
+        return None
+    tok = r.json()["token"]
+    uid = r.json()["user"]["user_id"]
+    # patch city
+    _req("PATCH", "/auth/me", token=tok, json={"city": city, "state": state, "primary_country": country})
+    return {"email": email, "token": tok, "user_id": uid, "name": name or email_prefix.title()}
 
 
-def register(name: str, email: str, password: str, city: str = "Austin", state: str = "TX") -> Optional[dict]:
-    s, b = req("POST", "/auth/register", json_body={
-        "name": name, "email": email, "password": password,
-        "city": city, "state": state,
-    })
-    if s == 200 and isinstance(b, dict):
-        return b
-    print(f"  (register {email} failed: {s} {str(b)[:160]})")
-    return None
+def login(email, pw):
+    r = _req("POST", "/auth/login", json={"email": email, "password": pw})
+    if r.status_code != 200:
+        print(f"LOGIN FAIL {email} {r.status_code} {r.text[:300]}")
+        return None
+    return r.json()["token"]
 
 
-# --------------------------------------------------------------------------
+# ------------------------------------------------------------------------
+# Section 1 — Spot CRUD
+# ------------------------------------------------------------------------
+def test_spot_crud(admin_tok):
+    sec = "S1 CRUD"
+
+    # list default
+    r = _req("GET", "/spots?limit=5")
+    _log(sec, "GET /spots?limit=5", r.status_code == 200 and isinstance(r.json(), list), f"code={r.status_code} n={len(r.json()) if r.status_code==200 and isinstance(r.json(), list) else 'n/a'}")
+    baseline = r.json() if r.status_code == 200 else []
+
+    # sort=quality
+    r = _req("GET", "/spots?sort=quality&limit=5")
+    ok_q = r.status_code == 200 and isinstance(r.json(), list) and all("quality_score" in s for s in r.json())
+    _log(sec, "GET /spots?sort=quality", ok_q, f"code={r.status_code}")
+
+    # sort=newest (recent)
+    r = _req("GET", "/spots?sort=newest&limit=5")
+    _log(sec, "GET /spots?sort=newest", r.status_code == 200, f"code={r.status_code}")
+
+    # sort=trending
+    r = _req("GET", "/spots?sort=trending&limit=5")
+    _log(sec, "GET /spots?sort=trending", r.status_code == 200, f"code={r.status_code}")
+
+    # city filter
+    r = _req("GET", "/spots?city=Austin&limit=10")
+    ok_c = r.status_code == 200 and all((s.get("city") or "").lower() == "austin" for s in r.json()) if r.status_code == 200 else False
+    _log(sec, "GET /spots?city=Austin", r.status_code == 200, f"code={r.status_code} all_austin={ok_c}")
+
+    # detail on existing
+    spot_id = baseline[0]["spot_id"] if baseline else None
+    if spot_id:
+        r = _req("GET", f"/spots/{spot_id}", token=admin_tok)
+        j = r.json() if r.status_code == 200 else {}
+        ok = (
+            r.status_code == 200
+            and j.get("spot_id") == spot_id
+            and "owner" in j
+            and "images" in j
+            and "is_saved" in j
+        )
+        _log(sec, "GET /spots/{id} hydrated", ok, f"code={r.status_code} has_owner={bool(j.get('owner'))} is_saved_key={'is_saved' in j}")
+
+    # Create spot as admin — auto-approves (admin role)
+    body = {
+        "title": f"QA Phase3 Lookout {uuid.uuid4().hex[:6]}",
+        "description": "Regression test spot — Phase3 extraction",
+        "latitude": 30.2672, "longitude": -97.7431,
+        "city": "Austin", "state": "TX", "country": "USA",
+        "shoot_types": ["urban", "portrait"],
+        "images": [{"image_url": "https://images.unsplash.com/photo-1519125323398-675f0ddb6308"}],
+    }
+    r = _req("POST", "/spots", token=admin_tok, json=body)
+    ok = r.status_code == 200 and r.json().get("spot_id", "").startswith("spot_")
+    admin_spot_id = r.json().get("spot_id") if ok else None
+    _log(sec, "POST /spots (admin)", ok, f"code={r.status_code} id={admin_spot_id}")
+
+    # check-duplicates
+    r = _req("GET", f"/spots/check-duplicates?latitude=30.2672&longitude=-97.7431")
+    ok = r.status_code == 200 and "candidates" in r.json()
+    _log(sec, "GET /spots/check-duplicates", ok, f"code={r.status_code}")
+
+    # nearby
+    r = _req("GET", "/spots/nearby/search?lat=30.2672&lng=-97.7431&radius_km=50")
+    ok = r.status_code == 200 and isinstance(r.json(), list)
+    _log(sec, "GET /spots/nearby/search", ok, f"code={r.status_code} n={len(r.json()) if ok else 0}")
+
+    # Delete an admin spot
+    if admin_spot_id:
+        r = _req("DELETE", f"/spots/{admin_spot_id}", token=admin_tok)
+        _log(sec, "DELETE /spots/{id} (owner admin)", r.status_code == 200, f"code={r.status_code}")
+
+    return admin_spot_id
+
+
+# ------------------------------------------------------------------------
+# Section 2 — Uploads
+# ------------------------------------------------------------------------
+def test_uploads(admin_tok):
+    sec = "S2 UPLOADS"
+    # Create a spot as admin
+    body = {
+        "title": f"QA Phase3 Uploads Spot {uuid.uuid4().hex[:6]}",
+        "description": "Upload flow target",
+        "latitude": 30.2672, "longitude": -97.7431,
+        "city": "Austin", "state": "TX", "country": "USA",
+        "shoot_types": ["urban"],
+        "images": [{"image_url": "https://images.unsplash.com/photo-1519501025264-65ba15a82390"}],
+    }
+    r = _req("POST", "/spots", token=admin_tok, json=body)
+    if r.status_code != 200:
+        _log(sec, "seed spot", False, f"code={r.status_code}")
+        return None, None
+    spot_id = r.json()["spot_id"]
+    _log(sec, "seed spot", True, f"id={spot_id}")
+
+    # Register a second user to post a pending upload
+    u = register_user("qa_uploader", name="QA Uploader", city="Austin")
+    if not u:
+        return spot_id, None
+
+    # Have this user save the spot (so we can verify saved_spot_fresh_photo later)
+    _req("POST", f"/spots/{spot_id}/save", token=u["token"])
+
+    # Submit upload as non-admin → should be pending (non-verified, non-admin, non-owner)
+    upload_body = {
+        "images": [{"image_url": "https://images.unsplash.com/photo-1493246507139-91e8fad9978e"}],
+        "caption": "Community photo QA",
+    }
+    r = _req("POST", f"/spots/{spot_id}/uploads", token=u["token"], json=upload_body)
+    j = r.json() if r.status_code == 200 else {}
+    ok = r.status_code == 200 and j.get("moderation_status") == "pending"
+    _log(sec, "POST /spots/{id}/uploads (non-admin pending)", ok, f"code={r.status_code} status={j.get('moderation_status')}")
+
+    # List uploads — we need the upload_id. Fetch admin-side (includes pending)
+    r = _req("GET", f"/spots/{spot_id}/uploads?limit=10", token=admin_tok)
+    items = r.json().get("items", []) if r.status_code == 200 else []
+    pending = [i for i in items if i.get("moderation_status") == "pending"]
+    upload_id = pending[0]["upload_id"] if pending else None
+    _log(sec, "GET /spots/{id}/uploads admin sees pending", bool(upload_id), f"code={r.status_code} n_pending={len(pending)}")
+
+    if not upload_id:
+        return spot_id, None
+
+    # Admin approves via PATCH /api/admin/spot-uploads/{upload_id}
+    r = _req("PATCH", f"/admin/spot-uploads/{upload_id}", token=admin_tok, json={"action": "approve"})
+    _log(sec, "PATCH /admin/spot-uploads (approve)", r.status_code == 200, f"code={r.status_code}")
+
+    # Verify upload now approved
+    time.sleep(1.5)
+    r = _req("GET", f"/spots/{spot_id}/uploads?limit=10")
+    items = r.json().get("items", []) if r.status_code == 200 else []
+    app = [i for i in items if i.get("upload_id") == upload_id]
+    ok = bool(app) and app[0].get("moderation_status") == "approved"
+    _log(sec, "upload.status=approved post-moderation", ok, f"found={bool(app)} status={(app[0].get('moderation_status') if app else None)}")
+
+    # Public listing shows approved
+    r = _req("GET", f"/spots/{spot_id}/uploads?limit=10")
+    approved_cnt = len([i for i in r.json().get("items", []) if i.get("moderation_status") == "approved"]) if r.status_code == 200 else 0
+    _log(sec, "GET /spots/{id}/uploads (public) returns approved", approved_cnt >= 1, f"code={r.status_code} approved={approved_cnt}")
+
+    # Reaction test — another user reacts "like" (the only allowed kinds are like|helpful per code)
+    u2 = register_user("qa_reactor", city="Austin")
+    r = _req("POST", f"/spot-uploads/{upload_id}/react?kind=like", token=u2["token"])
+    ok = r.status_code == 200 and r.json().get("ok") is True and r.json().get("like_count", 0) >= 1
+    _log(sec, "POST /spot-uploads/{id}/react kind=like", ok, f"code={r.status_code} body={str(r.json())[:120]}")
+
+    return spot_id, upload_id
+
+
+# ------------------------------------------------------------------------
+# Section 3 — Spot updates (news)
+# ------------------------------------------------------------------------
+def test_spot_updates(admin_tok, spot_id):
+    sec = "S3 UPDATES"
+    # Admin-owned spot → auto-approve
+    r = _req("POST", f"/spots/{spot_id}/updates", token=admin_tok,
+             json={"text": "Blooming now at this spot — wildflowers everywhere"})
+    _log(sec, "POST /spots/{id}/updates", r.status_code == 200, f"code={r.status_code}")
+
+    r = _req("GET", f"/spots/{spot_id}/updates")
+    ok = r.status_code == 200 and "items" in r.json()
+    _log(sec, "GET /spots/{id}/updates", ok, f"code={r.status_code} n={len(r.json().get('items', [])) if ok else 0}")
+
+
+# ------------------------------------------------------------------------
+# Section 4 — Saves + trending fanout
+# ------------------------------------------------------------------------
+def test_saves_and_trending(admin_tok):
+    sec = "S4 SAVES+TRENDING"
+
+    # Get an existing spot to toggle save
+    r = _req("GET", "/spots?limit=3")
+    if r.status_code != 200 or not r.json():
+        _log(sec, "seed list", False, f"code={r.status_code}")
+        return
+
+    # Register user for toggle save test
+    u = register_user("qa_saver", city="Austin")
+    spot_id_any = r.json()[0]["spot_id"]
+
+    r1 = _req("POST", f"/spots/{spot_id_any}/save", token=u["token"])
+    ok1 = r1.status_code == 200 and r1.json().get("saved") is True
+    r2 = _req("POST", f"/spots/{spot_id_any}/save", token=u["token"])
+    ok2 = r2.status_code == 200 and r2.json().get("saved") is False
+    _log(sec, "toggle save on/off", ok1 and ok2, f"on={r1.json()} off={r2.json()}")
+
+    # Save again so /me/saved shows something
+    _req("POST", f"/spots/{spot_id_any}/save", token=u["token"])
+    r = _req("GET", "/me/saved", token=u["token"])
+    _log(sec, "GET /me/saved", r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) >= 1, f"code={r.status_code}")
+
+    # ------- Trending fanout --------------------------------------------
+    # Admin creates a fresh Austin spot (auto-approved).
+    body = {
+        "title": f"QA Trending Austin {uuid.uuid4().hex[:6]}",
+        "description": "Trending fanout QA",
+        "latitude": 30.27, "longitude": -97.74,
+        "city": "Austin", "state": "TX", "country": "USA",
+        "shoot_types": ["urban"],
+        "images": [{"image_url": "https://images.unsplash.com/photo-1493246507139-91e8fad9978e"}],
+    }
+    r = _req("POST", "/spots", token=admin_tok, json=body)
+    if r.status_code != 200:
+        _log(sec, "seed trending spot", False, f"code={r.status_code}")
+        return
+    tr_spot = r.json()["spot_id"]
+    _log(sec, "seed trending spot", True, f"id={tr_spot}")
+
+    # Register user E BEFORE the 4th save (same city=Austin)
+    userE = register_user("qa_trending_E", city="Austin", name="QA TrendingE")
+    if not userE:
+        _log(sec, "register userE", False)
+        return
+
+    # 4 throwaway Austin savers
+    savers = []
+    for i in range(4):
+        u = register_user(f"qa_tr_saver_{i}", city="Austin", name=f"Saver{i}")
+        if not u:
+            _log(sec, f"register saver{i}", False)
+            return
+        savers.append(u)
+
+    # Have savers save the spot in sequence
+    for i, s in enumerate(savers):
+        r = _req("POST", f"/spots/{tr_spot}/save", token=s["token"])
+        if r.status_code != 200:
+            _log(sec, f"saver{i} save", False, f"code={r.status_code} body={r.text[:200]}")
+            return
+    time.sleep(2.0)  # give fanout tasks time
+
+    # Verify E received a trending_spot notification with correct deep_link
+    r = _req("GET", "/notifications?limit=40", token=userE["token"])
+    items = r.json().get("items", []) if r.status_code == 200 else (r.json() if isinstance(r.json(), list) else [])
+    # Handle both shapes
+    if isinstance(r.json(), list):
+        items = r.json()
+    trend_rows = [n for n in items if n.get("kind") == "trending_spot" and n.get("deep_link") == f"/spot/{tr_spot}"]
+    ok = len(trend_rows) >= 1
+    _log(sec, "trending_spot notification for E (Austin)", ok,
+         f"code={r.status_code} trend_rows={len(trend_rows)} total={len(items)}")
+
+    # 5th save (user F) — must NOT double-fire
+    userF = register_user("qa_tr_saver_F", city="Austin", name="SaverF")
+    # Snapshot existing E trending_spot count before 5th save
+    pre = len(trend_rows)
+    r = _req("POST", f"/spots/{tr_spot}/save", token=userF["token"])
+    time.sleep(2.0)
+
+    r = _req("GET", "/notifications?limit=40", token=userE["token"])
+    items = r.json() if isinstance(r.json(), list) else r.json().get("items", [])
+    post = len([n for n in items if n.get("kind") == "trending_spot" and n.get("deep_link") == f"/spot/{tr_spot}"])
+    _log(sec, "5th save no double-fire (guard saves_after==4)", post == pre, f"pre={pre} post={post}")
+
+
+# ------------------------------------------------------------------------
+# Section 5 — Reviews + checkins
+# ------------------------------------------------------------------------
+def test_reviews_checkins(admin_tok, spot_id):
+    sec = "S5 REV+CHK"
+    r = _req("POST", f"/spots/{spot_id}/reviews", token=admin_tok,
+             json={"overall_rating": 5, "comment": "great for QA"})
+    _log(sec, "POST /spots/{id}/reviews", r.status_code == 200, f"code={r.status_code}")
+
+    r = _req("POST", f"/spots/{spot_id}/checkins", token=admin_tok,
+             json={"status_summary": "Visited today — all good", "crowd_level": 2})
+    _log(sec, "POST /spots/{id}/checkins", r.status_code == 200, f"code={r.status_code}")
+
+
+# ------------------------------------------------------------------------
+# Section 6 — Collections
+# ------------------------------------------------------------------------
+def test_collections(admin_tok):
+    sec = "S6 COLLECTIONS"
+    r = _req("POST", "/collections", token=admin_tok, json={"name": "QA Phase3 Trips"})
+    ok = r.status_code == 200 and r.json().get("collection_id", "").startswith("col_")
+    col_id = r.json().get("collection_id") if ok else None
+    _log(sec, "POST /collections", ok, f"code={r.status_code} id={col_id}")
+
+    r = _req("GET", "/me/collections", token=admin_tok)
+    ok = r.status_code == 200 and isinstance(r.json(), list) and any(c.get("collection_id") == col_id for c in r.json())
+    _log(sec, "GET /me/collections", ok, f"code={r.status_code} n={len(r.json()) if r.status_code==200 else 0}")
+
+    # Need a spot to add
+    r = _req("GET", "/spots?limit=3")
+    sid = r.json()[0]["spot_id"] if r.status_code == 200 and r.json() else None
+    if col_id and sid:
+        r = _req("POST", f"/collections/{col_id}/spots", token=admin_tok, json={"spot_id": sid})
+        ok = r.status_code == 200 and r.json().get("ok") is True
+        _log(sec, "POST /collections/{id}/spots", ok, f"code={r.status_code} body={r.json()}")
+
+        r = _req("GET", f"/collections/{col_id}", token=admin_tok)
+        ok = r.status_code == 200 and isinstance(r.json().get("spots"), list)
+        _log(sec, "GET /collections/{id} hydrated", ok, f"code={r.status_code} n_spots={len(r.json().get('spots', []))}")
+
+    return col_id
+
+
+# ------------------------------------------------------------------------
+# Section 7 — Draft publish + ownership
+# ------------------------------------------------------------------------
+def test_draft_publish():
+    sec = "S7 DRAFT"
+    u = register_user("qa_drafter", city="Austin")
+    body = {
+        "title": f"QA Draft {uuid.uuid4().hex[:6]}",
+        "description": "private draft",
+        "latitude": 30.21, "longitude": -97.73,
+        "city": "Austin", "state": "TX", "country": "USA",
+        "shoot_types": ["urban"],
+        "images": [{"image_url": "https://images.unsplash.com/photo-1519125323398-675f0ddb6308"}],
+        "save_as_draft": True,
+        "privacy_mode": "public",
+    }
+    r = _req("POST", "/spots", token=u["token"], json=body)
+    ok = r.status_code == 200 and r.json().get("visibility_status") == "draft"
+    spot_id = r.json().get("spot_id") if r.status_code == 200 else None
+    _log(sec, "POST /spots draft", ok, f"code={r.status_code} vis={r.json().get('visibility_status') if r.status_code==200 else None}")
+
+    if spot_id:
+        r = _req("POST", f"/spots/{spot_id}/publish-draft", token=u["token"])
+        ok = r.status_code == 200 and r.json().get("visibility_status") in ("pending_review", "approved")
+        _log(sec, "POST /spots/{id}/publish-draft", ok, f"code={r.status_code} vis={r.json().get('visibility_status') if r.status_code==200 else None}")
+
+    r = _req("GET", "/me/spots", token=u["token"])
+    ok = r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) >= 1
+    _log(sec, "GET /me/spots", ok, f"code={r.status_code} n={len(r.json()) if r.status_code==200 else 0}")
+
+
+# ------------------------------------------------------------------------
+# Section 8 — Astronomy + shot list
+# ------------------------------------------------------------------------
+def test_astronomy_shotlist(admin_tok, spot_id):
+    sec = "S8 ASTRO+SHOT"
+    r = _req("GET", f"/spots/{spot_id}/astronomy")
+    ok = r.status_code == 200 and ("sunrise" in r.json() or "sunrise_at" in r.json() or "golden" in str(r.json()).lower())
+    _log(sec, "GET /spots/{id}/astronomy", ok, f"code={r.status_code} keys={list(r.json().keys())[:8] if r.status_code==200 else 'n/a'}")
+
+    r = _req("POST", f"/spots/{spot_id}/shot-list", token=admin_tok)
+    # Shot-list uses LLM; might fail in test env — tolerate 200 OR 5xx with clean handling
+    if r.status_code == 200:
+        j = r.json()
+        ok = "items" in j
+        _log(sec, "POST /spots/{id}/shot-list", ok, f"code=200 n_items={len(j.get('items', []))}")
+    else:
+        _log(sec, "POST /spots/{id}/shot-list", False, f"code={r.status_code} body={r.text[:200]}")
+
+
+# ------------------------------------------------------------------------
+# Section 9 — Admin cover editor
+# ------------------------------------------------------------------------
+def test_cover_editor(admin_tok, spot_id):
+    sec = "S9 COVER EDITOR"
+    r = _req("GET", f"/admin/spots/{spot_id}/cover-editor", token=admin_tok)
+    ok = r.status_code == 200 and "images" in r.json() and isinstance(r.json()["images"], list)
+    img_url = None
+    if ok and r.json()["images"]:
+        img_url = r.json()["images"][0]["image_url"]
+    _log(sec, "GET /admin/spots/{id}/cover-editor", ok, f"code={r.status_code} n_imgs={len(r.json().get('images', [])) if ok else 0}")
+    if not img_url:
+        _log(sec, "no image available to PATCH cover", False)
+        return
+
+    payload = {"image_url": img_url, "focal_x": 0.4, "focal_y": 0.6, "scale": 1.3, "rotation": 0}
+    r = _req("PATCH", f"/admin/spots/{spot_id}/cover", token=admin_tok, json=payload)
+    ok = r.status_code == 200 and r.json().get("ok") is True
+    _log(sec, "PATCH /admin/spots/{id}/cover", ok, f"code={r.status_code}")
+
+    # Subsequent GET /api/spots returns spot with new cover applied (hero_cover_source=admin_override)
+    r = _req("GET", f"/spots/{spot_id}")
+    ok = r.status_code == 200 and r.json().get("hero_cover_source") == "admin_override" and r.json().get("hero_cover_image_url") == img_url
+    _log(sec, "GET /spots/{id} reflects override", ok, f"code={r.status_code} source={r.json().get('hero_cover_source')}")
+
+    # GET /api/spots list with this spot in it — should also carry admin_override for this spot
+    r = _req("GET", f"/spots?city=Austin&limit=50")
+    match = [s for s in r.json() if s.get("spot_id") == spot_id] if r.status_code == 200 else []
+    ok = bool(match) and match[0].get("hero_cover_source") == "admin_override"
+    _log(sec, "GET /spots list propagates override", ok, f"found={bool(match)} source={(match[0].get('hero_cover_source') if match else None)}")
+
+    # DELETE override
+    r = _req("DELETE", f"/admin/spots/{spot_id}/cover", token=admin_tok)
+    _log(sec, "DELETE /admin/spots/{id}/cover", r.status_code == 200, f"code={r.status_code}")
+
+
+# ------------------------------------------------------------------------
+# Section 10 — Marketplace pack contents
+# ------------------------------------------------------------------------
+def test_marketplace():
+    sec = "S10 MARKETPLACE"
+    r = _req("GET", "/marketplace/storefront")
+    ok = r.status_code == 200 and "rails" in r.json()
+    _log(sec, "GET /marketplace/storefront", ok, f"code={r.status_code} keys={list(r.json().keys())[:6] if ok else 'n/a'}")
+    # Check pack spot_ids resolve
+    if ok:
+        rails = r.json().get("rails", {})
+        featured = rails.get("featured", []) or []
+        pack = next((p for p in featured if p.get("type") == "spot_pack"), None) or (featured[0] if featured else None)
+        if pack:
+            pid = pack.get("product_id")
+            r = _req("GET", f"/marketplace/products/{pid}")
+            _log(sec, "GET /marketplace/products/{pack_id}", r.status_code == 200, f"code={r.status_code}")
+
+
+# ------------------------------------------------------------------------
+# Section 11 — Non-regression
+# ------------------------------------------------------------------------
+def test_non_regression(admin_tok):
+    sec = "S11 NON-REG"
+    endpoints = [
+        ("GET", "/auth/me", True),
+        ("GET", "/feed/home", False),
+        ("GET", "/notifications?limit=5", True),
+        ("GET", "/dm/threads", True),
+        ("GET", "/network/discover?limit_per_rail=3", True),
+        ("GET", "/me/viewers", True),
+        ("GET", "/referrals", True),
+        ("GET", "/referrals/rails", True),
+        ("GET", "/admin/overview", True),
+        ("GET", "/admin/users?limit=3", True),
+    ]
+    for method, path, needs_auth in endpoints:
+        r = _req(method, path, token=admin_tok if needs_auth else None)
+        _log(sec, f"{method} {path}", r.status_code == 200, f"code={r.status_code}")
+
+
+# ------------------------------------------------------------------------
+# Section 12 — Cross-module push integrations
+# ------------------------------------------------------------------------
+def test_cross_module_push(admin_tok):
+    sec = "S12 CROSS-MODULE PUSH"
+
+    # A follows B → B gets new_follower push/notification
+    A = register_user("qa_followerA", city="Austin")
+    B = register_user("qa_followedB", city="Austin")
+    r = _req("POST", f"/users/{B['user_id']}/follow", token=A["token"])
+    time.sleep(1.5)
+    r = _req("GET", "/notifications?limit=20", token=B["token"])
+    items = r.json() if isinstance(r.json(), list) else r.json().get("items", [])
+    ok = any(n.get("kind") == "new_follower" for n in items)
+    _log(sec, "follow → new_follower", ok, f"n_items={len(items)} found_new_follower={ok}")
+
+    # A DMs B — bypass push
+    r = _req("POST", "/dm/threads/start", token=A["token"], json={"user_id": B["user_id"], "opening_body": "hi from A"})
+    time.sleep(1.5)
+    r2 = _req("GET", "/notifications?limit=20", token=B["token"])
+    items = r2.json() if isinstance(r2.json(), list) else r2.json().get("items", [])
+    ok = any(n.get("kind") in ("new_message", "new_message_request", "dm_request", "dm_message") for n in items)
+    _log(sec, "DM → new_message/request notif for B", ok, f"n_items={len(items)}")
+
+    # Save owner's spot → spot owner gets "saved" notification (upload_featured kind)
+    # Need an owner spot
+    ownerU = register_user("qa_owner", city="Austin")
+    body = {
+        "title": f"QA Owner Spot {uuid.uuid4().hex[:6]}",
+        "description": "owner save notification",
+        "latitude": 30.3, "longitude": -97.73,
+        "city": "Austin", "state": "TX", "country": "USA",
+        "shoot_types": ["urban"],
+        "images": [{"image_url": "https://images.unsplash.com/photo-1493246507139-91e8fad9978e"}],
+        "privacy_mode": "public",
+    }
+    r = _req("POST", "/spots", token=ownerU["token"], json=body)
+    if r.status_code == 200:
+        own_sid = r.json()["spot_id"]
+        # Admin must approve if pending — just force visibility by creating via admin instead; but let's check it's created
+        # Non-verified owner → spot pending_review; saving pending spot still fires owner notif per code (no vis check)
+        saverU = register_user("qa_saveowner", city="Austin")
+        r = _req("POST", f"/spots/{own_sid}/save", token=saverU["token"])
+        time.sleep(1.5)
+        r = _req("GET", "/notifications?limit=20", token=ownerU["token"])
+        items = r.json() if isinstance(r.json(), list) else r.json().get("items", [])
+        # owner notif uses kind=upload_featured per code
+        ok = any("saved your spot" in (n.get("title") or "").lower() for n in items) or any(n.get("spot_id") == own_sid for n in items)
+        _log(sec, "save spot → owner gets 'saved your spot' notif", ok, f"n_items={len(items)}")
+
+    # Admin sanctions a user → user gets user_sanction_warning push
+    targetU = register_user("qa_sanction_target", city="Austin")
+    r = _req("POST", f"/admin/users/{targetU['user_id']}/sanction", token=admin_tok,
+             json={"type": "warn", "reason": "QA regression test — safe to ignore"})
+    time.sleep(1.5)
+    r2 = _req("GET", "/notifications?limit=20", token=targetU["token"])
+    items = r2.json() if isinstance(r2.json(), list) else r2.json().get("items", [])
+    ok = any(n.get("kind") == "user_sanction_warn" or n.get("kind") == "user_sanction_warning" for n in items)
+    _log(sec, "admin sanction → user_sanction_warn notif", ok, f"sanction_status={r.status_code} n_items={len(items)}")
+
+
+# ------------------------------------------------------------------------
+# Section 13 — Permissions
+# ------------------------------------------------------------------------
+def test_permissions(admin_tok):
+    sec = "S13 PERMS"
+
+    # /me/* unauth → 401
+    r = _req("GET", "/me/saved")
+    _log(sec, "GET /me/saved unauth → 401", r.status_code == 401, f"code={r.status_code}")
+
+    r = _req("GET", "/me/spots")
+    _log(sec, "GET /me/spots unauth → 401", r.status_code == 401, f"code={r.status_code}")
+
+    # POST /spots/{id}/uploads unauth → 401
+    r = _req("GET", "/spots?limit=1")
+    spot_id = r.json()[0]["spot_id"] if r.status_code == 200 and r.json() else None
+    if spot_id:
+        r = _req("POST", f"/spots/{spot_id}/uploads", json={"images": [{"image_url": "x"}]})
+        _log(sec, "POST /spots/{id}/uploads unauth → 401", r.status_code == 401, f"code={r.status_code}")
+
+    # DELETE /spots/{id} by non-owner → 403
+    # Seed a spot as admin, then have another user attempt delete
+    body = {
+        "title": f"QA Perm Spot {uuid.uuid4().hex[:6]}",
+        "description": "perm check", "latitude": 30.3, "longitude": -97.7,
+        "city": "Austin", "state": "TX", "country": "USA",
+        "images": [{"image_url": "https://images.unsplash.com/photo-1519125323398-675f0ddb6308"}],
+    }
+    r = _req("POST", "/spots", token=admin_tok, json=body)
+    if r.status_code == 200:
+        sid = r.json()["spot_id"]
+        u = register_user("qa_nonowner", city="Austin")
+        r = _req("DELETE", f"/spots/{sid}", token=u["token"])
+        _log(sec, "DELETE /spots/{id} non-owner → 403", r.status_code == 403, f"code={r.status_code}")
+        # Cleanup
+        _req("DELETE", f"/spots/{sid}", token=admin_tok)
+
+
+# ------------------------------------------------------------------------
 # Main
-# --------------------------------------------------------------------------
-def main() -> int:
-    print("=" * 70)
-    print("Phase 2 regression — network / referrals / push route extraction")
-    print("=" * 70)
-
-    # Bootstrap admin token
+# ------------------------------------------------------------------------
+def main():
+    print(f"Testing against: {BASE}")
     admin_tok = login(ADMIN_EMAIL, ADMIN_PASSWORD)
     if not admin_tok:
-        print("ABORT — cannot login admin")
-        return 1
-    s, me = req("GET", "/auth/me", token=admin_tok, expected_status=200, label="admin /auth/me")
-    admin_id = me.get("user_id") if isinstance(me, dict) else None
-    print(f"  (admin_id={admin_id})")
+        print("FATAL — cannot login as admin")
+        sys.exit(1)
+    print(f"Admin login OK (token len={len(admin_tok)})")
 
-    # Create two throwaway users u1, u2 in same city for cross tests
-    stamp = _rand(5)
-    u1_email = f"qa_u1_{stamp}@qatest.photoscout.app"
-    u2_email = f"qa_u2_{stamp}@qatest.photoscout.app"
-    u1_reg = register("QA One", u1_email, "Passw0rd!", city="Austin", state="TX")
-    u2_reg = register("QA Two", u2_email, "Passw0rd!", city="Austin", state="TX")
-    if not (u1_reg and u2_reg):
-        print("ABORT — cannot create throwaway users")
-        return 1
-    u1_tok = u1_reg.get("token") or u1_reg.get("access_token") or login(u1_email, "Passw0rd!")
-    u2_tok = u2_reg.get("token") or u2_reg.get("access_token") or login(u2_email, "Passw0rd!")
-    s, u1_me = req("GET", "/auth/me", token=u1_tok)
-    s, u2_me = req("GET", "/auth/me", token=u2_tok)
-    u1_id = u1_me["user_id"]; u2_id = u2_me["user_id"]
-    print(f"  (u1_id={u1_id}  u2_id={u2_id})")
+    # Run sections
+    test_spot_crud(admin_tok)
+    spot_id_u, upload_id = test_uploads(admin_tok)
+    if spot_id_u:
+        test_spot_updates(admin_tok, spot_id_u)
+    test_saves_and_trending(admin_tok)
+    if spot_id_u:
+        test_reviews_checkins(admin_tok, spot_id_u)
+    test_collections(admin_tok)
+    test_draft_publish()
+    if spot_id_u:
+        test_astronomy_shotlist(admin_tok, spot_id_u)
+        test_cover_editor(admin_tok, spot_id_u)
+    test_marketplace()
+    test_non_regression(admin_tok)
+    test_cross_module_push(admin_tok)
+    test_permissions(admin_tok)
 
-    # ======================================================================
-    # PUSH module
-    # ======================================================================
-    print("\n--- PUSH module ---")
-    s, prefs = req("GET", "/me/notification-preferences", token=admin_tok,
-                   expected_status=200, label="GET /me/notification-preferences")
-    if isinstance(prefs, dict):
-        have = {"push_enabled", "daily_cap", "quiet_hours", "categories"}.issubset(prefs.keys())
-        if have:
-            log_pass("prefs has push_enabled/daily_cap/quiet_hours/categories")
-            if {"enabled", "start", "end"}.issubset(prefs.get("quiet_hours", {}).keys()):
-                log_pass("quiet_hours has enabled/start/end")
-            else:
-                log_fail("prefs quiet_hours shape", str(prefs.get("quiet_hours")))
-        else:
-            log_fail("prefs keys", str(list(prefs.keys()) if isinstance(prefs, dict) else prefs))
-
-    # PATCH categories.promotions=true
-    s, p2 = req("PATCH", "/me/notification-preferences", token=admin_tok,
-                json_body={"categories": {"promotions": True}}, expected_status=200,
-                label="PATCH prefs categories.promotions=true")
-    if isinstance(p2, dict) and p2.get("categories", {}).get("promotions") is True:
-        log_pass("categories.promotions persisted true")
-    else:
-        log_fail("categories.promotions persisted", str(p2.get("categories") if isinstance(p2, dict) else p2))
-
-    # Re-GET returns same
-    s, p2g = req("GET", "/me/notification-preferences", token=admin_tok)
-    if isinstance(p2g, dict) and p2g.get("categories", {}).get("promotions") is True:
-        log_pass("re-GET shows promotions=true")
-    else:
-        log_fail("re-GET promotions", "not persisted")
-
-    # Clamping daily_cap → 50
-    s, p3 = req("PATCH", "/me/notification-preferences", token=admin_tok,
-                json_body={"daily_cap": 99}, expected_status=200,
-                label="PATCH daily_cap=99")
-    if isinstance(p3, dict) and p3.get("daily_cap") == 50:
-        log_pass("daily_cap clamped 99→50")
-    else:
-        log_fail("daily_cap clamp 99→50", str(p3.get("daily_cap") if isinstance(p3, dict) else p3))
-
-    # Clamping daily_cap → 1
-    s, p4 = req("PATCH", "/me/notification-preferences", token=admin_tok,
-                json_body={"daily_cap": 0}, expected_status=200,
-                label="PATCH daily_cap=0")
-    if isinstance(p4, dict) and p4.get("daily_cap") == 1:
-        log_pass("daily_cap clamped 0→1")
-    else:
-        log_fail("daily_cap clamp 0→1", str(p4.get("daily_cap") if isinstance(p4, dict) else p4))
-
-    # quiet_hours set
-    s, p5 = req("PATCH", "/me/notification-preferences", token=admin_tok,
-                json_body={"quiet_hours": {"enabled": True, "start": "23:00", "end": "08:00"}},
-                expected_status=200, label="PATCH quiet_hours")
-    if isinstance(p5, dict) and p5.get("quiet_hours", {}).get("start") == "23:00" \
-            and p5.get("quiet_hours", {}).get("end") == "08:00" \
-            and p5.get("quiet_hours", {}).get("enabled") is True:
-        log_pass("quiet_hours persisted 23:00-08:00 enabled")
-    else:
-        log_fail("quiet_hours persisted", str(p5.get("quiet_hours") if isinstance(p5, dict) else p5))
-
-    # Ensure promotions=true + daily_cap reasonable + quiet_hours off for test-push
-    req("PATCH", "/me/notification-preferences", token=admin_tok,
-        json_body={"categories": {"promotions": True}, "daily_cap": 50,
-                   "quiet_hours": {"enabled": False, "start": "22:00", "end": "07:00"}})
-
-    # test-push with promotions=true → delivered:true (but subject to 10-min dedupe)
-    s, tp1 = req("POST", "/me/notifications/test-push", token=admin_tok,
-                 expected_status=200, label="POST /me/notifications/test-push (promotions on)")
-    if isinstance(tp1, dict) and "delivered" in tp1:
-        log_pass(f"test-push returns delivered={tp1.get('delivered')}")
-    else:
-        log_fail("test-push shape", str(tp1))
-
-    # test-push with promotions=false
-    req("PATCH", "/me/notification-preferences", token=admin_tok,
-        json_body={"categories": {"promotions": False}})
-    s, tp2 = req("POST", "/me/notifications/test-push", token=admin_tok,
-                 expected_status=200)
-    if isinstance(tp2, dict) and tp2.get("delivered") is False:
-        log_pass("test-push promotions=false → delivered=false")
-    else:
-        log_fail("test-push promotions=false", str(tp2))
-    # Restore
-    req("PATCH", "/me/notification-preferences", token=admin_tok,
-        json_body={"categories": {"promotions": True}, "daily_cap": 10,
-                   "quiet_hours": {"enabled": True, "start": "22:00", "end": "07:00"}})
-
-    # GET /notifications
-    s, nlist = req("GET", "/notifications", token=admin_tok, params={"limit": 5},
-                   expected_status=200, label="GET /notifications?limit=5")
-    if isinstance(nlist, dict) and "items" in nlist:
-        log_pass(f"/notifications items={len(nlist['items'])}")
-    else:
-        log_fail("/notifications shape", str(nlist)[:200])
-
-    # mark-read without body
-    s, mr = req("POST", "/notifications/mark-read", token=admin_tok, json_body={},
-                expected_status=200, label="POST /notifications/mark-read {}")
-    if isinstance(mr, dict) and mr.get("ok") is True:
-        log_pass("mark-read ok")
-
-    # push-token register
-    fake_token = f"ExponentPushToken[QA{stamp}]"
-    s, pt = req("POST", "/me/push-token", token=admin_tok,
-                json_body={"token": fake_token, "device_type": "ios", "platform": "ios"},
-                expected_status=200, label="POST /me/push-token")
-    # push-token delete (endpoint requires token query param)
-    s, ptd = req("DELETE", "/me/push-token", token=admin_tok,
-                 params={"token": fake_token}, expected_status=200,
-                 label="DELETE /me/push-token")
-
-    # ======================================================================
-    # NETWORK module
-    # ======================================================================
-    print("\n--- NETWORK module ---")
-    # /me/viewers
-    s, v = req("GET", "/me/viewers", token=admin_tok, params={"limit": 10},
-               expected_status=200, label="GET /me/viewers?limit=10")
-    if isinstance(v, dict) and "plan" in v and "viewers" in v:
-        log_pass(f"/me/viewers plan={v.get('plan')} viewers_count={len(v.get('viewers', []))}")
-    else:
-        log_fail("/me/viewers shape", str(v)[:200])
-
-    # /me/viewers/summary
-    s, vs = req("GET", "/me/viewers/summary", token=admin_tok, expected_status=200,
-                label="GET /me/viewers/summary")
-    if isinstance(vs, dict) and ("total_7d" in vs or "count_7d" in vs):
-        log_pass(f"viewers/summary total_7d={vs.get('total_7d') or vs.get('count_7d')}")
-    else:
-        log_fail("viewers/summary shape", str(vs)[:200])
-
-    # /me/analytics/networking
-    s, an = req("GET", "/me/analytics/networking", token=admin_tok, expected_status=200,
-                label="GET /me/analytics/networking")
-    if isinstance(an, dict) and "profile_views_30d" in an:
-        log_pass(f"analytics/networking profile_views_30d={an.get('profile_views_30d')}")
-    else:
-        log_fail("analytics/networking shape", str(an)[:200])
-
-    # Follow toggle: u1 → u2
-    s, f1 = req("POST", f"/users/{u2_id}/follow", token=u1_tok, expected_status=200,
-                label="POST /users/{u2}/follow (u1)")
-    if isinstance(f1, dict) and f1.get("following") is True:
-        log_pass("follow → {following:true}")
-    else:
-        log_fail("follow response", str(f1))
-    s, f2 = req("POST", f"/users/{u2_id}/follow", token=u1_tok, expected_status=200,
-                label="POST /users/{u2}/follow (toggle)")
-    if isinstance(f2, dict) and f2.get("following") is False:
-        log_pass("re-follow → {following:false}")
-    else:
-        log_fail("unfollow response", str(f2))
-    # Re-follow so we get a follower row for u2
-    req("POST", f"/users/{u2_id}/follow", token=u1_tok)
-
-    # DM /dm/threads/start u1 → u2
-    s, dmstart = req("POST", "/dm/threads/start", token=u1_tok,
-                     json_body={"user_id": u2_id, "opening_body": "hi from u1"},
-                     expected_status=200, label="POST /dm/threads/start")
-    thread_id = (dmstart or {}).get("thread_id") if isinstance(dmstart, dict) else None
-    if thread_id:
-        log_pass(f"thread_id={thread_id}")
-    else:
-        log_fail("dm start thread_id missing", str(dmstart))
-
-    # Send message on thread
-    if thread_id:
-        s, msg = req("POST", f"/dm/threads/{thread_id}/messages", token=u1_tok,
-                     json_body={"type": "text", "body": "second hi"},
-                     expected_status=200, label="POST /dm/threads/{id}/messages")
-        if isinstance(msg, dict) and msg.get("body"):
-            log_pass("dm message sent")
-
-    # GET /dm/threads
-    s, tlist = req("GET", "/dm/threads", token=u1_tok, expected_status=200,
-                   label="GET /dm/threads")
-    if isinstance(tlist, dict) and "items" in tlist:
-        log_pass(f"dm threads items={len(tlist['items'])}")
-
-    # DM requests: u2 can accept, ignore, block. Fetch pending requests for u2
-    s, req_list = req("GET", "/dm/threads", token=u2_tok, params={"tab": "requests"})
-    req_items = (req_list or {}).get("items", []) if isinstance(req_list, dict) else []
-    req_id = req_items[0]["request_id"] if req_items else None
-    if req_id:
-        s, acc = req("POST", f"/dm/requests/{req_id}/accept", token=u2_tok,
-                     expected_status=200, label="POST /dm/requests/{id}/accept")
-
-    # /network/discover
-    s, disc = req("GET", "/network/discover", token=admin_tok, params={"limit_per_rail": 5},
-                  expected_status=200, label="GET /network/discover")
-    if isinstance(disc, dict) and any(k in disc for k in ("near_you", "verified_pros", "new_members")):
-        log_pass(f"discover rails keys={list(disc.keys())[:5]}")
-
-    # /network/search
-    s, sr = req("GET", "/network/search", token=admin_tok, params={"q": "admin"},
-                expected_status=200, label="GET /network/search?q=admin")
-    if isinstance(sr, dict) and "items" in sr:
-        log_pass(f"search items={len(sr['items'])}")
-
-    # /mentors
-    s, mn = req("GET", "/mentors", token=admin_tok, params={"limit": 3},
-                expected_status=200, label="GET /mentors?limit=3")
-
-    # /users/{admin_id}/trust
-    s, tr = req("GET", f"/users/{admin_id}/trust", expected_status=200,
-                label="GET /users/{admin_id}/trust")
-
-    # /conversations legacy
-    s, cv = req("POST", "/conversations", token=u1_tok,
-                json_body={"participant_user_id": u2_id}, expected_status=200,
-                label="POST /conversations")
-    conv_id = (cv or {}).get("conversation_id") if isinstance(cv, dict) else None
-    # idempotent re-POST
-    s, cv2 = req("POST", "/conversations", token=u1_tok,
-                 json_body={"participant_user_id": u2_id}, expected_status=200,
-                 label="POST /conversations (idempotent)")
-    if conv_id and isinstance(cv2, dict) and cv2.get("conversation_id") == conv_id:
-        log_pass("conversations idempotent")
-
-    s, myconv = req("GET", "/me/conversations", token=u1_tok, expected_status=200,
-                    label="GET /me/conversations")
-
-    if conv_id:
-        s, cmsg = req("POST", f"/conversations/{conv_id}/messages", token=u1_tok,
-                      json_body={"body": "hi legacy"}, expected_status=200,
-                      label="POST /conversations/{id}/messages")
-
-    # ======================================================================
-    # REFERRALS module
-    # ======================================================================
-    print("\n--- REFERRALS module ---")
-    # NOTE: Review spec used gig_type='paid' but valid values are in GIG_TYPES
-    # constant (full_session_referral, second_shooter, etc). Use valid one.
-    ref_body = {
-        "title": "Need second shooter Austin QA",
-        "shoot_type": "portrait",
-        "gig_type": "full_session_referral",
-        "city": "Austin",
-        "state": "TX",
-    }
-    s, rn = req("POST", "/referrals", token=u1_tok, json_body=ref_body,
-                expected_status=200, label="POST /referrals")
-    need_id = (rn or {}).get("need_id") if isinstance(rn, dict) else None
-    if need_id:
-        log_pass(f"need_id={need_id}")
-
-    s, rlist = req("GET", "/referrals", params={"city": "Austin"}, expected_status=200,
-                   label="GET /referrals?city=Austin")
-    s, rails = req("GET", "/referrals/rails", expected_status=200,
-                   label="GET /referrals/rails")
-    s, mine = req("GET", "/me/referrals", token=u1_tok, expected_status=200,
-                  label="GET /me/referrals")
-
-    if need_id:
-        s, gr = req("GET", f"/referrals/{need_id}", token=u1_tok, expected_status=200,
-                    label="GET /referrals/{id}")
-        # PATCH as poster → 200 (note: ReferralUpdateIn only allows status/notes/urgency;
-        # 'title' will be ignored silently, but request should succeed)
-        s, pr = req("PATCH", f"/referrals/{need_id}", token=u1_tok,
-                    json_body={"notes": "updated notes"}, expected_status=200,
-                    label="PATCH /referrals/{id} (poster)")
-        # PATCH as non-poster → 403
-        s, pr2 = req("PATCH", f"/referrals/{need_id}", token=u2_tok,
-                     json_body={"notes": "hack"}, expected_status=403,
-                     label="PATCH /referrals/{id} (non-poster)")
-        # u2 applies to u1's need
-        s, ap = req("POST", f"/referrals/{need_id}/apply", token=u2_tok,
-                    json_body={"pitch": "I'd love to"}, expected_status=200,
-                    label="POST /referrals/{id}/apply")
-        app_id = (ap or {}).get("app_id") if isinstance(ap, dict) else None
-        if app_id:
-            log_pass(f"app_id={app_id}")
-            # u1 accepts
-            s, acc = req("POST", f"/referrals/{need_id}/applications/{app_id}/accept",
-                         token=u1_tok, expected_status=200,
-                         label="POST accept application")
-        # Apply a second need for reject test
-        ref_body2 = {**ref_body, "title": "Second gig for reject test"}
-        s2, rn2 = req("POST", "/referrals", token=u1_tok, json_body=ref_body2)
-        need2 = (rn2 or {}).get("need_id") if isinstance(rn2, dict) else None
-        if need2:
-            s, ap2 = req("POST", f"/referrals/{need2}/apply", token=u2_tok,
-                         json_body={"pitch": "reject me"})
-            app2 = (ap2 or {}).get("app_id") if isinstance(ap2, dict) else None
-            if app2:
-                req("POST", f"/referrals/{need2}/applications/{app2}/reject",
-                    token=u1_tok, expected_status=200, label="POST reject application")
-            # Non-poster DELETE → 403
-            req("DELETE", f"/referrals/{need2}", token=u2_tok,
-                expected_status=403, label="DELETE non-poster → 403")
-            # Poster DELETE → 200
-            req("DELETE", f"/referrals/{need2}", token=u1_tok,
-                expected_status=200, label="DELETE poster → 200")
-
-        # Cleanup — delete first need
-        if need_id:
-            req("DELETE", f"/referrals/{need_id}", token=u1_tok)
-
-    # ======================================================================
-    # CROSS-MODULE integration (send_growth_push + notifications)
-    # ======================================================================
-    print("\n--- CROSS-MODULE integration ---")
-    # Follow u1→admin so admin gets new_follower notification
-    s, _ = req("POST", f"/users/{admin_id}/follow", token=u1_tok, expected_status=200,
-               label="u1 follows admin")
-    time.sleep(1.5)
-    s, nf = req("GET", "/notifications", token=admin_tok, params={"limit": 10})
-    kinds = [n.get("kind") for n in (nf or {}).get("items", [])] if isinstance(nf, dict) else []
-    if "new_follower" in kinds:
-        log_pass("admin received new_follower notification")
-    else:
-        log_fail("new_follower cross-module", f"kinds recent: {kinds[:8]}")
-    # unfollow
-    req("POST", f"/users/{admin_id}/follow", token=u1_tok)
-
-    # ======================================================================
-    # NON-REGRESSION
-    # ======================================================================
-    print("\n--- NON-REGRESSION ---")
-    req("GET", "/auth/me", token=admin_tok, expected_status=200, label="GET /auth/me")
-    req("GET", "/feed/home", token=admin_tok, expected_status=200, label="GET /feed/home")
-    req("GET", "/spots", params={"limit": 3}, expected_status=200, label="GET /spots?limit=3")
-    req("GET", "/marketplace/storefront", expected_status=200, label="GET /marketplace/storefront")
-    req("GET", "/me/marketplace/sales", token=admin_tok, expected_status=200, label="GET /me/marketplace/sales")
-    req("GET", "/admin/overview", token=admin_tok, expected_status=200, label="GET /admin/overview")
-    req("GET", "/admin/users", token=admin_tok, params={"limit": 3}, expected_status=200, label="GET /admin/users")
-    req("GET", "/admin/audit-logs", token=admin_tok, params={"limit": 3}, expected_status=200, label="GET /admin/audit-logs")
-
-    # ======================================================================
-    # PERMISSION sanity
-    # ======================================================================
-    print("\n--- PERMISSION sanity ---")
-    # Non-admin hitting admin endpoint → 403
-    req("GET", "/admin/overview", token=u1_tok, expected_status=403, label="non-admin /admin/overview → 403")
-    # Unauth /me/* → 401
-    req("GET", "/me/notification-preferences", expected_status=401, label="unauth /me/notification-preferences → 401")
-    req("POST", "/me/push-token", json_body={"token": "x"}, expected_status=401,
-        label="unauth /me/push-token → 401")
-
-    # ======================================================================
     # Summary
-    # ======================================================================
-    print("\n" + "=" * 70)
-    print(f"RESULTS: {PASS} passed, {FAIL} failed")
-    if FIVE_HUNDREDS:
-        print(f"\n🔴 5xx errors ({len(FIVE_HUNDREDS)}):")
-        for e in FIVE_HUNDREDS:
-            print(f"  - {e}")
-    if FAIL_MSGS:
-        print(f"\n❌ Failures:")
-        for m in FAIL_MSGS:
-            print(f"  - {m}")
-    print("=" * 70)
-    return 0 if FAIL == 0 and not FIVE_HUNDREDS else 1
+    print("\n" + "=" * 80)
+    print("SUMMARY")
+    print("=" * 80)
+    by_sec = {}
+    for section, label, ok, _d in RESULTS:
+        by_sec.setdefault(section, {"pass": 0, "fail": 0, "items": []})
+        by_sec[section]["pass" if ok else "fail"] += 1
+        by_sec[section]["items"].append((ok, label))
+    total_pass = sum(s["pass"] for s in by_sec.values())
+    total_fail = sum(s["fail"] for s in by_sec.values())
+    for sec, d in by_sec.items():
+        print(f"{sec:30s}  PASS={d['pass']}  FAIL={d['fail']}")
+        for ok, lbl in d["items"]:
+            if not ok:
+                print(f"   ❌ {lbl}")
+    print(f"\nTOTAL: {total_pass} PASS / {total_fail} FAIL")
+    return 0 if total_fail == 0 else 1
 
 
 if __name__ == "__main__":
