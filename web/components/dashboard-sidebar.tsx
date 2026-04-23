@@ -6,13 +6,14 @@ import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import {
   LayoutDashboard, Bookmark, Folder, Users, Eye, MessageSquareText,
-  Map as MapIcon, Menu, X, LogOut, User, Settings,
+  Map as MapIcon, Menu, X, LogOut, User, Settings, Sparkles,
 } from 'lucide-react';
 
 type User = { name?: string; username?: string; avatar_url?: string; plan?: string };
 
 const items = [
   { href: '/dashboard', label: 'Overview', icon: LayoutDashboard, exact: true },
+  { href: '/dashboard/feed', label: 'Community feed', icon: Sparkles },
   { href: '/dashboard/saved', label: 'Saved spots', icon: Bookmark },
   { href: '/dashboard/collections', label: 'Collections', icon: Folder },
   { href: '/dashboard/map', label: 'Map planner', icon: MapIcon },
