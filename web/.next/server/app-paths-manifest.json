@@ -1,7 +1,3 @@
 {
-  "/session/login/route": "app/session/login/route.js",
-  "/community/page": "app/community/page.js",
-  "/spots/[city]/page": "app/spots/[city]/page.js",
-  "/post/[id]/page": "app/post/[id]/page.js",
-  "/dashboard/feed/page": "app/dashboard/feed/page.js"
+  "/page": "app/page.js"
 }
