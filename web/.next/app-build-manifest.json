@@ -91,6 +91,31 @@
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/register/page.js"
+    ],
+    "/dashboard/saved/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/dashboard/saved/page.js"
+    ],
+    "/dashboard/collections/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/dashboard/collections/page.js"
+    ],
+    "/dashboard/messages/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/dashboard/messages/page.js"
+    ],
+    "/dashboard/viewers/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/dashboard/viewers/page.js"
+    ],
+    "/dashboard/followers/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/dashboard/followers/page.js"
     ]
   }
 }
