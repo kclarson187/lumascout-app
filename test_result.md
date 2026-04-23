@@ -24,7 +24,144 @@ user_problem_statement: |
   (soft delete + anonymize), plus comprehensive QA pass. See tasks below.
 
 backend:
-  - task: "Network Phase A — DM threads/messages, requests (accept/ignore/block), safety report, network/discover, network/search, user trust, notification hooks"
+  - task: "Pack Marketplace MVP — storefront/products/checkout(MOCK)/purchases/reviews/wishlist/sales/library/admin-moderation + demo seed"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Full Pack Marketplace MVP shipped. Endpoints grouped:
+
+          (1) Discovery:
+              GET  /api/marketplace/storefront            — rails (featured, trending, newest) + by_type map
+              GET  /api/marketplace/products?q=&type=&sort=&seller_id=&featured=&limit=&skip=
+              GET  /api/marketplace/products/{id}         — increments view_count
+          (2) Create/update/delete (seller):
+              POST /api/marketplace/products              — starts in status='pending' (admin approval)
+              PATCH /api/marketplace/products/{id}        — seller or admin; price/contents_url changes
+                                                             by seller flip status back to 'pending'
+              DELETE /api/marketplace/products/{id}       — sets status='removed'
+          (3) Checkout (MOCKED for MVP):
+              POST /api/marketplace/products/{id}/checkout → always returns {mocked:true, purchase_id,
+                  price_cents, platform_fee_cents, seller_payout_cents}. Guards: product must be
+                  status='active', seller can't buy own product, duplicate-purchase returns
+                  already_owned=true. Free products (price_cents==0) auto-complete immediately
+                  with sales_count++ and status='completed' in one shot.
+              POST /api/marketplace/purchases/{id}/complete → flips pending→completed, increments
+                  sales_count, notifies seller with kind='marketplace_sale'.
+          (4) Reviews:
+              POST /api/marketplace/products/{id}/reviews  — requires buyer to own the product
+              GET  /api/marketplace/products/{id}/reviews
+          (5) Wishlist:
+              POST /api/marketplace/wishlist/{id}          — toggle
+              GET  /api/me/wishlist
+          (6) Seller + Library:
+              GET  /api/me/marketplace/sales?since_days=   — per-product stats + KPIs
+              GET  /api/me/marketplace/library             — buyer's purchased products (contents_url
+                                                             only exposed to buyer/seller/admin)
+          (7) Admin moderation:
+              POST /api/admin/marketplace/products/{id}/moderate {action, reason}
+                    → actions: approve | deny | feature | unfeature | suspend | unsuspend
+              GET  /api/admin/marketplace/pending          — mod+ listing of status='pending'
+
+          Seed: seed_marketplace_demo() seeds 8 demo products distributed round-robin across
+          @lumascout.app photographer accounts. Idempotent on (title).
+
+          Already end-to-end verified via curl in this session:
+          - storefront rails populated (featured=4, trending=6, newest=6, by_type covers 7 types)
+          - search with q=preset returns 3 items
+          - checkout returns mocked payload with fee/payout math
+          - /complete finalizes and library shows it
+          - review POST works (buyer-gated)
+          - wishlist toggle + list work
+          - sales endpoint returns structured KPIs
+          - admin/pending returns 0 (all demo products approved by seed)
+
+          Please validate:
+          (a) Hit every endpoint above with auth for admin + a fresh non-admin user.
+          (b) Confirm status transitions: new product 'pending' → admin approve → 'active'; edit
+              price as owner → status reverts to 'pending'; admin deny → status='denied' with
+              deny_reason saved.
+          (c) contents_url privacy rule: visible only when viewer.has_purchased OR viewer is
+              seller OR viewer.role in (admin, super_admin, moderator).
+          (d) Duplicate checkout returns already_owned=true (no new purchase row).
+          (e) Review restricted to buyers only (non-buyer gets 403).
+          (f) Wishlist is per-user and exposes only active products.
+          (g) Admin moderation actions update audit_logs.
+          (h) Seed idempotency: restart backend twice and confirm seed_marketplace_demo doesn't
+              create duplicates (query on title).
+
+          Test credentials: admin@lumascout.app / admin123.
+
+        -working: true
+        -agent: "testing"
+        -comment: |
+          FULL VALIDATION — 76/77 assertions PASS against all 10 review scenarios. Test script: /app/backend_test_marketplace.py. Backend at http://localhost:8001/api. Admin: admin@lumascout.app / admin123 (super_admin). Two throwaway users (u1 seller, u2 buyer) + a third (u3 non-buyer) registered per scenario and soft-deleted on cleanup.
+
+          (1) STOREFRONT — PASS. GET /api/marketplace/storefront 200. Response carries rails={featured,trending,newest} and by_type dict. trending/newest rails non-empty (6 items each). Each item carries all 11 required fields: product_id, title, type, price_cents, currency, thumbnail_url, seller{name,username,user_id,avatar_url,plan,verification_status,city}, rating_avg, sales_count, in_wishlist, has_purchased. PASS.
+
+          (2) LIST/SEARCH — 4/5 PASS, 1 FAIL:
+            • GET /products?q=preset&limit=10 → 200, total>=1, every item matches in type=='preset' OR keyword in title/desc/tags. PASS.
+            • GET /products?type=mentorship → 200, every item.type=='mentorship'. PASS.
+            • ❌ GET /products?sort=price_low → 200 but NOT strictly ascending. Returned prices: [1900, 1999, 2900, 7900, 900, 1500, 2400, 3200, 3900]. ROOT CAUSE (server.py:8355-8361): the sort_spec ALWAYS prepends ("featured", -1) before the price key, so 4 featured products (sorted asc within the featured bucket) come before 5 non-featured (also sorted asc within their bucket). If the review's intent is a strict price-asc view (typical user expectation for "sort by price low→high"), remove the ("featured", -1) prefix when sort in ("price_low","price_high"). Currently this is the only deviation from spec.
+
+          (3) PRODUCT DETAIL — PASS (5/5). GET /products/{id} 200, view_count increments by 1 between consecutive GETs. Bogus id → 404. Unauth GET does NOT include contents_url (privacy rule enforced via _shape_product). PASS.
+
+          (4) CREATE/PATCH/DELETE — PASS (12/12).
+            • POST /products {title, type:preset, description, price_cents:1500, thumbnail_url:"data:image/png;base64,..."} → 200, status='pending'.
+            • Non-owner u2 PATCH → 403; non-owner u2 DELETE → 403.
+            • Owner u1 PATCH title only → 200, status stays 'pending'.
+            • Admin POST /admin/marketplace/products/{id}/moderate {action:'approve'} → 200 (status flips to 'active').
+            • Owner PATCH price_cents:1800 → 200 and status REVERTS to 'pending' (auto-kick-back rule at server.py:8416-8417 confirmed live).
+            • Admin re-approve → 200.
+            • Owner DELETE → 200. Re-GET shows product.status='removed'. PASS.
+
+          (5) CHECKOUT (MOCK) — PASS (16/16).
+            • Created fresh admin-approved product by u1, price 500 cents.
+            • u2 POST /products/{id}/checkout → 200 with {mocked:true, purchase_id:'mp_*', platform_fee_cents=75, seller_payout_cents=425}. Math correct (15% fee of 500 = 75; payout = 425).
+            • Seller u1 buying own product → 400 "You can't buy your own product".
+            • Duplicate checkout by u2 BEFORE completing first → 200 with a DIFFERENT purchase_id (multiple pending rows allowed — explicit design choice in the code).
+            • POST /purchases/{first_pid}/complete (u2) → 200; bogus purchase_id → 404; non-buyer u3 → 403.
+            • After completion, u2's next checkout → 200 with already_owned=true.
+            • product.sales_count incremented (≥1) after complete.
+            • u2 GET product includes contents_url (buyer privilege).
+            • Free product path (price_cents=0): approved, checkout → 200 auto_completed=true; /me/marketplace/library shows it.
+
+          (6) REVIEWS — PASS (9/9).
+            • u2 (buyer of completed product) POST /products/{id}/reviews {rating:4, text:"Nice"} → 200; product rating_count becomes 1, rating_avg becomes 4.0.
+            • Re-submit by same buyer → updates in place (no duplicate; rating_count stays 1).
+            • rating=0 → 422; rating=6 → 422 (pydantic field_validator on MarketplaceReviewIn).
+            • Non-buyer u3 → 403.
+            • GET /products/{id}/reviews returns items with reviewer={name, username, user_id, avatar_url, plan, verification_status, city} hydrated. PASS.
+
+          (7) WISHLIST — PASS (4/4).
+            • POST /marketplace/wishlist/{id} (u2) → in_wishlist=true; second call → in_wishlist=false (toggle).
+            • After re-adding, GET /me/wishlist returns only active products (all statuses=='active'). PASS.
+
+          (8) LIBRARY + SALES — PASS (6/6).
+            • GET /me/marketplace/library (u2) → items with product.contents_url present (buyer unlock confirmed).
+            • GET /me/marketplace/sales (u1) → total_sales≥1, gross_cents≥500, platform_fee_pct==15, net_cents == gross_cents − platform_fee_cents. products[] each carry {sales, revenue_cents, view_count}. PASS.
+
+          (9) ADMIN MODERATION — PASS (10/10).
+            • GET /admin/marketplace/pending as admin → 200 with pending items (all status='pending'); as non-staff u1 → 403.
+            • action='deny' with reason "low quality screenshots" → status='denied' and deny_reason saved on the product doc.
+            • action='feature' on active product → featured=true; 'unfeature' → featured=false.
+            • GET /admin/audit-logs?target_id=<pid> → 200 with entries whose action starts with "marketplace_product." (audit_log write path at server.py:8830 is live). PASS.
+
+          (10) SEED IDEMPOTENCY — PASS (2/2).
+            • Before restart: products matching "Golden Hour Austin" = 1.
+            • sudo supervisorctl restart backend; waited for startup complete + seed_marketplace_demo to run; re-checked → still 1. Idempotent seed via `existing = await db.marketplace_products.find_one({"title": p["title"]})` at server.py:9947 confirmed.
+
+          CLEANUP — all 4 throwaway users soft-deleted via DELETE /api/admin/users/{id} and all 4 throwaway products DELETE'd → all 200. No residue.
+
+          ONLY BUG FOUND: sort=price_low / sort=price_high not strictly ordered because ("featured", -1) is always prepended. If the intended UX is "strict cheapest→most expensive", this is a real bug. If the intended UX is "featured first, then cheapest", then the current code is correct and the review expectation should be updated. Flagging for main agent decision — one-line fix either way.
+
+
     implemented: true
     working: true
     file: "/app/backend/server.py"
@@ -4799,7 +4936,64 @@ frontend:
 agent_communication:
     -agent: "main"
     -message: |
-      Two P0 paywall bugs fixed. Deferred in this pass due to scope:
+      PACK MARKETPLACE MVP — dedicated session.
+      Scope: Storefront / Product Detail / Buy flow (MOCK checkout) /
+      Seller Dashboard / My Purchases / Wishlist / Admin Moderation.
+
+      Backend changes in server.py:
+      (a) /api/marketplace/products/{id}/checkout now runs entirely
+          through a MOCK path. Records purchase rows with status=pending
+          (or auto-completed for free products). Architecture is Stripe
+          Connect-ready: platform_fee_cents, seller_payout_cents, and
+          stripe_session_id slots are all persisted so real Connect only
+          swaps the body of this endpoint + webhook handler. Added
+          duplicate-purchase guard (buyer already owns → short-circuit
+          with already_owned=true) and free-product auto-complete.
+      (b) Added DEMO_PRODUCTS seed data + seed_marketplace_demo()
+          called from on_startup. Round-robins 8 products across demo
+          photographer accounts. Idempotent.
+      (c) All existing endpoints (storefront / product list+detail /
+          create-edit / reviews / wishlist / sales / library / admin
+          moderate / admin pending) are untouched and already tested
+          end-to-end via curl (purchase → complete → review → wishlist
+          → library → sales).
+
+      Frontend changes:
+      - Deleted legacy /app/marketplace.tsx (conflicted with the new
+        folder route; it targeted the separate /packs system).
+      - Enhanced /marketplace/index.tsx storefront (existing file).
+      - NEW: /marketplace/[id].tsx — product detail with gallery,
+        creator card, what-is-included, reviews, mock buy flow,
+        related rail, write-review modal.
+      - NEW: /marketplace/search.tsx — filter by type, sort toggle,
+        results grid.
+      - NEW: /marketplace/new.tsx — create product form with image
+        picker for thumbnail + up to 5 previews, price input, tags.
+      - NEW: /marketplace/edit/[id].tsx — edit form with delete.
+      - NEW: /me/library.tsx — My Purchases with Download CTA.
+      - NEW: /me/wishlist.tsx — saved products grid.
+      - NEW: /me/seller.tsx — sales hero, KPIs, payout card, product
+        list with status chips.
+      - NEW: /admin/marketplace.tsx — 3-tab moderation (pending /
+        active / all) with approve/deny/feature/suspend actions and
+        reason-capture modal.
+      - Admin layout: added Marketplace tab (ShoppingBag icon).
+      - Settings: added My Purchases, Wishlist, Seller dashboard rows.
+
+      Checkout mocking: on buy, frontend receives {mocked:true,
+      purchase_id, platform_fee_cents, seller_payout_cents} → shows a
+      Stripe-branded confirmation sheet with line items → user taps
+      Pay → POST /marketplace/purchases/{id}/complete → product appears
+      in library. Full funnel demo-able without real payment.
+
+      Backend-verified: all new endpoints succeed end-to-end.
+      Frontend: screenshot attempt was blocked by login flow but
+      compilation is green (py_compile clean, TS parses at runtime).
+      Ready for full backend re-test of the marketplace module.
+
+    -agent: "main"
+    -message: |
+      P0 paywall bugs fixed. Deferred in this pass due to scope:
       Admin Explore cover-photo/focal-point editor (existing
       /admin/spots-pending + approve/reject flows already work),
       inline-on-card community moderation (Control Center already

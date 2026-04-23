@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { ChevronLeft, ChevronRight, CreditCard, User, Bell, Shield, Crown, LogOut, Store, PackageOpen, ShieldCheck } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, CreditCard, User, Bell, Shield, Crown, LogOut, Store, PackageOpen, ShieldCheck, Bookmark, Briefcase } from 'lucide-react-native';
 import { useAuth } from '../src/auth';
 import { colors, font, space, radii } from '../src/theme';
 
@@ -26,6 +26,9 @@ export default function Settings() {
     { key: 'upgrade', icon: <Crown size={20} color={colors.primary} />, title: user.plan === 'elite' ? 'Manage plan' : 'Upgrade plan', subtitle: user.plan === 'elite' ? 'Elite creator' : 'Go Pro or Elite', onPress: () => router.push('/paywall') },
     { key: 'creator', icon: <PackageOpen size={20} color={colors.primary} />, title: 'Creator studio', subtitle: user.plan === 'elite' ? 'Manage your spot packs' : 'Elite unlocks pack creation', onPress: () => router.push('/creator/packs') },
     { key: 'marketplace', icon: <Store size={20} color={colors.primary} />, title: 'Marketplace', subtitle: 'Explore creator spot packs', onPress: () => router.push('/marketplace') },
+    { key: 'library', icon: <PackageOpen size={20} color={colors.primary} />, title: 'My Purchases', subtitle: 'Packs you\u2019ve bought', onPress: () => router.push('/me/library' as any) },
+    { key: 'wishlist', icon: <Bookmark size={20} color={colors.primary} />, title: 'Wishlist', subtitle: 'Saved packs to buy later', onPress: () => router.push('/me/wishlist' as any) },
+    { key: 'seller', icon: <Briefcase size={20} color={colors.primary} />, title: 'Seller dashboard', subtitle: 'Sales, revenue, payouts', onPress: () => router.push('/me/seller' as any) },
     { key: 'profile', icon: <User size={20} color={colors.primary} />, title: 'Edit profile', subtitle: 'Name, bio, specialties, city', onPress: () => router.push('/(tabs)/profile') },
     { key: 'notif', icon: <Bell size={20} color={colors.primary} />, title: 'Notifications', subtitle: 'Push notifications (coming soon)', onPress: () => Alert.alert('Coming soon', 'Push notifications launch with mobile build.') },
     { key: 'privacy', icon: <Shield size={20} color={colors.primary} />, title: 'Privacy defaults', subtitle: 'How new spots are displayed', onPress: () => Alert.alert('Privacy defaults', 'You control each spot\'s privacy when you create it. Bulk defaults land in the next release.') },
