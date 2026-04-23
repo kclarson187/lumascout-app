@@ -162,6 +162,25 @@ async def get_user(user_id: str, viewer: Optional[dict] = Depends(get_optional_u
             pass  # never block profile loads on view-tracking failures
     return user
 
+# --- by_username (added for web /u/[username] public profile) ---
+# Additive, read-only helper for the Next.js web app. Preserves all prior
+# semantics of /users/{user_id}; we simply resolve username → user_id here
+# and delegate to the same underlying data shape. Never leaks password_hash.
+@router.get("/users/by-username/{username}")
+async def get_user_by_username(username: str, viewer: Optional[dict] = Depends(get_optional_user)):
+    uname = (username or "").strip().lstrip("@").lower()
+    if not uname:
+        raise HTTPException(status_code=404, detail="Not found")
+    user = await db.users.find_one(
+        {"username": {"$regex": f"^{uname}$", "$options": "i"}},
+        {"_id": 0, "password_hash": 0},
+    )
+    if not user:
+        raise HTTPException(status_code=404, detail="Not found")
+    # Reuse the same response shape as get_user by delegating.
+    return await get_user(user["user_id"], viewer)
+
+
 # --- report_user (server.py:1999-2012) ---
 @router.post("/users/{user_id}/report")
 async def report_user(user_id: str, body: DMReportIn, user: dict = Depends(get_current_user)):
