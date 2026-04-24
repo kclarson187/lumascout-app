@@ -13,6 +13,8 @@ import {
   Switch,
   Platform,
   KeyboardAvoidingView,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -87,6 +89,10 @@ export default function Profile() {
   const [reviewsReceived, setReviewsReceived] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<TabKey>('posts');
   const [editMode, setEditMode] = useState(false);
+  // PRD: Portfolio empty-state sheet — surfaces when the Portfolio CTA is
+  // tapped but the user has no website set. Offers a single action ("Add
+  // Portfolio Link") which drops them into edit mode so they can fill it.
+  const [portfolioEmptyOpen, setPortfolioEmptyOpen] = useState(false);
   const [uploading, setUploading] = useState<'banner' | 'avatar' | null>(null);
   const [form, setForm] = useState(emptyForm);
 
@@ -371,24 +377,8 @@ export default function Profile() {
               )}
             </View>
 
-            {/* Social + web links
-                PRD: Portfolio now uses the shared <Button variant="ghost">
-                (identical styling to the "Share profile" button above) with
-                a GlobeIcon prefix. Gives the Portfolio action the same
-                premium feel as other primary CTAs on the page instead of
-                competing with the social-pill aesthetic. */}
-            {!!user.website && (
-              <View style={{ marginTop: space.md }}>
-                <Button
-                  title="Portfolio"
-                  variant="ghost"
-                  onPress={() => openUrl(user.website)}
-                  icon={<GlobeIcon size={15} active weight="regular" />}
-                  testID="profile-portfolio-link"
-                />
-              </View>
-            )}
-
+            {/* Secondary socials — Portfolio is now promoted to the primary
+                CTA row below alongside Share profile. */}
             {(user.instagram || user.facebook_url || user.tiktok_url) && (
               <View style={styles.linkRow}>
                 {!!user.instagram && (
@@ -409,13 +399,36 @@ export default function Profile() {
               </View>
             )}
 
-            <View style={styles.ctaRow}>
+            {/* Row A — Edit profile (self only). Sits on its own line so the
+                Portfolio + Share pair below feels like the headline actions. */}
+            <View style={[styles.ctaRow, { marginTop: space.md }]}>
               <Button
                 title={editMode ? 'Cancel' : 'Edit profile'}
                 variant="secondary"
                 onPress={() => setEditMode(!editMode)}
                 style={{ flex: 1 }}
                 testID="profile-edit-toggle"
+              />
+            </View>
+
+            {/* Row B — [ Portfolio ]  [ Share profile ]
+                Two equal-width ghost buttons, perfectly matched. Portfolio
+                always renders; tapping it when empty opens an elegant
+                "Add Portfolio Link" sheet so the CTA never dead-ends. */}
+            <View style={styles.ctaRow}>
+              <Button
+                title="Portfolio"
+                variant="ghost"
+                onPress={() => {
+                  if (user.website) {
+                    openUrl(user.website);
+                  } else {
+                    setPortfolioEmptyOpen(true);
+                  }
+                }}
+                icon={<GlobeIcon size={15} active weight="regular" />}
+                style={{ flex: 1 }}
+                testID="profile-portfolio-link"
               />
               <Button
                 title="Share profile"
@@ -815,6 +828,54 @@ export default function Profile() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* PRD: Portfolio empty-state sheet. Triggered when the Portfolio
+          CTA is tapped but no website is configured. Keeps the CTA from
+          dead-ending and invites the user to complete their profile. */}
+      <Modal
+        visible={portfolioEmptyOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPortfolioEmptyOpen(false)}
+      >
+        <Pressable
+          style={styles.portfolioEmptyBackdrop}
+          onPress={() => setPortfolioEmptyOpen(false)}
+        >
+          <Pressable style={styles.portfolioEmptySheet} onPress={() => {}}>
+            <LinearGradient
+              colors={['rgba(245,166,35,0.10)', 'transparent']}
+              style={StyleSheet.absoluteFill}
+              pointerEvents="none"
+            />
+            <View style={styles.portfolioEmptyGlyph}>
+              <GlobeIcon size={28} active weight="bold" />
+            </View>
+            <Text style={styles.portfolioEmptyTitle}>No portfolio added yet</Text>
+            <Text style={styles.portfolioEmptyBody}>
+              Add your website so photographers, clients, and LumaScout viewers
+              can discover your published work with one tap.
+            </Text>
+            <Button
+              title="Add Portfolio Link"
+              variant="primary"
+              onPress={() => {
+                setPortfolioEmptyOpen(false);
+                setEditMode(true);
+              }}
+              icon={<GlobeIcon size={15} active weight="regular" />}
+              testID="profile-portfolio-empty-cta"
+              style={{ alignSelf: 'stretch', marginTop: space.md }}
+            />
+            <TouchableOpacity
+              onPress={() => setPortfolioEmptyOpen(false)}
+              style={styles.portfolioEmptyDismiss}
+            >
+              <Text style={styles.portfolioEmptyDismissTxt}>Not now</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1046,6 +1107,45 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     letterSpacing: 0.4,
     includeFontPadding: false,
+  },
+  // PRD: Portfolio empty-state sheet
+  portfolioEmptyBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    justifyContent: 'flex-end',
+  },
+  portfolioEmptySheet: {
+    backgroundColor: colors.surface1,
+    borderTopLeftRadius: radii.xl,
+    borderTopRightRadius: radii.xl,
+    borderWidth: 1,
+    borderColor: 'rgba(245,166,35,0.3)',
+    paddingHorizontal: space.xl,
+    paddingTop: space.xl,
+    paddingBottom: space.xxl + space.sm,
+    alignItems: 'center',
+    gap: 6,
+    overflow: 'hidden',
+  },
+  portfolioEmptyGlyph: {
+    width: 60, height: 60, borderRadius: 30,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(245,166,35,0.14)',
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.42)',
+    marginBottom: space.sm,
+  },
+  portfolioEmptyTitle: {
+    color: colors.text, fontFamily: font.display,
+    fontSize: 24, letterSpacing: -0.2, textAlign: 'center',
+  },
+  portfolioEmptyBody: {
+    color: colors.textSecondary, fontFamily: font.body,
+    fontSize: 14, lineHeight: 20, textAlign: 'center',
+    paddingHorizontal: 8,
+  },
+  portfolioEmptyDismiss: { paddingVertical: 10, marginTop: 4 },
+  portfolioEmptyDismissTxt: {
+    color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13,
   },
 
   ctaRow: { flexDirection: 'row', gap: 8, marginTop: space.lg, width: '100%' },
