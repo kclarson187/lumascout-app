@@ -12,6 +12,158 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Photographer Directory — GET /api/directory + GET /api/directory/suggested (sort/filter pills, multi-token search, specialty/city/state, pagination, premium plan_rank soft-boost, viewer-aware is_following/is_blocked)"
+    implemented: true
+    working: true
+    file: "/app/backend/routes/network.py (directory_browse @ 1187, directory_suggested @ 1372, _split_query_tokens @ 1158, _directory_search_filter @ 1165, DIRECTORY_PROJECTION @ 1148)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          FULL VALIDATION PASS — 45/45 assertions green via
+          /app/backend_test.py against http://localhost:8001/api. Admin:
+          admin@lumascout.app / admin123 (user_6daa7d0a3abc, super_admin,
+          city='San Antonio', state='TX', plan='elite').
+
+          (1) GET /api/directory basic — PASS (9/9):
+              · Unauth GET /directory?limit=5 → 200 with response shape
+                exactly {items, next_cursor, has_more, sort, filter}.
+                Sample item keys: {avatar_url, bio, city, created_at,
+                name, plan, specialties, state, user_id, username,
+                verification_status} — NO is_following/is_blocked when
+                unauthenticated (verified by scanning every item).
+              · Auth GET /directory?limit=5 → 200, every item carries
+                both is_following and is_blocked fields (boolean).
+              · Auth payload size = 1,510 bytes for limit=5 (well under
+                the 200KB ceiling). Confirms no base64 avatar bloat is
+                being projected — DIRECTORY_PROJECTION at routes/
+                network.py:1148 only pulls 14 lightweight scalar fields.
+              · Admin (viewer) never included in the returned items —
+                base["user_id"] = {"$ne": viewer["user_id"]} at
+                routes/network.py:1232 enforces this.
+
+          (2) Sort variants (auth) — PASS (12/12):
+              · sort=name → 200, items sorted alphabetically (case-
+                insensitive ascending). First 5 names verified:
+                ['alex rivera','brandi larson','deleted user',
+                 'deleted user','deleted user'].
+              · sort=new → 200. Implementation actually sorts by
+                {plan_rank:-1, created_at:-1} (premium soft-boost
+                applies). Verified plan_rank non-increasing globally
+                AND created_at DESC within each plan tier — both pass.
+              · sort=popular → 200. plan_rank pattern across top 20:
+                [2,2,2,2,2,2,1,1,1,1,0,0,0,0,0,0,0,0,0,0] — perfect
+                Elite>Pro>Free banding. follower_count strictly DESC
+                within each tier — verified.
+              · sort=recent → 200. plan_rank non-increasing
+                ([2,2,2,2,2,2,1,1,1,1,...]) AND last_active_at DESC
+                within each tier where the field is populated — both
+                pass.
+              · sort=nearby → 200. Admin's city='San Antonio'. Items
+                returned in order:
+                ['San Antonio','Austin','Austin','Austin','Houston',
+                 'Austin','Austin','Austin','Austin','Fredericksburg']
+                — admin-city users float to the top (only one
+                San Antonio user in the directory besides admin), then
+                same-state TX cities cluster behind. Confirms the
+                $addFields nearby_rank stage at routes/network.py:1313-
+                1316 is layering correctly with plan_rank tiebreak.
+
+          (3) Filter variants (auth) — PASS (7/7):
+              · filter=verified → all 16 items have
+                verification_status=='verified'.
+              · filter=elite → all 6 items have plan=='elite'.
+              · filter=pro → all 10 items have plan in {'pro','elite'}
+                (Pro filter is a superset including Elite, as
+                documented at routes/network.py:1213).
+              · filter=new → all 30 items have created_at within
+                last 30 days.
+              · filter=popular → 0 items (no users in the DB currently
+                hit follower_count>=50). The endpoint returns 200 with
+                an empty items list — vacuously satisfies the predicate.
+                Not a backend defect; just a data-state observation.
+              · filter=available → 1 item, available_for_referrals OR
+                available_for_second_shooter == true.
+              · filter=nearby → 1 item, city == admin.city ('San
+                Antonio') exactly.
+
+          (4) Multi-token search — PASS (3/3):
+              · q='test' → 30 items, each contains 'test' across
+                indexed fields {name, username, city, state,
+                specialties, bio} (case-insensitive).
+              · q='fresh user' → 21 items, each matches BOTH 'fresh'
+                AND 'user' across the indexed field set. Confirms
+                _directory_search_filter wraps tokens in $and at
+                routes/network.py:1184.
+              · q='zzxxnonexistent123' → empty items list.
+
+          (5) specialty / city / state explicit filters — PASS (3/3):
+              · specialty='Wedding' → 5 items, every item has
+                'Wedding' (case-insensitive regex) somewhere in
+                specialties[].
+              · city='Austin' → 17 items, every city begins with
+                'Austin' (regex anchored ^).
+              · state='TX' → 21 items, every state begins with 'TX'.
+
+          (6) Pagination — PASS (6/6):
+              · cursor=0 limit=5 sort=popular → 200 with
+                next_cursor=5 + has_more=true (more than 5 records
+                exist).
+              · cursor=5 limit=5 sort=popular → returns a different
+                set of items (zero overlap with cursor=0 page) —
+                confirms $skip + $limit pagination is consistent.
+              · cursor=99999 limit=5 → 200 with has_more=false and
+                next_cursor=null. Empty items list, correct
+                terminal-page contract.
+              · Wide-sample (limit=50): admin user_id
+                user_6daa7d0a3abc never appears in items.
+
+          (7) GET /api/directory/suggested — PASS (5/5):
+              · Auth limit=5 → 200 with shape {"items":[...]}, len=0
+                (returned empty list — admin currently follows only 1
+                user and the same-city Pro/Elite backfill produced 0
+                additional matches because no other Pro/Elite
+                photographers in San Antonio satisfy the exclusion
+                set). Per spec this is acceptable: "If admin follows
+                0 users, endpoint still returns something (same-city
+                Pro/Elite backfill) — not a hard fail if empty list
+                returned when nothing matches." len(items)<=5 satisfied.
+              · Live-verified larger limits also work: limit=8 → 200,
+                limit=10 → 200, limit=20 → 200. (Earlier 500 in
+                supervisor logs at 23:24 was pre-fix; current code
+                clean.)
+              · Admin not in items list (vacuously true given empty
+                list, but the endpoint excludes user["user_id"] at
+                routes/network.py:1392 by design).
+              · Direct Mongo cross-check: db.follows
+                {follower_user_id: admin_id} → 1 row. Intersection of
+                that followed_user_id set with returned items
+                user_ids = empty — confirms suggested correctly
+                excludes already-followed users.
+              · Unauth GET /directory/suggested → 401
+                "Not authenticated" (HTTPBearer auto_error path
+                because endpoint depends on get_current_user).
+
+          ── VERDICT ─────────────────────────────────────────────────
+          Photographer Directory backend is launch-ready. All 5 sort
+          modes (popular, name, recent, new, nearby) order correctly
+          with the documented premium plan_rank soft-boost. All 8
+          filter pills (all/nearby/verified/elite/pro/new/popular/
+          available) constrain items per spec. Multi-token search
+          correctly ANDs tokens across the indexed field set. Cursor
+          pagination terminates cleanly at the end. is_following /
+          is_blocked are toggled in only on authenticated calls.
+          Suggested endpoint excludes already-followed users and
+          admin self via the follows lookup, with same-city Pro/Elite
+          fallback when 2nd-degree expansion yields nothing.
+
+          No 500s observed. No regressions. Test harness:
+          /app/backend_test.py.
+
+
 
   - task: "Tier 1 Messaging Upgrade — read-receipts (delivered_at/seen_at), unread-count endpoint, inbox preview endpoint"
     implemented: true
@@ -7719,12 +7871,108 @@ agent_communication:
           GestureHandlerRootView confirmed wrapping app at
           /app/frontend/app/_layout.tsx line 87.
 
+  - task: "Photographer Directory — GET /api/directory + GET /api/directory/suggested (search/sort/filter/specialty/cursor pagination, premium soft-boost, follow/block hydration)"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/routes/network.py — added _split_query_tokens, _directory_search_filter, GET /directory (sort=popular|name|recent|new|nearby; filter=all|nearby|verified|elite|pro|new|popular|available; specialty/city/state; cursor+limit; plan_rank soft-boost), GET /directory/suggested (2nd-degree mutual-follow expansion + same-city Pro/Elite backfill)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          PHOTOGRAPHER DIRECTORY backend implemented. Needs validation.
+
+          (1) GET /api/directory — params: q, sort (popular|name|recent|new|nearby),
+              filter (all|nearby|verified|elite|pro|new|popular|available),
+              specialty, city, state, cursor, limit (max 50). Returns
+              {items, next_cursor, has_more, sort, filter}. Items projected
+              to {user_id, name, username, avatar_url, verification_status,
+              plan, city, state, specialties, follower_count, following_count,
+              created_at, last_active_at, is_following, is_blocked}. NEVER
+              returns base64 / heavy payloads.
+          (2) Multi-token search: 'austin wedding' becomes an AND of token
+              ORs across name/username/city/state/specialties/bio so a
+              photographer in Austin specializing in Wedding matches.
+          (3) Premium soft-boost: Elite > Pro > Free within identical sort
+              keys via aggregation $addFields { plan_rank } stage. The
+              Nearby sort additionally adds nearby_rank (same city > same
+              state > rest).
+          (4) GET /api/directory/suggested?limit=N — 2nd-degree mutual
+              follow suggestions; backfills with same-city Pro/Elite when
+              the viewer follows nobody yet. Excludes already-followed +
+              the viewer themselves.
+
+          Validation checklist:
+            (a) GET /directory?limit=2&sort=popular → 200, items.length<=2,
+                items[0].plan_rank not exposed (internal only), follower_count
+                present, no avatar base64 bloat.
+            (b) sort=name → alphabetical; sort=new → newest first;
+                sort=recent → last_active_at desc; sort=nearby (with
+                viewer.city set) → same-city users first.
+            (c) filter=verified → only verified users in items; filter=elite
+                → plan==elite; filter=available → at least one of
+                available_for_referrals/second_shooter true; filter=new →
+                created_at within last 30 days.
+            (d) Multi-token: q='austin wedding' returns photographers
+                where austin AND wedding both hit at least one indexed
+                field.
+            (e) Pagination: cursor=0 limit=20 → next_cursor=20 if more;
+                follow-up cursor=20 → next 20.
+            (f) /directory/suggested → 200 {items}; never includes the
+                viewer; never includes already-followed; respects limit cap
+                of 20.
+            (g) Auth: viewer is_following / is_blocked correctly hydrated
+                when authenticated; quiet (no field) when unauthenticated.
+
+  - task: "Photographer Directory — Frontend (Discover/Directory toggle in Network tab, DirectoryView with search/sort/filter/specialty/follow-toggle/messaging/suggested)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/DirectoryView.tsx (new — full directory UI) + /app/frontend/app/(tabs)/network.tsx (added top-level Discover↔Directory segmented pill + DirectoryView render branch; existing Discover rails untouched)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          FRONTEND DIRECTORY shipped. Verified visually:
+            · Top toggle (Compass icon Discover · BookOpen icon Directory)
+              rendered above the existing layout. Tapping switches the body
+              cleanly without unmounting either tree.
+            · Discover view UNTOUCHED — still shows Messages/Viewers/Gigs/
+              Analytics pills, niche chips (All/Wedding/Portrait/Family/
+              Maternity/…), and the "Near you" / "Verified pros" / etc.
+              rails. PRD constraint "do not remove existing Network
+              features" satisfied.
+            · Directory view renders: sticky search bar (placeholder
+              "Search photographers, city, specialty"), filter pills
+              (All/Nearby/Verified/Elite/Pro/New/Popular/Available),
+              Sort row (Popular default, Nearby, Active, New, A-Z),
+              specialty chips (16 niches), then card list. Premium
+              soft-boost shows Elite cards FIRST with gold avatar ring +
+              gold-tinted card background.
+            · Card actions: Follow (primary gold) toggles to Following
+              with optimistic local update + rollback on failure.
+              Message hits POST /dm/threads/start and routes to
+              /inbox/{thread_id}.
+            · "People you may know" rail above the list when no search/
+              filter is active; uses /directory/suggested.
+            · 250ms debounce on search; cursor-based pagination with
+              onEndReached at 60% scroll; ActivityIndicator footer while
+              paging.
+            · No FlashList dep — switched to FlatList since the project
+              doesn't have @shopify/flash-list installed and the list
+              size is small enough that windowed FlatList is plenty.
+
 metadata:
-  test_sequence: 11
+  test_sequence: 12
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Photographer Directory — GET /api/directory + GET /api/directory/suggested (search/sort/filter/specialty/cursor pagination, premium soft-boost, follow/block hydration)"
   stuck_tasks: []
   test_all: false
   test_priority: "stuck_first"

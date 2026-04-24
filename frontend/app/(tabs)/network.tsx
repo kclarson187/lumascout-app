@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, Pressable, Image, ActivityIndicator, Platform, Share } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { Search, MessageSquare, ShieldCheck, Star, MapPin, Send, Users as UsersIcon, Inbox, Eye, Briefcase, BarChart3, Share2 } from 'lucide-react-native';
+import { Search, MessageSquare, ShieldCheck, Star, MapPin, Send, Users as UsersIcon, Inbox, Eye, Briefcase, BarChart3, Share2, Compass, BookOpen } from 'lucide-react-native';
 import { api } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
+import DirectoryView from '../../src/components/DirectoryView';
 
 const RAIL_ORDER: Array<{ key: string; title: string }> = [
   { key: 'near_you', title: 'Near you' },
@@ -70,6 +71,12 @@ function UserCard({ u }: { u: any }) {
 }
 
 export default function NetworkTab() {
+  // Network has two top-level views per Photographer Directory PRD (June 2026):
+  //   - 'discover'  → existing rails experience (Near you, Verified pros, …).
+  //   - 'directory' → new searchable/filterable directory of all photographers.
+  // The action pills (Messages / Viewers / Gigs / Analytics) live BELOW the
+  // toggle and are visible in both views.
+  const [view, setView] = useState<'discover' | 'directory'>('discover');
   const [rails, setRails] = useState<Record<string, any[]>>({});
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(true);
@@ -127,6 +134,44 @@ export default function NetworkTab() {
           <Share2 size={18} color={colors.primary} />
         </Pressable>
       </View>
+
+      {/* Photographer Directory PRD: top-level Discover ↔ Directory toggle.
+          Renders a segmented pill that switches the body. Discover keeps
+          its existing rails / search experience; Directory hands off to
+          DirectoryView (its own search + sort + filter + paginated list). */}
+      <View style={s.viewToggleRow}>
+        <Pressable
+          onPress={() => setView('discover')}
+          style={[s.viewToggleBtn, view === 'discover' && s.viewToggleBtnActive]}
+          testID="network-view-discover"
+        >
+          <Compass size={14} color={view === 'discover' ? colors.bg : colors.textSecondary} />
+          <Text style={[s.viewToggleTxt, view === 'discover' && s.viewToggleTxtActive]}>
+            Discover
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => setView('directory')}
+          style={[s.viewToggleBtn, view === 'directory' && s.viewToggleBtnActive]}
+          testID="network-view-directory"
+        >
+          <BookOpen size={14} color={view === 'directory' ? colors.bg : colors.textSecondary} />
+          <Text style={[s.viewToggleTxt, view === 'directory' && s.viewToggleTxtActive]}>
+            Directory
+          </Text>
+        </Pressable>
+      </View>
+
+      {view === 'directory' ? (
+        // Directory owns its own search bar, filters and list. The action
+        // pills (Messages / Viewers / Gigs / Analytics) below this branch
+        // are intentionally hidden here so the Directory experience can
+        // breathe — they're one tap away on Discover.
+        <DirectoryView />
+      ) : (
+        <></>
+      )}
+      {view === 'discover' ? (<>
       {/* Search bar gets its own full-width row so it never competes with
           the action pills for horizontal space (was squishing the input to
           just the magnifier icon on smaller devices). */}
@@ -237,12 +282,46 @@ export default function NetworkTab() {
           )}
         </ScrollView>
       )}
+      </>) : null}
     </SafeAreaView>
   );
 }
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
+  // Photographer Directory PRD: top-level Discover ↔ Directory toggle.
+  viewToggleRow: {
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: space.xl,
+    paddingTop: 4,
+    paddingBottom: 12,
+  },
+  viewToggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: radii.pill,
+    backgroundColor: colors.surface1,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  viewToggleBtnActive: {
+    backgroundColor: colors.text,
+    borderColor: colors.text,
+  },
+  viewToggleTxt: {
+    color: colors.textSecondary,
+    fontFamily: font.bodySemibold,
+    fontSize: 12,
+    letterSpacing: 0.3,
+  },
+  viewToggleTxtActive: {
+    color: colors.bg,
+    fontFamily: font.bodyBold,
+  },
   header: { paddingHorizontal: space.xl, paddingTop: space.sm, paddingBottom: space.sm, flexDirection: 'row', alignItems: 'center', gap: space.md },
   headerShareBtn: {
     width: 40, height: 40, borderRadius: 20,

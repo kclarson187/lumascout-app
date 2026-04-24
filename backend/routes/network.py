@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
+import re
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel, field_validator
@@ -1135,6 +1136,301 @@ async def network_search(
         "specialties": 1, "years_experience": 1, "bio": 1, "available_for_referrals": 1,
         "available_for_second_shooter": 1}).limit(limit).to_list(limit)
     return {"items": rows, "total": len(rows)}
+
+
+# ---------------------------------------------------------------------------
+# Directory — Photographer browse / discovery (June 2026)
+# ---------------------------------------------------------------------------
+# Goal: a single high-throughput endpoint to power a fully filterable
+# /network → Directory experience. Lightweight payload (no base64), cursor
+# pagination, premium-tier soft-boost in the sort layer.
+
+DIRECTORY_PROJECTION = {
+    "_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
+    "verification_status": 1, "plan": 1, "city": 1, "state": 1,
+    "specialties": 1, "years_experience": 1, "bio": 1,
+    "available_for_referrals": 1, "available_for_second_shooter": 1,
+    "follower_count": 1, "following_count": 1, "created_at": 1,
+    "last_active_at": 1,
+}
+
+
+def _split_query_tokens(q: str) -> List[str]:
+    """Tokenize the search query so 'austin wedding' matches photographers
+    whose city is Austin AND specialties include Wedding even though no
+    single field contains both substrings. Keeps tokens >= 2 chars."""
+    return [t for t in re.split(r"[\s,]+", (q or "").strip()) if len(t) >= 2]
+
+
+def _directory_search_filter(q: str) -> dict:
+    """Build a Mongo filter that ANDs across all tokens but ORs across
+    fields. Each token must hit at least one of: name / username / city /
+    state / specialties / bio. Diacritic-insensitive via case-insensitive
+    regex (good enough for our scale; no Atlas Search dependency)."""
+    tokens = _split_query_tokens(q)
+    if not tokens:
+        return {}
+    and_clauses: List[dict] = []
+    for t in tokens:
+        pat = re.escape(t)
+        and_clauses.append({"$or": [
+            {"name": {"$regex": pat, "$options": "i"}},
+            {"username": {"$regex": pat, "$options": "i"}},
+            {"city": {"$regex": pat, "$options": "i"}},
+            {"state": {"$regex": pat, "$options": "i"}},
+            {"specialties": {"$regex": pat, "$options": "i"}},
+            {"bio": {"$regex": pat, "$options": "i"}},
+        ]})
+    return {"$and": and_clauses} if len(and_clauses) > 1 else and_clauses[0]
+
+
+@router.get("/directory")
+async def directory_browse(
+    q: Optional[str] = None,
+    sort: str = "popular",   # popular | name | recent | new | nearby
+    filter: str = "all",     # all | nearby | verified | elite | pro | new | popular | available
+    specialty: Optional[str] = None,
+    city: Optional[str] = None,
+    state: Optional[str] = None,
+    cursor: int = 0,
+    limit: int = 20,
+    viewer: Optional[dict] = Depends(get_optional_user),
+):
+    """Photographer Directory.
+
+    Sort options:
+      - popular  : follower_count DESC, then plan-weighted (elite > pro > free)
+      - name     : alphabetical by display name
+      - recent   : last_active_at DESC (proxy for recently active)
+      - new      : created_at DESC (newest members)
+      - nearby   : same city as viewer first, then same state, then rest;
+                   within each band, follower_count DESC.
+
+    Filter pills (independent of sort):
+      - all       : no filter
+      - nearby    : same city as viewer (requires viewer.city)
+      - verified  : verification_status = verified
+      - elite     : plan = elite
+      - pro       : plan in ("pro","elite")  — Pro is a superset
+      - new       : created_at >= now-30d
+      - popular   : follower_count >= 50
+      - available : available_for_referrals OR available_for_second_shooter
+
+    Premium soft-boost: within identical sort keys, ELITE float above
+    PRO float above FREE. Implemented via an "_rank" field added in
+    Mongo's $addFields stage so the sort is deterministic.
+    """
+    limit = max(1, min(50, limit))
+    cursor = max(0, cursor)
+
+    base: dict = {
+        "is_bot": {"$ne": True},
+        "is_official": {"$ne": True},
+        "plan": {"$ne": "suspended"},
+    }
+    if viewer:
+        base["user_id"] = {"$ne": viewer["user_id"]}
+
+    # Search + free-text query
+    if q:
+        s = _directory_search_filter(q)
+        if s:
+            # Merge — _directory_search_filter returns either {"$and":[..]} or
+            # an {"$or":[..]} doc. Wrap into base via $and to be safe.
+            base = {"$and": [base, s]}
+
+    # Filter pills
+    f = (filter or "all").lower()
+    if f == "verified":
+        base.setdefault("$and", []).append({"verification_status": "verified"}) \
+            if "$and" in base else base.update({"verification_status": "verified"})  # type: ignore
+    elif f == "elite":
+        if "$and" in base:
+            base["$and"].append({"plan": "elite"})
+        else:
+            base["plan"] = "elite"
+    elif f == "pro":
+        if "$and" in base:
+            base["$and"].append({"plan": {"$in": ["pro", "elite"]}})
+        else:
+            base["plan"] = {"$in": ["pro", "elite"]}
+    elif f == "new":
+        cutoff = utcnow() - timedelta(days=30)
+        if "$and" in base:
+            base["$and"].append({"created_at": {"$gte": cutoff}})
+        else:
+            base["created_at"] = {"$gte": cutoff}
+    elif f == "popular":
+        if "$and" in base:
+            base["$and"].append({"follower_count": {"$gte": 50}})
+        else:
+            base["follower_count"] = {"$gte": 50}
+    elif f == "available":
+        avail_clause = {"$or": [
+            {"available_for_referrals": True},
+            {"available_for_second_shooter": True},
+        ]}
+        if "$and" in base:
+            base["$and"].append(avail_clause)
+        else:
+            base = {"$and": [base, avail_clause]}
+    elif f == "nearby" and viewer and viewer.get("city"):
+        if "$and" in base:
+            base["$and"].append({"city": viewer["city"]})
+        else:
+            base["city"] = viewer["city"]
+
+    # Specialty / city / state explicit filters (in addition to filter pill)
+    if specialty:
+        clause = {"specialties": {"$regex": re.escape(specialty), "$options": "i"}}
+        if "$and" in base:
+            base["$and"].append(clause)
+        else:
+            base.update(clause)
+    if city:
+        clause = {"city": {"$regex": f"^{re.escape(city)}", "$options": "i"}}
+        if "$and" in base:
+            base["$and"].append(clause)
+        else:
+            base.update(clause)
+    if state:
+        clause = {"state": {"$regex": f"^{re.escape(state)}", "$options": "i"}}
+        if "$and" in base:
+            base["$and"].append(clause)
+        else:
+            base.update(clause)
+
+    # Build the aggregation pipeline so we can layer plan_rank + nearby_rank.
+    plan_rank = {"$switch": {"branches": [
+        {"case": {"$eq": ["$plan", "elite"]}, "then": 2},
+        {"case": {"$eq": ["$plan", "pro"]}, "then": 1},
+    ], "default": 0}}
+
+    add_fields: dict = {"plan_rank": plan_rank}
+    if sort == "nearby" and viewer:
+        viewer_city = viewer.get("city") or ""
+        viewer_state = viewer.get("state") or ""
+        add_fields["nearby_rank"] = {"$switch": {"branches": [
+            {"case": {"$eq": ["$city", viewer_city]}, "then": 2},
+            {"case": {"$eq": ["$state", viewer_state]}, "then": 1},
+        ], "default": 0}}
+
+    pipeline: list = [{"$match": base}, {"$addFields": add_fields}]
+
+    # Sort stage
+    sort_key = sort.lower()
+    if sort_key == "popular":
+        sort_stage = {"plan_rank": -1, "follower_count": -1, "created_at": -1}
+    elif sort_key == "name":
+        sort_stage = {"name": 1, "username": 1}
+    elif sort_key == "recent":
+        sort_stage = {"plan_rank": -1, "last_active_at": -1, "created_at": -1}
+    elif sort_key == "new":
+        sort_stage = {"plan_rank": -1, "created_at": -1}
+    elif sort_key == "nearby":
+        sort_stage = {"nearby_rank": -1, "plan_rank": -1, "follower_count": -1}
+    else:
+        sort_stage = {"plan_rank": -1, "follower_count": -1, "created_at": -1}
+
+    pipeline.append({"$sort": sort_stage})
+    pipeline.append({"$project": DIRECTORY_PROJECTION})
+    pipeline.append({"$skip": cursor})
+    pipeline.append({"$limit": limit + 1})  # +1 to detect next page
+
+    rows = await db.users.aggregate(pipeline).to_list(limit + 1)
+    has_more = len(rows) > limit
+    items = rows[:limit]
+
+    # Hydrate is_following + is_blocked for the viewer (lightweight set lookup)
+    if viewer and items:
+        ids = [r["user_id"] for r in items]
+        following_set = set()
+        blocked_set = set()
+        async for f in db.follows.find(
+            {"follower_user_id": viewer["user_id"], "followed_user_id": {"$in": ids}},
+            {"_id": 0, "followed_user_id": 1},
+        ):
+            following_set.add(f["followed_user_id"])
+        async for b in db.user_blocks.find(
+            {"blocker_user_id": viewer["user_id"], "blocked_user_id": {"$in": ids}},
+            {"_id": 0, "blocked_user_id": 1},
+        ):
+            blocked_set.add(b["blocked_user_id"])
+        for r in items:
+            r["is_following"] = r["user_id"] in following_set
+            r["is_blocked"] = r["user_id"] in blocked_set
+
+    return {
+        "items": items,
+        "next_cursor": (cursor + limit) if has_more else None,
+        "has_more": has_more,
+        "sort": sort_key,
+        "filter": f,
+    }
+
+
+@router.get("/directory/suggested")
+async def directory_suggested(limit: int = 10, user: dict = Depends(get_current_user)):
+    """People-you-may-know — followers of the people the viewer follows
+    (mutual-follow expansion), capped at `limit`. Excludes already-followed
+    users and the viewer themselves.
+
+    Uses an aggregation join via the follows collection. If the viewer
+    follows nobody yet, falls back to "Featured locally" (same-city +
+    elite/pro tier soft-boost).
+    """
+    limit = max(1, min(20, limit))
+
+    # Direct: who do I follow?
+    my_following: List[str] = []
+    async for f in db.follows.find(
+        {"follower_user_id": user["user_id"]},
+        {"_id": 0, "followed_user_id": 1},
+    ):
+        my_following.append(f["followed_user_id"])
+
+    excluded = set(my_following + [user["user_id"]])
+
+    suggestions: List[dict] = []
+    if my_following:
+        # 2nd-degree: who do my followees follow?
+        async for f in db.follows.find(
+            {"follower_user_id": {"$in": my_following}, "followed_user_id": {"$nin": list(excluded)}},
+            {"_id": 0, "followed_user_id": 1},
+        ).limit(200):
+            excluded.add(f["followed_user_id"])
+            suggestions.append({"user_id": f["followed_user_id"]})
+            if len(suggestions) >= limit * 3:
+                break
+
+    # Backfill with same-city Pro/Elite if we don't have enough
+    if len(suggestions) < limit:
+        backfill_q: dict = {
+            "is_bot": {"$ne": True},
+            "is_official": {"$ne": True},
+            "plan": {"$in": ["pro", "elite"]},
+            "user_id": {"$nin": list(excluded)},
+        }
+        if user.get("city"):
+            backfill_q["city"] = user["city"]
+        rows = await db.users.find(
+            backfill_q, DIRECTORY_PROJECTION,
+        ).sort([("plan", -1), ("follower_count", -1)]).limit(limit * 2).to_list(limit * 2)
+        for r in rows:
+            if r["user_id"] not in excluded:
+                excluded.add(r["user_id"])
+                suggestions.append({"user_id": r["user_id"]})
+                if len(suggestions) >= limit:
+                    break
+
+    if not suggestions:
+        return {"items": []}
+
+    ids = [s["user_id"] for s in suggestions[:limit]]
+    rows = await db.users.find(
+        {"user_id": {"$in": ids}}, DIRECTORY_PROJECTION,
+    ).to_list(len(ids))
+    return {"items": rows}
 
 # --- list_mentors (server.py:5720-5743) ---
 @router.get("/mentors")
