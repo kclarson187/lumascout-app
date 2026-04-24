@@ -559,6 +559,45 @@ export default function Profile() {
             </TouchableOpacity>
           </View>
 
+          {/* PRD #11: Share-the-app primary CTA. Deliberately sits on its
+              own row with a gold gradient accent so it reads as a delight /
+              growth action rather than a boring settings entry. Referral
+              codes, if the account has one, are auto-appended so we can
+              track K-factor later without any extra UX. */}
+          <TouchableOpacity
+            style={styles.shareAppRow}
+            onPress={async () => {
+              try {
+                const ref = (user as any)?.referral_code;
+                const urlBase = 'https://lumascout.app';
+                const url = ref ? `${urlBase}?ref=${encodeURIComponent(ref)}` : urlBase;
+                await Share.share({
+                  message: `I'm using LumaScout to find amazing photo spots — come join me 📸\n\n${url}`,
+                  url,
+                  title: 'LumaScout — photo-spot scouting for photographers',
+                });
+              } catch {}
+            }}
+            testID="profile-share-app"
+            activeOpacity={0.88}
+          >
+            <LinearGradient
+              colors={['rgba(245,166,35,0.18)', 'rgba(245,166,35,0.04)']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFill}
+            />
+            <View style={styles.shareAppIcon}>
+              <Share2 size={18} color={colors.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.shareAppTitle}>Share LumaScout with a friend</Text>
+              <Text style={styles.shareAppBody}>
+                Photographers love finding new spots. Spread the word — unlock Pro perks when referrals subscribe.
+              </Text>
+            </View>
+          </TouchableOpacity>
+
           {/* Sign-out is visually de-emphasised (separate row, subdued) so it
               doesn't sit one tap away from Admin — PRD priority #6. */}
           <TouchableOpacity style={styles.signOutRow} onPress={logout} testID="profile-logout">
@@ -1081,6 +1120,23 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary, borderRadius: radii.pill,
   },
   upgradeArrowTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.3 },
+  // PRD #11: Share LumaScout row
+  shareAppRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    marginHorizontal: space.xl, marginTop: space.md,
+    paddingHorizontal: space.md, paddingVertical: 14,
+    backgroundColor: colors.surface1,
+    borderColor: 'rgba(245,166,35,0.28)', borderWidth: 1,
+    borderRadius: radii.lg,
+    overflow: 'hidden',
+  },
+  shareAppIcon: {
+    width: 42, height: 42, borderRadius: 21,
+    backgroundColor: 'rgba(245,166,35,0.18)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  shareAppTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
+  shareAppBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17, marginTop: 2 },
 
   aboutCard: {
     backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,

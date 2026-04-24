@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Image, RefreshControl, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ChevronLeft, Plus, MessageCircle, Heart, Users, Sparkles, Coffee, Camera, HandHeart, Wrench, Eye, BookOpen, Briefcase, Star, GraduationCap, MapPin, Clock, Flame, PenLine } from 'lucide-react-native';
+import { ChevronLeft, Plus, MessageCircle, Heart, Users, Sparkles, Coffee, Camera, HandHeart, Wrench, Eye, BookOpen, Briefcase, Star, GraduationCap, MapPin, Clock, Flame, PenLine, Lightbulb } from 'lucide-react-native';
 import { api } from '../src/api';
 import { useAuth } from '../src/auth';
 import { colors, font, space, radii } from '../src/theme';
@@ -176,6 +176,35 @@ function PostCard({ post, onLike, meId }: { post: any; onLike: () => void; meId?
   const Cat = CATEGORY_ICONS[post.category] || BookOpen;
   const color = CATEGORY_COLORS[post.category] || colors.primary;
 
+  // PRD #10: typed reactions (Win/Tip) live alongside Heart like.
+  // Optimistic toggle pattern mirrored from toggleLike — rollback on failure.
+  const initialReactions: string[] = Array.isArray(post.my_reactions) ? post.my_reactions : [];
+  const [myReactions, setMyReactions] = useState<Set<string>>(new Set(initialReactions));
+  const [reactionCounts, setReactionCounts] = useState<{ win: number; tip: number }>({
+    win: Number(post.reaction_counts?.win || 0),
+    tip: Number(post.reaction_counts?.tip || 0),
+  });
+  const toggleReaction = async (kind: 'win' | 'tip') => {
+    const was = myReactions.has(kind);
+    const nextSet = new Set(myReactions);
+    if (was) nextSet.delete(kind); else nextSet.add(kind);
+    setMyReactions(nextSet);
+    setReactionCounts((c) => ({ ...c, [kind]: Math.max(0, c[kind] + (was ? -1 : 1)) }));
+    try {
+      const r = await api.post(`/posts/${post.post_id}/react`, { type: kind });
+      // Snap to server truth in case we drifted.
+      setReactionCounts((c) => ({ ...c, [kind]: Number(r?.count || 0) }));
+    } catch {
+      // Revert.
+      setMyReactions((prev) => {
+        const rev = new Set(prev);
+        if (was) rev.add(kind); else rev.delete(kind);
+        return rev;
+      });
+      setReactionCounts((c) => ({ ...c, [kind]: Math.max(0, c[kind] + (was ? 1 : -1)) }));
+    }
+  };
+
   // PRD #7: derive interaction prompt label so every card invites engagement.
   const commentCount = post.comment_count || 0;
   const isFresh = post.created_at && (Date.now() - new Date(post.created_at).getTime()) < 3600_000; // < 1h
@@ -311,6 +340,36 @@ function PostCard({ post, onLike, meId }: { post: any; onLike: () => void; meId?
         <TouchableOpacity onPress={toggleLike} style={styles.action} testID={`post-like-${post.post_id}`}>
           <Heart size={15} color={liked ? colors.secondary : colors.textSecondary} fill={liked ? colors.secondary : 'transparent'} />
           <Text style={[styles.actionTxt, liked && { color: colors.secondary }]}>{likeCount}</Text>
+        </TouchableOpacity>
+        {/* PRD #10: 🔥 Win reaction */}
+        <TouchableOpacity
+          onPress={() => toggleReaction('win')}
+          style={styles.action}
+          testID={`post-react-win-${post.post_id}`}
+        >
+          <Flame
+            size={15}
+            color={myReactions.has('win') ? '#F97316' : colors.textSecondary}
+            fill={myReactions.has('win') ? '#F97316' : 'transparent'}
+          />
+          <Text style={[styles.actionTxt, myReactions.has('win') && { color: '#F97316', fontFamily: font.bodyBold }]}>
+            {reactionCounts.win}
+          </Text>
+        </TouchableOpacity>
+        {/* PRD #10: 💡 Tip reaction */}
+        <TouchableOpacity
+          onPress={() => toggleReaction('tip')}
+          style={styles.action}
+          testID={`post-react-tip-${post.post_id}`}
+        >
+          <Lightbulb
+            size={15}
+            color={myReactions.has('tip') ? colors.primary : colors.textSecondary}
+            fill={myReactions.has('tip') ? colors.primary : 'transparent'}
+          />
+          <Text style={[styles.actionTxt, myReactions.has('tip') && { color: colors.primary, fontFamily: font.bodyBold }]}>
+            {reactionCounts.tip}
+          </Text>
         </TouchableOpacity>
         <View style={styles.action}>
           <MessageCircle size={15} color={colors.textSecondary} />

@@ -172,6 +172,8 @@ export default function Explore() {
             <LegendDot color={colors.primary} label="Verified" />
             <LegendDot color="#38BDF8" label="Proven" />
             <LegendDot color="#9D59FF" label="Elite" />
+            <LegendDot color="#F5A623" label="New" />
+            <LegendDot color="#6B7280" label="Low score" />
           </View>
 
           <View style={styles.floatControls}>

@@ -359,6 +359,15 @@ async def follow_user(user_id: str, user: dict = Depends(get_current_user)):
     target = await db.users.find_one({"user_id": user_id}, {"_id": 0})
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
+    # PRD #12: refuse follow if either side has blocked the other.
+    blocked = await db.user_blocks.find_one({
+        "$or": [
+            {"blocker_user_id": user["user_id"], "blocked_user_id": user_id},
+            {"blocker_user_id": user_id, "blocked_user_id": user["user_id"]},
+        ],
+    })
+    if blocked:
+        raise HTTPException(status_code=403, detail="Cannot follow a blocked user")
     existing = await db.follows.find_one({"follower_user_id": user["user_id"], "followed_user_id": user_id})
     if existing:
         await db.follows.delete_one({"follower_user_id": user["user_id"], "followed_user_id": user_id})
@@ -382,6 +391,61 @@ async def follow_user(user_id: str, user: dict = Depends(get_current_user)):
     except Exception:
         pass
     return {"following": True}
+
+
+# PRD #12: Full social-graph — Block / Unblock.
+# Idempotent endpoints; blocking ALSO severs any follow relationships in
+# both directions so the blocked user stops seeing the blocker's content
+# immediately. `dm_blocks` is intentionally left untouched (DM-request
+# specific) — `user_blocks` is the higher-scope profile block.
+@router.post("/users/{user_id}/block")
+async def block_user(user_id: str, user: dict = Depends(get_current_user)):
+    if user_id == user["user_id"]:
+        raise HTTPException(status_code=400, detail="Cannot block yourself")
+    target = await db.users.find_one({"user_id": user_id}, {"_id": 0, "user_id": 1})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Upsert so it's idempotent.
+    await db.user_blocks.update_one(
+        {"blocker_user_id": user["user_id"], "blocked_user_id": user_id},
+        {"$set": {
+            "blocker_user_id": user["user_id"],
+            "blocked_user_id": user_id,
+            "created_at": utcnow(),
+        }},
+        upsert=True,
+    )
+    # Drop follows both ways so the graph reflects the block immediately.
+    await db.follows.delete_many({
+        "$or": [
+            {"follower_user_id": user["user_id"], "followed_user_id": user_id},
+            {"follower_user_id": user_id, "followed_user_id": user["user_id"]},
+        ],
+    })
+    # Mirror the block on the DM layer so message requests are refused.
+    await db.dm_blocks.update_one(
+        {"blocker_user_id": user["user_id"], "blocked_user_id": user_id},
+        {"$set": {
+            "blocker_user_id": user["user_id"],
+            "blocked_user_id": user_id,
+            "created_at": utcnow(),
+        }},
+        upsert=True,
+    )
+    return {"blocked": True}
+
+
+@router.delete("/users/{user_id}/block")
+async def unblock_user(user_id: str, user: dict = Depends(get_current_user)):
+    await db.user_blocks.delete_one({
+        "blocker_user_id": user["user_id"],
+        "blocked_user_id": user_id,
+    })
+    await db.dm_blocks.delete_one({
+        "blocker_user_id": user["user_id"],
+        "blocked_user_id": user_id,
+    })
+    return {"blocked": False}
 
 # --- dm_start_thread (server.py:3195-3289) ---
 @router.post("/dm/threads/start")

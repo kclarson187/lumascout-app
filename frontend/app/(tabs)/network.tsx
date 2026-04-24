@@ -19,6 +19,14 @@ const RAIL_ORDER: Array<{ key: string; title: string }> = [
   { key: 'new_members', title: 'New members' },
 ];
 
+// PRD #13: Shoot-style filter chips. Keep the list ~10 items so the chip
+// row stays single-line scrollable rather than wrapping.
+const SHOOT_NICHES = [
+  'Wedding', 'Portrait', 'Family', 'Maternity', 'Newborn',
+  'Pet', 'Real Estate', 'Landscape', 'Street', 'Events',
+  'Brand', 'Fashion', 'Food', 'Sports',
+];
+
 function Badge({ u }: { u: any }) {
   if (u.verification_status === 'verified') {
     return (
@@ -66,6 +74,10 @@ export default function NetworkTab() {
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(true);
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
+  // PRD #13: Shoot-style filter chips. When a niche is active, we pipe the
+  // keyword into /network/search (backend matches specialties + bio text).
+  // When null, we fall back to the rails view.
+  const [niche, setNiche] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -77,17 +89,19 @@ export default function NetworkTab() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Debounced search
+  // Debounced search — now niche-aware. Treat niche as an additional query
+  // term so backend specialty matching fires.
   useEffect(() => {
-    if (!q.trim()) { setSearchResults(null); return; }
+    const effective = [q.trim(), niche].filter(Boolean).join(' ');
+    if (!effective) { setSearchResults(null); return; }
     const t = setTimeout(async () => {
       try {
-        const r = await api.get('/network/search', { q: q.trim(), limit: 30 });
+        const r = await api.get('/network/search', { q: effective, limit: 30 });
         setSearchResults(r.items || []);
       } catch { setSearchResults([]); }
     }, 350);
     return () => clearTimeout(t);
-  }, [q]);
+  }, [q, niche]);
 
   return (
     <SafeAreaView style={s.root}>
@@ -124,6 +138,37 @@ export default function NetworkTab() {
           <Text style={[s.inboxBtnTxt, { color: colors.primary }]}>Analytics</Text>
         </Pressable>
       </View>
+
+      {/* PRD #13: Shoot-style filter chips. Horizontal scroll so we can keep
+          adding niches without squeezing the layout. Tapping "All" clears
+          the filter, any niche toggles the search by that specialty. */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={s.nicheStrip}
+      >
+        <Pressable
+          onPress={() => setNiche(null)}
+          style={[s.nicheChip, !niche && s.nicheChipActive]}
+          testID="niche-all"
+        >
+          <Text style={[s.nicheChipTxt, !niche && { color: colors.textInverse }]}>All</Text>
+        </Pressable>
+        {SHOOT_NICHES.map((n) => {
+          const active = niche === n;
+          return (
+            <Pressable
+              key={n}
+              onPress={() => setNiche(active ? null : n)}
+              style={[s.nicheChip, active && s.nicheChipActive]}
+              testID={`niche-${n.toLowerCase().replace(/\s+/g, '-')}`}
+            >
+              <Text style={[s.nicheChipTxt, active && { color: colors.textInverse }]}>{n}</Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
 
       {loading ? (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
@@ -180,4 +225,24 @@ const s = StyleSheet.create({
   badge: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 5, paddingVertical: 2, borderRadius: radii.pill, borderWidth: 1 },
   badgeTxt: { fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.4, textTransform: 'uppercase' },
   empty: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, textAlign: 'center', marginTop: space.lg },
+  // PRD #13: Niche filter chip strip
+  nicheStrip: {
+    paddingHorizontal: space.xl,
+    paddingTop: space.sm,
+    paddingBottom: space.sm,
+    gap: 6,
+  },
+  nicheChip: {
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderRadius: radii.pill,
+    backgroundColor: colors.surface1,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  nicheChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  nicheChipTxt: {
+    color: colors.text, fontFamily: font.bodyMedium, fontSize: 12, letterSpacing: 0.2,
+  },
 });

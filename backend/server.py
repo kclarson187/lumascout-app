@@ -3245,6 +3245,41 @@ async def _hydrate_posts(posts: List[dict], viewer: Optional[dict]) -> List[dict
         sid = p.get("spot_id")
         if sid and sid in smap:
             p["spot_ref"] = smap[sid]
+
+    # PRD #10: per-post typed reaction counts (win/tip) + viewer's own state.
+    # Stored in a separate collection so we don't overload post_likes; makes
+    # it easy to add more reaction types later without a schema migration.
+    pids_all = [p["post_id"] for p in posts]
+    reaction_counts: Dict[str, Dict[str, int]] = {pid: {"win": 0, "tip": 0} for pid in pids_all}
+    try:
+        # Aggregate counts across all posts in one round-trip.
+        cur = db.post_reactions.aggregate([
+            {"$match": {"post_id": {"$in": pids_all}, "reaction_type": {"$in": ["win", "tip"]}}},
+            {"$group": {"_id": {"post_id": "$post_id", "type": "$reaction_type"}, "n": {"$sum": 1}}},
+        ])
+        async for row in cur:
+            pid = row["_id"]["post_id"]
+            t = row["_id"]["type"]
+            if pid in reaction_counts and t in reaction_counts[pid]:
+                reaction_counts[pid][t] = row["n"]
+    except Exception:
+        pass
+
+    my_reactions: Dict[str, List[str]] = {pid: [] for pid in pids_all}
+    if viewer and pids_all:
+        try:
+            rows = await db.post_reactions.find(
+                {"user_id": viewer["user_id"], "post_id": {"$in": pids_all}},
+                {"_id": 0, "post_id": 1, "reaction_type": 1},
+            ).to_list(len(pids_all) * 3)
+            for r in rows:
+                my_reactions.setdefault(r["post_id"], []).append(r["reaction_type"])
+        except Exception:
+            pass
+
+    for p in posts:
+        p["reaction_counts"] = reaction_counts.get(p["post_id"], {"win": 0, "tip": 0})
+        p["my_reactions"] = my_reactions.get(p["post_id"], [])
     return posts
 
 
@@ -3375,6 +3410,53 @@ async def unlike_post(post_id: str, user: dict = Depends(get_current_user)):
 
 class CommentIn(BaseModel):
     body: str
+
+
+# --- PRD #10: Typed community-post reactions (Win / Tip) -----------------
+# These are *in addition to* the existing Heart like, not a replacement.
+# A single endpoint toggles a user's reaction of a given type. Stored in a
+# separate collection (`post_reactions`) keyed by (user_id, post_id,
+# reaction_type). Hydration lives in `_hydrate_posts`.
+class ReactionIn(BaseModel):
+    type: str  # 'win' | 'tip'
+
+
+_ALLOWED_REACTION_TYPES = {"win", "tip"}
+
+
+@api.post("/posts/{post_id}/react")
+async def react_to_post(post_id: str, body: ReactionIn, user: dict = Depends(get_current_user)):
+    rtype = (body.type or "").lower().strip()
+    if rtype not in _ALLOWED_REACTION_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid reaction type")
+    p = await db.community_posts.find_one({"post_id": post_id})
+    if not p:
+        raise HTTPException(status_code=404, detail="Post not found")
+    key = {"post_id": post_id, "user_id": user["user_id"], "reaction_type": rtype}
+    existing = await db.post_reactions.find_one(key)
+    if existing:
+        await db.post_reactions.delete_one(key)
+        reacted = False
+    else:
+        await db.post_reactions.insert_one({**key, "created_at": utcnow()})
+        reacted = True
+        # Notify author (fire-and-forget, skip self).
+        try:
+            if p.get("author_user_id") and p["author_user_id"] != user["user_id"]:
+                emoji = "🔥" if rtype == "win" else "💡"
+                label = "Win" if rtype == "win" else "Tip"
+                await _emit_notification(
+                    p["author_user_id"],
+                    f"post_react_{rtype}",
+                    f"{emoji} {label} on your post",
+                    f"{user.get('name') or 'Someone'} reacted to your post",
+                    actor_user_id=user["user_id"],
+                    deep_link=f"/community/post/{post_id}",
+                )
+        except Exception:
+            pass
+    count = await db.post_reactions.count_documents({"post_id": post_id, "reaction_type": rtype})
+    return {"reacted": reacted, "type": rtype, "count": count}
 
 
 @api.get("/posts/{post_id}/comments")
