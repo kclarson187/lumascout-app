@@ -8,7 +8,7 @@ import { api } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 import { timeAgo } from '../../src/components/FreshnessBits';
-import KeyboardSafe from '../../src/components/KeyboardSafe';
+import { KeyboardSafeDocked } from '../../src/components/KeyboardSafe';
 import ReadReceipt from '../../src/components/ReadReceipt';
 
 const QUICK_STARTERS = [
@@ -92,7 +92,7 @@ export default function ThreadScreen() {
         </Pressable>
       </View>
 
-      <KeyboardSafe style={{ flex: 1 }}>
+      <KeyboardSafeDocked style={{ flex: 1 }} keyboardVerticalOffset={Platform.OS === 'ios' ? 88 : 0}>
         {loading ? (
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
             <ActivityIndicator color={colors.primary}/>
@@ -194,7 +194,7 @@ export default function ThreadScreen() {
             </View>
           </>
         )}
-      </KeyboardSafe>
+      </KeyboardSafeDocked>
     </SafeAreaView>
   );
 }
