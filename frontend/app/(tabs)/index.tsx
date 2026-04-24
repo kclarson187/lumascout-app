@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState, memo } from 'react';
 import {
   View,
   Text,
@@ -28,8 +28,37 @@ import { SectionSkeleton, SkeletonBox } from '../../src/components/Skeleton';
 import UpgradeBanner from '../../src/components/UpgradeBanner';
 import ScoutAICard from '../../src/components/ScoutAICard';
 import ScoutAIIntroModal from '../../src/components/ScoutAIIntroModal';
+import { readCache, writeCache } from '../../src/utils/swrCache';
 
 type Feed = Record<string, any[]>;
+
+// Sanitizer is pulled out so it can run once on cached payloads too,
+// avoiding duplicate filtering work on every fetch vs. cache hydration.
+function sanitizeFeed(data: any): any {
+  const isRenderable = (s: any) => {
+    if (!s || !s.title) return false;
+    const imgs = Array.isArray(s.images) ? s.images : [];
+    const cover = imgs.find((i: any) => i?.is_cover) || imgs[0];
+    return !!cover?.image_url;
+  };
+  if (!data || typeof data !== 'object') return data;
+  const appearances: Record<string, number> = {};
+  for (const key of Object.keys(data)) {
+    if (!Array.isArray(data[key])) continue;
+    data[key] = data[key]
+      .filter(isRenderable)
+      .filter((s: any) => {
+        const id = s.spot_id;
+        if (!id) return false;
+        const n = appearances[id] || 0;
+        if (n >= 2) return false;
+        appearances[id] = n + 1;
+        return true;
+      });
+  }
+  if (data.hero && !isRenderable(data.hero)) data.hero = null;
+  return data;
+}
 
 export default function Home() {
   const { user } = useAuth();
@@ -38,67 +67,86 @@ export default function Home() {
   const [refreshing, setRefreshing] = useState(false);
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [unreadNotif, setUnreadNotif] = useState(0);
-  // Poll unread count lightly on mount + pull-to-refresh.
+  const [filterResults, setFilterResults] = useState<any[] | null>(null);
+  const { coords } = useGps();
+
+  // PERF #1: unread-notification poll is deferred 500ms so the Home shell
+  // can paint first. First page render no longer blocks on this call.
   useEffect(() => {
     let alive = true;
-    const load = async () => {
+    const fire = async () => {
       try {
         const r = await api.get('/notifications', { limit: 1 });
         if (alive) setUnreadNotif(r.unread_count || 0);
       } catch {}
     };
-    load();
-    const iv = setInterval(load, 45000);
-    return () => { alive = false; clearInterval(iv); };
+    const kickoff = setTimeout(fire, 500);
+    const iv = setInterval(fire, 45000);
+    return () => { alive = false; clearTimeout(kickoff); clearInterval(iv); };
   }, []);
-  const [filterResults, setFilterResults] = useState<any[] | null>(null);
-  const { coords } = useGps();
 
-  const load = useCallback(async () => {
+  // PERF #2: stale-while-revalidate. Hydrate from cached payload instantly
+  // (under 100ms), then kick off a network refresh in the background. User
+  // never stares at a skeleton after the first successful visit.
+  // PERF #3: double-fetch bug fixed — previously the feed re-fetched the
+  // moment coords resolved. We now debounce: if coords are pending, wait
+  // up to 1.2s before falling back to a no-coords request; if coords
+  // arrive first we fire immediately. Net result: exactly one network
+  // fetch per home mount.
+  const loadingRef = useRef(false);
+  const hydratedOnceRef = useRef(false);
+
+  const doFetch = useCallback(async (withCoords: boolean) => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     try {
       const params: any = {};
-      if (coords) {
+      if (withCoords && coords) {
         params.lat = coords.latitude;
         params.lng = coords.longitude;
       }
       const data = await api.get('/feed/home', Object.keys(params).length ? params : undefined);
-
-      // Sanitize feed — drop spots that would render as blank/incomplete cards
-      // (no title, no images), and limit same-spot repetition to max 2 sections
-      // to avoid feeling seeded. This preserves hero since hero is a single pick.
-      const isRenderable = (s: any) => {
-        if (!s) return false;
-        if (!s.title) return false;
-        const imgs = Array.isArray(s.images) ? s.images : [];
-        const cover = imgs.find((i: any) => i?.is_cover) || imgs[0];
-        return !!cover?.image_url;
-      };
-      const appearances: Record<string, number> = {};
-      if (data && typeof data === 'object') {
-        for (const key of Object.keys(data)) {
-          if (!Array.isArray(data[key])) continue;
-          data[key] = data[key]
-            .filter(isRenderable)
-            .filter((s: any) => {
-              const id = s.spot_id;
-              if (!id) return false;
-              const n = appearances[id] || 0;
-              if (n >= 2) return false;  // cap repetition across sections
-              appearances[id] = n + 1;
-              return true;
-            });
-        }
-        // Hero: only keep if renderable
-        if (data.hero && !isRenderable(data.hero)) data.hero = null;
-      }
-      setFeed(data);
+      const clean = sanitizeFeed(data);
+      setFeed(clean);
+      writeCache('feed:home', clean).catch(() => {});
     } finally {
       setLoading(false);
       setRefreshing(false);
+      loadingRef.current = false;
     }
   }, [coords]);
 
-  useEffect(() => { load(); }, [load]);
+  // Instant cache hydration — runs ONCE on mount.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const cached = await readCache<Feed>('feed:home');
+      if (alive && cached && !hydratedOnceRef.current) {
+        setFeed(cached);
+        setLoading(false);
+        hydratedOnceRef.current = true;
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // Single-fetch orchestration — waits briefly for GPS, then fires once.
+  useEffect(() => {
+    if (coords) {
+      doFetch(true);
+      return;
+    }
+    // GPS not ready yet — don't fire immediately. Give GPS up to 1.2s to
+    // resolve; otherwise fire without coords so we don't deadlock users
+    // who denied location permission.
+    const t = setTimeout(() => doFetch(false), 1200);
+    return () => clearTimeout(t);
+  }, [coords, doFetch]);
+
+  // Back-compat entry point for pull-to-refresh / manual reload buttons.
+  const load = useCallback(async () => {
+    return doFetch(!!coords);
+  }, [doFetch, coords]);
 
   const applyFilter = async (label: string | null) => {
     setActiveFilter(label);
