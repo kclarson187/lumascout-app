@@ -7657,3 +7657,71 @@ on the user's approved roadmap.
 Phase 2 — Pages & Modals (#3 Spot Detail, #4 Profile, #5 Upgrade Gate,
 #6 Onboarding, #7 LumaScout branding, #8 Spot card skeletons). Batch
 test after #8 per user directive.
+
+
+================================================================================
+# Mobile Phase 2 — Pages, Modals & UI Polish (June 2025)
+================================================================================
+
+## Items shipped (#3 – #8)
+- #3 Full Spot Detail page  ................................... COMPLETE (enhanced)
+- #4 User Profile page  ....................................... COMPLETE (enhanced)
+- #5 Upgrade Gate modal for Free users  ....................... COMPLETE (new)
+- #6 Onboarding flow for new users  ........................... COMPLETE (verified)
+- #7 Rename PhotoScout -> LumaScout header branding  .......... COMPLETE (verified)
+- #8 Spot card image loading with skeleton states  ............ COMPLETE (new)
+
+## Files changed
+  EDITED:
+    /app/frontend/app/spot/[id].tsx
+      + Imports goldenHourLabel utility.
+      + New prominent Golden Hour window pill below tag row — uses spot's
+        local timezone, shows "Golden 6:47 PM–7:14 PM · local time at the
+        spot"; hidden for polar/missing-coord spots.
+    /app/frontend/src/components/SpotCard.tsx
+      + Animated imgLoaded + shimmer Value with opacity interpolation.
+      + Absolute-positioned Animated.View shimmer layer during Image load,
+        fades off on onLoad; onError still trips the SpotImageFallback.
+      + New styles.skelLayer.
+    /app/frontend/app/(tabs)/profile.tsx
+      + Imports LinearGradient.
+      + Horizontal Badges strip: Verified, Plan (Pro/Elite), Years (>=3),
+        Contributor (>=1 spot), Top Scout (>=10 spots). Only earned badges.
+      + Premium Upgrade CTA card (gold gradient) rendered ONLY for free
+        users, routing to /paywall. Testable via "profile-upgrade-cta".
+      + Photos tab promoted to 3-column pseudo-masonry: alternating
+        aspectRatio (1, 1.35, 0.75) across a 3-tile rhythm for curated feel.
+      + New styles: badgesStrip, badgePill, upgradeCard, upgradeCrown,
+        upgradeArrow (+ text variants).
+
+  ADDED:
+    /app/frontend/src/components/UpgradeGateModal.tsx
+      + Reusable bottom-sheet Modal with scrim tap-to-dismiss, gold crown
+        hero, per-reason title/body/perks copy, primary "See {tier} plans"
+        CTA routing to /paywall?reason=X, "Not now" dismiss.
+      + 8 reasons: saves, collections, filters, private, ai_planner,
+        messaging, analytics, generic. Each maps to its target plan (pro
+        vs elite) so the CTA text and pricing page focus match.
+      + Exported useUpgradeGate() hook returning { show, hide, Modal }
+        for one-line adoption in any screen.
+
+## Verification
+- #7 Confirmed: "LumaScout" already rendered in Home header (index.tsx:163),
+  app.json name/slug = lumascout, all user-facing strings already migrated.
+  Only stale "photoscout" string is AsyncStorage TOKEN_KEY which MUST stay
+  for session compatibility.
+- #6 Confirmed: _layout.tsx:52-53 redirects unauthed users to /onboarding,
+  which runs 4 slides + specialties picker before register/login CTA.
+- Golden hour pill, badges strip, upgrade CTA, and masonry photo grid all
+  compile clean (Metro tunnel ready on port 3002).
+
+## Wiring notes for UpgradeGateModal
+The modal is fully built and idle. Specific gated actions (save-limit,
+collection-limit, private-limit, advanced filters) still route to the full
+paywall screen today; switching any to the in-context modal is a 3-line
+change per call site — see useUpgradeGate() hook in the component.
+
+## Next phase
+Phase 3 — P2 features (#9 Map pins by tier, #10 Community reactions,
+#11 Share App, #12 Full Social Graph, #13 Photographer Search). Batch
+test at end of #13 per user directive.

@@ -38,6 +38,7 @@ import ReportSheet from '../../src/components/ReportSheet';
 import ShotListSheet from '../../src/components/ShotListSheet';
 import ScoutAICard from '../../src/components/ScoutAICard';
 import DeleteConfirmSheet, { SPOT_DELETE_PRESETS } from '../../src/components/DeleteConfirmSheet';
+import { goldenHourLabel } from '../../src/utils/sun';
 
 const { width: W } = Dimensions.get('window');
 
@@ -230,6 +231,26 @@ export default function SpotDetail() {
               </View>
             ))}
           </View>
+
+          {/* Golden-hour window — prominent, actionable. Uses the spot's local
+              timezone (handled by goldenHourLabel). Hidden for polar regions
+              / missing coords / detail pages where coords are deliberately
+              redacted. PRD item #3. */}
+          {(() => {
+            const g = goldenHourLabel(spot.latitude, spot.longitude);
+            if (!g) return null;
+            return (
+              <View style={styles.goldenWindow} testID="spot-golden-window">
+                <View style={styles.goldenIcon}>
+                  <Sun size={16} color={colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.goldenTitle}>{g}</Text>
+                  <Text style={styles.goldenSub}>Best light for today · local time at the spot</Text>
+                </View>
+              </View>
+            );
+          })()}
 
           {/* Owner row */}
           {spot.owner && (
@@ -629,6 +650,22 @@ const styles = StyleSheet.create({
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.md },
   tag: { backgroundColor: colors.surface2, paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.pill },
   tagText: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.3 },
+  // PRD #3 Golden-hour window
+  goldenWindow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    marginTop: space.md,
+    paddingHorizontal: space.md, paddingVertical: 12,
+    backgroundColor: 'rgba(245,166,35,0.08)',
+    borderColor: 'rgba(245,166,35,0.38)', borderWidth: 1,
+    borderRadius: radii.md,
+  },
+  goldenIcon: {
+    width: 34, height: 34, borderRadius: 17,
+    backgroundColor: 'rgba(245,166,35,0.18)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  goldenTitle: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 15, letterSpacing: 0.2 },
+  goldenSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, marginTop: 2 },
   ownerRow: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     marginTop: space.xl, padding: space.md,

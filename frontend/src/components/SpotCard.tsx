@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Pressable, Platform } from 'react-native';
+import React, { useState, useRef, useEffect } from 'react';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Pressable, Platform, Animated, Easing } from 'react-native';
 import { router } from 'expo-router';
 import { Bookmark, Star, Shield, Lock, EyeOff, MapPin, Sun, MoreVertical, TrendingUp, Sparkles, ShieldCheck } from 'lucide-react-native';
 import { colors, radii, space, font } from '../theme';
@@ -41,6 +41,23 @@ export default function SpotCard({
   const isAdmin = !!user && (user.role === 'admin' || user.role === 'super_admin');
   const [adminMenuOpen, setAdminMenuOpen] = useState(false);
   const [imgError, setImgError] = useState(false);
+  // #8: track whether the hero image has painted yet so we can fade in
+  // and keep a shimmer placeholder until the pixels arrive.
+  const [imgLoaded, setImgLoaded] = useState(false);
+  const shimmer = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.timing(shimmer, {
+        toValue: 1,
+        duration: 1400,
+        easing: Easing.inOut(Easing.ease),
+        useNativeDriver: false,
+      }),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [shimmer]);
+  const shimmerOpacity = shimmer.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.9] });
 
   // Cover priority:
   //   1. hero_cover_image_url (when admin_override OR rotation stack decided it)
@@ -92,11 +109,24 @@ export default function SpotCard({
     >
       <View style={styles.imageWrap}>
         {cover && !imgError ? (
-          <Image
-            source={{ uri: cover }}
-            style={styles.image}
-            onError={() => setImgError(true)}
-          />
+          <>
+            <Image
+              source={{ uri: cover }}
+              style={styles.image}
+              onError={() => setImgError(true)}
+              onLoad={() => setImgLoaded(true)}
+            />
+            {/* #8: shimmer placeholder while pixels arrive. Absolute-positioned
+                so it covers the Image at the same aspect ratio; fades out the
+                moment onLoad fires. Never sticks (network failures trip
+                onError which swaps to SpotImageFallback below). */}
+            {!imgLoaded && (
+              <Animated.View
+                pointerEvents="none"
+                style={[styles.skelLayer, { opacity: shimmerOpacity }]}
+              />
+            )}
+          </>
         ) : (
           <SpotImageFallback
             title={spot.title}
@@ -257,6 +287,10 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   image: { width: '100%', height: '100%' },
+  skelLayer: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: colors.surface2,
+  },
   overlayTop: {
     position: 'absolute',
     top: space.sm,

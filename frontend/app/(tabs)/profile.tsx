@@ -14,6 +14,7 @@ import {
   Platform,
   KeyboardAvoidingView,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
@@ -421,6 +422,97 @@ export default function Profile() {
             <StatCell label="Posts"     value={stats.posts_count ?? myPosts.length} />
           </View>
 
+          {/* PRD #4: Badges strip — visual shorthand for who this photographer
+              is at a glance. Only shows badges the user has actually earned
+              (no placeholder pills). Horizontally scrollable so we can add
+              more achievements over time without breaking the layout. */}
+          {(() => {
+            const badges: { key: string; label: string; color: string; icon: React.ReactNode; bg: string }[] = [];
+            if (user.verification_status === 'verified') {
+              badges.push({
+                key: 'verified', label: 'Verified',
+                color: colors.info, bg: 'rgba(96,165,250,0.14)',
+                icon: <ShieldCheck size={12} color={colors.info} />,
+              });
+            }
+            if (plan !== 'free') {
+              badges.push({
+                key: 'plan', label: planLabel,
+                color: colors.primary, bg: 'rgba(245,166,35,0.14)',
+                icon: <Crown size={12} color={colors.primary} />,
+              });
+            }
+            if ((user.years_experience ?? 0) >= 3) {
+              badges.push({
+                key: 'years', label: `${user.years_experience}+ yrs`,
+                color: colors.success, bg: 'rgba(16,185,129,0.14)',
+                icon: <GraduationCap size={12} color={colors.success} />,
+              });
+            }
+            if ((stats.spots_created ?? mySpots.length) >= 1) {
+              badges.push({
+                key: 'contrib', label: 'Contributor',
+                color: colors.text, bg: colors.surface2,
+                icon: <MapPin size={12} color={colors.text} />,
+              });
+            }
+            if ((stats.spots_created ?? mySpots.length) >= 10) {
+              badges.push({
+                key: 'scout', label: 'Top Scout',
+                color: colors.primary, bg: 'rgba(245,166,35,0.14)',
+                icon: <Store size={12} color={colors.primary} />,
+              });
+            }
+            if (badges.length === 0) return null;
+            return (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.badgesStrip}
+              >
+                {badges.map((b) => (
+                  <View
+                    key={b.key}
+                    style={[styles.badgePill, { backgroundColor: b.bg, borderColor: b.color + '55' }]}
+                  >
+                    {b.icon}
+                    <Text style={[styles.badgePillTxt, { color: b.color }]} numberOfLines={1}>{b.label}</Text>
+                  </View>
+                ))}
+              </ScrollView>
+            );
+          })()}
+
+          {/* PRD #4: Premium Upgrade CTA — gold gradient card, only for Free
+              users, positioned above role-based tools so it has maximum air. */}
+          {plan === 'free' && (
+            <TouchableOpacity
+              style={styles.upgradeCard}
+              onPress={() => router.push('/paywall')}
+              testID="profile-upgrade-cta"
+              activeOpacity={0.9}
+            >
+              <LinearGradient
+                colors={['rgba(245,166,35,0.16)', 'rgba(245,166,35,0.04)']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={StyleSheet.absoluteFill}
+              />
+              <View style={styles.upgradeCrown}>
+                <Crown size={20} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1, gap: 4 }}>
+                <Text style={styles.upgradeTitle}>Scout smarter. Shoot better.</Text>
+                <Text style={styles.upgradeBody}>
+                  Unlimited saves, AI shot lists, creator analytics, verified badge — starting at $8/mo.
+                </Text>
+              </View>
+              <View style={styles.upgradeArrow}>
+                <Text style={styles.upgradeArrowTxt}>Go Pro →</Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
           {/* === ROLE-BASED TOOLS ======================================== */}
           {showRoleSection && (
             <>
@@ -570,12 +662,22 @@ export default function Profile() {
                     icon={<Camera size={28} color={colors.textSecondary} />}
                   />
                 : (
+                  // PRD #4: 3-column pseudo-masonry. We vary aspect ratios
+                  // across a 3-tile rhythm (1, 1.35, 0.75) so the grid reads
+                  // as a curated portfolio rather than a uniform calendar.
                   <View style={styles.photoGrid}>
-                    {photos.slice(0, 30).map((p, idx) => (
-                      <TouchableOpacity key={`${p.spot_id}-${idx}`} onPress={() => router.push(`/spot/${p.spot_id}`)} style={styles.photoTile}>
-                        <Image source={{ uri: p.url }} style={StyleSheet.absoluteFillObject} />
-                      </TouchableOpacity>
-                    ))}
+                    {photos.slice(0, 30).map((p, idx) => {
+                      const ratio = idx % 3 === 1 ? 1.35 : idx % 3 === 2 ? 0.75 : 1;
+                      return (
+                        <TouchableOpacity
+                          key={`${p.spot_id}-${idx}`}
+                          onPress={() => router.push(`/spot/${p.spot_id}`)}
+                          style={[styles.photoTile, { aspectRatio: 1 / ratio }]}
+                        >
+                          <Image source={{ uri: p.url }} style={StyleSheet.absoluteFillObject} />
+                        </TouchableOpacity>
+                      );
+                    })}
                   </View>
                 )
             )}
@@ -941,8 +1043,44 @@ const styles = StyleSheet.create({
 
   photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginHorizontal: -space.xl / 2 },
   photoTile: {
-    width: '32%', aspectRatio: 1, backgroundColor: colors.surface2, borderRadius: radii.sm, overflow: 'hidden',
+    width: '32%', backgroundColor: colors.surface2, borderRadius: radii.sm, overflow: 'hidden',
   },
+  // PRD #4: Badges strip
+  badgesStrip: {
+    paddingHorizontal: space.xl, paddingVertical: space.sm,
+    gap: 6,
+  },
+  badgePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, paddingVertical: 5,
+    borderRadius: radii.pill, borderWidth: 1,
+  },
+  badgePillTxt: {
+    fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.3,
+  },
+  // PRD #4: Premium Upgrade CTA for Free users
+  upgradeCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    marginHorizontal: space.xl, marginTop: space.md,
+    paddingHorizontal: space.md, paddingVertical: 14,
+    backgroundColor: colors.surface1,
+    borderColor: 'rgba(245,166,35,0.35)', borderWidth: 1,
+    borderRadius: radii.lg,
+    overflow: 'hidden',
+  },
+  upgradeCrown: {
+    width: 42, height: 42, borderRadius: 21,
+    backgroundColor: 'rgba(245,166,35,0.2)',
+    borderColor: 'rgba(245,166,35,0.45)', borderWidth: 1,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  upgradeTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
+  upgradeBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17 },
+  upgradeArrow: {
+    paddingHorizontal: 10, paddingVertical: 6,
+    backgroundColor: colors.primary, borderRadius: radii.pill,
+  },
+  upgradeArrowTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.3 },
 
   aboutCard: {
     backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
