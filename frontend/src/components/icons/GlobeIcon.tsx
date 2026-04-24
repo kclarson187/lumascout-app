@@ -1,25 +1,21 @@
 import React from 'react';
-import Svg, { Circle, Path, Ellipse, Defs, LinearGradient, Stop } from 'react-native-svg';
+import Svg, { Circle, Path, Ellipse, Defs, LinearGradient, Stop, RadialGradient } from 'react-native-svg';
 
 /**
  * GlobeIcon — SF-Symbol-style premium globe used on Profile → Portfolio.
  *
- * Design rationale (PRD: "make it feel expensive"):
- *   • Geometry: perfect circle outline + equator ellipse + 2 symmetric
- *     meridian curves, producing the iconic four-quadrant look of Apple's
- *     globe.americas SF Symbol without copying it outright.
- *   • Weight: 1.4 stroke (Apple's "thin / regular" hybrid). Looks crisp at
- *     14–24px sizing without feeling brittle on low-DPI Androids.
- *   • Color: takes one `color` prop — everything inside uses it, so a parent
- *     can hand it down from the theme. For the "active" state we also apply
- *     a subtle radial glow behind the disc (gold on gold tokens).
- *   • Linecap: round; linejoin: round — matches the feel of SF Symbols.
+ * Apple SF Symbol `globe.americas` aesthetic:
+ *   • Perfect circle outline
+ *   • Equator (horizontal line spanning the full disc)
+ *   • Symmetric meridian ellipse (one vertical, curved, producing the
+ *     signature four-quadrant read at small sizes)
+ *   • Rounded linecaps / joins — matches native SF symbols
  *
- * Props:
- *   size    — target square size in px (default 16)
- *   color   — stroke color (default handed down from caller)
- *   active  — true to render gold tint + soft halo
- *   weight  — 'thin' | 'regular' | 'bold' → stroke widths 1.1 / 1.4 / 1.9
+ * Active variant (PRD: "premium gold/amber tint + modern iOS/Android feel"):
+ *   • Gold stroke (#F5A623)
+ *   • Soft radial halo behind the disc — pushes it forward on dark surfaces
+ *   • Slightly heavier stroke (1.6 instead of 1.4) so it reads as "lit up"
+ *     rather than muted
  */
 export default function GlobeIcon({
   size = 16,
@@ -32,26 +28,27 @@ export default function GlobeIcon({
   active?: boolean;
   weight?: 'thin' | 'regular' | 'bold';
 }) {
-  const strokeWidth = weight === 'thin' ? 1.1 : weight === 'bold' ? 1.9 : 1.4;
+  const baseStroke = weight === 'thin' ? 1.1 : weight === 'bold' ? 1.9 : 1.4;
+  // Active state gets slightly heavier stroke so the gold reads as emphasis.
+  const strokeWidth = active ? baseStroke + 0.2 : baseStroke;
   const resolved = active ? '#F5A623' : color;
-  const haloId = `globeHalo_${Math.round(size)}_${active ? 'a' : 'i'}`;
+  const haloId = `globeHalo_${Math.round(size * 10)}_${active ? 'a' : 'i'}`;
 
-  // Canvas is 24x24 so the geometry reads identically at every size.
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       {active && (
         <Defs>
-          <LinearGradient id={haloId} x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor="#F5A623" stopOpacity="0.22" />
-            <Stop offset="1" stopColor="#F5A623" stopOpacity="0.02" />
-          </LinearGradient>
+          <RadialGradient id={haloId} cx="50%" cy="50%" r="50%">
+            <Stop offset="0" stopColor="#F5A623" stopOpacity="0.32" />
+            <Stop offset="0.6" stopColor="#F5A623" stopOpacity="0.08" />
+            <Stop offset="1" stopColor="#F5A623" stopOpacity="0" />
+          </RadialGradient>
         </Defs>
       )}
 
-      {/* Subtle gold halo for the active state — pushes the icon forward on
-          dark surfaces without turning it into a filled disc. */}
+      {/* Gold halo backdrop for active state */}
       {active && (
-        <Circle cx="12" cy="12" r="10.5" fill={`url(#${haloId})`} />
+        <Circle cx="12" cy="12" r="11.5" fill={`url(#${haloId})`} />
       )}
 
       {/* Outer disc */}
@@ -61,6 +58,7 @@ export default function GlobeIcon({
         r="9"
         stroke={resolved}
         strokeWidth={strokeWidth}
+        strokeLinecap="round"
       />
 
       {/* Equator */}
@@ -71,7 +69,8 @@ export default function GlobeIcon({
         strokeLinecap="round"
       />
 
-      {/* Left meridian — curved ellipse half */}
+      {/* Meridian — one symmetric ellipse. Creates the iconic 4-quadrant
+          look at glance size while keeping the icon uncluttered. */}
       <Ellipse
         cx="12"
         cy="12"
@@ -79,6 +78,7 @@ export default function GlobeIcon({
         ry="9"
         stroke={resolved}
         strokeWidth={strokeWidth}
+        strokeLinecap="round"
       />
     </Svg>
   );

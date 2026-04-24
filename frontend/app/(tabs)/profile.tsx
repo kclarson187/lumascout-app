@@ -380,8 +380,18 @@ export default function Profile() {
                     style={[styles.linkBtn, styles.linkBtnPortfolio]}
                     testID="profile-portfolio-link"
                     accessibilityLabel="Open portfolio"
+                    activeOpacity={0.82}
                   >
-                    <GlobeIcon size={16} active weight="regular" />
+                    {/* Gold gradient fill (stronger than a flat tint) so the
+                        pill reads as distinctly premium next to the neutral
+                        socials. Bordered to finish the bezel. */}
+                    <LinearGradient
+                      colors={['rgba(245,166,35,0.28)', 'rgba(245,166,35,0.06)']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={StyleSheet.absoluteFill}
+                    />
+                    <GlobeIcon size={18} active weight="regular" />
                   </TouchableOpacity>
                 )}
                 {!!user.instagram && (
@@ -1017,10 +1027,14 @@ const styles = StyleSheet.create({
   },
   // Premium gold-tinted variant used for the Portfolio (website) link only.
   // Signals "this is where their published work lives" vs. the neutral
-  // social pills (Instagram / Facebook / TikTok).
+  // social pills (Instagram / Facebook / TikTok). Keeps identical 32x32
+  // dimensions as the other socials (perfectly aligned row) but layers a
+  // gold gradient fill + stronger gold bezel to read as a premium CTA.
   linkBtnPortfolio: {
-    backgroundColor: 'rgba(245,166,35,0.14)',
-    borderColor: 'rgba(245,166,35,0.42)',
+    overflow: 'hidden',
+    backgroundColor: 'rgba(245,166,35,0.08)',
+    borderColor: 'rgba(245,166,35,0.55)',
+    borderWidth: 1.2,
   },
 
   ctaRow: { flexDirection: 'row', gap: 8, marginTop: space.lg, width: '100%' },
