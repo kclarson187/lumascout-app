@@ -127,7 +127,10 @@ export default function NetworkTab() {
           <Share2 size={18} color={colors.primary} />
         </Pressable>
       </View>
-      <View style={{ paddingHorizontal: space.xl, flexDirection: 'row', gap: 8 }}>
+      {/* Search bar gets its own full-width row so it never competes with
+          the action pills for horizontal space (was squishing the input to
+          just the magnifier icon on smaller devices). */}
+      <View style={{ paddingHorizontal: space.xl }}>
         <View style={s.searchBar}>
           <Search size={16} color={colors.textSecondary} />
           <TextInput
@@ -139,23 +142,33 @@ export default function NetworkTab() {
             testID="network-search"
           />
         </View>
+      </View>
+      {/* Action pills — horizontally scrollable so we can keep adding
+          (Messages, Viewers, Gigs, Analytics...) without squeezing. */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        style={s.actionStripWrap}
+        contentContainerStyle={s.actionStrip}
+      >
         <Pressable onPress={() => router.push('/inbox' as any)} style={s.inboxBtn} testID="network-inbox">
-          <Inbox size={18} color={colors.text} />
+          <Inbox size={16} color={colors.text} />
           <Text style={s.inboxBtnTxt}>Messages</Text>
         </Pressable>
         <Pressable onPress={() => router.push('/profile-viewers' as any)} style={s.inboxBtn} testID="network-viewers">
-          <Eye size={18} color={colors.primary} />
+          <Eye size={16} color={colors.primary} />
           <Text style={[s.inboxBtnTxt, { color: colors.primary }]}>Viewers</Text>
         </Pressable>
         <Pressable onPress={() => router.push('/referrals' as any)} style={s.inboxBtn} testID="network-referrals">
-          <Briefcase size={18} color={colors.primary} />
+          <Briefcase size={16} color={colors.primary} />
           <Text style={[s.inboxBtnTxt, { color: colors.primary }]}>Gigs</Text>
         </Pressable>
         <Pressable onPress={() => router.push('/analytics' as any)} style={s.inboxBtn} testID="network-analytics">
-          <BarChart3 size={18} color={colors.primary} />
+          <BarChart3 size={16} color={colors.primary} />
           <Text style={[s.inboxBtnTxt, { color: colors.primary }]}>Analytics</Text>
         </Pressable>
-      </View>
+      </ScrollView>
 
       {/* PRD #13: Shoot-style filter chips. Horizontal scroll so we can keep
           adding niches without squeezing the layout. Tapping "All" clears
@@ -241,8 +254,30 @@ const s = StyleSheet.create({
   title: { color: colors.text, fontFamily: font.display, fontSize: 24 },
   searchBar: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: Platform.OS === 'ios' ? 10 : 6, borderRadius: radii.pill, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
   searchInp: { flex: 1, color: colors.text, fontFamily: font.body, fontSize: 14, padding: 0 },
-  inboxBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, borderRadius: radii.pill, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
-  inboxBtnTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },
+  actionStripWrap: {
+    flexGrow: 0,
+    flexShrink: 0,
+    maxHeight: 52,
+  },
+  actionStrip: {
+    paddingHorizontal: space.xl,
+    paddingVertical: space.sm,
+    gap: 8,
+    alignItems: 'center',
+  },
+  inboxBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    height: 34,
+    paddingHorizontal: 14,
+    borderRadius: radii.pill,
+    backgroundColor: colors.surface1,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  inboxBtnTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12.5, lineHeight: 15, includeFontPadding: false },
   railTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 15, marginBottom: 8, marginTop: 6 },
   card: { width: 160, padding: 10, borderRadius: radii.md, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, gap: 4, marginBottom: 10 },
   avatar: { width: 56, height: 56, borderRadius: 28, marginBottom: 4 },

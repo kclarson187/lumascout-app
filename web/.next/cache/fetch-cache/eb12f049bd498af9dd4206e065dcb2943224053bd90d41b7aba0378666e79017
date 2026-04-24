@@ -1,1 +1,0 @@
-{"kind":"FETCH","data":{"headers":{"content-length":"2","content-type":"application/json","date":"Thu, 23 Apr 2026 20:59:33 GMT","server":"uvicorn"},"body":"W10=","status":200,"url":"http://localhost:8001/api/spots?city=Denver&limit=48&sort=score"},"revalidate":300,"tags":[]}
