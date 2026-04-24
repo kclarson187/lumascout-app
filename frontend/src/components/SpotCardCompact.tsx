@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, Image, Pressable } from 'react-native';
 import { router } from 'expo-router';
 import { Star, Sun, Clock, MapPin } from 'lucide-react-native';
 import { colors, radii, space, font } from '../theme';
 import VerifiedBadge from './VerifiedBadge';
+import SpotImageFallback from './SpotImageFallback';
 import { goldenHourLabel } from '../utils/sun';
 
 /**
@@ -21,7 +22,9 @@ export default function SpotCardCompact({
   testID?: string;
   emphasis?: 'fresh' | 'distance' | 'golden' | 'score' | 'seasonal';
 }) {
-  const cover = (spot.images && (spot.images.find((i: any) => i.is_cover) || spot.images[0]))?.image_url;
+  const rawCover = (spot.images && (spot.images.find((i: any) => i.is_cover) || spot.images[0]))?.image_url;
+  const cover = rawCover && typeof rawCover === 'string' && rawCover.trim() !== '' ? rawCover : null;
+  const [imgError, setImgError] = useState(false);
   const go = () => router.push(`/spot/${spot.spot_id}`);
   const gLabel = goldenHourLabel(spot.latitude, spot.longitude);
 
@@ -35,10 +38,21 @@ export default function SpotCardCompact({
 
   return (
     <Pressable onPress={go} style={styles.row} testID={testID}>
-      {cover ? (
-        <Image source={{ uri: cover }} style={styles.thumb} />
+      {cover && !imgError ? (
+        <Image
+          source={{ uri: cover }}
+          style={styles.thumb}
+          onError={() => setImgError(true)}
+        />
       ) : (
-        <View style={[styles.thumb, { backgroundColor: colors.surface2 }]} />
+        <View style={styles.thumb}>
+          <SpotImageFallback
+            title={spot.title}
+            shootType={spot.shoot_types?.[0]}
+            seed={spot.spot_id || spot.title}
+            compact
+          />
+        </View>
       )}
       <View style={{ flex: 1, gap: 2 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -87,7 +101,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border, borderWidth: 1, borderRadius: radii.md,
   },
   thumb: {
-    width: 64, height: 64, borderRadius: radii.sm,
+    width: 64, height: 64, borderRadius: radii.sm, overflow: 'hidden', backgroundColor: colors.surface2,
   },
   title: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14, flex: 1 },
   city: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12 },

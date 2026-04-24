@@ -7619,3 +7619,41 @@ on the user's approved roadmap.
 - expo-alt RUNNING, tunnel \"Tunnel ready\" confirmed twice in logs.
 - No backend changes. All additions are web-only reading existing APIs.
 
+
+
+================================================================================
+# Mobile Phase 1 — Bug Fixes (June 2025)
+================================================================================
+
+## Items shipped
+- #1 Black/broken spot cards on Home  ........................ SHIPPED
+- #2 Favorites tab infinite skeleton  ........................ SHIPPED
+
+## Files changed
+  ADDED:
+    /app/frontend/src/components/SpotImageFallback.tsx
+      Deterministic dark-premium gradient placeholder (8 curated stops
+      hashed off spot_id/title) + soft vignette + camera glyph + title
+      overlay + shoot-type pill. Compact + full variants.
+  EDITED:
+    /app/frontend/src/components/SpotCard.tsx
+      - Tracks imgError state via <Image onError>.
+      - Null-safe cover detection (trim, typeof string).
+      - Renders SpotImageFallback on missing OR failed cover.
+      - isHydrated no longer requires cover (overlays render on fallback).
+    /app/frontend/src/components/SpotCardCompact.tsx
+      - Same imgError + fallback pattern for 64px thumb variant.
+      - thumb style gained overflow:hidden + surface2 bg.
+    /app/frontend/app/(tabs)/saved.tsx
+      - Added loading / loaded / error tri-state for /me/saved fetch.
+      - Initial fetch now shows 3 SpotCardSkeleton rows (resolves cleanly
+        to list OR error OR empty — never infinite shimmer).
+      - Error state has AlertCircle icon + Retry button wired to load().
+      - Richer empty state: 76px gold-ring Bookmark icon, display-font
+        title, body copy explaining the value of saves, + 2 CTAs
+        (Explore spots / Ask Scout AI).
+
+## Next phase
+Phase 2 — Pages & Modals (#3 Spot Detail, #4 Profile, #5 Upgrade Gate,
+#6 Onboarding, #7 LumaScout branding, #8 Spot card skeletons). Batch
+test after #8 per user directive.

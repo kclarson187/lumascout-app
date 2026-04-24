@@ -8,6 +8,7 @@ import { useAuth } from '../auth';
 import FreshnessBadge from './FreshnessBadge';
 import VerifiedBadge from './VerifiedBadge';
 import AdminSpotMenu from './AdminSpotMenu';
+import SpotImageFallback from './SpotImageFallback';
 import { goldenHourLabel } from '../utils/sun';
 
 export type Spot = any;
@@ -39,6 +40,7 @@ export default function SpotCard({
   const { user } = useAuth();
   const isAdmin = !!user && (user.role === 'admin' || user.role === 'super_admin');
   const [adminMenuOpen, setAdminMenuOpen] = useState(false);
+  const [imgError, setImgError] = useState(false);
 
   // Cover priority:
   //   1. hero_cover_image_url (when admin_override OR rotation stack decided it)
@@ -47,11 +49,12 @@ export default function SpotCard({
   //
   // PRIORITY FIX: hero_cover_image_url must win when present — otherwise
   // an admin-pinned cover never shows on Explore because images[0] beats it.
-  const cover =
+  const rawCover =
     spot.hero_cover_image_url
     || (spot.images && (spot.images.find((i: any) => i.is_cover) || spot.images[0]))?.image_url;
+  const cover = rawCover && typeof rawCover === 'string' && rawCover.trim() !== '' ? rawCover : null;
   const isPremium = spot.privacy_mode === 'premium';
-  const isHydrated = !!(cover && spot?.title);
+  const isHydrated = !!spot?.title;
 
   const handlePress = () => {
     if (onPress) return onPress();
@@ -88,10 +91,19 @@ export default function SpotCard({
       testID={testID}
     >
       <View style={styles.imageWrap}>
-        {cover ? (
-          <Image source={{ uri: cover }} style={styles.image} />
+        {cover && !imgError ? (
+          <Image
+            source={{ uri: cover }}
+            style={styles.image}
+            onError={() => setImgError(true)}
+          />
         ) : (
-          <View style={[styles.image, { backgroundColor: colors.surface2 }]} />
+          <SpotImageFallback
+            title={spot.title}
+            shootType={spot.shoot_types?.[0]}
+            seed={spot.spot_id || spot.title}
+            style={styles.image}
+          />
         )}
         <View style={styles.overlayTop}>
           {isHydrated && isAdmin && (

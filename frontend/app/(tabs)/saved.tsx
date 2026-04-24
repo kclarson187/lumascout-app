@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
-import { FolderPlus, Bookmark, Lock, X, MapPin, Sparkles, Clock, ChevronRight, Users as UsersIcon, Eye, EyeOff } from 'lucide-react-native';
+import { FolderPlus, Bookmark, Lock, X, MapPin, Sparkles, Clock, ChevronRight, Users as UsersIcon, Eye, EyeOff, AlertCircle, RefreshCcw, Compass } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
@@ -22,6 +22,7 @@ import { EmptyState, Chip } from '../../src/components/ui';
 import { Button } from '../../src/components/Button';
 import UpgradeBanner from '../../src/components/UpgradeBanner';
 import ScoutAICard from '../../src/components/ScoutAICard';
+import { SpotCardSkeleton } from '../../src/components/Skeleton';
 
 type SortKey = 'recent' | 'score' | 'distance' | 'city' | 'shoot_type';
 const SORT_LABELS: Record<SortKey, string> = {
@@ -54,20 +55,41 @@ export default function Saved() {
   const [newColName, setNewColName] = useState('');
   const [sort, setSort] = useState<SortKey>('recent');
   const [filterShoot, setFilterShoot] = useState<string | null>(null);
+  // FIX #2 (Favorites tab skeleton never resolves): Previously the screen
+  // had no explicit loading state — a silent API failure would leave the user
+  // staring at shimmer cards forever. We now track loading + error + loaded
+  // so we can surface skeletons, empty state, OR an actionable error retry.
+  const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    if (!user) return;
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+    setError(null);
+    if (!loaded) setLoading(true);
     try {
       const [saves, mine, cols] = await Promise.all([
         api.get('/me/saved'),
         api.get('/me/spots'),
         api.get('/me/collections'),
       ]);
-      setSavedSpots(saves);
-      setPrivateSpots(mine.filter((s: any) => s.privacy_mode !== 'public' && s.privacy_mode !== 'premium'));
-      setCollections(cols);
-    } catch {}
-  }, [user]);
+      setSavedSpots(Array.isArray(saves) ? saves : []);
+      setPrivateSpots(
+        (Array.isArray(mine) ? mine : []).filter(
+          (s: any) => s.privacy_mode !== 'public' && s.privacy_mode !== 'premium',
+        ),
+      );
+      setCollections(Array.isArray(cols) ? cols : []);
+      setLoaded(true);
+    } catch (e) {
+      setError(formatApiError(e) || 'Could not load your saves. Check your connection and try again.');
+    } finally {
+      setLoading(false);
+    }
+  }, [user, loaded]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -165,81 +187,129 @@ export default function Saved() {
 
       {tab === 'favorites' && (
         <>
-          {/* Scout AI planning helper — only shown when user has saved spots to plan from. */}
-          {savedSpots.length > 0 && (
-            <View style={{ paddingHorizontal: space.xl, marginBottom: 8 }}>
-              <ScoutAICard placement="saved" variant="row" />
-            </View>
-          )}
-          {/* PRD #9 — contextual upsell after user has invested some effort
-              saving favourites (triggers at 5+) rather than pestering them
-              the moment they open the tab. */}
-          {savedSpots.length >= 5 && (
-            <View style={{ paddingHorizontal: space.xl, marginBottom: 8 }}>
-              <UpgradeBanner
-                placement="saved-favorites"
-                title="You've saved a lot — go Pro to get more out of them"
-                subtitle="Group saves into themed collections, export a shoot-day itinerary, and see weather on the map."
-              />
-            </View>
-          )}
-          <View style={styles.sortRail}>
-            <ScrollView
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag" horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: space.xl, gap: 6 }}>
-              {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
-                <TouchableOpacity
-                  key={k}
-                  onPress={() => setSort(k)}
-                  style={[styles.sortChip, sort === k && styles.sortChipActive]}
-                  testID={`sort-${k}`}
-                >
-                  <Text style={[styles.sortChipTxt, sort === k && { color: colors.textInverse }]}>{SORT_LABELS[k]}</Text>
-                </TouchableOpacity>
-              ))}
+          {loading && !loaded ? (
+            // FIX #2: Visible skeleton ONLY during initial fetch. We always
+            // follow up with either data, an empty state, or an error UI —
+            // never an infinite skeleton.
+            <ScrollView contentContainerStyle={{ padding: space.xl, gap: space.md, paddingBottom: 100 }}>
+              <SpotCardSkeleton width={'100%' as any} />
+              <SpotCardSkeleton width={'100%' as any} />
+              <SpotCardSkeleton width={'100%' as any} />
             </ScrollView>
-          </View>
-          {uniqueShoots.length > 1 && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: space.xl, gap: 6, paddingBottom: 8 }}>
-              <TouchableOpacity onPress={() => setFilterShoot(null)} style={[styles.filterChip, !filterShoot && styles.filterChipActive]} testID="filter-all">
-                <Text style={[styles.filterChipTxt, !filterShoot && { color: colors.textInverse }]}>All</Text>
-              </TouchableOpacity>
-              {uniqueShoots.map((st) => (
-                <TouchableOpacity key={st} onPress={() => setFilterShoot(filterShoot === st ? null : st)} style={[styles.filterChip, filterShoot === st && styles.filterChipActive]} testID={`filter-shoot-${st}`}>
-                  <Text style={[styles.filterChipTxt, filterShoot === st && { color: colors.textInverse }]}>{st}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          )}
-          {sortedFavs.length === 0 ? (
+          ) : error ? (
             <ScrollView contentContainerStyle={{ padding: space.xl }}>
-              <EmptyState
-                icon={<Bookmark size={28} color={colors.primary} />}
-                title={savedSpots.length === 0 ? 'Nothing saved yet' : 'No matches'}
-                subtitle={savedSpots.length === 0 ? 'Tap the bookmark on any spot to save it here for later planning.' : 'Try clearing the shoot-type filter.'}
-              />
-              {savedSpots.length === 0 && (
-                <TouchableOpacity
-                  style={styles.scoutAiAssist}
-                  onPress={() => router.push('/scout-ai/planner/collection')}
-                  testID="saved-scout-ai-assist"
-                  activeOpacity={0.85}
-                >
-                  <View style={styles.scoutAiBubble}><Sparkles size={16} color={colors.primary} /></View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.scoutAiTitle}>Help me build my first collection</Text>
-                    <Text style={styles.scoutAiBody}>Describe what you love to shoot and Scout AI will assemble 5–10 starter spots.</Text>
-                  </View>
+              <View style={styles.errorBox}>
+                <AlertCircle size={28} color={colors.secondary} />
+                <Text style={styles.errorTitle}>Couldn't load your saves</Text>
+                <Text style={styles.errorBody}>{error}</Text>
+                <TouchableOpacity style={styles.retryBtn} onPress={load} testID="favorites-retry">
+                  <RefreshCcw size={14} color={colors.textInverse} />
+                  <Text style={styles.retryTxt}>Try again</Text>
                 </TouchableOpacity>
-              )}
+              </View>
             </ScrollView>
           ) : (
-            <FlatList
-              data={sortedFavs}
-              keyExtractor={(i) => i.spot_id}
-              contentContainerStyle={{ padding: space.xl, gap: space.md, paddingBottom: 100 }}
-              renderItem={({ item }) => <SpotCard spot={item} width={undefined as any} onToggleSave={load} />}
-            />
+            <>
+              {/* Scout AI planning helper — only shown when user has saved spots to plan from. */}
+              {savedSpots.length > 0 && (
+                <View style={{ paddingHorizontal: space.xl, marginBottom: 8 }}>
+                  <ScoutAICard placement="saved" variant="row" />
+                </View>
+              )}
+              {/* PRD #9 — contextual upsell after user has invested some effort
+                  saving favourites (triggers at 5+) rather than pestering them
+                  the moment they open the tab. */}
+              {savedSpots.length >= 5 && (
+                <View style={{ paddingHorizontal: space.xl, marginBottom: 8 }}>
+                  <UpgradeBanner
+                    placement="saved-favorites"
+                    title="You've saved a lot — go Pro to get more out of them"
+                    subtitle="Group saves into themed collections, export a shoot-day itinerary, and see weather on the map."
+                  />
+                </View>
+              )}
+              {savedSpots.length > 0 && (
+                <View style={styles.sortRail}>
+                  <ScrollView
+                    keyboardShouldPersistTaps="handled"
+                    keyboardDismissMode="on-drag"
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={{ paddingHorizontal: space.xl, gap: 6 }}
+                  >
+                    {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
+                      <TouchableOpacity
+                        key={k}
+                        onPress={() => setSort(k)}
+                        style={[styles.sortChip, sort === k && styles.sortChipActive]}
+                        testID={`sort-${k}`}
+                      >
+                        <Text style={[styles.sortChipTxt, sort === k && { color: colors.textInverse }]}>{SORT_LABELS[k]}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+              {uniqueShoots.length > 1 && (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: space.xl, gap: 6, paddingBottom: 8 }}>
+                  <TouchableOpacity onPress={() => setFilterShoot(null)} style={[styles.filterChip, !filterShoot && styles.filterChipActive]} testID="filter-all">
+                    <Text style={[styles.filterChipTxt, !filterShoot && { color: colors.textInverse }]}>All</Text>
+                  </TouchableOpacity>
+                  {uniqueShoots.map((st) => (
+                    <TouchableOpacity key={st} onPress={() => setFilterShoot(filterShoot === st ? null : st)} style={[styles.filterChip, filterShoot === st && styles.filterChipActive]} testID={`filter-shoot-${st}`}>
+                      <Text style={[styles.filterChipTxt, filterShoot === st && { color: colors.textInverse }]}>{st}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
+              {sortedFavs.length === 0 ? (
+                <ScrollView contentContainerStyle={{ padding: space.xl, paddingBottom: 100 }}>
+                  {/* FIX #2: Richer empty state with illustration + 2 CTAs.
+                      Makes it unambiguous that the fetch finished and the user
+                      simply hasn't saved anything yet. */}
+                  <View style={styles.emptyHero}>
+                    <View style={styles.emptyIconWrap}>
+                      <Bookmark size={36} color={colors.primary} />
+                    </View>
+                    <Text style={styles.emptyTitle}>
+                      {savedSpots.length === 0 ? 'Nothing saved yet' : 'No matches'}
+                    </Text>
+                    <Text style={styles.emptyBody}>
+                      {savedSpots.length === 0
+                        ? 'Tap the bookmark on any spot to keep it here for your next shoot day. Your saves power itineraries, shoot planning, and Scout AI suggestions.'
+                        : 'Try clearing the shoot-type filter above.'}
+                    </Text>
+                    {savedSpots.length === 0 && (
+                      <View style={styles.emptyCtaRow}>
+                        <TouchableOpacity
+                          style={styles.emptyCtaPrimary}
+                          onPress={() => router.push('/(tabs)/explore')}
+                          testID="favorites-explore-cta"
+                        >
+                          <Compass size={14} color={colors.textInverse} />
+                          <Text style={styles.emptyCtaPrimaryTxt}>Explore spots</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.emptyCtaSecondary}
+                          onPress={() => router.push('/scout-ai/planner/collection')}
+                          testID="favorites-scoutai-cta"
+                        >
+                          <Sparkles size={14} color={colors.primary} />
+                          <Text style={styles.emptyCtaSecondaryTxt}>Ask Scout AI</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+                </ScrollView>
+              ) : (
+                <FlatList
+                  data={sortedFavs}
+                  keyExtractor={(i) => i.spot_id}
+                  contentContainerStyle={{ padding: space.xl, gap: space.md, paddingBottom: 100 }}
+                  renderItem={({ item }) => <SpotCard spot={item} width={undefined as any} onToggleSave={load} />}
+                />
+              )}
+            </>
           )}
         </>
       )}
@@ -446,6 +516,64 @@ const styles = StyleSheet.create({
   premiumEmptyTitle: { color: colors.text, fontFamily: font.display, fontSize: 24, letterSpacing: -0.3, textAlign: 'center' },
   premiumEmptyBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 14, lineHeight: 21, textAlign: 'center' },
   premiumFeatureList: { alignSelf: 'stretch', gap: 8, backgroundColor: colors.surface2, padding: space.md, borderRadius: radii.md },
+  // FIX #2 — Favorites error + empty styles
+  errorBox: {
+    alignItems: 'center',
+    gap: space.sm,
+    backgroundColor: colors.surface1,
+    borderColor: 'rgba(208,72,72,0.4)',
+    borderWidth: 1,
+    borderRadius: radii.lg,
+    padding: space.xl,
+  },
+  errorTitle: { color: colors.text, fontFamily: font.display, fontSize: 20, letterSpacing: -0.2, marginTop: 4 },
+  errorBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 19, textAlign: 'center' },
+  retryBtn: {
+    marginTop: space.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.primary,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: radii.pill,
+  },
+  retryTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 13, letterSpacing: 0.3 },
+  emptyHero: {
+    alignItems: 'center',
+    gap: space.sm,
+    backgroundColor: colors.surface1,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: radii.lg,
+    padding: space.xl,
+  },
+  emptyIconWrap: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: 'rgba(245,166,35,0.12)',
+    borderColor: 'rgba(245,166,35,0.4)',
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  emptyTitle: { color: colors.text, fontFamily: font.display, fontSize: 24, letterSpacing: -0.3, textAlign: 'center' },
+  emptyBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 20, textAlign: 'center', paddingHorizontal: 8 },
+  emptyCtaRow: { flexDirection: 'row', gap: 10, marginTop: space.md, flexWrap: 'wrap', justifyContent: 'center' },
+  emptyCtaPrimary: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: colors.primary, paddingHorizontal: 16, paddingVertical: 10,
+    borderRadius: radii.pill,
+  },
+  emptyCtaPrimaryTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 13 },
+  emptyCtaSecondary: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: 'rgba(245,166,35,0.12)', borderColor: 'rgba(245,166,35,0.4)', borderWidth: 1,
+    paddingHorizontal: 16, paddingVertical: 10, borderRadius: radii.pill,
+  },
+  emptyCtaSecondaryTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 13 },
 });
 
 function FeatureLine({ icon, text }: { icon: any; text: string }) {
