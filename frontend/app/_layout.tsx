@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, Modal, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, ActivityIndicator } from 'react-native';
 import {
   useFonts,
   PlayfairDisplay_700Bold,
@@ -15,10 +15,9 @@ import {
 } from '@expo-google-fonts/manrope';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AuthProvider, useAuth } from '../src/auth';
-import { colors, font, space, radii } from '../src/theme';
+import { colors } from '../src/theme';
 import { onPaywallNeeded } from '../src/api';
-import { Crown, X } from 'lucide-react-native';
-import { Button } from '../src/components/Button';
+import UpgradeGateModal, { GateReason } from '../src/components/UpgradeGateModal';
 
 /**
  * Mount once at app root: wire push-notification tap handler so notifications
@@ -90,7 +89,7 @@ export default function RootLayout() {
         <StatusBar style="light" />
         <PushDeepLinkMount />
         <Gate />
-        <PaywallOverlay />
+        <GlobalUpgradeGate />
         <Stack
           screenOptions={{
             headerShown: false,
@@ -103,74 +102,50 @@ export default function RootLayout() {
   );
 }
 
-function PaywallOverlay() {
-  const [message, setMessage] = useState<string | null>(null);
-  const router = useRouter();
+/**
+ * GlobalUpgradeGate — Option A wiring (PRD #5)
+ *
+ * Replaces the legacy PaywallOverlay with the polished UpgradeGateModal.
+ *
+ * Infrastructure already in place:
+ *   • `api.ts` intercepts every 402 Payment Required response and fires
+ *     `onPaywallNeeded(detail_message)`.
+ *   • Backend raises 402 with a descriptive detail string for every plan
+ *     limit hit: saves, collections, private spots, advanced filters,
+ *     messaging, AI planner.
+ *
+ * This component listens once at root, maps the server detail string to a
+ * canonical GateReason, and renders the targeted modal. That single wiring
+ * instantly covers *all* gated call sites app-wide — no per-screen changes
+ * needed.
+ */
+function GlobalUpgradeGate() {
+  const [visible, setVisible] = useState(false);
+  const [reason, setReason] = useState<GateReason>('generic');
+
   useEffect(() => {
-    onPaywallNeeded((m) => setMessage(m));
+    onPaywallNeeded((msg: string) => {
+      setReason(detailToReason(msg));
+      setVisible(true);
+    });
   }, []);
-  if (!message) return null;
 
-  // Infer a reason code from the server message so the paywall can tailor copy.
-  const m = message.toLowerCase();
-  const reason = m.includes('save')
-    ? 'saves'
-    : m.includes('collection')
-    ? 'collections'
-    : m.includes('private')
-    ? 'private'
-    : m.includes('filter')
-    ? 'filters'
-    : undefined;
-
-  const headline = reason === 'saves'
-    ? "You've reached your 5-save limit"
-    : "You've hit your Free limit";
-
-  return (
-    <Modal transparent animationType="fade" visible>
-      <View style={overlayStyles.bg}>
-        <View style={overlayStyles.card}>
-          <TouchableOpacity onPress={() => setMessage(null)} style={overlayStyles.close} testID="paywall-overlay-close">
-            <X size={20} color={colors.text} />
-          </TouchableOpacity>
-          <View style={overlayStyles.icon}><Crown size={28} color={colors.primary} /></View>
-          <Text style={overlayStyles.title}>{headline}</Text>
-          <Text style={overlayStyles.body}>
-            {reason === 'saves'
-              ? 'Upgrade to Pro for unlimited saved locations, advanced filters, and premium features — just $9.99/month.'
-              : message}
-          </Text>
-          <Button
-            title="See Pro & Elite plans"
-            onPress={() => {
-              setMessage(null);
-              router.push(reason ? `/paywall?reason=${reason}` : '/paywall');
-            }}
-            testID="paywall-overlay-cta"
-            style={{ marginTop: space.lg }}
-          />
-          <TouchableOpacity onPress={() => setMessage(null)} style={{ marginTop: space.sm, alignItems: 'center' }}>
-            <Text style={{ color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13 }}>Maybe later</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
+  return <UpgradeGateModal visible={visible} onClose={() => setVisible(false)} reason={reason} />;
 }
 
-const overlayStyles = StyleSheet.create({
-  bg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center', padding: space.xl },
-  card: {
-    width: '100%', maxWidth: 380, backgroundColor: colors.surface1,
-    borderColor: colors.primary, borderWidth: 1, borderRadius: radii.lg, padding: space.xl,
-  },
-  close: { position: 'absolute', top: 12, right: 12, width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
-  icon: {
-    width: 56, height: 56, borderRadius: 28, backgroundColor: 'rgba(245,166,35,0.15)',
-    borderColor: 'rgba(245,166,35,0.4)', borderWidth: 1, alignItems: 'center', justifyContent: 'center',
-    alignSelf: 'center', marginTop: space.sm,
-  },
-  title: { color: colors.text, fontFamily: font.display, fontSize: 24, textAlign: 'center', marginTop: space.md, letterSpacing: -0.3 },
-  body: { color: colors.textSecondary, fontFamily: font.body, fontSize: 14, textAlign: 'center', marginTop: 8, lineHeight: 20 },
-});
+/**
+ * Map backend 402 detail strings to UpgradeGateModal reason keys.
+ * Keep in sync with backend error copy. Unknown strings fall back to
+ * 'generic' which is safe (generic Pro pitch).
+ */
+function detailToReason(detail: string): GateReason {
+  const m = (detail || '').toLowerCase();
+  if (m.includes('save')) return 'saves';
+  if (m.includes('collection')) return 'collections';
+  if (m.includes('private')) return 'private';
+  if (m.includes('filter')) return 'filters';
+  if (m.includes('scout ai') || m.includes('planner') || m.includes('ai plan')) return 'ai_planner';
+  if (m.includes('analytics') || m.includes('viewer')) return 'analytics';
+  if (m.includes('message') || m.includes('dm')) return 'messaging';
+  return 'generic';
+}
