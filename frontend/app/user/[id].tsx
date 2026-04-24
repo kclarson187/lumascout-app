@@ -12,6 +12,7 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
   ChevronLeft,
@@ -292,11 +293,19 @@ export default function UserProfile() {
               {!!profile.website && (
                 <TouchableOpacity
                   onPress={() => openUrl(profile.website)}
-                  style={[styles.linkBtn, styles.linkBtnPortfolio]}
+                  style={styles.portfolioBtn}
                   testID="user-portfolio-link"
                   accessibilityLabel="Open portfolio"
+                  activeOpacity={0.85}
                 >
+                  <LinearGradient
+                    colors={['rgba(245,166,35,0.30)', 'rgba(245,166,35,0.08)']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={StyleSheet.absoluteFill}
+                  />
                   <GlobeIcon size={16} active weight="regular" />
+                  <Text style={styles.portfolioBtnTxt}>Portfolio</Text>
                 </TouchableOpacity>
               )}
               {!!profile.instagram && (
@@ -554,11 +563,30 @@ const styles = StyleSheet.create({
     width: 32, height: 32, borderRadius: 16, backgroundColor: colors.surface1,
     borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center',
   },
-  // Premium gold-tinted variant for the Portfolio link — distinguishes the
-  // photographer's published work destination from neutral social pills.
-  linkBtnPortfolio: {
-    backgroundColor: 'rgba(245,166,35,0.14)',
-    borderColor: 'rgba(245,166,35,0.42)',
+  // PRD: Portfolio CTA button — full pill with globe icon + "Portfolio"
+  // label. Lives in the social link row but visually dominates so it reads
+  // as the photographer's hero destination (published work), while the
+  // remaining socials stay as compact icon circles. Height matches linkBtn
+  // (32px) for baseline alignment across the row.
+  portfolioBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    height: 32,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(245,166,35,0.08)',
+    borderColor: 'rgba(245,166,35,0.55)',
+    borderWidth: 1.2,
+  },
+  portfolioBtnTxt: {
+    color: colors.primary,
+    fontFamily: font.bodyBold,
+    fontSize: 12.5,
+    letterSpacing: 0.4,
+    includeFontPadding: false,
   },
 
   ctaRow: { flexDirection: 'row', gap: 8, marginTop: space.lg, width: '100%' },
