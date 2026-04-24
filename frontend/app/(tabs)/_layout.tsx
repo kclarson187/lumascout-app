@@ -3,13 +3,28 @@ import { Tabs } from 'expo-router';
 import { Home, Map, Plus, Users, User } from 'lucide-react-native';
 import { View, StyleSheet, Platform } from 'react-native';
 import { colors, font } from '../../src/theme';
+import { useUnreadMessages } from '../../src/hooks/useUnreadMessages';
 
 /**
  * 5-tab bottom nav for the photographer-network pivot:
  *   Home · Explore · ➕ Add · Network · Profile
  * Inbox is accessed via the bell on Home header and a prominent "Messages"
  * entry inside Network tab. Saved stays reachable from the Profile screen.
+ *
+ * Tier 1 Messaging Upgrade (2026-04): the Profile tab icon now carries a
+ * red dot when the viewer has unread DMs. Polling is driven by the shared
+ * useUnreadMessages hook so it stays consistent with the home avatar dot.
  */
+function ProfileTabIcon({ color }: { color: string }) {
+  const unread = useUnreadMessages();
+  return (
+    <View style={styles.iconWrap}>
+      <User size={22} color={color} />
+      {unread.total > 0 ? <View style={styles.iconRedDot} /> : null}
+    </View>
+  );
+}
+
 export default function TabsLayout() {
   return (
     <Tabs
@@ -41,7 +56,7 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen name="network" options={{ title: 'Network', tabBarIcon: ({color}) => <Users size={22} color={color}/>, tabBarButtonTestID: 'tab-network' }} />
-      <Tabs.Screen name="profile" options={{ title: 'Profile', tabBarIcon: ({color}) => <User size={22} color={color}/>, tabBarButtonTestID: 'tab-profile' }} />
+      <Tabs.Screen name="profile" options={{ title: 'Profile', tabBarIcon: ({ color }) => <ProfileTabIcon color={color}/>, tabBarButtonTestID: 'tab-profile' }} />
       {/* Hidden legacy tabs: saved moved off the bottom bar (still reachable from Profile → Saved). */}
       <Tabs.Screen name="saved" options={{ href: null }} />
     </Tabs>
@@ -50,4 +65,16 @@ export default function TabsLayout() {
 
 const styles = StyleSheet.create({
   addBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 4 },
+  iconWrap: { position: 'relative', width: 24, height: 24, alignItems: 'center', justifyContent: 'center' },
+  iconRedDot: {
+    position: 'absolute',
+    top: -1,
+    right: -3,
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: '#ef4444',
+    borderWidth: 1.5,
+    borderColor: 'rgba(20,20,22,1)',
+  },
 });

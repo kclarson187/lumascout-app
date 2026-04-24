@@ -9,6 +9,7 @@ import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 import { timeAgo } from '../../src/components/FreshnessBits';
 import KeyboardSafe from '../../src/components/KeyboardSafe';
+import ReadReceipt from '../../src/components/ReadReceipt';
 
 const QUICK_STARTERS = [
   'Love your work.',
@@ -117,8 +118,21 @@ export default function ThreadScreen() {
                   </View>
                 </View>
               }
-              renderItem={({ item }) => {
+              renderItem={({ item, index }) => {
                 const mine = item.sender_user_id === user?.user_id;
+                // Show the read-receipt line on the LAST outbound message only
+                // (Instagram/iMessage convention). Earlier messages keep a
+                // plain timestamp for a clean bubble stack.
+                let isLastMine = false;
+                if (mine) {
+                  isLastMine = true;
+                  for (let j = index + 1; j < messages.length; j++) {
+                    if (messages[j]?.sender_user_id === user?.user_id) {
+                      isLastMine = false;
+                      break;
+                    }
+                  }
+                }
                 return (
                   <View style={[s.row, mine ? s.rowMine : s.rowTheirs]}>
                     <View style={[s.bubble, mine ? s.bubbleMine : s.bubbleTheirs]}>
@@ -151,6 +165,13 @@ export default function ThreadScreen() {
                         </Pressable>
                       ) : null}
                       <Text style={[s.ts, mine && { color: 'rgba(255,255,255,0.7)' }]}>{timeAgo(item.created_at)}</Text>
+                      {isLastMine ? (
+                        <ReadReceipt
+                          deliveredAt={item.delivered_at}
+                          seenAt={item.seen_at}
+                          mine
+                        />
+                      ) : null}
                     </View>
                   </View>
                 );

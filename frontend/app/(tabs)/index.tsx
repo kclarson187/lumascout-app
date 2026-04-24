@@ -28,6 +28,8 @@ import { SectionSkeleton, SkeletonBox } from '../../src/components/Skeleton';
 import UpgradeBanner from '../../src/components/UpgradeBanner';
 import ScoutAICard from '../../src/components/ScoutAICard';
 import ScoutAIIntroModal from '../../src/components/ScoutAIIntroModal';
+import HomeInboxPreview from '../../src/components/HomeInboxPreview';
+import { useUnreadMessages } from '../../src/hooks/useUnreadMessages';
 import { readCache, writeCache } from '../../src/utils/swrCache';
 
 type Feed = Record<string, any[]>;
@@ -62,6 +64,7 @@ function sanitizeFeed(data: any): any {
 
 export default function Home() {
   const { user } = useAuth();
+  const unread = useUnreadMessages();
   const [feed, setFeed] = useState<Feed>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -217,6 +220,13 @@ export default function Home() {
             testID="home-messages"
           >
             <MessageCircle size={20} color={colors.text} />
+            {unread.unread_messages > 0 ? (
+              <View style={styles.topIconBadge}>
+                <Text style={styles.topIconBadgeTxt}>
+                  {unread.unread_messages > 9 ? '9+' : unread.unread_messages}
+                </Text>
+              </View>
+            ) : null}
           </TouchableOpacity>
           {/* PRD: Share LumaScout — quick access between messages and avatar.
               Native Share sheet; referral-code appended when present.
@@ -241,14 +251,16 @@ export default function Home() {
             <Share2 size={19} color={colors.primary} />
           </TouchableOpacity>
           {user?.avatar_url ? (
-            <TouchableOpacity onPress={() => router.push('/(tabs)/profile')} testID="home-avatar">
+            <TouchableOpacity onPress={() => router.push('/(tabs)/profile')} testID="home-avatar" style={styles.avatarWrap}>
               <Image source={{ uri: user.avatar_url }} style={styles.avatar} />
+              {unread.total > 0 ? <View style={styles.avatarRedDot} /> : null}
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity onPress={() => router.push('/(tabs)/profile')} style={styles.avatarPh} testID="home-avatar">
+            <TouchableOpacity onPress={() => router.push('/(tabs)/profile')} style={[styles.avatarPh, styles.avatarWrap]} testID="home-avatar">
               <Text style={{ color: colors.text, fontFamily: font.bodyBold }}>
                 {user?.name?.[0]?.toUpperCase() || '?'}
               </Text>
+              {unread.total > 0 ? <View style={styles.avatarRedDot} /> : null}
             </TouchableOpacity>
           )}
         </View>
@@ -324,6 +336,11 @@ export default function Home() {
         <View style={{ paddingHorizontal: space.xl, marginTop: space.md }}>
           <ScoutAICard placement="home" />
         </View>
+
+        {/* Tier 1 Messaging: compact inbox preview row — renders only when
+            the viewer has at least one active thread. Stays above the fold
+            so DMs feel alive without polluting the home experience. */}
+        <HomeInboxPreview limit={3} />
 
         <ScrollView
           horizontal
@@ -487,7 +504,24 @@ const styles = StyleSheet.create({
     paddingBottom: space.sm,
     gap: 10,
   },
-  topIconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
+  topIconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  // Numeric unread badge for the Messages pill (Tier 1 messaging upgrade).
+  topIconBadge: {
+    position: 'absolute', top: -3, right: -3,
+    minWidth: 18, height: 18, borderRadius: 9,
+    backgroundColor: '#ef4444', paddingHorizontal: 4,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 2, borderColor: colors.bg,
+  },
+  topIconBadgeTxt: { color: '#fff', fontFamily: font.bodyBold, fontSize: 9 },
+  // Avatar red-dot overlay — small surface that reads "you have activity".
+  avatarWrap: { position: 'relative' },
+  avatarRedDot: {
+    position: 'absolute', top: -1, right: -1,
+    width: 12, height: 12, borderRadius: 6,
+    backgroundColor: '#ef4444',
+    borderWidth: 2, borderColor: colors.bg,
+  },
   // Gold-tinted pill variant so the Share CTA reads as a distinct action
   // between the Messages pill and the avatar. Same 40x40 shell for vertical
   // alignment parity with the other two top-bar items.
