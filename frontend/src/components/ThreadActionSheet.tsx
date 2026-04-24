@@ -21,7 +21,7 @@ import {
   Pressable,
   Alert,
 } from 'react-native';
-import { Trash2, BellOff, Bell, ShieldOff, Flag, X } from 'lucide-react-native';
+import { Trash2, BellOff, Bell, ShieldOff, Flag, X, Archive, ArchiveRestore, Pin, PinOff } from 'lucide-react-native';
 import { api, formatApiError } from '../api';
 import { colors, font, radii, space } from '../theme';
 import ReportSheet from './ReportSheet';
@@ -31,6 +31,8 @@ export type ThreadActionTarget = {
   other_user_id?: string | null;
   other_name?: string | null;
   is_muted?: boolean;
+  is_archived?: boolean;
+  is_pinned?: boolean;
 };
 
 export default function ThreadActionSheet({
@@ -40,6 +42,8 @@ export default function ThreadActionSheet({
   onDeleted,
   onMuted,
   onBlocked,
+  onArchived,
+  onPinned,
 }: {
   visible: boolean;
   target: ThreadActionTarget | null;
@@ -47,9 +51,51 @@ export default function ThreadActionSheet({
   onDeleted?: (threadId: string) => void;
   onMuted?: (threadId: string, isMuted: boolean) => void;
   onBlocked?: (userId: string) => void;
+  onArchived?: (threadId: string, isArchived: boolean) => void;
+  onPinned?: (threadId: string, isPinned: boolean) => void;
 }) {
   const [reportVisible, setReportVisible] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  const handleArchive = async () => {
+    if (!target) return;
+    setBusy(true);
+    try {
+      if (target.is_archived) {
+        await api.delete(`/dm/threads/${target.thread_id}/archive`);
+        onArchived?.(target.thread_id, false);
+      } else {
+        await api.post(`/dm/threads/${target.thread_id}/archive`, {});
+        onArchived?.(target.thread_id, true);
+      }
+      onClose();
+    } catch (e: any) {
+      Alert.alert('Could not update', formatApiError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handlePin = async () => {
+    if (!target) return;
+    setBusy(true);
+    try {
+      if (target.is_pinned) {
+        await api.delete(`/dm/threads/${target.thread_id}/pin`);
+        onPinned?.(target.thread_id, false);
+        onClose();
+      } else {
+        await api.post(`/dm/threads/${target.thread_id}/pin`, {});
+        onPinned?.(target.thread_id, true);
+        onClose();
+      }
+    } catch (e: any) {
+      // 409 = pin cap reached. Show the server's helpful message verbatim.
+      Alert.alert('Pin limit reached', formatApiError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const handleDelete = () => {
     if (!target) return;
@@ -146,6 +192,34 @@ export default function ThreadActionSheet({
                 <X size={18} color={colors.textSecondary} />
               </Pressable>
             </View>
+
+            <Pressable
+              style={s.item}
+              onPress={handlePin}
+              disabled={busy}
+              testID="thread-action-pin"
+            >
+              {target?.is_pinned ? (
+                <PinOff size={18} color={colors.text} />
+              ) : (
+                <Pin size={18} color="#f5a623" />
+              )}
+              <Text style={s.itemTxt}>{target?.is_pinned ? 'Unpin' : 'Pin to top'}</Text>
+            </Pressable>
+
+            <Pressable
+              style={s.item}
+              onPress={handleArchive}
+              disabled={busy}
+              testID="thread-action-archive"
+            >
+              {target?.is_archived ? (
+                <ArchiveRestore size={18} color={colors.text} />
+              ) : (
+                <Archive size={18} color={colors.text} />
+              )}
+              <Text style={s.itemTxt}>{target?.is_archived ? 'Unarchive' : 'Archive'}</Text>
+            </Pressable>
 
             <Pressable
               style={s.item}
