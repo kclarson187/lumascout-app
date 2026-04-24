@@ -252,7 +252,22 @@ const s = StyleSheet.create({
   },
   kicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.8 },
   title: { color: colors.text, fontFamily: font.display, fontSize: 24 },
-  searchBar: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: Platform.OS === 'ios' ? 10 : 6, borderRadius: radii.pill, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
+  searchBar: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    // Explicit height so the bar reads as a substantial pill (same pattern
+    // as the Home search/bell). Platform padding was collapsing it on iOS.
+    height: 48,
+    borderRadius: radii.pill,
+    // FIX: brighter surface + visible border so the search pill stands out
+    // against the page bg (was nearly invisible on dark backgrounds).
+    backgroundColor: colors.surface2,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+  },
   searchInp: { flex: 1, color: colors.text, fontFamily: font.body, fontSize: 14, padding: 0 },
   actionStripWrap: {
     flexGrow: 0,

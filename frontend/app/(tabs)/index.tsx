@@ -232,7 +232,12 @@ export default function Home() {
 
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: space.xl, marginTop: space.sm }}>
           <TouchableOpacity
-            style={[styles.searchBar, { flex: 1, marginHorizontal: 0 }]}
+            // FIX: null out the marginTop/marginHorizontal baked into the
+            // shared searchBar style — those margins were pushing the bar
+            // down inside this flex row and causing the notif bell to look
+            // offset. With them zeroed, the parent's alignItems:'center'
+            // lines both children up perfectly.
+            style={[styles.searchBar, { flex: 1, marginHorizontal: 0, marginTop: 0 }]}
             onPress={() => router.push('/search')}
             testID="home-search"
             activeOpacity={0.85}
