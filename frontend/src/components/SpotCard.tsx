@@ -1,5 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Pressable, Platform, Animated, Easing } from 'react-native';
+import React, { useState, useRef, useEffect, memo } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Pressable, Platform, Animated, Easing } from 'react-native';
+import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { Bookmark, Star, Shield, Lock, EyeOff, MapPin, Sun, MoreVertical, TrendingUp, Sparkles, ShieldCheck } from 'lucide-react-native';
 import { colors, radii, space, font } from '../theme';
@@ -22,7 +23,7 @@ function ScoreBadge({ score }: { score: number }) {
   );
 }
 
-export default function SpotCard({
+function SpotCardImpl({
   spot,
   onPress,
   onToggleSave,
@@ -111,15 +112,17 @@ export default function SpotCard({
         {cover && !imgError ? (
           <>
             <Image
-              source={{ uri: cover }}
+              source={cover}
               style={styles.image}
               onError={() => setImgError(true)}
               onLoad={() => setImgLoaded(true)}
+              // PERF: hardware-backed disk + memory cache; keeps scrolling
+              // butter-smooth and eliminates redundant network fetches.
+              cachePolicy="memory-disk"
+              contentFit="cover"
+              transition={160}
+              recyclingKey={cover}
             />
-            {/* #8: shimmer placeholder while pixels arrive. Absolute-positioned
-                so it covers the Image at the same aspect ratio; fades out the
-                moment onLoad fires. Never sticks (network failures trip
-                onError which swaps to SpotImageFallback below). */}
             {!imgLoaded && (
               <Animated.View
                 pointerEvents="none"
@@ -417,3 +420,22 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
 });
+
+// PERF: React.memo skips re-renders when props are shallow-equal.
+// FlatList/ScrollView of 20–30 SpotCards without memo would re-run each
+// card's full body on every parent setState (e.g. unread-notif tick);
+// memoization keeps scroll-frame cost flat as the feed grows.
+export default memo(SpotCardImpl, (prev, next) => {
+  const a = prev.spot, b = next.spot;
+  return (
+    a?.spot_id === b?.spot_id &&
+    a?.hero_cover_image_url === b?.hero_cover_image_url &&
+    a?.save_count === b?.save_count &&
+    a?.view_count === b?.view_count &&
+    a?.verification_status === b?.verification_status &&
+    prev.width === next.width &&
+    prev.compact === next.compact &&
+    prev.onToggleSave === next.onToggleSave
+  );
+});
+
