@@ -780,6 +780,10 @@ async def dm_inbox_preview(
     for t in threads:
         others = [u for u in t["participant_user_ids"] if u != user["user_id"]]
         other = umap.get(others[0]) if others else None
+        # Skip threads whose counter-party was soft-deleted — they'd render
+        # as empty cards with no name/avatar. Hardening per backend test.
+        if not other:
+            continue
         last_read = (my_map.get(t["thread_id"]) or {}).get("last_read_at")
         q: dict = {"thread_id": t["thread_id"], "sender_user_id": {"$ne": user["user_id"]},
                    "is_deleted": {"$ne": True}}

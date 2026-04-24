@@ -6,6 +6,8 @@ import { ChevronLeft, ShieldCheck, BellOff } from 'lucide-react-native';
 import { api } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
 import { timeAgo } from '../../src/components/FreshnessBits';
+import EliteBadge from '../../src/components/EliteBadge';
+import ThreadActionSheet, { ThreadActionTarget } from '../../src/components/ThreadActionSheet';
 
 export default function InboxScreen() {
   const params = useLocalSearchParams<{ tab?: string }>();
@@ -13,6 +15,8 @@ export default function InboxScreen() {
   const [threads, setThreads] = useState<any[]>([]);
   const [requests, setRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  // Tier 1: long-press action sheet state
+  const [actionTarget, setActionTarget] = useState<ThreadActionTarget | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -104,12 +108,24 @@ export default function InboxScreen() {
             const o = item.other || {};
             const unread = item.unread_count > 0;
             return (
-              <Pressable onPress={() => router.push(`/inbox/${item.thread_id}` as any)} style={s.threadRow} testID={`thread-${item.thread_id}`}>
+              <Pressable
+                onPress={() => router.push(`/inbox/${item.thread_id}` as any)}
+                onLongPress={() => setActionTarget({
+                  thread_id: item.thread_id,
+                  other_user_id: o.user_id,
+                  other_name: o.name || (o.username ? `@${o.username}` : 'Conversation'),
+                  is_muted: !!item.is_muted,
+                })}
+                delayLongPress={350}
+                style={s.threadRow}
+                testID={`thread-${item.thread_id}`}
+              >
                 {o.avatar_url ? <Image source={{ uri: o.avatar_url }} style={s.tAvatar}/> : <View style={[s.tAvatar,{backgroundColor:colors.surface2,alignItems:'center',justifyContent:'center'}]}><Text style={{color:colors.textSecondary,fontFamily:font.bodyBold}}>{o.name?.[0]?.toUpperCase() || '?'}</Text></View>}
                 <View style={{ flex: 1 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                     <Text style={[s.tName, unread && { fontFamily: font.bodyBold }]} numberOfLines={1}>{o.name || '@'+o.username}</Text>
                     {o.verification_status === 'verified' ? <ShieldCheck size={12} color="#3b82f6"/> : null}
+                    {o.plan === 'elite' ? <EliteBadge variant="compact" /> : null}
                     {item.is_muted ? <BellOff size={11} color={colors.textTertiary}/> : null}
                     <Text style={s.tTime}>{timeAgo(item.last_message_at) || timeAgo(item.created_at)}</Text>
                   </View>
@@ -122,6 +138,14 @@ export default function InboxScreen() {
           ItemSeparatorComponent={() => <View style={s.sep}/>}
         />
       )}
+      <ThreadActionSheet
+        visible={!!actionTarget}
+        target={actionTarget}
+        onClose={() => setActionTarget(null)}
+        onDeleted={(tid) => setThreads((prev) => prev.filter((t) => t.thread_id !== tid))}
+        onMuted={(tid, isMuted) => setThreads((prev) => prev.map((t) => t.thread_id === tid ? { ...t, is_muted: isMuted } : t))}
+        onBlocked={() => { load(); }}
+      />
     </SafeAreaView>
   );
 }
