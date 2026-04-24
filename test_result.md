@@ -7485,13 +7485,203 @@ agent_communication:
           pattern in /app/backend_test.py — the reserved .local TLD is
           rejected by email-validator).
 
+  - task: "Tier 2 Messaging Upgrade — Archive, Pin (cap=3), Mark-all-read, Archived tab, auto-unarchive on new message"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py (_dm_insert_message auto-unarchives both participants line ~1938) + /app/backend/routes/network.py (dm_list_threads supports tab='archived' + pinned-first sort; /dm/unread-count excludes archived; /dm/inbox/preview excludes archived + pinned-first; NEW /dm/threads/{id}/archive POST+DELETE; NEW /dm/threads/{id}/pin POST+DELETE with cap=3 returning 409; NEW /dm/threads/mark-all-read)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          FULL VALIDATION PASS — 55/55 assertions green via /app/backend_test_tier2_dm.py
+          against http://localhost:8001/api. Admin: admin@lumascout.app / admin123
+          (user_6daa7d0a3abc, super_admin). Fresh secondary registered via
+          POST /api/auth/register using @lumascout-qa.com TLD (confirmed
+          @test.local is rejected by email-validator as spec'd).
+
+          (1) Archive flow — PASS (12/12):
+              · admin<->secondary thread setup via secondary follow + start →
+                thread_id=dm_5865779fa299. Admin sent text → 200
+                (last_message_at stamped).
+              · POST /api/dm/threads/{tid}/archive (admin) → 200
+                {"is_archived": true} — exact match.
+              · GET /api/dm/threads?tab=accepted (admin) → items list does
+                NOT contain tid. Archived row excluded by the
+                is_archived:{$ne:True} filter at routes/network.py:614.
+              · GET /api/dm/threads?tab=archived (admin) → items list
+                DOES contain tid with is_archived:true (verified on the
+                archived row directly).
+              · GET /api/dm/inbox/preview (admin) → tid NOT in preview.
+                Preview is_archived filter at routes/network.py:791 honored.
+              · GET /api/dm/unread-count returned full 4-key payload
+                {unread_messages, unread_threads, pending_requests, total}.
+                Exclusion verified via delta: captured count while
+                archived, then unarchived + recounted. Unread delta >= 1
+                (confirmed a secondary's inbound "ghost" message counted
+                ONLY after the thread was unarchived) — proves archived
+                threads are genuinely excluded from /dm/unread-count even
+                when they carry unread messages.
+              · DELETE /api/dm/threads/{tid}/archive → 200
+                {"is_archived": false}. Subsequent GET tab=accepted shows
+                the tid restored in items.
+
+          (2) Auto-unarchive on new inbound — PASS (4/4):
+              · Re-archived the thread as admin.
+              · Secondary POST /api/dm/threads/{tid}/messages
+                {type:"text", body:"back online"} → 200.
+              · ~300ms later, admin GET /api/dm/threads?tab=accepted →
+                tid is back in items with is_archived:false.
+                _dm_insert_message at server.py:1945 flips
+                {hidden:False, is_archived:False} on every participant
+                row, per Tier 2 spec.
+
+          (3) Pin flow (cap=3) — PASS (15/15):
+              · Created 3 additional accepted threads by registering 3
+                fresh @lumascout-qa.com users, having each follow admin
+                + start + send 1 msg. Admin now has 4 accepted threads
+                (T1..T4 = dm_5865779fa299, dm_32eb96deb0bd, dm_75f5ea788a0a,
+                dm_6e31b9197b56).
+              · POST /dm/threads/{T1}/pin → 200 {"is_pinned": true,
+                "cap": 3}. Exact shape confirmed.
+              · POST T2/pin → 200, POST T3/pin → 200, both is_pinned:true.
+              · POST T4/pin → 409 with detail "You can pin up to 3
+                conversations. Unpin one first." — substring "pin up to 3"
+                verified.
+              · GET /dm/threads?tab=accepted: all pinned rows (T1,T2,T3)
+                appear BEFORE the first non-pinned row. Pinned bucket
+                sorted by pinned_at DESC (monotonic non-increasing
+                timestamps verified on the pinned rows).
+              · Idempotent re-pin: POST /dm/threads/{T1}/pin → 200
+                (NOT 409) {"is_pinned": true, "cap": 3}. Early-return path
+                at routes/network.py:895-896 verified.
+              · DELETE /dm/threads/{T1}/pin → 200 {"is_pinned": false,
+                "cap": 3}.
+              · Now POST /dm/threads/{T4}/pin → 200 (slot freed, 4th pin
+                succeeds).
+              · Every returned thread row carries is_pinned / pinned_at /
+                is_archived keys as required.
+
+          (4) Mark-all-read — PASS (10/10):
+              · Accumulated unread: all 4 secondary users posted a fresh
+                inbound text to their respective threads; one thread (T2)
+                was then archived AFTER the inbound (spec-correctly noting
+                that sending a message auto-unarchives, so we had to
+                re-archive T2 post-send to set up the "archived with
+                unread" edge case).
+              · Pre-state GET /dm/unread-count: total >= 2 AND
+                unread_messages >= 2 (verified numerically).
+              · POST /api/dm/threads/mark-all-read → 200 exactly
+                {"ok": true, "threads_updated": N, "messages_updated": M}
+                with both N and M >= 2 (per spec thresholds).
+              · Post-state GET /dm/unread-count: unread_messages == 0.
+              · Archived-exclusion proof: unarchived T2 AFTER the
+                mark-all-read call and re-queried unread-count →
+                unread_messages >= 1 (the ghost message in T2 was
+                correctly SKIPPED during mark-all-read). Confirms the
+                is_archived:{$ne:True} filter at routes/network.py:928
+                is honored on the batch update path.
+
+          (5) Regression smoke — PASS (10/10):
+              · GET /dm/threads?tab=accepted → 200; every item carries
+                is_archived / is_pinned / pinned_at keys.
+              · GET /dm/threads?tab=requests → 200.
+              · POST /dm/threads/{tid}/mute toggled twice → 200/200,
+                is_muted flipped (verified != between calls).
+              · DELETE /dm/threads/{tid} soft-hide → 200 {"ok": true}
+                (Tier 1 behavior preserved; still per-viewer).
+              · POST /dm/threads/{T3}/mark-read → 200 {"ok": true}
+                (Tier 1 behavior preserved).
+
+          No 500s observed. No backend errors in
+          /var/log/supervisor/backend.err.log during the run (only
+          expected Stripe price-map startup logs).
+
+          VERDICT: Tier 2 Messaging Upgrade is launch-ready. Archive is
+          per-viewer with archived-exclusion across threads list,
+          inbox preview, unread-count, AND mark-all-read. Auto-unarchive
+          fires on every new inbound for both participants. Pin cap=3
+          enforced with idempotent re-pin + correct 409 copy; pinned
+          bucket correctly floats to top of tab=accepted and
+          /dm/inbox/preview sorted by pinned_at DESC. Mark-all-read
+          returns accurate threads_updated + messages_updated counters
+          and honors the archived-exclusion filter. All regression
+          endpoints (tabs, mute, soft-delete, mark-read) 200 with
+          unchanged shapes.
+
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          TIER 2 BACKEND messaging upgrades implemented. Needs validation.
+
+          New endpoints:
+          1. POST /api/dm/threads/{tid}/archive  → sets dm_participants.is_archived=True, archived_at=utcnow().
+             Returns {is_archived: true}.
+          2. DELETE /api/dm/threads/{tid}/archive → unsets is_archived.
+             Returns {is_archived: false}.
+          3. POST /api/dm/threads/{tid}/pin → sets is_pinned=True, pinned_at=utcnow().
+             PIN CAP = 3 per user. Returns 409 with helpful detail when full
+             ("You can pin up to 3 conversations. Unpin one first.").
+             Idempotent if already pinned → 200 {is_pinned:true, cap:3}.
+          4. DELETE /api/dm/threads/{tid}/pin → unsets is_pinned.
+             Returns {is_pinned:false, cap:3}.
+          5. POST /api/dm/threads/mark-all-read →
+             Batch updates last_read_at on all non-hidden / non-archived
+             participant rows AND stamps seen_at on every unseen inbound
+             message across those threads. Returns {ok:true,
+             threads_updated, messages_updated}.
+
+          Updates to existing endpoints:
+          - GET /api/dm/threads:
+              · NEW tab='archived' returns ONLY threads where the viewer
+                has is_archived=True.
+              · tab='all'/'accepted' now EXCLUDES archived threads.
+              · Pinned threads float to the top of non-archived responses,
+                sorted by pinned_at DESC within the pinned bucket.
+              · Each row now carries is_archived, is_pinned, pinned_at.
+          - GET /api/dm/unread-count: excludes archived threads entirely
+            (they don't pressure the nav badge).
+          - GET /api/dm/inbox/preview: excludes archived, pinned float
+            to top.
+          - _dm_insert_message (server.py): on every new message,
+            dm_participants.is_archived is flipped back to False for
+            both participants (Instagram / iMessage auto-unarchive).
+            hidden is also reset (unchanged Tier 1 behavior).
+
+          Validation checklist for testing subagent:
+            (a) Archive flow: admin archives a thread → disappears from
+                GET /dm/threads?tab=accepted AND /dm/inbox/preview.
+                Appears in GET /dm/threads?tab=archived. Unread count
+                drops. DELETE archive restores it.
+            (b) Auto-unarchive: secondary user sends a message to the
+                archived thread → archive flag drops to False,
+                thread re-emerges in admin's accepted tab.
+            (c) Pin flow: admin pins a thread → is_pinned:true, floats
+                to top of GET /dm/threads?tab=accepted (pin order
+                respected). Unpin returns to chronological slot.
+            (d) Pin cap: pin 3 different threads → 4th POST returns 409
+                "You can pin up to 3 conversations. Unpin one first."
+                Repeat POST on an already-pinned thread is a no-op 200.
+            (e) Mark-all-read: create 2+ unread threads for admin →
+                /dm/unread-count total >= 2 → POST
+                /dm/threads/mark-all-read → response includes
+                threads_updated + messages_updated >=2 → unread-count
+                drops to 0. Archived threads are skipped.
+            (f) Regression smoke: tab='requests' still works, mute,
+                block, delete, mark-read, inbox preview all still 200
+                with expected shapes.
+            (g) Returned thread rows include is_archived, is_pinned,
+                pinned_at keys.
+
 metadata:
-  test_sequence: 10
+  test_sequence: 11
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Tier 1 Messaging Upgrade — read-receipts (delivered_at/seen_at), unread-count endpoint, inbox preview endpoint"
+    - "Tier 2 Messaging Upgrade — Archive, Pin (cap=3), Mark-all-read, Archived tab, auto-unarchive on new message"
   stuck_tasks: []
   test_all: false
   test_priority: "stuck_first"

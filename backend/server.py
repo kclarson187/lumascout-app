@@ -1935,10 +1935,14 @@ async def _dm_insert_message(thread: dict, sender: dict, payload: dict) -> dict:
         {"$set": {"last_message_at": doc["created_at"], "last_message_preview": preview[:160],
                   "updated_at": doc["created_at"]}},
     )
-    # Unhide for both participants (in case they soft-deleted)
+    # Unhide for both participants (in case they soft-deleted) AND
+    # auto-unarchive for the recipient so a new inbound message always
+    # surfaces back in their "All" tab (Instagram / iMessage behavior).
+    # Pinned / muted state is preserved — only `hidden` and
+    # `is_archived` are flipped back off.
     await db.dm_participants.update_many(
         {"thread_id": thread["thread_id"]},
-        {"$set": {"hidden": False}},
+        {"$set": {"hidden": False, "is_archived": False}},
     )
     # Notify the other participant
     others = [u for u in thread["participant_user_ids"] if u != sender["user_id"]]
