@@ -7873,11 +7873,21 @@ agent_communication:
 
   - task: "Photographer Directory — GET /api/directory + GET /api/directory/suggested (search/sort/filter/specialty/cursor pagination, premium soft-boost, follow/block hydration)"
     implemented: true
-    working: "NA"
+    working: true
     file: "/app/backend/routes/network.py — added _split_query_tokens, _directory_search_filter, GET /directory (sort=popular|name|recent|new|nearby; filter=all|nearby|verified|elite|pro|new|popular|available; specialty/city/state; cursor+limit; plan_rank soft-boost), GET /directory/suggested (2nd-degree mutual-follow expansion + same-city Pro/Elite backfill)"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          BACKEND PASS — 45/45 assertions green on 2026-04-24.
+          Coverage: basic shape, 5 sorts, 7 filters, multi-token
+          search, specialty/city/state params, pagination, suggested
+          2nd-degree expansion and auth requirement.
+          NOTE: filter=popular returned 0 items because DB has no
+          users with follower_count>=50 (data, not defect).
     status_history:
         -working: "NA"
         -agent: "main"
