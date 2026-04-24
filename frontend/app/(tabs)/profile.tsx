@@ -28,7 +28,6 @@ import {
   Store,
   Camera,
   Share2,
-  Globe,
   Globe2,
   AtSign,
   Music2,
@@ -42,6 +41,7 @@ import {
   HelpCircle,
   Eye,
 } from 'lucide-react-native';
+import GlobeIcon from '../../src/components/icons/GlobeIcon';
 import { useAuth } from '../../src/auth';
 import { api, formatApiError } from '../../src/api';
 import { colors, font, space, radii, SHOOT_TYPES } from '../../src/theme';
@@ -375,8 +375,13 @@ export default function Profile() {
             {(user.website || user.instagram || user.facebook_url || user.tiktok_url) && (
               <View style={styles.linkRow}>
                 {!!user.website && (
-                  <TouchableOpacity onPress={() => openUrl(user.website)} style={styles.linkBtn}>
-                    <Globe size={14} color={colors.textSecondary} />
+                  <TouchableOpacity
+                    onPress={() => openUrl(user.website)}
+                    style={[styles.linkBtn, styles.linkBtnPortfolio]}
+                    testID="profile-portfolio-link"
+                    accessibilityLabel="Open portfolio"
+                  >
+                    <GlobeIcon size={16} active weight="regular" />
                   </TouchableOpacity>
                 )}
                 {!!user.instagram && (
@@ -632,7 +637,7 @@ export default function Profile() {
                 </View>
               </View>
 
-              <Input label="Website" value={form.website} onChangeText={(t) => setForm({ ...form, website: t })} autoCapitalize="none" />
+              <Input label="Portfolio" placeholder="https://yoursite.com" value={form.website} onChangeText={(t) => setForm({ ...form, website: t })} autoCapitalize="none" />
               <Input label="Instagram handle" value={form.instagram} onChangeText={(t) => setForm({ ...form, instagram: t })} autoCapitalize="none" />
               <Input label="Facebook URL" value={form.facebook_url} onChangeText={(t) => setForm({ ...form, facebook_url: t })} autoCapitalize="none" />
               <Input label="TikTok URL" value={form.tiktok_url} onChangeText={(t) => setForm({ ...form, tiktok_url: t })} autoCapitalize="none" />
@@ -1009,6 +1014,13 @@ const styles = StyleSheet.create({
   linkBtn: {
     width: 32, height: 32, borderRadius: 16, backgroundColor: colors.surface1,
     borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center',
+  },
+  // Premium gold-tinted variant used for the Portfolio (website) link only.
+  // Signals "this is where their published work lives" vs. the neutral
+  // social pills (Instagram / Facebook / TikTok).
+  linkBtnPortfolio: {
+    backgroundColor: 'rgba(245,166,35,0.14)',
+    borderColor: 'rgba(245,166,35,0.42)',
   },
 
   ctaRow: { flexDirection: 'row', gap: 8, marginTop: space.lg, width: '100%' },

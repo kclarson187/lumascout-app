@@ -17,7 +17,6 @@ import {
   ChevronLeft,
   ShieldCheck,
   MapPin,
-  Globe,
   Globe2,
   AtSign,
   Music2,
@@ -32,6 +31,7 @@ import {
   MoreVertical,
   ShieldOff,
 } from 'lucide-react-native';
+import GlobeIcon from '../../src/components/icons/GlobeIcon';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
@@ -290,8 +290,13 @@ export default function UserProfile() {
           {(profile.website || profile.instagram || profile.facebook_url || profile.tiktok_url) && (
             <View style={styles.linkRow}>
               {!!profile.website && (
-                <TouchableOpacity onPress={() => openUrl(profile.website)} style={styles.linkBtn}>
-                  <Globe size={14} color={colors.textSecondary} />
+                <TouchableOpacity
+                  onPress={() => openUrl(profile.website)}
+                  style={[styles.linkBtn, styles.linkBtnPortfolio]}
+                  testID="user-portfolio-link"
+                  accessibilityLabel="Open portfolio"
+                >
+                  <GlobeIcon size={16} active weight="regular" />
                 </TouchableOpacity>
               )}
               {!!profile.instagram && (
@@ -548,6 +553,12 @@ const styles = StyleSheet.create({
   linkBtn: {
     width: 32, height: 32, borderRadius: 16, backgroundColor: colors.surface1,
     borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center',
+  },
+  // Premium gold-tinted variant for the Portfolio link — distinguishes the
+  // photographer's published work destination from neutral social pills.
+  linkBtnPortfolio: {
+    backgroundColor: 'rgba(245,166,35,0.14)',
+    borderColor: 'rgba(245,166,35,0.42)',
   },
 
   ctaRow: { flexDirection: 'row', gap: 8, marginTop: space.lg, width: '100%' },
