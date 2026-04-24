@@ -171,7 +171,9 @@ export default function Home() {
             <MessageCircle size={20} color={colors.text} />
           </TouchableOpacity>
           {/* PRD: Share LumaScout — quick access between messages and avatar.
-              Native Share sheet; referral-code appended when present. */}
+              Native Share sheet; referral-code appended when present.
+              FIX: gold-tinted pill so it's clearly visible as a CTA next to
+              the standard surface-colored Messages pill (same 40x40 shell). */}
           <TouchableOpacity
             onPress={async () => {
               try {
@@ -185,7 +187,7 @@ export default function Home() {
                 });
               } catch {}
             }}
-            style={styles.topIconBtn}
+            style={styles.topShareBtn}
             testID="home-share"
           >
             <Share2 size={19} color={colors.primary} />
@@ -433,6 +435,15 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   topIconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
+  // Gold-tinted pill variant so the Share CTA reads as a distinct action
+  // between the Messages pill and the avatar. Same 40x40 shell for vertical
+  // alignment parity with the other two top-bar items.
+  topShareBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(245,166,35,0.14)',
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.4)',
+    alignItems: 'center', justifyContent: 'center',
+  },
   communityStrip: { paddingHorizontal: space.xl, paddingBottom: space.sm, gap: 6, alignItems: 'center' },
   cTab: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1 },
   // Subtle "you are here" — no primary fill. Just a darker surface and
@@ -459,12 +470,14 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderWidth: 1,
     paddingHorizontal: space.lg,
-    paddingVertical: 14,
+    // FIX: explicit height so the search bar lines up perfectly with the
+    // notif bell (both 48px) regardless of platform font padding.
+    height: 48,
     borderRadius: radii.md,
   },
   searchPlaceholder: { color: colors.textSecondary, fontFamily: font.body, fontSize: 14 },
-  // Notifications bell (Phase 2) — lives next to the search bar.
-  notifBtn: { width: 44, height: 44, borderRadius: radii.md, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  // Notifications bell — matches search bar height for a clean inline row.
+  notifBtn: { width: 48, height: 48, borderRadius: radii.md, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   notifBadge: { position: 'absolute', top: 4, right: 4, minWidth: 16, height: 16, borderRadius: 8, backgroundColor: colors.secondary || '#ef4444', paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
   notifBadgeTxt: { color: colors.textInverse || '#fff', fontFamily: font.bodyBold, fontSize: 9 },
   heroCard: {
