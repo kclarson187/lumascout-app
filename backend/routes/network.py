@@ -689,11 +689,111 @@ async def dm_mark_read(thread_id: str, user: dict = Depends(get_current_user)):
     thread = await db.dm_threads.find_one({"thread_id": thread_id})
     if not thread or user["user_id"] not in thread["participant_user_ids"]:
         raise HTTPException(status_code=404, detail="Not found")
+    now = utcnow()
     await db.dm_participants.update_one(
         {"thread_id": thread_id, "user_id": user["user_id"]},
-        {"$set": {"last_read_at": utcnow()}},
+        {"$set": {"last_read_at": now}},
+    )
+    # Tier 1 read-receipts: stamp seen_at on every inbound message that
+    # hasn't been seen yet. This gives per-message Seen indicators to the
+    # *sender* (i.e. the other participant) without websockets.
+    await db.dm_messages.update_many(
+        {
+            "thread_id": thread_id,
+            "sender_user_id": {"$ne": user["user_id"]},
+            "seen_at": None,
+        },
+        {"$set": {"seen_at": now}},
     )
     return {"ok": True}
+
+
+# Tier 1: total unread across all accepted threads for the current viewer.
+# Used by nav-bar badge + profile-avatar red dot on home.
+@router.get("/dm/unread-count")
+async def dm_unread_count(user: dict = Depends(get_current_user)):
+    parts = await db.dm_participants.find(
+        {"user_id": user["user_id"], "hidden": {"$ne": True}},
+        {"_id": 0, "thread_id": 1, "last_read_at": 1},
+    ).to_list(1000)
+    total = 0
+    threads_with_unread = 0
+    for p in parts:
+        q: dict = {
+            "thread_id": p["thread_id"],
+            "sender_user_id": {"$ne": user["user_id"]},
+            "is_deleted": {"$ne": True},
+        }
+        if p.get("last_read_at"):
+            q["created_at"] = {"$gt": p["last_read_at"]}
+        n = await db.dm_messages.count_documents(q)
+        if n:
+            total += n
+            threads_with_unread += 1
+    # Include pending inbound requests so the badge reflects true "needs attention"
+    pending = await db.dm_requests.count_documents({
+        "to_user_id": user["user_id"], "status": "pending",
+    })
+    return {
+        "unread_messages": total,
+        "unread_threads": threads_with_unread,
+        "pending_requests": pending,
+        "total": total + pending,
+    }
+
+
+# Tier 1: lightweight inbox preview for the Home screen row.
+# Returns just enough to render ~3 thread pills (avatar, name, preview, unread).
+# Stripped of any heavy fields to protect home-feed perf.
+@router.get("/dm/inbox/preview")
+async def dm_inbox_preview(
+    limit: int = 3,
+    user: dict = Depends(get_current_user),
+):
+    limit = max(1, min(10, limit))
+    parts = await db.dm_participants.find(
+        {"user_id": user["user_id"], "hidden": {"$ne": True}},
+        {"_id": 0},
+    ).to_list(500)
+    tids = [p["thread_id"] for p in parts]
+    if not tids:
+        return {"items": []}
+    threads = await db.dm_threads.find(
+        {"thread_id": {"$in": tids}, "last_message_at": {"$ne": None}},
+        {"_id": 0, "thread_id": 1, "participant_user_ids": 1,
+         "last_message_at": 1, "last_message_preview": 1},
+    ).sort("last_message_at", -1).limit(limit).to_list(limit)
+    if not threads:
+        return {"items": []}
+    other_ids: list = []
+    for t in threads:
+        other_ids += [u for u in t["participant_user_ids"] if u != user["user_id"]]
+    other_ids = list(set(other_ids))
+    ulist = await db.users.find(
+        {"user_id": {"$in": other_ids}},
+        {"_id": 0, "user_id": 1, "name": 1, "username": 1,
+         "avatar_url": 1, "verification_status": 1, "plan": 1},
+    ).to_list(len(other_ids))
+    umap = {u["user_id"]: u for u in ulist}
+    my_map = {p["thread_id"]: p for p in parts}
+    out = []
+    for t in threads:
+        others = [u for u in t["participant_user_ids"] if u != user["user_id"]]
+        other = umap.get(others[0]) if others else None
+        last_read = (my_map.get(t["thread_id"]) or {}).get("last_read_at")
+        q: dict = {"thread_id": t["thread_id"], "sender_user_id": {"$ne": user["user_id"]},
+                   "is_deleted": {"$ne": True}}
+        if last_read:
+            q["created_at"] = {"$gt": last_read}
+        unread = await db.dm_messages.count_documents(q)
+        out.append({
+            "thread_id": t["thread_id"],
+            "other": other,
+            "last_message_preview": t.get("last_message_preview"),
+            "last_message_at": t.get("last_message_at"),
+            "unread_count": unread,
+        })
+    return {"items": out}
 
 # --- dm_mute_toggle (server.py:3500-3510) ---
 @router.post("/dm/threads/{thread_id}/mute")
