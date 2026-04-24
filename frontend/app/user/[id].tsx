@@ -287,27 +287,24 @@ export default function UserProfile() {
             </View>
           )}
 
-          {/* Socials */}
-          {(profile.website || profile.instagram || profile.facebook_url || profile.tiktok_url) && (
+          {/* Socials
+              PRD: Portfolio rendered as a full <Button variant="ghost">
+              (same styling as Share / Follow CTAs) with a GlobeIcon prefix.
+              Social pills below remain as compact icon circles. */}
+          {!!profile.website && (
+            <View style={{ width: '100%', marginTop: space.md }}>
+              <Button
+                title="Portfolio"
+                variant="ghost"
+                onPress={() => openUrl(profile.website)}
+                icon={<GlobeIcon size={15} active weight="regular" />}
+                testID="user-portfolio-link"
+              />
+            </View>
+          )}
+
+          {(profile.instagram || profile.facebook_url || profile.tiktok_url) && (
             <View style={styles.linkRow}>
-              {!!profile.website && (
-                <TouchableOpacity
-                  onPress={() => openUrl(profile.website)}
-                  style={styles.portfolioBtn}
-                  testID="user-portfolio-link"
-                  accessibilityLabel="Open portfolio"
-                  activeOpacity={0.85}
-                >
-                  <LinearGradient
-                    colors={['rgba(245,166,35,0.30)', 'rgba(245,166,35,0.08)']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={StyleSheet.absoluteFill}
-                  />
-                  <GlobeIcon size={16} active weight="regular" />
-                  <Text style={styles.portfolioBtnTxt}>Portfolio</Text>
-                </TouchableOpacity>
-              )}
               {!!profile.instagram && (
                 <TouchableOpacity onPress={() => openUrl(`https://instagram.com/${String(profile.instagram).replace('@', '')}`)} style={styles.linkBtn}>
                   <AtSign size={14} color={colors.textSecondary} />
