@@ -371,30 +371,26 @@ export default function Profile() {
               )}
             </View>
 
-            {/* Social + web links */}
-            {(user.website || user.instagram || user.facebook_url || user.tiktok_url) && (
+            {/* Social + web links
+                PRD: Portfolio now uses the shared <Button variant="ghost">
+                (identical styling to the "Share profile" button above) with
+                a GlobeIcon prefix. Gives the Portfolio action the same
+                premium feel as other primary CTAs on the page instead of
+                competing with the social-pill aesthetic. */}
+            {!!user.website && (
+              <View style={{ marginTop: space.md }}>
+                <Button
+                  title="Portfolio"
+                  variant="ghost"
+                  onPress={() => openUrl(user.website)}
+                  icon={<GlobeIcon size={15} active weight="regular" />}
+                  testID="profile-portfolio-link"
+                />
+              </View>
+            )}
+
+            {(user.instagram || user.facebook_url || user.tiktok_url) && (
               <View style={styles.linkRow}>
-                {!!user.website && (
-                  <TouchableOpacity
-                    onPress={() => openUrl(user.website)}
-                    style={styles.portfolioBtn}
-                    testID="profile-portfolio-link"
-                    accessibilityLabel="Open portfolio"
-                    activeOpacity={0.85}
-                  >
-                    {/* Gold diagonal gradient fill — reads as a premium CTA
-                        chip rather than a flat tint. Clipped by overflow
-                        on the parent. */}
-                    <LinearGradient
-                      colors={['rgba(245,166,35,0.30)', 'rgba(245,166,35,0.08)']}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 1 }}
-                      style={StyleSheet.absoluteFill}
-                    />
-                    <GlobeIcon size={16} active weight="regular" />
-                    <Text style={styles.portfolioBtnTxt}>Portfolio</Text>
-                  </TouchableOpacity>
-                )}
                 {!!user.instagram && (
                   <TouchableOpacity onPress={() => openUrl(`https://instagram.com/${user.instagram.replace('@', '')}`)} style={styles.linkBtn}>
                     <AtSign size={14} color={colors.textSecondary} />
