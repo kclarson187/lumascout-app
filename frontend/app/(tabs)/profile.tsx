@@ -513,6 +513,45 @@ export default function Profile() {
             </TouchableOpacity>
           )}
 
+          {/* PRD #11: Share-the-app primary CTA moved HIGH on the profile so
+              it's visible above the fold. Sits right under the Upgrade CTA
+              (or directly below Badges when the user is already Pro/Elite).
+              Uses the native Share sheet with referral code auto-appended
+              when present so we can track K-factor later. */}
+          <TouchableOpacity
+            style={styles.shareAppRow}
+            onPress={async () => {
+              try {
+                const ref = (user as any)?.referral_code;
+                const urlBase = 'https://lumascout.app';
+                const url = ref ? `${urlBase}?ref=${encodeURIComponent(ref)}` : urlBase;
+                await Share.share({
+                  message: `I'm using LumaScout to find amazing photo spots — come join me 📸\n\n${url}`,
+                  url,
+                  title: 'LumaScout — photo-spot scouting for photographers',
+                });
+              } catch {}
+            }}
+            testID="profile-share-app"
+            activeOpacity={0.88}
+          >
+            <LinearGradient
+              colors={['rgba(245,166,35,0.18)', 'rgba(245,166,35,0.04)']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFill}
+            />
+            <View style={styles.shareAppIcon}>
+              <Share2 size={18} color={colors.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.shareAppTitle}>Share LumaScout with a friend</Text>
+              <Text style={styles.shareAppBody}>
+                Photographers love finding new spots. Spread the word — unlock Pro perks when referrals subscribe.
+              </Text>
+            </View>
+          </TouchableOpacity>
+
           {/* === ROLE-BASED TOOLS ======================================== */}
           {showRoleSection && (
             <>
@@ -559,44 +598,7 @@ export default function Profile() {
             </TouchableOpacity>
           </View>
 
-          {/* PRD #11: Share-the-app primary CTA. Deliberately sits on its
-              own row with a gold gradient accent so it reads as a delight /
-              growth action rather than a boring settings entry. Referral
-              codes, if the account has one, are auto-appended so we can
-              track K-factor later without any extra UX. */}
-          <TouchableOpacity
-            style={styles.shareAppRow}
-            onPress={async () => {
-              try {
-                const ref = (user as any)?.referral_code;
-                const urlBase = 'https://lumascout.app';
-                const url = ref ? `${urlBase}?ref=${encodeURIComponent(ref)}` : urlBase;
-                await Share.share({
-                  message: `I'm using LumaScout to find amazing photo spots — come join me 📸\n\n${url}`,
-                  url,
-                  title: 'LumaScout — photo-spot scouting for photographers',
-                });
-              } catch {}
-            }}
-            testID="profile-share-app"
-            activeOpacity={0.88}
-          >
-            <LinearGradient
-              colors={['rgba(245,166,35,0.18)', 'rgba(245,166,35,0.04)']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={StyleSheet.absoluteFill}
-            />
-            <View style={styles.shareAppIcon}>
-              <Share2 size={18} color={colors.primary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.shareAppTitle}>Share LumaScout with a friend</Text>
-              <Text style={styles.shareAppBody}>
-                Photographers love finding new spots. Spread the word — unlock Pro perks when referrals subscribe.
-              </Text>
-            </View>
-          </TouchableOpacity>
+          {/* === SUPPORT ================================================= */}
 
           {/* Sign-out is visually de-emphasised (separate row, subdued) so it
               doesn't sit one tap away from Admin — PRD priority #6. */}

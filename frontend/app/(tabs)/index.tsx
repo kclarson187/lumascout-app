@@ -10,10 +10,11 @@ import {
   RefreshControl,
   ActivityIndicator,
   TextInput,
+  Share,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { Search, TrendingUp, MessageCircle, Users, HandHeart, BookOpen, Bell } from 'lucide-react-native';
+import { Search, TrendingUp, MessageCircle, Users, HandHeart, BookOpen, Bell, Share2 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { api } from '../../src/api';
 import { useAuth } from '../../src/auth';
@@ -168,6 +169,26 @@ export default function Home() {
             testID="home-messages"
           >
             <MessageCircle size={20} color={colors.text} />
+          </TouchableOpacity>
+          {/* PRD: Share LumaScout — quick access between messages and avatar.
+              Native Share sheet; referral-code appended when present. */}
+          <TouchableOpacity
+            onPress={async () => {
+              try {
+                const ref = (user as any)?.referral_code;
+                const urlBase = 'https://lumascout.app';
+                const url = ref ? `${urlBase}?ref=${encodeURIComponent(ref)}` : urlBase;
+                await Share.share({
+                  message: `I'm using LumaScout to find amazing photo spots — come join me 📸\n\n${url}`,
+                  url,
+                  title: 'LumaScout',
+                });
+              } catch {}
+            }}
+            style={styles.topIconBtn}
+            testID="home-share"
+          >
+            <Share2 size={19} color={colors.primary} />
           </TouchableOpacity>
           {user?.avatar_url ? (
             <TouchableOpacity onPress={() => router.push('/(tabs)/profile')} testID="home-avatar">

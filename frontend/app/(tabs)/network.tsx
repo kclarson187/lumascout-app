@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, Pressable, Image, ActivityIndicator, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, Pressable, Image, ActivityIndicator, Platform, Share } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { Search, MessageSquare, ShieldCheck, Star, MapPin, Send, Users as UsersIcon, Inbox, Eye, Briefcase, BarChart3 } from 'lucide-react-native';
+import { Search, MessageSquare, ShieldCheck, Star, MapPin, Send, Users as UsersIcon, Inbox, Eye, Briefcase, BarChart3, Share2 } from 'lucide-react-native';
 import { api } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
 
@@ -106,8 +106,26 @@ export default function NetworkTab() {
   return (
     <SafeAreaView style={s.root}>
       <View style={s.header}>
-        <Text style={s.kicker}>NETWORK</Text>
-        <Text style={s.title}>Find photographers</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={s.kicker}>NETWORK</Text>
+          <Text style={s.title}>Find photographers</Text>
+        </View>
+        {/* PRD: Share LumaScout — top-right parity with Home. */}
+        <Pressable
+          onPress={async () => {
+            try {
+              await Share.share({
+                message: 'Join me on LumaScout — find amazing photo spots, connect with photographers 📸\n\nhttps://lumascout.app',
+                url: 'https://lumascout.app',
+                title: 'LumaScout',
+              });
+            } catch {}
+          }}
+          style={s.headerShareBtn}
+          testID="network-share-app"
+        >
+          <Share2 size={18} color={colors.primary} />
+        </Pressable>
       </View>
       <View style={{ paddingHorizontal: space.xl, flexDirection: 'row', gap: 8 }}>
         <View style={s.searchBar}>
@@ -141,11 +159,14 @@ export default function NetworkTab() {
 
       {/* PRD #13: Shoot-style filter chips. Horizontal scroll so we can keep
           adding niches without squeezing the layout. Tapping "All" clears
-          the filter, any niche toggles the search by that specialty. */}
+          the filter, any niche toggles the search by that specialty.
+          FIX: explicit chip height + alignItems:center on the ScrollView
+          so chips no longer stretch vertically with varying text length. */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        style={s.nicheStripWrap}
         contentContainerStyle={s.nicheStrip}
       >
         <Pressable
@@ -209,7 +230,13 @@ export default function NetworkTab() {
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
-  header: { paddingHorizontal: space.xl, paddingTop: space.sm, paddingBottom: space.sm },
+  header: { paddingHorizontal: space.xl, paddingTop: space.sm, paddingBottom: space.sm, flexDirection: 'row', alignItems: 'center', gap: space.md },
+  headerShareBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(245,166,35,0.14)',
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.4)',
+  },
   kicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.8 },
   title: { color: colors.text, fontFamily: font.display, fontSize: 24 },
   searchBar: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: Platform.OS === 'ios' ? 10 : 6, borderRadius: radii.pill, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
@@ -226,23 +253,37 @@ const s = StyleSheet.create({
   badgeTxt: { fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.4, textTransform: 'uppercase' },
   empty: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, textAlign: 'center', marginTop: space.lg },
   // PRD #13: Niche filter chip strip
+  nicheStripWrap: {
+    flexGrow: 0,
+    flexShrink: 0,
+    maxHeight: 52,
+  },
   nicheStrip: {
     paddingHorizontal: space.xl,
-    paddingTop: space.sm,
-    paddingBottom: space.sm,
-    gap: 6,
+    paddingVertical: space.sm,
+    gap: 8,
+    alignItems: 'center',
   },
   nicheChip: {
-    paddingHorizontal: 12, paddingVertical: 6,
-    borderRadius: radii.pill,
+    height: 32,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 16,
     backgroundColor: colors.surface1,
-    borderWidth: 1, borderColor: colors.border,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   nicheChipActive: {
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
   nicheChipTxt: {
-    color: colors.text, fontFamily: font.bodyMedium, fontSize: 12, letterSpacing: 0.2,
+    color: colors.text,
+    fontFamily: font.bodyMedium,
+    fontSize: 12.5,
+    letterSpacing: 0.2,
+    lineHeight: 15,
+    includeFontPadding: false,
   },
 });
