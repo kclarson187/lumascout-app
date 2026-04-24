@@ -567,22 +567,30 @@ async def dm_send_message(
 # --- dm_list_threads (server.py:3369-3435) ---
 @router.get("/dm/threads")
 async def dm_list_threads(
-    tab: str = "all",   # "all" | "requests" | "accepted"
+    tab: str = "all",   # "all" | "requests" | "accepted" | "archived"
     limit: int = 30,
+    q: Optional[str] = None,  # (unused server-side — search is client-side per PRD)
     user: dict = Depends(get_current_user),
 ):
     """List my threads grouped/filtered by tab.
 
-    - 'accepted' ⇒ exclude threads whose last_message_at is null AND we
-      have a pending request from the other side.
-    - 'requests' ⇒ only pending inbound requests.
+    Tier 2 upgrade (2026-04):
+      - `archived` tab ⇒ only threads where the viewer has is_archived=True.
+      - `all`/`accepted` ⇒ exclude archived + hidden.
+      - Pinned threads (is_pinned=True) float to the top of every
+        non-archived response, preserving chronological order within
+        each bucket. Archived tab does NOT honor pin (pins live on the
+        active inbox by design).
+
+    'accepted' ⇒ exclude threads whose last_message_at is null AND we
+    have a pending request from the other side.
+    'requests' ⇒ only pending inbound requests.
     """
     limit = max(1, min(100, limit))
     if tab == "requests":
         pending = await db.dm_requests.find(
             {"to_user_id": user["user_id"], "status": "pending"}, {"_id": 0}
         ).sort("created_at", -1).limit(limit).to_list(limit)
-        # Hydrate sender
         sids = list({r["from_user_id"] for r in pending})
         users = await db.users.find({"user_id": {"$in": sids}},
             {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
@@ -592,15 +600,29 @@ async def dm_list_threads(
             r["sender"] = umap.get(r["from_user_id"])
         return {"items": pending, "tab": "requests"}
 
-    # Accepted / all
-    part_filter = {"user_id": user["user_id"], "hidden": {"$ne": True}}
+    # Archived vs. active-inbox filter on the participant row.
+    if tab == "archived":
+        part_filter = {
+            "user_id": user["user_id"],
+            "hidden": {"$ne": True},
+            "is_archived": True,
+        }
+    else:
+        part_filter = {
+            "user_id": user["user_id"],
+            "hidden": {"$ne": True},
+            "is_archived": {"$ne": True},
+        }
+
     myparts = await db.dm_participants.find(part_filter, {"_id": 0}).to_list(500)
     tids = [p["thread_id"] for p in myparts]
+    if not tids:
+        return {"items": [], "tab": tab}
+
     threads = await db.dm_threads.find(
         {"thread_id": {"$in": tids}}, {"_id": 0}
-    ).sort("last_message_at", -1).to_list(limit)
+    ).sort("last_message_at", -1).to_list(limit * 2)
     # Drop threads with no messages that still have pending inbound requests
-    # (those live in Requests tab)
     pending_from_me_ids = await db.dm_requests.find(
         {"from_user_id": user["user_id"], "status": "pending"}, {"_id": 0, "thread_id": 1}
     ).to_list(500)
@@ -618,7 +640,8 @@ async def dm_list_threads(
     for t in threads:
         others = [u for u in t["participant_user_ids"] if u != user["user_id"]]
         other = umap.get(others[0]) if others else None
-        last_read = (my_map.get(t["thread_id"]) or {}).get("last_read_at")
+        mypart = my_map.get(t["thread_id"]) or {}
+        last_read = mypart.get("last_read_at")
         q_unread: dict = {"thread_id": t["thread_id"], "sender_user_id": {"$ne": user["user_id"]}}
         if last_read:
             q_unread["created_at"] = {"$gt": last_read}
@@ -627,11 +650,22 @@ async def dm_list_threads(
             **t,
             "other": other,
             "unread_count": unread,
-            "is_muted": (my_map.get(t["thread_id"]) or {}).get("is_muted", False),
+            "is_muted": mypart.get("is_muted", False),
+            "is_archived": mypart.get("is_archived", False),
+            "is_pinned": mypart.get("is_pinned", False),
+            "pinned_at": mypart.get("pinned_at"),
             "is_pending_from_me": t["thread_id"] in pending_thread_ids,
         }
         out.append(row)
-    return {"items": out, "tab": tab}
+    # Pinned float to top on the active inbox. Within pinned / within
+    # non-pinned, preserve the last_message_at DESC sort from Mongo.
+    if tab != "archived":
+        pinned = [r for r in out if r.get("is_pinned")]
+        # Recent pins first within the pinned bucket
+        pinned.sort(key=lambda r: r.get("pinned_at") or datetime.min, reverse=True)
+        rest = [r for r in out if not r.get("is_pinned")]
+        out = pinned + rest
+    return {"items": out[:limit], "tab": tab}
 
 # --- dm_get_thread (server.py:3438-3485) ---
 @router.get("/dm/threads/{thread_id}")
@@ -710,10 +744,12 @@ async def dm_mark_read(thread_id: str, user: dict = Depends(get_current_user)):
 
 # Tier 1: total unread across all accepted threads for the current viewer.
 # Used by nav-bar badge + profile-avatar red dot on home.
+# Tier 2: archived threads are excluded — they're intentionally
+# backgrounded and should not generate pressure on the nav icon.
 @router.get("/dm/unread-count")
 async def dm_unread_count(user: dict = Depends(get_current_user)):
     parts = await db.dm_participants.find(
-        {"user_id": user["user_id"], "hidden": {"$ne": True}},
+        {"user_id": user["user_id"], "hidden": {"$ne": True}, "is_archived": {"$ne": True}},
         {"_id": 0, "thread_id": 1, "last_read_at": 1},
     ).to_list(1000)
     total = 0
@@ -752,7 +788,7 @@ async def dm_inbox_preview(
 ):
     limit = max(1, min(10, limit))
     parts = await db.dm_participants.find(
-        {"user_id": user["user_id"], "hidden": {"$ne": True}},
+        {"user_id": user["user_id"], "hidden": {"$ne": True}, "is_archived": {"$ne": True}},
         {"_id": 0},
     ).to_list(500)
     tids = [p["thread_id"] for p in parts]
@@ -762,7 +798,7 @@ async def dm_inbox_preview(
         {"thread_id": {"$in": tids}, "last_message_at": {"$ne": None}},
         {"_id": 0, "thread_id": 1, "participant_user_ids": 1,
          "last_message_at": 1, "last_message_preview": 1},
-    ).sort("last_message_at", -1).limit(limit).to_list(limit)
+    ).sort("last_message_at", -1).limit(limit * 2).to_list(limit * 2)
     if not threads:
         return {"items": []}
     other_ids: list = []
@@ -780,11 +816,10 @@ async def dm_inbox_preview(
     for t in threads:
         others = [u for u in t["participant_user_ids"] if u != user["user_id"]]
         other = umap.get(others[0]) if others else None
-        # Skip threads whose counter-party was soft-deleted — they'd render
-        # as empty cards with no name/avatar. Hardening per backend test.
         if not other:
             continue
-        last_read = (my_map.get(t["thread_id"]) or {}).get("last_read_at")
+        mypart = my_map.get(t["thread_id"]) or {}
+        last_read = mypart.get("last_read_at")
         q: dict = {"thread_id": t["thread_id"], "sender_user_id": {"$ne": user["user_id"]},
                    "is_deleted": {"$ne": True}}
         if last_read:
@@ -796,8 +831,123 @@ async def dm_inbox_preview(
             "last_message_preview": t.get("last_message_preview"),
             "last_message_at": t.get("last_message_at"),
             "unread_count": unread,
+            "is_pinned": mypart.get("is_pinned", False),
+            "pinned_at": mypart.get("pinned_at"),
         })
+    # Pinned first on the home preview rail too
+    pinned = [r for r in out if r.get("is_pinned")]
+    pinned.sort(key=lambda r: r.get("pinned_at") or datetime.min, reverse=True)
+    rest = [r for r in out if not r.get("is_pinned")]
+    out = (pinned + rest)[:limit]
     return {"items": out}
+
+
+# ---------------------------------------------------------------------------
+# Tier 2 Messaging Upgrade — Archive, Pin, Mark-All-Read
+# ---------------------------------------------------------------------------
+# Archive / pin are per-user (stored on dm_participants). Archive is the
+# "soft background" bucket — threads stay accessible via the Archived tab
+# and auto-return to the All tab on a new inbound message. Pin keeps up to
+# 3 threads floating at the top of the active inbox.
+
+async def _require_participant(thread_id: str, user: dict) -> dict:
+    p = await db.dm_participants.find_one({"thread_id": thread_id, "user_id": user["user_id"]})
+    if not p:
+        # Fall back to thread membership — some legacy rows may lack a
+        # participant doc. 404 if the user truly isn't on the thread.
+        t = await db.dm_threads.find_one({"thread_id": thread_id})
+        if not t or user["user_id"] not in t.get("participant_user_ids", []):
+            raise HTTPException(status_code=404, detail="Not found")
+    return p or {}
+
+
+@router.post("/dm/threads/{thread_id}/archive")
+async def dm_archive_thread(thread_id: str, user: dict = Depends(get_current_user)):
+    """Per-user archive. Auto-unarchives on next inbound message."""
+    await _require_participant(thread_id, user)
+    await db.dm_participants.update_one(
+        {"thread_id": thread_id, "user_id": user["user_id"]},
+        {"$set": {"is_archived": True, "archived_at": utcnow()}},
+        upsert=True,
+    )
+    return {"is_archived": True}
+
+
+@router.delete("/dm/threads/{thread_id}/archive")
+async def dm_unarchive_thread(thread_id: str, user: dict = Depends(get_current_user)):
+    """Manual unarchive."""
+    await _require_participant(thread_id, user)
+    await db.dm_participants.update_one(
+        {"thread_id": thread_id, "user_id": user["user_id"]},
+        {"$set": {"is_archived": False}, "$unset": {"archived_at": ""}},
+    )
+    return {"is_archived": False}
+
+
+PIN_CAP = 3  # PRD decision: 3 pins (forces curation, feels clean).
+
+
+@router.post("/dm/threads/{thread_id}/pin")
+async def dm_pin_thread(thread_id: str, user: dict = Depends(get_current_user)):
+    """Per-user pin. Capped at PIN_CAP (3). Returns 409 when already full."""
+    await _require_participant(thread_id, user)
+    existing = await db.dm_participants.find_one({"thread_id": thread_id, "user_id": user["user_id"]})
+    if existing and existing.get("is_pinned"):
+        return {"is_pinned": True, "cap": PIN_CAP}
+    current_pins = await db.dm_participants.count_documents(
+        {"user_id": user["user_id"], "is_pinned": True}
+    )
+    if current_pins >= PIN_CAP:
+        raise HTTPException(
+            status_code=409,
+            detail=f"You can pin up to {PIN_CAP} conversations. Unpin one first.",
+        )
+    await db.dm_participants.update_one(
+        {"thread_id": thread_id, "user_id": user["user_id"]},
+        {"$set": {"is_pinned": True, "pinned_at": utcnow()}},
+        upsert=True,
+    )
+    return {"is_pinned": True, "cap": PIN_CAP}
+
+
+@router.delete("/dm/threads/{thread_id}/pin")
+async def dm_unpin_thread(thread_id: str, user: dict = Depends(get_current_user)):
+    await _require_participant(thread_id, user)
+    await db.dm_participants.update_one(
+        {"thread_id": thread_id, "user_id": user["user_id"]},
+        {"$set": {"is_pinned": False}, "$unset": {"pinned_at": ""}},
+    )
+    return {"is_pinned": False, "cap": PIN_CAP}
+
+
+@router.post("/dm/threads/mark-all-read")
+async def dm_mark_all_read(user: dict = Depends(get_current_user)):
+    """Batch mark-read for every non-hidden, non-archived thread."""
+    now = utcnow()
+    parts = await db.dm_participants.find(
+        {"user_id": user["user_id"], "hidden": {"$ne": True}, "is_archived": {"$ne": True}},
+        {"_id": 0, "thread_id": 1},
+    ).to_list(1000)
+    tids = [p["thread_id"] for p in parts]
+    if not tids:
+        return {"ok": True, "threads_updated": 0, "messages_updated": 0}
+    await db.dm_participants.update_many(
+        {"user_id": user["user_id"], "thread_id": {"$in": tids}},
+        {"$set": {"last_read_at": now}},
+    )
+    res = await db.dm_messages.update_many(
+        {
+            "thread_id": {"$in": tids},
+            "sender_user_id": {"$ne": user["user_id"]},
+            "seen_at": None,
+        },
+        {"$set": {"seen_at": now}},
+    )
+    return {
+        "ok": True,
+        "threads_updated": len(tids),
+        "messages_updated": res.modified_count,
+    }
 
 # --- dm_mute_toggle (server.py:3500-3510) ---
 @router.post("/dm/threads/{thread_id}/mute")
