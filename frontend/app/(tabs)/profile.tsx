@@ -377,21 +377,22 @@ export default function Profile() {
                 {!!user.website && (
                   <TouchableOpacity
                     onPress={() => openUrl(user.website)}
-                    style={[styles.linkBtn, styles.linkBtnPortfolio]}
+                    style={styles.portfolioBtn}
                     testID="profile-portfolio-link"
                     accessibilityLabel="Open portfolio"
-                    activeOpacity={0.82}
+                    activeOpacity={0.85}
                   >
-                    {/* Gold gradient fill (stronger than a flat tint) so the
-                        pill reads as distinctly premium next to the neutral
-                        socials. Bordered to finish the bezel. */}
+                    {/* Gold diagonal gradient fill — reads as a premium CTA
+                        chip rather than a flat tint. Clipped by overflow
+                        on the parent. */}
                     <LinearGradient
-                      colors={['rgba(245,166,35,0.28)', 'rgba(245,166,35,0.06)']}
+                      colors={['rgba(245,166,35,0.30)', 'rgba(245,166,35,0.08)']}
                       start={{ x: 0, y: 0 }}
                       end={{ x: 1, y: 1 }}
                       style={StyleSheet.absoluteFill}
                     />
-                    <GlobeIcon size={18} active weight="regular" />
+                    <GlobeIcon size={16} active weight="regular" />
+                    <Text style={styles.portfolioBtnTxt}>Portfolio</Text>
                   </TouchableOpacity>
                 )}
                 {!!user.instagram && (
@@ -1025,16 +1026,30 @@ const styles = StyleSheet.create({
     width: 32, height: 32, borderRadius: 16, backgroundColor: colors.surface1,
     borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center',
   },
-  // Premium gold-tinted variant used for the Portfolio (website) link only.
-  // Signals "this is where their published work lives" vs. the neutral
-  // social pills (Instagram / Facebook / TikTok). Keeps identical 32x32
-  // dimensions as the other socials (perfectly aligned row) but layers a
-  // gold gradient fill + stronger gold bezel to read as a premium CTA.
-  linkBtnPortfolio: {
+  // PRD: Portfolio CTA button — full pill with globe icon + "Portfolio"
+  // label. Lives in the social link row but visually dominates so it reads
+  // as the photographer's hero destination (published work), while the
+  // remaining socials stay as compact icon circles.
+  // Height matches linkBtn (32px) for baseline alignment across the row.
+  portfolioBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    height: 32,
+    paddingHorizontal: 14,
+    borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: 'rgba(245,166,35,0.08)',
     borderColor: 'rgba(245,166,35,0.55)',
     borderWidth: 1.2,
+  },
+  portfolioBtnTxt: {
+    color: colors.primary,
+    fontFamily: font.bodyBold,
+    fontSize: 12.5,
+    letterSpacing: 0.4,
+    includeFontPadding: false,
   },
 
   ctaRow: { flexDirection: 'row', gap: 8, marginTop: space.lg, width: '100%' },
