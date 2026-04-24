@@ -1,318 +1,336 @@
 """
-Phase 3 Mobile PRD backend tests.
+Tier 1 Messaging Upgrade — backend validation harness.
 
-Covers:
-  1) POST /api/posts/{post_id}/react (typed win/tip reactions, toggle, hydration)
-  2) POST /api/users/{user_id}/block + DELETE /block (idempotent, severs follow,
-     mirrors into dm_blocks, surfaces is_blocked on GET /api/users/{id})
-  3) Regression smoke for /auth/me, /spots, /feed/home, /users/{id}/follow,
-     /posts, /posts/{id}/like.
+Tests:
+  (1) Read-receipt pipeline (delivered_at / seen_at)
+  (2) GET /api/dm/unread-count
+  (3) GET /api/dm/inbox/preview
+  (4) Hide-for-me regression (DELETE /api/dm/threads/{tid})
+  (5) Regression smoke (threads list, mute, block, report)
 
-Harness uses admin@lumascout.app/admin123 + a freshly-registered secondary
-user. Direct Mongo inspection is used to verify collection-level side
-effects (post_reactions, user_blocks, dm_blocks, follows).
+Target: http://localhost:8001/api
+Admin: admin@lumascout.app / admin123
 """
 
-import asyncio
-import os
 import sys
 import uuid
+import json
+import asyncio
+from datetime import datetime
 
-import requests
-from motor.motor_asyncio import AsyncIOMotorClient
+import httpx
 
 BASE = "http://localhost:8001/api"
 ADMIN_EMAIL = "admin@lumascout.app"
 ADMIN_PASSWORD = "admin123"
 
-MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-DB_NAME = os.environ.get("DB_NAME", "photoscout_database")
-
-PASS = []
-FAIL = []
+RESULTS: list[tuple[str, bool, str]] = []
 
 
-def _p(name, ok, detail=""):
-    if ok:
-        PASS.append(name)
-        print(f"PASS  {name}  {detail}")
-    else:
-        FAIL.append(f"{name} — {detail}")
-        print(f"FAIL  {name}  {detail}")
+def rec(name: str, ok: bool, detail: str = ""):
+    RESULTS.append((name, ok, detail))
+    mark = "PASS" if ok else "FAIL"
+    print(f"[{mark}] {name}{('  — ' + detail) if detail else ''}")
 
 
-def login(email, password):
-    r = requests.post(f"{BASE}/auth/login", json={"email": email, "password": password}, timeout=15)
-    if r.status_code != 200:
-        raise RuntimeError(f"login failed {r.status_code} {r.text}")
-    return r.json()
+async def login(client: httpx.AsyncClient, email: str, password: str):
+    r = await client.post(f"{BASE}/auth/login", json={"email": email, "password": password})
+    r.raise_for_status()
+    data = r.json()
+    return data["token"], data["user"]
 
 
-def register(email, password, username, name):
-    r = requests.post(
+async def register(client: httpx.AsyncClient):
+    suffix = uuid.uuid4().hex[:8]
+    email = f"qa_{suffix}@lumascout-qa.com"
+    password = "pass12345"
+    username = f"qa_{suffix}"
+    name = f"QA Tester {suffix[:4].upper()}"
+    r = await client.post(
         f"{BASE}/auth/register",
         json={"email": email, "password": password, "username": username, "name": name},
-        timeout=15,
     )
     if r.status_code != 200:
         raise RuntimeError(f"register failed {r.status_code} {r.text}")
-    return r.json()
+    data = r.json()
+    data["user"]["_email"] = email
+    data["user"]["_password"] = password
+    return data["token"], data["user"]
 
 
-def auth(token):
+def auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def cleanup_secondary(user_id):
-    client = AsyncIOMotorClient(MONGO_URL)
-    db = client[DB_NAME]
-    try:
-        await db.users.delete_one({"user_id": user_id})
-        await db.follows.delete_many({"$or": [
-            {"follower_user_id": user_id}, {"followed_user_id": user_id},
-        ]})
-        await db.user_blocks.delete_many({"$or": [
-            {"blocker_user_id": user_id}, {"blocked_user_id": user_id},
-        ]})
-        await db.dm_blocks.delete_many({"$or": [
-            {"blocker_user_id": user_id}, {"blocked_user_id": user_id},
-        ]})
-    finally:
-        client.close()
+async def main():
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            admin_token, admin_user = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+        except Exception as e:
+            rec("admin login", False, f"{e}")
+            return 1
+        rec("admin login", True, f"user_id={admin_user.get('user_id')}")
 
+        try:
+            sec_token, sec_user = await register(client)
+        except Exception as e:
+            rec("secondary user register", False, f"{e}")
+            return 1
+        rec("secondary user register", True,
+            f"user_id={sec_user.get('user_id')} email={sec_user.get('_email')}")
 
-async def cleanup_post(post_id):
-    client = AsyncIOMotorClient(MONGO_URL)
-    db = client[DB_NAME]
-    try:
-        await db.community_posts.delete_one({"post_id": post_id})
-        await db.post_reactions.delete_many({"post_id": post_id})
-        await db.post_likes.delete_many({"post_id": post_id})
-        await db.post_comments.delete_many({"post_id": post_id})
-    finally:
-        client.close()
+        admin_id = admin_user["user_id"]
+        sec_id = sec_user["user_id"]
 
+        # Secondary follows admin so admin->sec thread auto-accepts
+        r = await client.post(f"{BASE}/users/{admin_id}/follow", headers=auth(sec_token))
+        rec("secondary follows admin (for auto-accept)",
+            r.status_code == 200, f"status={r.status_code}")
 
-async def db_counts(admin_id, target_id, post_id=None):
-    client = AsyncIOMotorClient(MONGO_URL)
-    db = client[DB_NAME]
-    try:
-        out = {}
-        out["follows_admin->target"] = await db.follows.count_documents({
-            "follower_user_id": admin_id, "followed_user_id": target_id
-        })
-        out["follows_target->admin"] = await db.follows.count_documents({
-            "follower_user_id": target_id, "followed_user_id": admin_id
-        })
-        out["user_blocks_admin->target"] = await db.user_blocks.count_documents({
-            "blocker_user_id": admin_id, "blocked_user_id": target_id
-        })
-        out["dm_blocks_admin->target"] = await db.dm_blocks.count_documents({
-            "blocker_user_id": admin_id, "blocked_user_id": target_id
-        })
-        if post_id:
-            out["reactions_win"] = await db.post_reactions.count_documents({
-                "post_id": post_id, "reaction_type": "win"
-            })
-            out["reactions_tip"] = await db.post_reactions.count_documents({
-                "post_id": post_id, "reaction_type": "tip"
-            })
-        return out
-    finally:
-        client.close()
+        # Admin starts thread
+        r = await client.post(f"{BASE}/dm/threads/start",
+                              headers=auth(admin_token),
+                              json={"user_id": sec_id})
+        if r.status_code != 200:
+            rec("POST /dm/threads/start", False, f"status={r.status_code} body={r.text[:300]}")
+            return 1
+        data = r.json()
+        tid = data["thread_id"]
+        is_request = data.get("is_request")
+        rec("POST /dm/threads/start (admin → secondary)", True,
+            f"thread_id={tid} is_request={is_request}")
 
+        if is_request:
+            rq = await client.get(f"{BASE}/dm/threads?tab=requests", headers=auth(sec_token))
+            if rq.status_code == 200:
+                for it in rq.json().get("items", []):
+                    if it.get("thread_id") == tid and it.get("request_id"):
+                        await client.post(
+                            f"{BASE}/dm/requests/{it['request_id']}/accept",
+                            headers=auth(sec_token),
+                        )
+                        break
 
-def main():
-    admin = login(ADMIN_EMAIL, ADMIN_PASSWORD)
-    admin_token = admin["token"]
-    admin_id = admin["user"]["user_id"]
-    print(f"admin_id={admin_id}")
+        # ============== (1) Read-receipt pipeline ==============
+        r = await client.post(f"{BASE}/dm/threads/{tid}/messages",
+                              headers=auth(admin_token),
+                              json={"type": "text", "body": "tier1 receipt test"})
+        ok = r.status_code == 200
+        sent = r.json() if ok else {}
+        rec("(1a) admin POST /dm/threads/{tid}/messages", ok,
+            f"status={r.status_code} msg_id={sent.get('message_id') or sent.get('id')}")
 
-    suffix = uuid.uuid4().hex[:6]
-    u2_email = f"u2_{suffix}@lumascout-qa.com"
-    u2_username = f"testuser2_{suffix}"
-    u2 = register(u2_email, "pass12345", u2_username, "Test User Two")
-    u2_token = u2["token"]  # noqa: F841
-    u2_id = u2["user"]["user_id"]
-    print(f"u2_id={u2_id} email={u2_email}")
+        r = await client.get(f"{BASE}/dm/threads/{tid}", headers=auth(admin_token))
+        msgs = r.json().get("messages", []) if r.status_code == 200 else []
+        target = None
+        for m in msgs:
+            if m.get("body") == "tier1 receipt test":
+                target = m
+        delivered = target.get("delivered_at") if target else None
+        seen_pre = target.get("seen_at") if target else "MISSING"
+        rec("(1b) admin GET thread → delivered_at != null AND seen_at == null",
+            target is not None and delivered is not None and seen_pre is None,
+            f"delivered_at={delivered} seen_at={seen_pre}")
 
-    created_post_id = None
-    try:
-        # ========== 1) Typed reactions ==========
-        r = requests.post(
-            f"{BASE}/posts",
-            headers=auth(admin_token),
-            json={"category": "tip", "title": "Phase3 Reactions QA", "body": "Testing win/tip toggles."},
-            timeout=15,
-        )
-        _p("POST /api/posts (admin creates tip post)", r.status_code == 200, f"status={r.status_code} body={r.text[:200]}")
-        assert r.status_code == 200, r.text
-        post = r.json()
-        created_post_id = post.get("post_id")
-        assert created_post_id, f"no post_id in {post}"
+        r = await client.get(f"{BASE}/dm/threads/{tid}", headers=auth(sec_token))
+        sec_sees = any(m.get("body") == "tier1 receipt test"
+                       for m in (r.json().get("messages", []) if r.status_code == 200 else []))
+        rec("(1c) secondary GET thread sees admin message",
+            sec_sees, f"status={r.status_code}")
 
-        r = requests.post(f"{BASE}/posts/{created_post_id}/react", headers=auth(admin_token),
-                          json={"type": "win"}, timeout=15)
-        ok = r.status_code == 200 and r.json() == {"reacted": True, "type": "win", "count": 1}
-        _p("POST react win (first) → reacted:true count:1", ok, f"status={r.status_code} body={r.text[:200]}")
+        r = await client.post(f"{BASE}/dm/threads/{tid}/mark-read", headers=auth(sec_token))
+        ok_mark = r.status_code == 200 and r.json().get("ok") is True
+        rec("(1d) secondary POST /mark-read → 200 {ok:true}", ok_mark,
+            f"status={r.status_code} body={r.text[:120]}")
 
-        r = requests.post(f"{BASE}/posts/{created_post_id}/react", headers=auth(admin_token),
-                          json={"type": "win"}, timeout=15)
-        ok = r.status_code == 200 and r.json() == {"reacted": False, "type": "win", "count": 0}
-        _p("POST react win (second) → reacted:false count:0", ok, f"status={r.status_code} body={r.text[:200]}")
+        r = await client.get(f"{BASE}/dm/threads/{tid}", headers=auth(admin_token))
+        seen_post = None
+        if r.status_code == 200:
+            for m in r.json().get("messages", []):
+                if m.get("body") == "tier1 receipt test":
+                    seen_post = m.get("seen_at")
+        rec("(1e) admin GET thread → seen_at set after mark-read",
+            seen_post is not None, f"seen_at={seen_post}")
 
-        r1 = requests.post(f"{BASE}/posts/{created_post_id}/react", headers=auth(admin_token),
-                           json={"type": "tip"}, timeout=15)
-        r2 = requests.post(f"{BASE}/posts/{created_post_id}/react", headers=auth(admin_token),
-                           json={"type": "win"}, timeout=15)
-        ok = (r1.status_code == 200 and r1.json().get("count") == 1 and r1.json().get("type") == "tip"
-              and r2.status_code == 200 and r2.json().get("count") == 1 and r2.json().get("type") == "win")
-        _p("React tip + win coexist (both count=1)", ok,
-           f"tip={r1.text[:120]} win={r2.text[:120]}")
+        # ============== (2) /dm/unread-count ==============
+        r = await client.post(f"{BASE}/dm/threads/{tid}/messages",
+                              headers=auth(admin_token),
+                              json={"type": "text", "body": "tier1 second message"})
+        rec("(2a) admin sends second message", r.status_code == 200, f"status={r.status_code}")
 
-        counts = asyncio.run(db_counts(admin_id, u2_id, created_post_id))
-        ok_db = counts["reactions_win"] == 1 and counts["reactions_tip"] == 1
-        _p("DB: post_reactions has 1 win + 1 tip row", ok_db, str(counts))
+        r = await client.get(f"{BASE}/dm/unread-count", headers=auth(sec_token))
+        uc = r.json() if r.status_code == 200 else {}
+        cond = (r.status_code == 200
+                and uc.get("total", 0) >= 1
+                and uc.get("unread_messages", 0) >= 1
+                and uc.get("unread_threads", 0) >= 1)
+        rec("(2b) secondary unread-count (pre mark-read) has unread>=1", cond, json.dumps(uc))
 
-        r = requests.post(f"{BASE}/posts/{created_post_id}/react", headers=auth(admin_token),
-                          json={"type": "heart"}, timeout=15)
-        _p("React invalid type=heart → 400", r.status_code == 400,
-           f"status={r.status_code} body={r.text[:200]}")
+        r = await client.post(f"{BASE}/dm/threads/{tid}/mark-read", headers=auth(sec_token))
+        rec("(2c) secondary mark-read before recount", r.status_code == 200, f"status={r.status_code}")
 
-        r = requests.post(f"{BASE}/posts/post_doesnotexist_{suffix}/react",
-                          headers=auth(admin_token), json={"type": "win"}, timeout=15)
-        _p("React on non-existent post → 404", r.status_code == 404,
-           f"status={r.status_code} body={r.text[:200]}")
+        r = await client.get(f"{BASE}/dm/unread-count", headers=auth(sec_token))
+        uc2 = r.json() if r.status_code == 200 else {}
+        rec("(2d) secondary unread-count (post mark-read) unread_messages == 0",
+            r.status_code == 200 and uc2.get("unread_messages", -1) == 0, json.dumps(uc2))
 
-        r = requests.post(f"{BASE}/posts/{created_post_id}/react",
-                          json={"type": "win"}, timeout=15)
-        _p("React without auth → 401/403", r.status_code in (401, 403),
-           f"status={r.status_code} body={r.text[:200]}")
+        r = await client.get(f"{BASE}/dm/unread-count", headers=auth(admin_token))
+        admin_uc = r.json() if r.status_code == 200 else {}
+        rec("(2e) admin unread-count returns 200", r.status_code == 200,
+            f"unread_messages={admin_uc.get('unread_messages')} (>=0 ok)")
 
-        r = requests.get(f"{BASE}/posts", headers=auth(admin_token), timeout=15)
-        body = r.json() if r.status_code == 200 else None
-        items = body if isinstance(body, list) else (body.get("items") if isinstance(body, dict) else None)
-        ok_hydrate = False
-        found = None
-        if items:
-            for it in items:
-                if it.get("post_id") == created_post_id:
-                    found = it
-                    break
-        if found is not None:
-            rc = found.get("reaction_counts") or {}
-            mr = found.get("my_reactions")
-            ok_hydrate = (
-                isinstance(rc, dict) and "win" in rc and "tip" in rc
-                and rc.get("win") == 1 and rc.get("tip") == 1
-                and isinstance(mr, list) and set(mr) == {"win", "tip"}
-            )
-        _p("GET /api/posts hydrates reaction_counts + my_reactions", ok_hydrate,
-           f"status={r.status_code} found={bool(found)} sample={str(found)[:300] if found else 'none'}")
-
-        # ========== 2) Block endpoints ==========
-        r = requests.post(f"{BASE}/users/{u2_id}/follow", headers=auth(admin_token), timeout=15)
-        _p("admin POST /users/{u2}/follow → {following:true}",
-           r.status_code == 200 and r.json().get("following") is True,
-           f"status={r.status_code} body={r.text[:200]}")
-
-        r = requests.get(f"{BASE}/users/{u2_id}", headers=auth(admin_token), timeout=15)
-        ok = r.status_code == 200 and r.json().get("is_following") is True and r.json().get("is_blocked") is False
-        _p("GET /api/users/{u2} → is_following:true, is_blocked:false",
-           ok, f"status={r.status_code} is_following={r.json().get('is_following')} is_blocked={r.json().get('is_blocked')}")
-
-        r = requests.post(f"{BASE}/users/{u2_id}/block", headers=auth(admin_token), timeout=15)
-        _p("admin POST /users/{u2}/block → {blocked:true}",
-           r.status_code == 200 and r.json().get("blocked") is True,
-           f"status={r.status_code} body={r.text[:200]}")
-
-        r = requests.get(f"{BASE}/users/{u2_id}", headers=auth(admin_token), timeout=15)
+        # ============== (3) /dm/inbox/preview ==============
+        r = await client.get(f"{BASE}/dm/inbox/preview?limit=3", headers=auth(admin_token))
         body = r.json() if r.status_code == 200 else {}
-        ok = r.status_code == 200 and body.get("is_blocked") is True and body.get("is_following") is False
-        _p("After block: GET user returns is_blocked:true, is_following:false",
-           ok, f"status={r.status_code} is_following={body.get('is_following')} is_blocked={body.get('is_blocked')}")
+        items = body.get("items", []) if isinstance(body, dict) else []
+        rec("(3a) admin /dm/inbox/preview?limit=3 returns {items:[..<=3]}",
+            r.status_code == 200 and isinstance(items, list) and len(items) <= 3,
+            f"count={len(items)}")
 
-        counts = asyncio.run(db_counts(admin_id, u2_id))
-        ok_db = (counts["follows_admin->target"] == 0
-                 and counts["follows_target->admin"] == 0
-                 and counts["user_blocks_admin->target"] == 1
-                 and counts["dm_blocks_admin->target"] == 1)
-        _p("DB: follows=0 both ways, user_blocks=1, dm_blocks=1 (cascade)", ok_db, str(counts))
+        required_item = {"thread_id", "other", "last_message_preview",
+                         "last_message_at", "unread_count"}
+        required_other = {"user_id", "name", "username", "avatar_url",
+                          "plan", "verification_status"}
+        per_item_ok = True
+        missing = []
+        for it in items:
+            miss_i = required_item - set(it.keys())
+            if miss_i:
+                per_item_ok = False
+                missing.append(("item", miss_i))
+                break
+            other = it.get("other")
+            if not isinstance(other, dict):
+                per_item_ok = False
+                missing.append(("other_not_dict", it.get("thread_id")))
+                break
+            miss_o = required_other - set(other.keys())
+            if miss_o:
+                per_item_ok = False
+                missing.append(("other", miss_o))
+                break
+        rec("(3b) each item has required keys incl. full `other` profile",
+            per_item_ok,
+            f"sample_keys={list(items[0].keys()) if items else []} missing={missing}")
 
-        r = requests.post(f"{BASE}/users/{u2_id}/follow", headers=auth(admin_token), timeout=15)
-        ok = r.status_code == 403 and "blocked" in (r.json().get("detail") or "").lower()
-        _p("admin POST follow on blocked user → 403 'Cannot follow a blocked user'",
-           ok, f"status={r.status_code} body={r.text[:200]}")
+        def _pdt(s):
+            if not s:
+                return None
+            try:
+                return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+            except Exception:
+                return None
 
-        r = requests.post(f"{BASE}/users/{u2_id}/block", headers=auth(admin_token), timeout=15)
-        _p("Second POST /block → still {blocked:true}",
-           r.status_code == 200 and r.json().get("blocked") is True,
-           f"status={r.status_code} body={r.text[:200]}")
-        counts = asyncio.run(db_counts(admin_id, u2_id))
-        _p("Idempotency: user_blocks row count still exactly 1",
-           counts["user_blocks_admin->target"] == 1, str(counts))
+        sort_ok = True
+        prev = None
+        for it in items:
+            dt = _pdt(it.get("last_message_at"))
+            if prev is not None and dt is not None and dt > prev:
+                sort_ok = False
+                break
+            if dt is not None:
+                prev = dt
+        rec("(3c) items sorted by last_message_at DESC", sort_ok, "")
 
-        r = requests.delete(f"{BASE}/users/{u2_id}/block", headers=auth(admin_token), timeout=15)
-        _p("DELETE /users/{u2}/block → {blocked:false}",
-           r.status_code == 200 and r.json().get("blocked") is False,
-           f"status={r.status_code} body={r.text[:200]}")
+        heavy_keys = {"messages", "body", "content_base64", "image_base64",
+                      "images", "attachments"}
+        heavy_found = []
+        for it in items:
+            for k, v in it.items():
+                if k in heavy_keys:
+                    heavy_found.append(k)
+                if isinstance(v, str) and (v.startswith("data:") or len(v) > 4000):
+                    heavy_found.append(f"{k}(oversized)")
+        rec("(3d) payload is lightweight (no message arrays / no base64 bulk)",
+            len(heavy_found) == 0, f"heavy_fields={heavy_found}")
 
-        counts = asyncio.run(db_counts(admin_id, u2_id))
-        ok_db = counts["user_blocks_admin->target"] == 0 and counts["dm_blocks_admin->target"] == 0
-        _p("DB: user_blocks + dm_blocks rows removed after unblock", ok_db, str(counts))
+        rec("(3e) admin preview contains the test thread",
+            any(it.get("thread_id") == tid for it in items), f"tid={tid}")
 
-        r = requests.post(f"{BASE}/users/{admin_id}/block", headers=auth(admin_token), timeout=15)
-        _p("Self-block → 400", r.status_code == 400, f"status={r.status_code} body={r.text[:200]}")
+        # ============== (4) Hide-for-me ==============
+        r = await client.delete(f"{BASE}/dm/threads/{tid}", headers=auth(admin_token))
+        rec("(4a) admin DELETE /dm/threads/{tid}",
+            r.status_code == 200, f"status={r.status_code}")
 
-        r = requests.post(f"{BASE}/users/user_doesnotexist_{suffix}/block",
-                          headers=auth(admin_token), timeout=15)
-        _p("Block non-existent user → 404", r.status_code == 404,
-           f"status={r.status_code} body={r.text[:200]}")
+        r = await client.get(f"{BASE}/dm/unread-count", headers=auth(admin_token))
+        admin_uc_after = r.json() if r.status_code == 200 else {}
+        rec("(4b) admin /dm/unread-count after hide → 200",
+            r.status_code == 200, json.dumps(admin_uc_after))
 
-        # ========== 3) Regression ==========
-        r = requests.get(f"{BASE}/auth/me", headers=auth(admin_token), timeout=15)
-        _p("REG: GET /auth/me → 200", r.status_code == 200, f"status={r.status_code}")
+        r = await client.get(f"{BASE}/dm/inbox/preview?limit=10", headers=auth(admin_token))
+        items_after = (r.json().get("items", []) if r.status_code == 200 else [])
+        still = any(it.get("thread_id") == tid for it in items_after)
+        rec("(4c) admin inbox/preview EXCLUDES hidden thread",
+            r.status_code == 200 and not still, f"still_present={still}")
 
-        r = requests.get(f"{BASE}/spots", headers=auth(admin_token), timeout=15)
-        _p("REG: GET /spots → 200", r.status_code == 200, f"status={r.status_code}")
+        r = await client.get(f"{BASE}/dm/threads?tab=accepted", headers=auth(sec_token))
+        sec_items = r.json().get("items", []) if r.status_code == 200 else []
+        sec_has = any(it.get("thread_id") == tid for it in sec_items)
+        rec("(4d) secondary /dm/threads?tab=accepted still has thread",
+            r.status_code == 200 and sec_has,
+            f"count={len(sec_items)} has_tid={sec_has}")
 
-        r = requests.get(f"{BASE}/feed/home", headers=auth(admin_token), timeout=15)
-        _p("REG: GET /feed/home → 200", r.status_code == 200, f"status={r.status_code}")
+        r = await client.get(f"{BASE}/dm/inbox/preview?limit=10", headers=auth(sec_token))
+        sec_pv = r.json().get("items", []) if r.status_code == 200 else []
+        rec("(4e) secondary /dm/inbox/preview still has thread",
+            r.status_code == 200 and any(it.get("thread_id") == tid for it in sec_pv),
+            f"preview_count={len(sec_pv)}")
 
-        r = requests.post(f"{BASE}/users/{u2_id}/follow", headers=auth(admin_token), timeout=15)
-        _p("REG: POST follow (unblocked) works", r.status_code == 200 and r.json().get("following") is True,
-           f"status={r.status_code} body={r.text[:200]}")
+        # ============== (5) Regression smoke ==============
+        r = await client.get(f"{BASE}/dm/threads?tab=accepted", headers=auth(admin_token))
+        rec("(5a) GET /dm/threads?tab=accepted → 200",
+            r.status_code == 200, f"status={r.status_code}")
 
-        r = requests.get(f"{BASE}/posts", headers=auth(admin_token), timeout=15)
-        body = r.json() if r.status_code == 200 else None
-        items = body if isinstance(body, list) else (body.get("items") if isinstance(body, dict) else None)
-        _p("REG: GET /posts → 200 with items", r.status_code == 200 and bool(items),
-           f"status={r.status_code} n={len(items) if items else 0}")
+        r = await client.get(f"{BASE}/dm/threads?tab=requests", headers=auth(admin_token))
+        rec("(5b) GET /dm/threads?tab=requests → 200",
+            r.status_code == 200, f"status={r.status_code}")
 
-        r = requests.post(f"{BASE}/posts/{created_post_id}/like", headers=auth(admin_token), timeout=15)
-        _p("REG: POST /posts/{id}/like → 200", r.status_code == 200,
-           f"status={r.status_code} body={r.text[:200]}")
+        r = await client.post(f"{BASE}/dm/threads/{tid}/mute", headers=auth(admin_token))
+        ok1 = r.status_code == 200
+        s1 = r.json().get("is_muted") if ok1 else None
+        r = await client.post(f"{BASE}/dm/threads/{tid}/mute", headers=auth(admin_token))
+        ok2 = r.status_code == 200
+        s2 = r.json().get("is_muted") if ok2 else None
+        rec("(5c) POST /dm/threads/{tid}/mute toggles is_muted",
+            ok1 and ok2 and s1 != s2, f"first={s1} second={s2}")
 
-    finally:
-        try:
-            if created_post_id:
-                asyncio.run(cleanup_post(created_post_id))
-        except Exception as e:
-            print(f"post cleanup err: {e}")
-        try:
-            asyncio.run(cleanup_secondary(u2_id))
-        except Exception as e:
-            print(f"user cleanup err: {e}")
+        r = await client.post(f"{BASE}/users/{sec_id}/block", headers=auth(admin_token))
+        ok_b = r.status_code == 200 and r.json().get("blocked") is True
+        rec("(5d) POST /users/{uid}/block",
+            ok_b, f"status={r.status_code} body={r.text[:120]}")
 
-    print("\n================ RESULTS ================")
-    print(f"PASS: {len(PASS)}  |  FAIL: {len(FAIL)}")
-    if FAIL:
-        print("\nFailures:")
-        for f in FAIL:
-            print(f"  - {f}")
-        sys.exit(1)
-    sys.exit(0)
+        r = await client.delete(f"{BASE}/users/{sec_id}/block", headers=auth(admin_token))
+        ok_u = r.status_code == 200 and r.json().get("blocked") is False
+        rec("(5e) DELETE /users/{uid}/block",
+            ok_u, f"status={r.status_code} body={r.text[:120]}")
+
+        r = await client.post(
+            f"{BASE}/reports",
+            headers=auth(admin_token),
+            json={"target_type": "user", "target_id": sec_id, "reason": "inappropriate"},
+        )
+        ok_rep = False
+        rep_detail = ""
+        if r.status_code == 200:
+            b = r.json()
+            rep_detail = f"keys={list(b.keys())}"
+            ok_rep = bool(b.get("report_id")) or b.get("status") == "pending"
+        else:
+            rep_detail = f"status={r.status_code} body={r.text[:150]}"
+        rec("(5f) POST /reports {user, inappropriate} → 200 with report_id",
+            ok_rep, rep_detail)
+
+    print("\n" + "=" * 72)
+    passed = sum(1 for _, ok, _ in RESULTS if ok)
+    failed = [n for n, ok, _ in RESULTS if not ok]
+    print(f"TOTAL: {len(RESULTS)}  PASS: {passed}  FAIL: {len(failed)}")
+    if failed:
+        print("FAILED:")
+        for n in failed:
+            print(f"  - {n}")
+    print("=" * 72)
+    return 0 if not failed else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(asyncio.run(main()))
