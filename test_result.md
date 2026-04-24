@@ -13,6 +13,85 @@
 #====================================================================================================
 
 
+  - task: "Phase 3 Mobile PRD — Typed community-post reactions (POST /api/posts/{post_id}/react win/tip) + User block endpoints (POST/DELETE /api/users/{user_id}/block) + is_blocked on GET /api/users/{id}"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py (ReactionIn, react_to_post, _hydrate_posts reaction_counts/my_reactions) + /app/backend/routes/network.py (block_user, unblock_user, follow block-guard) + /app/backend/routes/users.py (is_blocked on public profile)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          FULL VALIDATION PASS — 27/27 assertions green via /app/backend_test.py
+          against http://localhost:8001/api. Admin: admin@lumascout.app / admin123
+          (super_admin, user_6daa7d0a3abc); secondary user registered fresh
+          (u2_{suffix}@lumascout-qa.com) — note: @test.local was rejected by
+          the backend's email-validator as a special-use/reserved TLD, so the
+          test harness uses @lumascout-qa.com for the secondary user (non-issue,
+          email-validator behavior is expected).
+
+          (1) Typed community-post reactions — PASS (9/9):
+              · POST /api/posts as admin (category=tip) → 200, post_id captured.
+              · POST /posts/{id}/react {type:"win"} → 200 exact {reacted:true,
+                type:"win", count:1}.
+              · Same call again → 200 exact {reacted:false, type:"win", count:0}
+                (toggle-off).
+              · React tip → 200 count:1. React win → 200 count:1. Both coexist.
+              · DB: post_reactions collection has exactly 1 row for
+                (post_id, reaction_type:"win") and 1 for "tip". Verified via
+                direct Mongo count.
+              · POST with {type:"heart"} → 400 "Invalid reaction type".
+              · POST on non-existent post_id → 404 "Post not found".
+              · POST without Authorization header → 401 "Not authenticated".
+              · GET /api/posts → 200. Target post carries
+                reaction_counts:{win:1,tip:1} (exact match) AND
+                my_reactions:["win","tip"] (set match). Both fields present
+                on every post in the feed.
+
+          (2) User block endpoints — PASS (11/11):
+              · Registered fresh secondary user via POST /api/auth/register
+                {email, password:pass12345, username, name} → 200 with token
+                + user.user_id.
+              · admin POST /users/{u2}/follow → 200 {following:true}.
+              · admin GET /users/{u2} → 200 with is_following:true,
+                is_blocked:false.
+              · admin POST /users/{u2}/block → 200 {blocked:true}.
+              · admin GET /users/{u2} → 200 is_blocked:true, is_following:false
+                (block severed follow relation — confirmed at the API layer).
+              · Direct Mongo verification of cascade: follows_admin→u2=0,
+                follows_u2→admin=0, user_blocks_admin→u2=1,
+                dm_blocks_admin→u2=1 (DM cascade row mirrored as spec'd).
+              · admin POST /users/{u2}/follow while blocked → 403 exact detail
+                "Cannot follow a blocked user".
+              · Second POST /users/{u2}/block → 200 {blocked:true} AND
+                user_blocks row count still exactly 1 (idempotent upsert).
+              · admin DELETE /users/{u2}/block → 200 {blocked:false}.
+                user_blocks + dm_blocks rows both removed.
+              · POST /users/{admin_id}/block as admin (self-block) → 400
+                "Cannot block yourself".
+              · POST /users/user_doesnotexist_.../block → 404 "User not found".
+
+          (3) Regression — PASS (6/6):
+              · GET /api/auth/me → 200.
+              · GET /api/spots → 200.
+              · GET /api/feed/home → 200.
+              · POST /users/{u2}/follow when NOT blocked → 200 {following:true}.
+              · GET /api/posts → 200 with 8 items.
+              · POST /posts/{id}/like → 200 {ok:true}.
+
+          No 500s anywhere (backend.err.log clean across run). Cleanup at end
+          of run: deleted throwaway user, follows, user_blocks, dm_blocks,
+          post_reactions, community_posts for the created test post. DB left
+          clean.
+
+          VERDICT: Phase 3 endpoints launch-ready. Role gates, idempotency,
+          cascade (follow-drop + dm_blocks mirror), 400/404/401 error paths,
+          and feed hydration (reaction_counts + my_reactions on every post)
+          all behave exactly per spec.
+
+
 backend:
   - task: "Push Notification Growth System — 8 core triggers + transactional cap bypass + quiet hours + daily cap + 10-min dedupe + deep-link routing + @mention parsing"
     implemented: true
@@ -7725,3 +7804,76 @@ change per call site — see useUpgradeGate() hook in the component.
 Phase 3 — P2 features (#9 Map pins by tier, #10 Community reactions,
 #11 Share App, #12 Full Social Graph, #13 Photographer Search). Batch
 test at end of #13 per user directive.
+
+
+================================================================================
+# Mobile Phase 3 — Advanced Features (June 2025)
+================================================================================
+
+## Items shipped (#9 – #13)
+- #9 Map pins color-coded by tier  ........................... COMPLETE (legend enriched)
+- #10 Community post reactions (🔥 Win, 💡 Tip)  .............. COMPLETE (new)
+- #11 Share App with a Friend  ................................ COMPLETE (new)
+- #12 Full Social Graph (Follow/Unfollow/Block)  .............. COMPLETE (new)
+- #13 Photographer Search + Portfolio  ........................ COMPLETE (enhanced)
+
+## Backend additions
+  EDITED:
+    /app/backend/server.py
+      - _hydrate_posts() now attaches per-post `reaction_counts` ({win, tip})
+        and viewer's `my_reactions` array via one aggregate + one find pass.
+      - New POST /api/posts/{post_id}/react endpoint. Body: {type: win|tip}.
+        Toggles in `post_reactions` collection. Fires notification to author
+        (non-self) and returns {reacted, type, count}.
+    /app/backend/routes/network.py
+      - POST /api/users/{user_id}/follow now refuses if either side has a
+        user_blocks relationship (prevents dead-end follows after a block).
+      - NEW POST /api/users/{user_id}/block (idempotent upsert, severs
+        follows in BOTH directions, mirrors on dm_blocks).
+      - NEW DELETE /api/users/{user_id}/block (unblock — removes both
+        user_blocks and dm_blocks rows for that pair).
+    /app/backend/routes/users.py
+      - GET /api/users/{user_id} now returns is_blocked so the profile UI
+        can surface the Unblock state without a second round-trip.
+
+## Frontend additions
+  EDITED:
+    /app/frontend/app/community.tsx
+      - Imports Lightbulb icon.
+      - PostCard tracks `myReactions` Set + {win, tip} counts with optimistic
+        toggle and server-truth snap on success.
+      - Two new reaction buttons (Flame=win orange, Lightbulb=tip gold) next
+        to Heart — testIDs `post-react-win-*`, `post-react-tip-*`.
+    /app/frontend/app/(tabs)/profile.tsx
+      - New "Share LumaScout with a friend" row below Account actions.
+        Uses RN Share API with referral code auto-appended when present
+        (so we can track K-factor without any extra UX).
+        TestID `profile-share-app`.
+    /app/frontend/app/user/[id].tsx
+      - Imports Ban, ShieldOff icons.
+      - toggleBlock() handler with native Alert confirmation on block,
+        instant unblock on tap. Error surfaces via Alert.
+      - If `is_blocked`, CTA row collapses into a red-bordered "You blocked
+        {name}" banner with Unblock button (testID `user-unblock`).
+      - If not blocked, retains Follow/Message/Refer/Collab + adds a subtle
+        "Block @username" subdued link below (testID `user-block`).
+    /app/frontend/app/(tabs)/network.tsx
+      - SHOOT_NICHES const (14 niches: Wedding, Portrait, Family, etc.).
+      - Niche filter chip strip below the search bar — horizontal, "All"
+        resets. Tapped niche pipes into /network/search alongside free-text.
+      - Debounced search effect is now niche-aware.
+      - New styles: nicheStrip, nicheChip, nicheChipActive, nicheChipTxt.
+      - TestIDs `niche-all`, `niche-wedding`, etc.
+    /app/frontend/app/(tabs)/explore.tsx
+      - Map legend gains "New" (F5A623 gold) + "Low score" (6B7280 gray)
+        rows to match the full `pinColor()` tier output, completing #9.
+
+## Verification
+- Backend reloaded cleanly x3 (server.py, routes/network.py, routes/users.py)
+  with no errors in /var/log/supervisor/backend.err.log.
+- Metro tunnel ready on 3002; no bundle errors.
+- All new endpoints idempotent + non-self-guarded.
+
+## Ready for final batch test
+Per user directive, this is the Phase 3 boundary. All 13 mobile PRD items
+shipped across Phases 1-3. Recommend handing off to frontend testing agent.

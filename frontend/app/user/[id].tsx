@@ -28,6 +28,9 @@ import {
   Briefcase,
   Handshake,
   GraduationCap,
+  Ban,
+  MoreVertical,
+  ShieldOff,
 } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
@@ -86,6 +89,48 @@ export default function UserProfile() {
     } finally {
       setBusy(false);
     }
+  };
+
+  // PRD #12: Full social-graph block with confirmation. Blocking severs
+  // follows both ways (backend handles it) and mirrors on the DM layer.
+  const toggleBlock = async () => {
+    if (!me) return router.push('/(auth)/login');
+    if (busy) return;
+    const currentlyBlocked = !!profile?.is_blocked;
+    if (currentlyBlocked) {
+      setBusy(true);
+      try {
+        await api.delete(`/users/${id}/block`);
+        await load();
+      } catch (e) {
+        Alert.alert('Could not unblock', formatApiError(e));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    Alert.alert(
+      `Block ${profile?.name || 'this user'}?`,
+      'They won\'t be able to follow you, message you, or see your content. You can unblock any time.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Block',
+          style: 'destructive',
+          onPress: async () => {
+            setBusy(true);
+            try {
+              await api.post(`/users/${id}/block`);
+              await load();
+            } catch (e) {
+              Alert.alert('Could not block', formatApiError(e));
+            } finally {
+              setBusy(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   const messageUser = async (kind?: 'message' | 'refer' | 'collab') => {
@@ -267,8 +312,29 @@ export default function UserProfile() {
             </View>
           )}
 
-          {/* CTA row — Network Phase A: Follow / Message / Refer / Invite */}
-          {!isSelf && (
+          {/* CTA row — Network Phase A: Follow / Message / Refer / Invite.
+              When viewer has blocked this user, swap to Unblock-only. */}
+          {!isSelf && profile.is_blocked ? (
+            <View style={styles.blockedBanner}>
+              <View style={styles.blockedIconWrap}>
+                <Ban size={16} color={colors.secondary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.blockedTitle}>You blocked {profile.name || 'this user'}</Text>
+                <Text style={styles.blockedBody}>
+                  They can't follow you or message you. Unblock to restore normal interaction.
+                </Text>
+              </View>
+              <Button
+                title="Unblock"
+                variant="secondary"
+                onPress={toggleBlock}
+                loading={busy}
+                icon={<ShieldOff size={14} color={colors.text} />}
+                testID="user-unblock"
+              />
+            </View>
+          ) : !isSelf ? (
             <>
               <View style={styles.ctaRow}>
                 <Button
@@ -307,8 +373,20 @@ export default function UserProfile() {
                   testID="user-collab"
                 />
               </View>
+              {/* PRD #12: Block is intentionally de-emphasised — subtle
+                  inline link, not a full button, so it doesn't steal focus
+                  from positive interaction CTAs above. */}
+              <TouchableOpacity
+                onPress={toggleBlock}
+                style={styles.blockLink}
+                testID="user-block"
+                disabled={busy}
+              >
+                <Ban size={12} color={colors.textTertiary} />
+                <Text style={styles.blockLinkTxt}>Block @{profile.username}</Text>
+              </TouchableOpacity>
             </>
-          )}
+          ) : null}
           {isSelf && (
             <View style={styles.selfNotice}>
               <Text style={styles.selfNoticeTxt}>This is how your profile appears to other photographers.</Text>
@@ -475,6 +553,27 @@ const styles = StyleSheet.create({
   ctaRow: { flexDirection: 'row', gap: 8, marginTop: space.lg, width: '100%' },
   selfNotice: { marginTop: space.lg, gap: 8, alignItems: 'stretch', width: '100%' },
   selfNoticeTxt: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, textAlign: 'center' },
+  // PRD #12: Block / unblock UI
+  blockedBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    marginTop: space.md,
+    paddingHorizontal: space.md, paddingVertical: 14,
+    backgroundColor: 'rgba(208,72,72,0.08)',
+    borderColor: 'rgba(208,72,72,0.45)', borderWidth: 1,
+    borderRadius: radii.lg,
+  },
+  blockedIconWrap: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: 'rgba(208,72,72,0.18)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  blockedTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
+  blockedBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, lineHeight: 16, marginTop: 1 },
+  blockLink: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 4, marginTop: space.sm, paddingVertical: 8,
+  },
+  blockLinkTxt: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.3 },
 
   statsRow: {
     flexDirection: 'row', marginTop: space.lg, paddingHorizontal: space.xl, gap: 8,

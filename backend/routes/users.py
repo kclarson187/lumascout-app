@@ -88,8 +88,14 @@ async def get_user(user_id: str, viewer: Optional[dict] = Depends(get_optional_u
         "spot_id": {"$in": [s["spot_id"] async for s in db.spots.find({"owner_user_id": user_id}, {"spot_id": 1, "_id": 0})]},
     })
     is_following = False
+    is_blocked = False
     if viewer:
         is_following = await db.follows.count_documents({"follower_user_id": viewer["user_id"], "followed_user_id": user_id}) > 0
+        # PRD #12: viewer needs to know if they've blocked this user so the UI
+        # can swap the Follow button for Unblock + show a blocked notice.
+        is_blocked = await db.user_blocks.count_documents({
+            "blocker_user_id": viewer["user_id"], "blocked_user_id": user_id,
+        }) > 0
     # Alias fields so the public profile UI can share rendering code with /auth/me.
     user["stats"] = {
         "spots": spots_count,
@@ -101,6 +107,7 @@ async def get_user(user_id: str, viewer: Optional[dict] = Depends(get_optional_u
         "reviews_received": reviews_received,
     }
     user["is_following"] = is_following
+    user["is_blocked"] = is_blocked
     # ================================================================
     # Phase B.1 — Who Viewed Your Profile
     # Record a view when an authenticated viewer loads someone else's
