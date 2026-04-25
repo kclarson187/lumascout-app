@@ -150,12 +150,14 @@ export default function PremiumProfileExtras({
             value={fmt(stats.followers ?? 0)}
             accent="#60A5FA"
             icon={<UserPlus size={14} color="#60A5FA" />}
+            onPress={() => router.push('/followers' as any)}
           />
           <StatTile
             label="Following"
             value={fmt(stats.following ?? 0)}
             accent="#60A5FA"
             icon={<UserPlus size={14} color="#60A5FA" />}
+            onPress={() => router.push('/following' as any)}
           />
           <StatTile
             label="Profile Views"
