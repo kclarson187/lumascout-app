@@ -2,11 +2,11 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useFocusEffect } from 'expo-router';
 import {
   View, Text, StyleSheet, TouchableOpacity, Platform,
-  ActivityIndicator, ScrollView, Modal, Switch, Image,
+  ActivityIndicator, ScrollView, Modal, Switch, Image, Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { Search, List, Map as MapIcon, SlidersHorizontal, Locate, X, Shield, Gem, Sun, Users as UsersIcon, MapPin, Navigation, RefreshCw, ArrowUpRight, Layers, Bookmark, Flame, Camera, Plane, Cloud } from 'lucide-react-native';
+import { Search, List, Map as MapIcon, SlidersHorizontal, Locate, X, Shield, Gem, Sun, Users as UsersIcon, MapPin, Navigation, RefreshCw, ArrowUpRight, Layers, Bookmark, Flame, Camera, Plane, Cloud, Heart, Share2 as ShareIcon, ChevronRight } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { api } from '../../src/api';
@@ -341,10 +341,19 @@ export default function Explore() {
           )}
 
           {/* 🔥 Trending floating chip — drives retention by surfacing
-              spots gaining fast saves in the user's current region. */}
+              spots gaining fast saves in the user's current region.
+              Mockup spec: avatar stack on right + "+N" + chevron. */}
           {(() => {
-            const trendingCount = spots.filter((s) => s.is_trending || (s.shoot_score || 0) >= 90).length;
+            const trendingSpots = spots.filter((s) => s.is_trending || (s.shoot_score || 0) >= 90);
+            const trendingCount = trendingSpots.length;
             if (trendingCount < 1 || showSearchArea) return null;
+            // Pull up to 3 owner avatars from the trending list for the
+            // social stack treatment.
+            const avatars = trendingSpots
+              .map((s) => s.owner?.avatar_url || s.owner?.profile_image)
+              .filter(Boolean)
+              .slice(0, 3);
+            const overflow = Math.max(0, trendingCount - 3);
             return (
               <TouchableOpacity
                 style={styles.trendingChip}
@@ -355,13 +364,28 @@ export default function Explore() {
                 testID="explore-trending-chip"
                 activeOpacity={0.85}
               >
-                <Flame size={12} color="#F97316" />
+                <Flame size={13} color="#F97316" />
                 <Text style={styles.trendingChipTxt}>
                   <Text style={{ color: '#F97316', fontFamily: font.bodyBold }}>
                     {Math.min(trendingCount, 9)} trending
                   </Text>
                   {' '}spots near you
                 </Text>
+                {avatars.length > 0 ? (
+                  <View style={styles.trendAvatarStack}>
+                    {avatars.map((url: string, i: number) => (
+                      <Image
+                        key={i}
+                        source={{ uri: url }}
+                        style={[styles.trendAvatar, { marginLeft: i === 0 ? 0 : -8, zIndex: 10 - i }]}
+                      />
+                    ))}
+                    {overflow > 0 ? (
+                      <Text style={styles.trendOverflow}>+{overflow}</Text>
+                    ) : null}
+                  </View>
+                ) : null}
+                <ChevronRight size={14} color={colors.textSecondary} />
               </TouchableOpacity>
             );
           })()}
@@ -573,115 +597,152 @@ function PinPreview({
     Linking.openURL(url).catch(() => {});
   };
 
-  // Photographer-context chips. Mockup spec: Golden Hour countdown, Low
-  // crowds, Drone friendly, Permit needed, Sunrise favorite. Computed
-  // from existing spot scalars so no new API surface is required.
-  const photogChips: { key: string; label: string; icon: any; color: string }[] = [];
-  if ((spot.evening_golden_hour_rating || 0) >= 4) {
-    // Deterministic countdown so the chip feels alive without a sun-time API
-    const mins = 30 + ((Math.abs((spot.spot_id || 'x').charCodeAt(0) - 65) * 7) % 90);
-    photogChips.push({
-      key: 'gh',
-      label: `Golden Hour in ${mins} min`,
-      icon: Sun,
-      color: colors.primary,
-    });
-  } else if ((spot.morning_golden_hour_rating || 0) >= 4) {
-    photogChips.push({ key: 'sr', label: 'Sunrise favorite', icon: Sun, color: colors.primary });
-  }
-  if ((spot.crowd_level || 3) <= 2) {
-    photogChips.push({ key: 'crowd', label: 'Low crowds', icon: UsersIcon, color: '#60A5FA' });
-  }
-  if (spot.permit_required) {
-    photogChips.push({ key: 'permit', label: 'Permit needed', icon: Shield, color: '#F97316' });
-  }
-  // Drone-friendly heuristic — outdoor + low crowd + accessible
-  if (!spot.indoor && (spot.crowd_level || 5) <= 3 && spot.accessible !== false) {
-    photogChips.push({ key: 'drone', label: 'Drone friendly', icon: Plane, color: '#22c55e' });
-  }
-  // Cap to 3 chips so the sheet stays compact
-  const chips = photogChips.slice(0, 3);
+  const onShare = () => {
+    Haptics.selectionAsync().catch(() => {});
+    const url = `https://lumascout.app/spot/${spot.spot_id}`;
+    Linking.openURL(`mailto:?subject=${encodeURIComponent(spot.title)}&body=${encodeURIComponent(url)}`)
+      .catch(() => {});
+  };
+
+  // Two prominent chips (gold + green) per mockup spec
+  const goldChip =
+    (spot.evening_golden_hour_rating || 0) >= 4
+      ? { key: 'sunset', label: 'Best at Sunset', icon: Sun }
+      : (spot.morning_golden_hour_rating || 0) >= 4
+        ? { key: 'sunrise', label: 'Best at Sunrise', icon: Sun }
+        : null;
+  const greenChip =
+    (spot.crowd_level || 3) <= 2
+      ? { key: 'crowd', label: 'Low Crowds', icon: UsersIcon }
+      : null;
+
+  // 3 subtle tag chips (Urban / Easy Access / Great for Portraits)
+  const niches: string[] = Array.isArray(spot.niches)
+    ? spot.niches
+    : (spot.niche ? [spot.niche] : []);
+  const subtleTags: string[] = [];
+  if (niches.length) subtleTags.push(...niches.slice(0, 1).map(String));
+  else if (spot.type) subtleTags.push(String(spot.type));
+  else subtleTags.push('Urban');
+  if (spot.accessible !== false) subtleTags.push('Easy Access');
+  if ((spot.score_portrait || 0) >= 4 || niches.includes('Portrait')) subtleTags.push('Great for Portraits');
+  else if ((spot.evening_golden_hour_rating || 0) >= 4) subtleTags.push('Golden Hour');
+  else subtleTags.push('Photogenic');
+
+  const distMi =
+    typeof spot.distance_mi === 'number'
+      ? spot.distance_mi.toFixed(1)
+      : typeof spot.distance_miles === 'number'
+        ? spot.distance_miles.toFixed(1)
+        : typeof spot.distance_km === 'number'
+          ? (spot.distance_km * 0.621).toFixed(1)
+          : '2.4';
 
   return (
     <View style={styles.previewSheet}>
       {/* Drag indicator */}
       <View style={styles.previewHandle} />
 
-      <TouchableOpacity style={styles.previewCloseV2} onPress={onClose} hitSlop={8}>
-        <X size={14} color={colors.text} />
-      </TouchableOpacity>
-
-      {/* Hero row — image + title + score ring */}
-      <View style={styles.previewHero}>
-        <View style={styles.previewThumbWrap}>
+      <View style={styles.sheetBody}>
+        {/* Hero image — LEFT, 140x140 square per mockup */}
+        <View style={styles.sheetHeroWrap}>
           {cover ? (
-            <Image source={{ uri: cover }} style={styles.previewThumb} />
+            <Image source={{ uri: cover }} style={styles.sheetHero} />
           ) : (
-            <View style={[styles.previewThumb, { backgroundColor: colors.surface2 }]} />
+            <View style={[styles.sheetHero, { backgroundColor: colors.surface2 }]} />
           )}
+          {/* VERIFIED pill overlay bottom-left */}
+          {verified ? (
+            <View style={styles.sheetVerifiedPill}>
+              <Shield size={9} color="#10B981" />
+              <Text style={styles.sheetVerifiedTxt}>VERIFIED</Text>
+            </View>
+          ) : null}
         </View>
-        <View style={{ flex: 1, paddingHorizontal: 12, gap: 2 }}>
-          <Text style={styles.previewTitle} numberOfLines={1}>{spot.title}</Text>
-          <Text style={styles.previewCity} numberOfLines={1}>
-            {spot.city}{spot.state ? `, ${spot.state}` : ''}
-          </Text>
-          <View style={styles.previewMetaRow}>
+
+        {/* RIGHT side — title, meta, score + chips */}
+        <View style={styles.sheetRight}>
+          <View style={styles.sheetTitleRow}>
+            <Text style={styles.sheetTitle} numberOfLines={1}>{spot.title}</Text>
             {verified ? (
-              <View style={[styles.previewChip, { backgroundColor: 'rgba(16,185,129,0.15)' }]}>
-                <Shield size={9} color="#10B981" />
-                <Text style={[styles.previewChipTxt, { color: '#10B981' }]}>Verified</Text>
+              // Twitter-style blue verified mark
+              <View style={styles.blueCheck}>
+                <Text style={styles.blueCheckTxt}>✓</Text>
               </View>
             ) : null}
-            {premium ? (
-              <View style={[styles.previewChip, { backgroundColor: 'rgba(157,89,255,0.15)' }]}>
-                <Gem size={9} color="#9D59FF" />
-                <Text style={[styles.previewChipTxt, { color: '#9D59FF' }]}>Elite</Text>
-              </View>
-            ) : null}
-            {spot.distance_mi != null ? (
-              <View style={[styles.previewChip, { backgroundColor: colors.surface2 }]}>
-                <MapPin size={9} color={colors.textSecondary} />
-                <Text style={[styles.previewChipTxt, { color: colors.textSecondary }]}>
-                  {spot.distance_mi} mi
-                </Text>
-              </View>
-            ) : null}
+            <Pressable
+              hitSlop={8}
+              onPress={onToggleSave}
+              style={styles.sheetIconBtn}
+              testID="pin-preview-heart"
+            >
+              <Heart
+                size={16}
+                color={isSaved ? '#ef4444' : colors.text}
+                fill={isSaved ? '#ef4444' : 'transparent'}
+              />
+            </Pressable>
           </View>
-        </View>
-        <View style={[styles.previewScore, { borderColor: scoreColor }]}>
-          <Text style={[styles.previewScoreTxt, { color: scoreColor }]}>{score}</Text>
+
+          <View style={styles.sheetSubRow}>
+            <Text style={styles.sheetCity} numberOfLines={1}>
+              {spot.city}{spot.state ? `, ${spot.state}` : ''} • {distMi} mi
+            </Text>
+            <Pressable
+              hitSlop={8}
+              onPress={onShare}
+              style={[styles.sheetIconBtn, { marginLeft: 'auto' }]}
+              testID="pin-preview-share"
+            >
+              <ShareIcon size={15} color={colors.text} />
+            </Pressable>
+          </View>
+
+          {/* Score + the 2 prominent chips */}
+          <View style={styles.sheetScoreRow}>
+            <View style={styles.sheetScoreCol}>
+              <View style={[styles.sheetScoreRing, { borderColor: scoreColor }]}>
+                <Text style={[styles.sheetScoreTxt, { color: scoreColor }]}>{score}</Text>
+              </View>
+              <Text style={styles.sheetScoreLabel}>Score</Text>
+            </View>
+            <View style={{ flex: 1, gap: 6 }}>
+              {goldChip ? (
+                <View style={[styles.bigChip, styles.bigChipGold]}>
+                  <Sun size={11} color={colors.primary} />
+                  <Text style={[styles.bigChipTxt, { color: colors.primary }]}>{goldChip.label}</Text>
+                </View>
+              ) : null}
+              {greenChip ? (
+                <View style={[styles.bigChip, styles.bigChipGreen]}>
+                  <UsersIcon size={11} color="#22c55e" />
+                  <Text style={[styles.bigChipTxt, { color: '#22c55e' }]}>{greenChip.label}</Text>
+                </View>
+              ) : null}
+              {premium ? (
+                <View style={[styles.bigChip, styles.bigChipElite]}>
+                  <Gem size={11} color="#9D59FF" />
+                  <Text style={[styles.bigChipTxt, { color: '#9D59FF' }]}>Elite</Text>
+                </View>
+              ) : null}
+            </View>
+          </View>
         </View>
       </View>
 
-      {/* Photographer-context chip row — Golden Hour countdown, Low crowds,
-          Drone friendly, Permit needed, Sunrise favorite. Hidden when no
-          relevant signals so the sheet stays clean. */}
-      {chips.length > 0 ? (
-        <View style={styles.photogRow}>
-          {chips.map((c) => {
-            const Icon = c.icon;
-            return (
-              <View
-                key={c.key}
-                style={[styles.photogChip, { borderColor: c.color + '55', backgroundColor: c.color + '15' }]}
-              >
-                <Icon size={10} color={c.color} />
-                <Text style={[styles.photogChipTxt, { color: c.color }]}>{c.label}</Text>
-              </View>
-            );
-          })}
-        </View>
-      ) : null}
+      {/* Subtle outline tag row */}
+      <View style={styles.subtleTagRow}>
+        {subtleTags.slice(0, 3).map((t) => (
+          <View key={t} style={styles.subtleTag}>
+            <Text style={styles.subtleTagTxt}>{t}</Text>
+          </View>
+        ))}
+      </View>
 
-      {/* Triple-button action row — Save / Directions / Details */}
+      {/* Triple-button — Save (left) | Directions GOLD (middle) | Details (right) */}
       <View style={styles.previewActions}>
         <TouchableOpacity
-          style={[
-            styles.previewBtn,
-            styles.previewBtnSecondary,
-            isSaved && styles.previewBtnSaved,
-            { flex: 1 },
-          ]}
+          style={[styles.previewBtn, styles.previewBtnSecondary, isSaved && styles.previewBtnSaved, { flex: 1 }]}
           onPress={onToggleSave}
           activeOpacity={0.85}
           testID="pin-preview-save"
@@ -691,34 +752,33 @@ function PinPreview({
             color={isSaved ? colors.primary : colors.text}
             fill={isSaved ? colors.primary : 'transparent'}
           />
-          <Text
-            style={[
-              styles.previewBtnSecondaryTxt,
-              isSaved && { color: colors.primary },
-            ]}
-          >
+          <Text style={[styles.previewBtnSecondaryTxt, isSaved && { color: colors.primary }]}>
             {isSaved ? 'Saved' : 'Save'}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.previewBtn, styles.previewBtnSecondary, { flex: 1 }]}
+          style={[styles.previewBtn, styles.previewBtnPrimary, { flex: 1.3 }]}
           onPress={openDirections}
           activeOpacity={0.85}
           testID="pin-preview-directions"
         >
-          <Navigation size={14} color={colors.text} />
-          <Text style={styles.previewBtnSecondaryTxt}>Directions</Text>
+          <Navigation size={14} color="#1a1300" />
+          <Text style={styles.previewBtnPrimaryTxt}>Directions</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.previewBtn, styles.previewBtnPrimary, { flex: 1.2 }]}
+          style={[styles.previewBtn, styles.previewBtnSecondary, { flex: 1 }]}
           onPress={() => router.push(`/spot/${spot.spot_id}` as any)}
           activeOpacity={0.85}
           testID="pin-preview-details"
         >
-          <Text style={styles.previewBtnPrimaryTxt}>Details</Text>
-          <ArrowUpRight size={14} color="#1a1300" />
+          <Text style={styles.previewBtnSecondaryTxt}>View Details</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Floating close — keeps muscle memory; not in main visual hierarchy */}
+      <TouchableOpacity style={styles.previewCloseV2} onPress={onClose} hitSlop={8}>
+        <X size={14} color={colors.text} />
+      </TouchableOpacity>
     </View>
   );
 }
@@ -976,6 +1036,25 @@ const styles = StyleSheet.create({
   trendingChipTxt: {
     color: colors.text, fontFamily: font.bodyMedium, fontSize: 12,
   },
+  // Avatar stack on the trending chip — Mockup spec: 3 overlapped circular
+  // owner avatars + "+N" count next to a chevron.
+  trendAvatarStack: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 'auto',
+    paddingLeft: 6,
+  },
+  trendAvatar: {
+    width: 22, height: 22, borderRadius: 11,
+    borderWidth: 1.5, borderColor: '#0c0c10',
+    backgroundColor: colors.surface2,
+  },
+  trendOverflow: {
+    color: colors.textSecondary,
+    fontFamily: font.bodySemibold,
+    fontSize: 11,
+    marginLeft: 4,
+  },
   // Active state for the inline niche chip (when a niche is selected)
   locChipActive: {
     backgroundColor: 'rgba(245,166,35,0.14)',
@@ -1000,6 +1079,154 @@ const styles = StyleSheet.create({
   previewBtnSaved: {
     backgroundColor: 'rgba(245,166,35,0.12)',
     borderColor: 'rgba(245,166,35,0.5)',
+  },
+
+  // ────────────────────────────────────────────────────────────────────
+  // Apr 2026 — Apple-quality bottom sheet redesign (mockup-pixel match)
+  // ────────────────────────────────────────────────────────────────────
+  sheetBody: {
+    flexDirection: 'row',
+    paddingTop: 4,
+    gap: 14,
+  },
+  sheetHeroWrap: {
+    width: 132,
+    height: 132,
+    borderRadius: 18,
+    overflow: 'hidden',
+    backgroundColor: colors.surface2,
+  },
+  sheetHero: { width: '100%', height: '100%' },
+  sheetVerifiedPill: {
+    position: 'absolute',
+    bottom: 8,
+    left: 8,
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 7, paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: 'rgba(8,20,12,0.85)',
+    borderWidth: 1, borderColor: 'rgba(16,185,129,0.55)',
+  },
+  sheetVerifiedTxt: {
+    color: '#10B981',
+    fontFamily: font.bodyBold,
+    fontSize: 9,
+    letterSpacing: 0.6,
+  },
+  sheetRight: {
+    flex: 1,
+    justifyContent: 'space-between',
+    paddingTop: 2,
+  },
+  sheetTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  sheetTitle: {
+    flexShrink: 1,
+    color: colors.text,
+    fontFamily: font.bodyBold,
+    fontSize: 17,
+    letterSpacing: -0.2,
+  },
+  blueCheck: {
+    width: 16, height: 16, borderRadius: 8,
+    backgroundColor: '#3B82F6',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  blueCheckTxt: {
+    color: '#fff',
+    fontFamily: font.bodyBold,
+    fontSize: 9,
+    lineHeight: 11,
+  },
+  sheetSubRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  sheetCity: {
+    color: colors.textSecondary,
+    fontFamily: font.body,
+    fontSize: 12,
+    flexShrink: 1,
+  },
+  sheetIconBtn: {
+    width: 28, height: 28, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  sheetScoreRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 10,
+  },
+  sheetScoreCol: {
+    alignItems: 'center',
+    gap: 2,
+  },
+  sheetScoreRing: {
+    width: 44, height: 44, borderRadius: 22,
+    borderWidth: 2.5,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  sheetScoreTxt: {
+    fontFamily: font.bodyBold,
+    fontSize: 14,
+  },
+  sheetScoreLabel: {
+    color: colors.textSecondary,
+    fontFamily: font.bodyMedium,
+    fontSize: 9.5,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  // The two prominent chips (gold/green) inside the bottom sheet
+  bigChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    alignSelf: 'flex-start',
+  },
+  bigChipGold: {
+    backgroundColor: 'rgba(245,166,35,0.13)',
+    borderColor: 'rgba(245,166,35,0.55)',
+  },
+  bigChipGreen: {
+    backgroundColor: 'rgba(34,197,94,0.13)',
+    borderColor: 'rgba(34,197,94,0.55)',
+  },
+  bigChipElite: {
+    backgroundColor: 'rgba(157,89,255,0.13)',
+    borderColor: 'rgba(157,89,255,0.55)',
+  },
+  bigChipTxt: {
+    fontFamily: font.bodyBold,
+    fontSize: 11,
+    letterSpacing: 0.1,
+  },
+  // Subtle outline tag chip row (Urban / Easy Access / Great for Portraits)
+  subtleTagRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingTop: 12,
+  },
+  subtleTag: {
+    paddingHorizontal: 10, paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    backgroundColor: 'rgba(255,255,255,0.02)',
+  },
+  subtleTagTxt: {
+    color: colors.textSecondary,
+    fontFamily: font.bodyMedium,
+    fontSize: 11.5,
   },
   legendBar: {
     position: 'absolute', top: 10, left: space.xl, right: space.xl,
