@@ -12,6 +12,51 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "LumaScout Priority Fixes (Apr 2026 — 10-item batch): (1) Land Access disclosure — added `LandAccessSelector` component (Public/Private/Unsure pill row + 'Only share locations you have permission to access' warning + access_notes textarea, 1000 char limit); wired into Add Spot form right under Description, payload includes land_access + access_notes; backend SpotCreateIn validates ('public'|'private'|'unsure') with field_validator + writes through to spots collection; spot detail page renders premium colored disclosure card (purple for private, green for public). (2) Spot Share — onShare on /spot/[id] now shares public URL `https://lumascout.app/spot.html?id={id}` with proper iOS `url` field + title; created /app/website/spot.html static page with branded dark theme (gold accent, Playfair-style title, image gallery with active-state thumbnails, access disclosure note, Get directions button -> Google Maps deeplink, 'Open in app' lumascout://spot/{id} deep link). (3) Distance bug ROOT-CAUSE fix in /api/feed/home — REMOVED the previous fallback that picked the first profile-city spot's coordinates as 'center' (which made e.g. Muleshoe Bend show 1.4 mi for a San Antonio user) and the Austin default; new strict policy = device GPS or NOTHING. When GPS unavailable, distance_km/distance_mi return null and `distance_source: 'unavailable'`. Frontend `formatDistance`/`distanceLabel` helper at /app/frontend/src/utils/distance.ts surfaces 'Distance unavailable' and existing card chip code naturally hides numeric chip when null. (4) Community admin delete — backend DELETE /api/posts/{id} already supports admin override + audit_log; UI now exposes Trash2 button on each post card when canDelete (post owner OR admin/super_admin), with iOS-native Alert.alert confirmation that shows different copy for self vs. admin moderation, optimistic local removal on success, haptic success notification. (5) Messaging audit — confirmed thread-open `/dm/threads/{id}/mark-read` is wired (inbox/[id].tsx:41), `/dm/threads/mark-all-read` available from inbox, `/dm/unread-count` polled every refresh — read clearing flow is end-to-end correct. (6) Explore filter cleanup — removed entire 'Access & logistics' Section from explore.tsx filter modal (min_parking_ease, max_walking_distance, max_crowd_level, min_variety chip rows). Underlying spot detail logistics data untouched. (7) Email system — created /app/backend/email_service.py Postmark client with SENDER_NOREPLY/SENDER_SUPPORT/SENDER_ADMIN constants matching the lumascout.app addresses; password reset flow now actually sends via Postmark with branded text+HTML; POSTMARK_SERVER_TOKEN appended to backend/.env; failure modes (no token, network error) are logged + return False, never raise. (8) User email update — added 2 new endpoints: POST /api/auth/email-change/request (requires current_password reauth, duplicate check, sends verification link to NEW email via Postmark, 2hr expiry, supersedes prior pending changes) + GET /api/auth/email-change/verify?token=... (final dup check, flips users.email, writes email_change_audit collection entry, notifies OLD email via Postmark). New screens: /app/settings/email.tsx (current email display, new-email + password inputs, 'Send verification email' CTA with optimistic success state, success Alert) and /verify-email.tsx (success/error landing for the email link). Settings hub now exposes 'Email address' row in Account section. (9) Pack Marketplace rename — Profile tile changed from 'Pack\\nMarketplace' to single-word 'Marketplace'. All other user-facing labels were already 'Marketplace'. (10) Marketplace visibility — Home tab now shows a premium gold-bordered Marketplace promo card after the Trending This Week rail (kicker MARKETPLACE, Playfair display title 'Shop presets, guides, routes, and spot packs', body copy, gold 'Browse Marketplace →' CTA, routes to /marketplace)."
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py, /app/backend/routes/spots.py, /app/backend/email_service.py, /app/backend/.env, /app/website/spot.html, /app/frontend/app/(tabs)/index.tsx, /app/frontend/app/(tabs)/profile.tsx, /app/frontend/app/(tabs)/explore.tsx, /app/frontend/app/(tabs)/add.tsx, /app/frontend/app/spot/[id].tsx, /app/frontend/app/settings.tsx, /app/frontend/app/settings/email.tsx, /app/frontend/app/verify-email.tsx, /app/frontend/src/components/CommunityView.tsx, /app/frontend/src/components/LandAccessSelector.tsx, /app/frontend/src/utils/distance.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Apr 2026 — 10-item priority fix pack landed in a single sprint.
+          • Land access (#1): SpotCreateIn validator + LandAccessSelector
+            wired into Add Spot, premium disclosure card on spot detail.
+          • Spot share (#2): real public URL + /spot.html webpage with
+            gallery + directions CTA + app deep link.
+          • Distance bug (#3) ROOT-CAUSE: removed broken city-fallback
+            center in /api/feed/home — strict GPS-or-unavailable policy.
+          • Community admin delete (#4): UI surfaces Trash2 button for
+            owner/admin, alert confirmation, audit log preserved.
+          • Messaging (#5): audited mark-read flow — already complete.
+          • Explore filter cleanup (#6): removed Access & logistics block.
+          • Email service (#7): Postmark client + sender constants;
+            password reset wired through; token in backend/.env.
+          • Email change flow (#8): 2-step verify endpoints + Settings
+            screen + /verify-email landing.
+          • Marketplace rename (#9): Profile tile updated.
+          • Marketplace visibility (#10): Home rail card after Trending.
+          Verified visually post-restart at 390x844 — Home loads with
+          Marketplace rail (no `Pressable is not defined` regression).
+          Backend reloads clean, no startup errors.
+
+          POSTMARK STATUS: Token saved as POSTMARK_SERVER_TOKEN. Sender
+          domains lumascout.app must be VERIFIED in Postmark dashboard
+          before live email delivery — until then the SDK returns 422 /
+          we log + degrade gracefully. The dev_token field is also
+          returned by /auth/email-change/request to unblock QA.
+
+          Marketplace visibility (B) Explore CTA + (D) Network creator-
+          product preview were intentionally deferred per the system
+          prompt's directive to limit scope. Home is the highest-traffic
+          surface and now has a premium entry point.
+
+
+
   - task: "Network Tab Premium Redesign Pass — unified shell across Discover · Directory · Community: (1) Compact premium header (kicker + display title + tight subtitle, paddingTop:4, paddingBottom:6) with mode-aware copy; (2) Premium circular gold Invite/UserPlus button (38px, gold border, pressed-state scale); (3) New segmented switch component — 3 equal-width buttons with sliding white indicator (Animated.timing + cubic ease, 240ms), active = white fill / black bold text, inactive = surface1; (4) Lazy-mount + cross-fade animation per tab — only active tab is initialised on first render, after visiting a tab once it stays mounted via absolute layer (opacity:0 + pointerEvents:none) so scroll state is preserved across switches; (5) Discover redesign — removed specialty filter pollution (Wedding/Portrait/Pet/Family pills), kept only All/Nearby/Verified/Elite/New; renamed 'Active Near You' → 'Creators Near You' and 'New Creators' → 'Recently Joined' per spec; tightened search bar height 48→44 and filter strip vertical padding 12→6; (6) Directory tightened — searchWrap marginTop:2, fcardRow paddingTop 12→10; cards & sheet logic untouched (already strongest mode); (7) Community premium rebuild — categories changed to All/Feedback/Referrals/Gear/Editing/Wins (replaced Questions/Local with Wins per spec, Trophy icon); search bar + floating gold + Compose CTA in toolbar with shadow + pressed-state; live local search across body/title/author/city; staggered fade-in + slide-up animation on feed cards (45ms cascade, capped 360ms); editorial Playfair display title + body line-height 19.5; 220px image height with overlay gradient; clean action row (Like w/ red fill, Comment, Share, Save w/ gold fill); referral CTA changed from 'I'm interested' to 'Apply' + 'Message' (both wired to /dm/threads/start); category chip on cards now hidden when post.category is unknown/missing (no more spammy 'All' badges); (8) Empty state — Playfair title, contextual messaging for query vs category, gold Create-a-post CTA; respects safe areas via SafeAreaView edges:['top','left','right']; bottom dead space fix via paddingBottom:140 in feed FlatList"
     implemented: true
     working: "NA"

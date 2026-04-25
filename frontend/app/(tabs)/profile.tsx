@@ -621,7 +621,7 @@ export default function Profile() {
                 {hasCreatorTools && (
                   <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/marketplace')} testID="profile-marketplace">
                     <Store size={18} color={colors.primary} />
-                    <Text style={styles.actionTxt}>Pack{'\n'}Marketplace</Text>
+                    <Text style={styles.actionTxt}>Marketplace</Text>
                   </TouchableOpacity>
                 )}
                 {/* FIX(Commit 7c): Admin Dashboard card removed from profile.

@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   TextInput,
   Share,
+  Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -404,6 +405,34 @@ export default function Home() {
 
         {/* Rail #3 — Trending This Week */}
         <TrendingRail items={feed.trending || feed.trending_again || feed.nearby || []} />
+
+        {/* Item #10 (Apr 2026) — Marketplace promo card.
+            Shop presets, guides, routes, and spot packs. Routes to /marketplace. */}
+        <Pressable
+          onPress={() => router.push('/marketplace' as any)}
+          style={({ pressed }) => [{
+            marginHorizontal: space.xl, marginTop: 22,
+            borderRadius: 22, overflow: 'hidden',
+            borderWidth: 1, borderColor: 'rgba(245,166,35,0.45)',
+            backgroundColor: 'rgba(245,166,35,0.08)',
+            padding: 18, opacity: pressed ? 0.92 : 1,
+          }]}
+          testID="home-marketplace-rail"
+        >
+          <Text style={{ color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 1.0, marginBottom: 4 }}>
+            MARKETPLACE
+          </Text>
+          <Text style={{ color: colors.text, fontFamily: font.display, fontSize: 19, letterSpacing: -0.3, marginBottom: 6, lineHeight: 24 }}>
+            Shop presets, guides, routes, and spot packs
+          </Text>
+          <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 12.5, lineHeight: 18 }}>
+            Curated by elite creators — tap to browse the LumaScout Marketplace.
+          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12 }}>
+            <Text style={{ color: colors.primary, fontFamily: font.bodyBold, fontSize: 13 }}>Browse Marketplace</Text>
+            <Text style={{ color: colors.primary, fontSize: 14 }}>→</Text>
+          </View>
+        </Pressable>
 
         {filterResults ? (
           <>

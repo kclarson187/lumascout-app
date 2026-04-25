@@ -140,6 +140,34 @@ class SpotCreateIn(BaseModel):
     # FIX(2026-04): [1.2] freeform photographer notes captured on the Ratings step.
     # Max 2000 chars, stripped, stored as null if empty after strip.
     notes: Optional[str] = None
+    # FIX(2026-04 / Item #1): Land access — required disclosure for trust
+    # & responsible sharing. One of: 'public' | 'private' | 'unsure'.
+    # Optional `access_notes` lets owners share permission/permit details
+    # (esp. for private-land spots).
+    land_access: Optional[str] = None  # public | private | unsure
+    access_notes: Optional[str] = None
+
+    @field_validator("land_access")
+    @classmethod
+    def _validate_land_access(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.strip().lower()
+        if v not in ("public", "private", "unsure"):
+            raise ValueError("Land access must be 'public', 'private', or 'unsure'.")
+        return v
+
+    @field_validator("access_notes")
+    @classmethod
+    def _validate_access_notes(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if len(v) > 1000:
+            raise ValueError("Access notes must be 1000 characters or fewer.")
+        return v
 
     @field_validator("latitude")
     @classmethod

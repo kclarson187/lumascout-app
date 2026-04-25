@@ -762,16 +762,11 @@ function FilterSheet({
             </Section>
 
             {/* Apr 2026 cleanup — removed Best time of day, Best season,
-                Light quality, and Hidden gem filters per latest product
-                direction. Kept the actionable filters (shoot type,
-                access & logistics, accessibility, verified, proven). */}
-
-            <Section label="Access & logistics">
-              <ScaleChips label="Min parking ease" value={local.min_parking_ease} onChange={(v) => setNumber('min_parking_ease', v)} />
-              <ScaleChips label="Max walking distance" value={local.max_walking_distance} onChange={(v) => setNumber('max_walking_distance', v)} />
-              <ScaleChips label="Max crowd level" value={local.max_crowd_level} onChange={(v) => setNumber('max_crowd_level', v)} />
-              <ScaleChips label="Background variety ≥" value={local.min_variety} onChange={(v) => setNumber('min_variety', v)} />
-            </Section>
+                Light quality, Hidden gem, AND Access & logistics filters
+                per latest product direction. The actual access/logistics
+                data still lives on the spot detail page; we just no longer
+                expose it as an Explore filter. Kept the actionable
+                shoot-type / accessibility / trust filters. */}
 
             <Section label="Trust & freshness">
               <SwitchRow label="Verified in last 60 days" value={!!local.verified_recently} onChange={() => toggle('verified_recently')} />

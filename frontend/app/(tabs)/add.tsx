@@ -21,6 +21,7 @@ import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, 
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii, SHOOT_TYPES, BEST_TIMES, PRIVACY_MODES } from '../../src/theme';
+import { LandAccessSelector } from '../../src/components/LandAccessSelector';
 import { Button } from '../../src/components/Button';
 import LocationSearchSheet, { PlaceResult } from '../../src/components/LocationSearchSheet';
 import MapPickerSheet from '../../src/components/MapPickerSheet';
@@ -83,6 +84,9 @@ type Draft = {
   notes: string;
   privacy_mode: string;
   location_display_mode: string;
+  // FIX(2026-04 / Item #1): Land access disclosure
+  land_access?: 'public' | 'private' | 'unsure';
+  access_notes?: string;
 };
 
 type DupCandidate = {
@@ -127,6 +131,8 @@ const initialDraft: Draft = {
   notes: '',
   privacy_mode: 'public',
   location_display_mode: 'exact',
+  land_access: undefined,
+  access_notes: '',
 };
 
 export default function AddSpot() {
@@ -544,6 +550,9 @@ export default function AddSpot() {
     composition_flex: draft.composition_flex,
     landmark_notes: draft.landmark || draft.landmarkNotes || '',
     notes: draft.notes,
+    // FIX(2026-04 / Item #1): land access disclosure
+    land_access: draft.land_access,
+    access_notes: draft.access_notes || undefined,
     best_months: [],
     images: draft.images,
     // Location provenance (new)
@@ -940,6 +949,16 @@ export default function AddSpot() {
                 testID="add-description"
               />
               <Text style={styles.helper}>Pros cover: parking hack, best arrival time, composition spots, seasonal gotchas, permits.</Text>
+
+              {/* Item #1 (Apr 2026) — Land Access disclosure */}
+              <View style={{ marginTop: 18 }}>
+                <LandAccessSelector
+                  value={draft.land_access}
+                  accessNotes={draft.access_notes}
+                  onChange={(v) => setDraft({ ...draft, land_access: v })}
+                  onAccessNotesChange={(s) => setDraft({ ...draft, access_notes: s })}
+                />
+              </View>
 
               {aiAssistTips.length > 0 && (
                 <View style={styles.aiTipsBox}>
