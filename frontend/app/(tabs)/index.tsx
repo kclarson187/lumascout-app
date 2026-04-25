@@ -358,32 +358,9 @@ export default function Home() {
               <Text style={[styles.qaSub, styles.qaSubActive]}>50 mi</Text>
             </View>
           </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => router.push('/explore' as any)}
-            style={styles.qaPill}
-            testID="home-qa-golden"
-          >
-            <View style={styles.qaIcon}>
-              <Sun size={13} color={colors.primary} />
-            </View>
-            <View>
-              <Text style={styles.qaLabel}>Golden Hour</Text>
-              <Text style={styles.qaSub}>2h 18m</Text>
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => router.push('/explore' as any)}
-            style={styles.qaPill}
-            testID="home-qa-weather"
-          >
-            <View style={styles.qaIcon}>
-              <Cloud size={13} color={colors.textSecondary} />
-            </View>
-            <View>
-              <Text style={styles.qaLabel}>Weather</Text>
-              <Text style={styles.qaSub}>72°F</Text>
-            </View>
-          </TouchableOpacity>
+          {/* Apr 2026 cleanup: removed Golden Hour and Weather pills —
+              they felt gimmicky vs photographer-utility focused. Keep the
+              three useful tools only: Near You / Collections / Routes. */}
           <TouchableOpacity
             onPress={() => router.push('/(tabs)/saved' as any)}
             style={styles.qaPill}
@@ -466,35 +443,38 @@ export default function Home() {
                 </View>
               );
             })()}
-            {/* Per Apr 2026 mockup spec — Home shows ONLY 8 sections:
-                Header / Search / Pills / Continue Planning / Best Near You /
-                Trending / Freshly Updated / Hidden Gems Elite CTA. The
-                previous Golden Hour Tonight (#5) and Creators You Follow
-                (#6) rails were removed from Home; both remain reachable
-                via the Explore tab. Keeps the home crisp and on-brand. */}
-            {/* Rail #7 — Hidden Gems Elite upsell card. Only renders for
-                non-Elite plans; Elite users see the actual hidden-gems
-                feed in /explore?bucket=hidden (shipped separately). */}
-            {(user as any)?.plan !== 'elite' && (user as any)?.plan !== 'comp_elite' && (user as any)?.plan !== 'trial_elite' ? (
-              <TouchableOpacity
-                onPress={() => router.push('/upgrade' as any)}
-                style={styles.gemsCard}
-                activeOpacity={0.9}
-                testID="home-hidden-gems"
-              >
-                <View style={styles.gemsIcon}>
-                  <Gem size={20} color={colors.primary} />
+            {/* Apr 2026 cleanup: Hidden Gems Elite upsell removed. The
+                Home tab now closes with a Recently Saved Spots rail —
+                pulls from feed.recently_saved (or feed.saved as fallback)
+                so users land back on spots they actually care about
+                instead of being upsold every visit. */}
+            {(() => {
+              const saved =
+                (Array.isArray(feed.recently_saved) && feed.recently_saved.length > 0
+                  ? feed.recently_saved
+                  : (feed.saved || feed.bookmarks || feed.collections_recent || []))
+                  .slice(0, 8);
+              if (!saved || saved.length === 0) return null;
+              return (
+                <View style={{ marginTop: space.md }}>
+                  <NumberedRailHeader
+                    n={5}
+                    title="Recently Saved Spots"
+                    onViewAll={() => router.push('/(tabs)/saved' as any)}
+                  />
+                  <FlatList
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    data={saved}
+                    keyExtractor={(it) => it.spot_id || it.id}
+                    contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.md }}
+                    renderItem={({ item }) => (
+                      <SpotCard spot={item} width={260} testID={`spot-saved-${item.spot_id}`} onToggleSave={load} />
+                    )}
+                  />
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.gemsTitle}>Unlock Hidden Gems</Text>
-                  <Text style={styles.gemsSub}>Discover 200+ handpicked spots only Elite members can see.</Text>
-                </View>
-                <View style={styles.gemsCta}>
-                  <Text style={styles.gemsCtaTxt}>Explore Elite</Text>
-                  <ChevronRight size={14} color={colors.textInverse} />
-                </View>
-              </TouchableOpacity>
-            ) : null}
+              );
+            })()}
           </>
         )}
       </ScrollView>

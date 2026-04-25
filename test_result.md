@@ -12,6 +12,47 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Apr 2026 Cleanup — Home + Explore decluttering: removed Golden Hour and Weather quick-action pills from Home (kept Near You / Collections / Routes); removed Hidden Gems Elite CTA upsell card from Home and replaced with Recently Saved Spots rail (graceful empty-state hide when no saved data); simplified Explore quick filter chips from 8 to 9 tightly-scoped (All / Nearby / Verified / New / Urban / Nature / Portrait / Wedding / Pet) — removed Golden Hour, Hidden Gems, season/time-of-day, light-quality, and other micro-filters; removed the 🔥 trending floating chip from Map mode (cleaner Apple-Maps feel)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(tabs)/index.tsx, /app/frontend/app/(tabs)/explore.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          PRD-aligned cleanup — Home now opens with 3 photographer-utility
+          pills (Near You / Collections / Routes), no Hidden Gems upsell
+          on every load. Closes with a Recently Saved Spots rail
+          (FlatList of SpotCard width=260) sourced from
+          feed.recently_saved (fallback chain: feed.saved →
+          feed.bookmarks → feed.collections_recent); rail simply hides
+          when array is empty so we never show a half-baked section.
+          Explore filter strip dropped to 9 actionable chips:
+            All clears all filters
+            Nearby sets sort='distance'
+            Verified sets verified=true
+            New sets new_only=true (last 30 days)
+            Urban / Nature / Portrait / Wedding / Pet set niche=<label>
+          activeChip resolution updated accordingly. Removed the
+          <Image>+avatar-stack 🔥 trending chip from Map mode plus its
+          dangling JSX closing tags. trendingChip / trendAvatarStack /
+          trendAvatar / trendOverflow styles remain as dead style keys
+          (harmless; can be cleaned in a follow-up).
+          Build: iOS bundled 2.9s 3749 modules clean, web bundled
+          clean. Verified visually @ 390x900 — Home shows only the 3
+          pills and no hidden gems CTA at bottom; Explore filter row
+          shows All (gold active) / Nearby / Verified / New / Urban /
+          Nature ... Wedding / Pet, no Golden Hour / Hidden Gems chips.
+          Backend untouched. No regressions in Continue Planning /
+          Best Near You / Trending / Freshly Updated rails or Explore
+          list mode (Smart Alert / Nearby Right Now / Trending Nearby /
+          Golden Hour Tonight rails all still render).
+
+
+
   - task: "Profile Premium Upgrade (Apr 2026): kicker header (PROFILE / Your creator hub + Share + Settings), 7-tile scrollable Stats Row (Followers/Following/Profile Views/Spot Saves/Posts/Reviews/Referrals — each with colored icon tile), 6-button Quick Actions row (Upload Spot/Create Post/View Messages/My Portfolio/Invite Friends/Upgrade or Manage Plan), Portfolio Highlights horizontal rail (FEATURED gold pill on top spot, gradient overlay, taps to /spot/{id}), Growth Insights card (4 blips: +N profile views / +N followers / Saved N times / #N in city — Saved+Rank blurred for free users with Lock icon), Subscription Status card (3 states: Free=Upgrade gold gradient, Pro=Enjoying Pro Benefits, Elite=Elite Creator Status Active with diamond Gem icon and gold gradient), reuses existing /me/spots /me/posts /me/viewers/summary /me/referrals — no backend changes"
     implemented: true
     working: "NA"
