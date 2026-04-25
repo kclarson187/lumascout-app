@@ -25,7 +25,7 @@ export default function UploadScreen() {
       return;
     }
     const r = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsMultipleSelection: true,
       base64: true,
       quality: 0.7,

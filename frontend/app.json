@@ -10,13 +10,20 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.lumascout.app",
+      "buildNumber": "1",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Show nearby photoshoot spots and save locations.",
         "NSPhotoLibraryUsageDescription": "Upload photos for your photoshoot spots.",
-        "NSCameraUsageDescription": "Capture photos for your photoshoot spots."
+        "NSPhotoLibraryAddUsageDescription": "Save spot photos to your camera roll.",
+        "NSCameraUsageDescription": "Capture photos for your photoshoot spots.",
+        "NSUserTrackingUsageDescription": "We use this to improve LumaScout recommendations and personalization.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
+      "package": "com.lumascout.app",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#0A0A0A"
@@ -28,7 +35,8 @@
         "ACCESS_FINE_LOCATION",
         "READ_MEDIA_IMAGES",
         "READ_EXTERNAL_STORAGE",
-        "CAMERA"
+        "CAMERA",
+        "POST_NOTIFICATIONS"
       ]
     },
     "web": {

@@ -35,7 +35,7 @@ export default function Compose() {
 
   const pickImage = async () => {
     const r = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       quality: 0.7, base64: true, allowsEditing: true, aspect: [16, 10],
     });
     if (!r.canceled && r.assets[0]?.base64) {

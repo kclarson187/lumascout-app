@@ -70,7 +70,7 @@ export default function ThreadScreen() {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (perm.status !== 'granted') return;
     const r = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       base64: true, quality: 0.7,
     });
     if (r.canceled || !r.assets?.[0]?.base64) return;

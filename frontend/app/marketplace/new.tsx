@@ -48,7 +48,7 @@ export default function NewProduct() {
     const r = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!r.granted) { Alert.alert('Permission needed', 'Please enable photo library access.'); return []; }
     const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsMultipleSelection: multi,
       selectionLimit: multi ? 5 : 1,
       quality: 0.7,

@@ -290,7 +290,7 @@ export default function AddSpot() {
       return;
     }
     const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsMultipleSelection: true,
       quality: 1,
       base64: false,
@@ -357,7 +357,7 @@ export default function AddSpot() {
       : Promise.resolve(null);
 
     const res = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       quality: 1,
       base64: false,
       exif: true,

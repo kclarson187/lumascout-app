@@ -53,7 +53,7 @@ export default function EditProduct() {
     const r = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!r.granted) { Alert.alert('Permission needed'); return []; }
     const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsMultipleSelection: multi, selectionLimit: multi ? 5 : 1,
       quality: 0.7, base64: true,
     });
