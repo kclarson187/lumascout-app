@@ -1,21 +1,21 @@
 /**
- * DirectoryView — Photographer Directory inside the Network tab.
+ * DirectoryView — Photographer Directory (premium rebuild, Apr 2026)
  *
- * UI polish pass (2026-04, "Apple/Instagram/Airbnb premium"):
- *   - Every pill / chip now has an EXPLICIT 36-40px height. Horizontal
- *     ScrollViews use alignItems:'center' on their contentContainerStyle
- *     so children never vertically-stretch (this was the bug producing
- *     tall capsule-shaped pills on iOS).
- *   - Specialties moved out of the inline chip row and into a sheet
- *     opened by a compact "Specialties ▾" pill that shows the active
- *     selection inline.
- *   - Sort moved to a single "Sort · <current> ▼" pill that opens
- *     its own sheet — cleaner than a 5-pill row.
- *   - Empty state: tighter typography, suggestion bullets, "Reset
- *     filters" CTA, and surfaces top of viewport instead of dominating.
+ * Layout follows the founder's mockup pixel-for-pixel:
+ *   1) Search bar (44px, gold focus accent)
+ *   2) Three primary filter CARDS in one row: Nearby · Verified · New
+ *      (no other pills — All / Elite / Pro / Popular were removed per PRD)
+ *   3) Secondary controls justified-between: "Sort · <X> ▾"  on the left,
+ *      "⚙ Specialties ▾" on the right (sheet-driven, never inline pills)
+ *   4) Stacked premium creator cards with horizontal layout:
+ *        avatar (with green online dot) | name + badges + meta | actions stack
  *
- * Data layer is unchanged (same /api/directory + /api/directory/suggested
- * contracts). No perf regression.
+ * BUGFIXES (this revision):
+ *   · Unfollow used DELETE /users/:id/follow → 404. Backend treats
+ *     POST /users/:id/follow as a TOGGLE returning {following: bool}.
+ *     We now always POST and trust the response.
+ *   · dm/threads/start body had field `participant_user_id` → 404/422.
+ *     Backend's DMStartIn expects `user_id`. Fixed.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -44,34 +44,32 @@ import {
   ChevronDown,
   SlidersHorizontal,
   RefreshCw,
+  Users as UsersIcon,
+  BadgeCheck,
 } from 'lucide-react-native';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { colors, font, space, radii } from '../theme';
 
-const FILTERS: Array<{ key: string; label: string }> = [
-  { key: 'all', label: 'All' },
-  { key: 'nearby', label: 'Nearby' },
-  { key: 'verified', label: 'Verified' },
-  { key: 'elite', label: 'Elite' },
-  { key: 'pro', label: 'Pro' },
-  { key: 'new', label: 'New' },
-  { key: 'popular', label: 'Popular' },
-  { key: 'available', label: 'Available' },
+// Three primary filter "cards" only — per founder PRD.
+const FILTERS: Array<{ key: string; label: string; sub?: string; icon: 'pin' | 'check' | 'spark' }> = [
+  { key: 'nearby', label: 'Nearby', icon: 'pin' },
+  { key: 'verified', label: 'Verified', icon: 'check' },
+  { key: 'new', label: 'New', sub: 'Joined in last 30 days', icon: 'spark' },
 ];
 
 const SORTS: Array<{ key: string; label: string }> = [
   { key: 'popular', label: 'Popular' },
   { key: 'nearby', label: 'Nearby' },
-  { key: 'recent', label: 'Recently Active' },
+  { key: 'recent', label: 'Active' },
   { key: 'new', label: 'Newest' },
   { key: 'name', label: 'A–Z' },
 ];
 
 const SPECIALTIES = [
-  'Wedding', 'Portrait', 'Family', 'Pet', 'Maternity',
-  'Newborn', 'Real Estate', 'Landscape', 'Drone', 'Events',
-  'Brand', 'Fashion', 'Food', 'Sports', 'Automotive', 'Content Creator',
+  'Wedding', 'Portrait', 'Family', 'Pet', 'Landscape',
+  'Drone', 'Real Estate', 'Events', 'Content Creator',
+  'Newborn', 'Maternity', 'Brand', 'Fashion', 'Food', 'Sports', 'Automotive',
 ];
 
 type DirItem = {
@@ -87,127 +85,140 @@ type DirItem = {
   follower_count?: number;
   bio?: string;
   is_following?: boolean;
+  last_active_at?: string;
 };
 
-function PlanBadge({ u }: { u: DirItem }) {
+function fmtFollowers(n?: number): string {
+  if (typeof n !== 'number') return '';
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K`;
+  return String(n);
+}
+
+function isOnline(iso?: string): boolean {
+  if (!iso) return false;
+  try {
+    return Date.now() - new Date(iso).getTime() < 5 * 60 * 1000; // active within 5 min
+  } catch { return false; }
+}
+
+function PlanBadge({ u, size = 'md' }: { u: DirItem; size?: 'sm' | 'md' }) {
+  const small = size === 'sm';
   if (u.plan === 'elite') {
     return (
-      <View style={[s.badge, s.badgeElite]} testID="badge-elite">
-        <Star size={9} color="#1a1300" fill="#1a1300" strokeWidth={0} />
-        <Text style={[s.badgeTxt, { color: '#1a1300' }]}>ELITE</Text>
+      <View style={[s.badge, s.badgeElite, small && { paddingVertical: 1.5 }]}>
+        <Star size={small ? 8 : 9} color="#1a1300" fill="#1a1300" strokeWidth={0} />
+        <Text style={[s.badgeTxt, { color: '#1a1300', fontSize: small ? 8 : 9 }]}>ELITE</Text>
       </View>
     );
   }
   if (u.plan === 'pro') {
     return (
-      <View style={[s.badge, s.badgePro]}>
-        <Star size={9} color={colors.primary} />
-        <Text style={[s.badgeTxt, { color: colors.primary }]}>PRO</Text>
+      <View style={[s.badge, s.badgePro, small && { paddingVertical: 1.5 }]}>
+        <Star size={small ? 8 : 9} color={colors.primary} />
+        <Text style={[s.badgeTxt, { color: colors.primary, fontSize: small ? 8 : 9 }]}>PRO</Text>
       </View>
     );
   }
   return null;
 }
 
-function DirectoryCard({
-  u,
-  onFollow,
-  onMessage,
-  busyFollow,
-}: {
-  u: DirItem;
-  onFollow: (u: DirItem) => void;
-  onMessage: (u: DirItem) => void;
-  busyFollow: boolean;
-}) {
-  const elite = u.plan === 'elite';
-  const specs = (u.specialties || []).slice(0, 3);
+function FilterCard({
+  k, label, sub, icon, active, onPress,
+}: { k: string; label: string; sub?: string; icon: 'pin' | 'check' | 'spark'; active: boolean; onPress: () => void }) {
+  const Icon = icon === 'pin' ? MapPin : icon === 'check' ? BadgeCheck : Sparkles;
   return (
     <Pressable
-      style={[s.card, elite && s.cardElite]}
+      onPress={onPress}
+      style={[s.fcard, active && s.fcardActive]}
+      testID={`directory-filter-${k}`}
+    >
+      <Icon size={15} color={active ? colors.primary : colors.textSecondary} />
+      <Text style={[s.fcardLabel, active && s.fcardLabelActive]} numberOfLines={1}>{label}</Text>
+      {sub ? (
+        <Text style={[s.fcardSub, active && { color: colors.primary, opacity: 0.85 }]} numberOfLines={1}>{sub}</Text>
+      ) : null}
+    </Pressable>
+  );
+}
+
+function CreatorCard({
+  u, onFollow, onMessage, busyFollow,
+}: { u: DirItem; onFollow: (u: DirItem) => void; onMessage: (u: DirItem) => void; busyFollow: boolean }) {
+  const elite = u.plan === 'elite';
+  const verified = u.verification_status === 'verified';
+  const specs = (u.specialties || []).slice(0, 3);
+  const online = isOnline(u.last_active_at);
+  return (
+    <Pressable
       onPress={() => router.push(`/user/${u.user_id}` as any)}
+      style={[s.card, elite && s.cardElite]}
       testID={`directory-card-${u.user_id}`}
     >
-      <View style={s.cardTop}>
-        <View style={s.avatarWrap}>
-          {u.avatar_url ? (
-            <Image source={{ uri: u.avatar_url }} style={s.avatar} />
-          ) : (
-            <View style={[s.avatar, s.avatarPh]}>
-              <Text style={s.avatarPhTxt}>
-                {(u.name || u.username || '?').slice(0, 1).toUpperCase()}
-              </Text>
-            </View>
-          )}
-          {elite ? <View style={s.eliteRing} pointerEvents="none" /> : null}
-        </View>
-        <View style={{ flex: 1 }}>
-          <View style={s.nameRow}>
-            <Text style={s.name} numberOfLines={1}>
-              {u.name || `@${u.username || 'user'}`}
-            </Text>
-            {u.verification_status === 'verified' ? (
-              <ShieldCheck size={13} color="#3b82f6" />
-            ) : null}
-            <PlanBadge u={u} />
+      <View style={s.avatarWrap}>
+        {u.avatar_url ? (
+          <Image source={{ uri: u.avatar_url }} style={s.avatar} />
+        ) : (
+          <View style={[s.avatar, s.avatarPh]}>
+            <Text style={s.avatarPhTxt}>{(u.name || u.username || '?').slice(0, 1).toUpperCase()}</Text>
           </View>
-          <View style={s.metaRow}>
-            {u.username ? (
-              <Text style={s.handle} numberOfLines={1}>@{u.username}</Text>
-            ) : null}
-            {u.username && (u.city || u.state) ? (
-              <Text style={s.metaDot}>·</Text>
-            ) : null}
-            {(u.city || u.state) ? (
-              <View style={s.locInline}>
-                <MapPin size={10} color={colors.textTertiary} />
-                <Text style={s.loc} numberOfLines={1}>
-                  {u.city}{u.state ? (u.city ? `, ${u.state}` : u.state) : ''}
-                </Text>
-              </View>
-            ) : null}
-          </View>
-          {typeof u.follower_count === 'number' ? (
-            <Text style={s.followers}>
-              {u.follower_count.toLocaleString()} follower{u.follower_count === 1 ? '' : 's'}
-            </Text>
-          ) : null}
-        </View>
+        )}
+        {elite ? <View style={s.eliteRing} pointerEvents="none" /> : null}
+        {online ? <View style={s.onlineDot} /> : null}
       </View>
-      {specs.length > 0 ? (
-        <View style={s.specRow}>
-          {specs.map((sp) => (
-            <View key={sp} style={s.specChip}>
-              <Text style={s.specTxt}>{sp}</Text>
-            </View>
-          ))}
+      <View style={s.body}>
+        <View style={s.nameRow}>
+          <Text style={s.name} numberOfLines={1}>{u.name || `@${u.username || 'user'}`}</Text>
+          {verified ? <ShieldCheck size={14} color="#3b82f6" fill="#3b82f6" strokeWidth={0} /> : null}
+          <PlanBadge u={u} size="sm" />
         </View>
-      ) : null}
-      <View style={s.actions}>
+        {u.username ? (
+          <Text style={s.handle} numberOfLines={1}>@{u.username}</Text>
+        ) : null}
+        {(u.city || u.state) ? (
+          <View style={s.metaRow}>
+            <MapPin size={11} color={colors.textTertiary} />
+            <Text style={s.meta} numberOfLines={1}>
+              {u.city}{u.state ? (u.city ? `, ${u.state}` : u.state) : ''}
+            </Text>
+          </View>
+        ) : null}
+        {specs.length > 0 ? (
+          <Text style={s.specInline} numberOfLines={1}>
+            {specs.join(' · ')}
+          </Text>
+        ) : null}
+        {typeof u.follower_count === 'number' ? (
+          <View style={s.metaRow}>
+            <UsersIcon size={11} color={colors.textTertiary} />
+            <Text style={s.meta}>{fmtFollowers(u.follower_count)} followers</Text>
+          </View>
+        ) : null}
+      </View>
+      <View style={s.actionsCol}>
         <Pressable
-          onPress={() => onFollow(u)}
+          onPress={(e) => { e.stopPropagation(); onFollow(u); }}
           disabled={busyFollow}
           style={[s.actionBtn, u.is_following ? s.actionFollowing : s.actionFollow]}
           testID={`directory-follow-${u.user_id}`}
         >
           {u.is_following ? (
             <>
-              <Check size={13} color={colors.text} />
+              <Check size={12} color={colors.text} />
               <Text style={[s.actionTxt, { color: colors.text }]}>Following</Text>
             </>
           ) : (
             <>
-              <UserPlus size={13} color={colors.textInverse} />
+              <UserPlus size={12} color={colors.textInverse} />
               <Text style={[s.actionTxt, { color: colors.textInverse }]}>Follow</Text>
             </>
           )}
         </Pressable>
         <Pressable
-          onPress={() => onMessage(u)}
+          onPress={(e) => { e.stopPropagation(); onMessage(u); }}
           style={[s.actionBtn, s.actionMessage]}
           testID={`directory-message-${u.user_id}`}
         >
-          <MessageCircle size={13} color={colors.text} />
+          <MessageCircle size={12} color={colors.text} />
           <Text style={[s.actionTxt, { color: colors.text }]}>Message</Text>
         </Pressable>
       </View>
@@ -222,7 +233,6 @@ export default function DirectoryView() {
   const [sort, setSort] = useState('popular');
   const [specialty, setSpecialty] = useState<string | null>(null);
   const [items, setItems] = useState<DirItem[]>([]);
-  const [suggested, setSuggested] = useState<DirItem[]>([]);
   const [cursor, setCursor] = useState<number | null>(0);
   const [loading, setLoading] = useState(false);
   const [paging, setPaging] = useState(false);
@@ -249,14 +259,11 @@ export default function DirectoryView() {
         cursor: resetCursor ? 0 : cursor,
         limit: 20,
       });
-      if (resetCursor) {
-        setItems(r.items || []);
-      } else {
-        setItems((prev) => [...prev, ...(r.items || [])]);
-      }
+      if (resetCursor) setItems(r.items || []);
+      else setItems((prev) => [...prev, ...(r.items || [])]);
       setCursor(r.next_cursor);
     } catch {
-      // Leave existing list in place.
+      // soft-fail; keep last state
     } finally {
       setLoading(false);
       setPaging(false);
@@ -266,36 +273,32 @@ export default function DirectoryView() {
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => load(true), 250);
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, sort, filter, specialty]);
 
-  useEffect(() => {
-    if (!user) return;
-    api.get('/directory/suggested', { limit: 8 })
-      .then((r) => setSuggested(r.items || []))
-      .catch(() => setSuggested([]));
-  }, [user]);
-
+  // BUGFIX: backend POST /users/:id/follow is a TOGGLE — never DELETE.
   const handleFollow = useCallback(async (u: DirItem) => {
     if (busyFollow) return;
     setBusyFollow(u.user_id);
     setItems((prev) => prev.map((x) => x.user_id === u.user_id ? { ...x, is_following: !x.is_following } : x));
     try {
-      if (u.is_following) await api.delete(`/users/${u.user_id}/follow`);
-      else await api.post(`/users/${u.user_id}/follow`, {});
+      const r = await api.post(`/users/${u.user_id}/follow`, {});
+      // Reconcile with server truth (server returns {following: bool}).
+      const serverFollowing = !!r?.following;
+      setItems((prev) => prev.map((x) => x.user_id === u.user_id ? { ...x, is_following: serverFollowing } : x));
     } catch {
+      // Roll back optimistic toggle on error.
       setItems((prev) => prev.map((x) => x.user_id === u.user_id ? { ...x, is_following: u.is_following } : x));
     } finally {
       setBusyFollow(null);
     }
   }, [busyFollow]);
 
+  // BUGFIX: backend DMStartIn expects `user_id`, not `participant_user_id`.
   const handleMessage = useCallback(async (u: DirItem) => {
     try {
-      const r = await api.post('/dm/threads/start', { participant_user_id: u.user_id });
+      const r = await api.post('/dm/threads/start', { user_id: u.user_id });
       if (r?.thread_id) router.push(`/inbox/${r.thread_id}` as any);
       else router.push('/inbox');
     } catch {
@@ -304,10 +307,7 @@ export default function DirectoryView() {
   }, []);
 
   const resetFilters = useCallback(() => {
-    setQ('');
-    setFilter('all');
-    setSort('popular');
-    setSpecialty(null);
+    setQ(''); setFilter('all'); setSort('popular'); setSpecialty(null);
   }, []);
 
   const hasActiveFilters = !!(q || filter !== 'all' || specialty);
@@ -315,7 +315,7 @@ export default function DirectoryView() {
 
   return (
     <View style={s.root}>
-      {/* Compact premium search bar (40px height) */}
+      {/* Search bar */}
       <View style={s.searchWrap}>
         <Search size={16} color={colors.textTertiary} />
         <TextInput
@@ -336,52 +336,52 @@ export default function DirectoryView() {
         ) : null}
       </View>
 
-      {/* Single horizontal pill row — no vertical stretch */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={s.pillRow}
-      >
+      {/* 3 primary filter cards — flexed equally per the mockup */}
+      <View style={s.fcardRow}>
         {FILTERS.map((f) => (
-          <Pressable
+          <FilterCard
             key={f.key}
-            onPress={() => setFilter(f.key)}
-            style={[s.pill, filter === f.key && s.pillActive]}
-            testID={`directory-filter-${f.key}`}
-          >
-            <Text style={[s.pillTxt, filter === f.key && s.pillTxtActive]}>{f.label}</Text>
-          </Pressable>
+            k={f.key}
+            label={f.label}
+            sub={f.sub}
+            icon={f.icon}
+            active={filter === f.key}
+            onPress={() => setFilter(filter === f.key ? 'all' : f.key)}
+          />
         ))}
-      </ScrollView>
+      </View>
 
-      {/* Sort + Specialties — two compact dropdown pills */}
+      {/* Secondary controls — Sort left, Specialties right */}
       <View style={s.controlRow}>
         <Pressable
           onPress={() => setSortSheetOpen(true)}
-          style={s.controlPill}
+          style={s.sortPill}
           testID="directory-sort-open"
         >
-          <Text style={s.controlLabel}>Sort</Text>
-          <Text style={s.controlValue}>{sortLabel}</Text>
-          <ChevronDown size={12} color={colors.textSecondary} />
+          <Text style={s.sortLabel}>Sort</Text>
+          <View style={s.sortValuePill}>
+            <Text style={s.sortValue}>{sortLabel}</Text>
+            <ChevronDown size={12} color={colors.textSecondary} />
+          </View>
         </Pressable>
-        <Pressable
-          onPress={() => setSpecSheetOpen(true)}
-          style={[s.controlPill, specialty && s.controlPillActive]}
-          testID="directory-specialty-open"
-        >
-          <SlidersHorizontal size={11} color={specialty ? colors.primary : colors.textSecondary} />
-          <Text style={[s.controlLabel, specialty && { color: colors.primary }]}>
-            {specialty ? 'Specialty' : 'Specialties'}
-          </Text>
-          {specialty ? <Text style={[s.controlValue, { color: colors.primary }]}>{specialty}</Text> : null}
-          <ChevronDown size={12} color={specialty ? colors.primary : colors.textSecondary} />
-        </Pressable>
-        {hasActiveFilters ? (
-          <Pressable onPress={resetFilters} style={s.resetMini} testID="directory-reset-mini">
-            <RefreshCw size={11} color={colors.textSecondary} />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          {hasActiveFilters ? (
+            <Pressable onPress={resetFilters} style={s.resetMini} testID="directory-reset-mini">
+              <RefreshCw size={11} color={colors.textSecondary} />
+            </Pressable>
+          ) : null}
+          <Pressable
+            onPress={() => setSpecSheetOpen(true)}
+            style={[s.specPill, specialty && s.specPillActive]}
+            testID="directory-specialty-open"
+          >
+            <SlidersHorizontal size={12} color={specialty ? colors.primary : colors.textSecondary} />
+            <Text style={[s.specPillTxt, specialty && { color: colors.primary }]}>
+              {specialty || 'Specialties'}
+            </Text>
+            <ChevronDown size={12} color={specialty ? colors.primary : colors.textSecondary} />
           </Pressable>
-        ) : null}
+        </View>
       </View>
 
       {/* Body */}
@@ -416,43 +416,9 @@ export default function DirectoryView() {
         <FlatList
           data={items}
           keyExtractor={(u: DirItem) => u.user_id}
-          contentContainerStyle={{ paddingHorizontal: space.xl, paddingBottom: 80 }}
-          ListHeaderComponent={
-            !q && filter === 'all' && !specialty && suggested.length > 0 ? (
-              <View style={s.sugWrap}>
-                <View style={s.sugHead}>
-                  <Sparkles size={13} color={colors.primary} />
-                  <Text style={s.sugTitle}>People you may know</Text>
-                </View>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={s.sugScroller}
-                >
-                  {suggested.map((u) => (
-                    <Pressable
-                      key={u.user_id}
-                      onPress={() => router.push(`/user/${u.user_id}` as any)}
-                      style={s.sugCard}
-                      testID={`directory-suggested-${u.user_id}`}
-                    >
-                      {u.avatar_url ? (
-                        <Image source={{ uri: u.avatar_url }} style={s.sugAvatar} />
-                      ) : (
-                        <View style={[s.sugAvatar, s.avatarPh]}>
-                          <Text style={s.avatarPhTxt}>{(u.name || '?').slice(0, 1).toUpperCase()}</Text>
-                        </View>
-                      )}
-                      <Text style={s.sugName} numberOfLines={1}>{u.name || `@${u.username}`}</Text>
-                      {u.city ? <Text style={s.sugLoc} numberOfLines={1}>{u.city}</Text> : null}
-                    </Pressable>
-                  ))}
-                </ScrollView>
-              </View>
-            ) : null
-          }
+          contentContainerStyle={s.listContent}
           renderItem={({ item }) => (
-            <DirectoryCard
+            <CreatorCard
               u={item}
               onFollow={handleFollow}
               onMessage={handleMessage}
@@ -468,12 +434,7 @@ export default function DirectoryView() {
       )}
 
       {/* Sort sheet */}
-      <Modal
-        visible={sortSheetOpen}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setSortSheetOpen(false)}
-      >
+      <Modal visible={sortSheetOpen} transparent animationType="slide" onRequestClose={() => setSortSheetOpen(false)}>
         <Pressable style={sheetS.backdrop} onPress={() => setSortSheetOpen(false)}>
           <Pressable style={sheetS.sheet} onPress={(e) => e.stopPropagation()}>
             <View style={sheetS.grabber} />
@@ -497,12 +458,7 @@ export default function DirectoryView() {
       </Modal>
 
       {/* Specialties sheet */}
-      <Modal
-        visible={specSheetOpen}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setSpecSheetOpen(false)}
-      >
+      <Modal visible={specSheetOpen} transparent animationType="slide" onRequestClose={() => setSpecSheetOpen(false)}>
         <Pressable style={sheetS.backdrop} onPress={() => setSpecSheetOpen(false)}>
           <Pressable style={sheetS.sheet} onPress={(e) => e.stopPropagation()}>
             <View style={sheetS.grabber} />
@@ -543,113 +499,84 @@ export default function DirectoryView() {
   );
 }
 
-// -----------------------------------------------------------------------------
-// Styles — every interactive pill has an EXPLICIT height and the parent rows
-// use alignItems:'center' so children never vertically-stretch.
-// -----------------------------------------------------------------------------
+const CARD_AVATAR = 64;
+const ACT_W = 110;
+
 const s = StyleSheet.create({
   root: { flex: 1 },
-  // Search — 44px touch target
+  // Search
   searchWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    height: 44,
-    marginHorizontal: space.xl,
-    paddingHorizontal: 12,
-    borderRadius: 22,
-    backgroundColor: colors.surface1,
-    borderWidth: 1,
-    borderColor: colors.border,
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    height: 44, marginHorizontal: space.xl, paddingHorizontal: 12,
+    borderRadius: 22, backgroundColor: colors.surface1,
+    borderWidth: 1, borderColor: colors.border,
   },
-  searchInput: {
-    flex: 1,
-    color: colors.text,
-    fontFamily: font.body,
-    fontSize: 13,
-    paddingVertical: 0,
-  },
+  searchInput: { flex: 1, color: colors.text, fontFamily: font.body, fontSize: 13, paddingVertical: 0 },
   searchClear: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 22, height: 22, borderRadius: 11,
+    alignItems: 'center', justifyContent: 'center',
     backgroundColor: colors.surface2,
   },
-  // Filter pill row
-  pillRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: space.xl,
-    paddingTop: 12,
-    paddingBottom: 4,
+  // 3 filter cards row
+  fcardRow: {
+    flexDirection: 'row', gap: 8,
+    paddingHorizontal: space.xl, paddingTop: 12, paddingBottom: 4,
   },
-  pill: {
-    height: 32,
-    paddingHorizontal: 14,
-    borderRadius: 16,
+  fcard: {
+    flex: 1,
+    minHeight: 56,
+    paddingHorizontal: 10, paddingVertical: 9,
+    borderRadius: 14,
     backgroundColor: colors.surface1,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderWidth: 1, borderColor: colors.border,
+    alignItems: 'center', justifyContent: 'center',
+    gap: 3,
   },
-  pillActive: {
-    backgroundColor: 'rgba(245,166,35,0.16)',
-    borderColor: colors.primary,
+  fcardActive: {
+    backgroundColor: 'rgba(245,166,35,0.08)',
+    borderColor: 'rgba(245,166,35,0.55)',
   },
-  pillTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
-  pillTxtActive: { color: colors.primary, fontFamily: font.bodySemibold },
-  // Sort + Specialties control row
+  fcardLabel: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
+  fcardLabelActive: { color: colors.primary, fontFamily: font.bodyBold },
+  fcardSub: { color: colors.textTertiary, fontFamily: font.body, fontSize: 9, textAlign: 'center', marginTop: 1 },
+  // Sort + Specialties row
   controlRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: space.xl,
-    paddingTop: 8,
-    paddingBottom: 12,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: space.xl, paddingTop: 10, paddingBottom: 12,
   },
-  controlPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    height: 32,
-    paddingHorizontal: 12,
-    borderRadius: 16,
+  sortPill: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sortLabel: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.4 },
+  sortValuePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    height: 30, paddingHorizontal: 12, borderRadius: 15,
     backgroundColor: colors.surface1,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderWidth: 1, borderColor: colors.border,
   },
-  controlPillActive: {
-    borderColor: 'rgba(245,166,35,0.45)',
-    backgroundColor: 'rgba(245,166,35,0.06)',
+  sortValue: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 12 },
+  specPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    height: 30, paddingHorizontal: 12, borderRadius: 15,
+    backgroundColor: colors.surface1,
+    borderWidth: 1, borderColor: colors.border,
   },
-  controlLabel: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.3 },
-  controlValue: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 12 },
+  specPillActive: { borderColor: 'rgba(245,166,35,0.5)', backgroundColor: 'rgba(245,166,35,0.08)' },
+  specPillTxt: { color: colors.textSecondary, fontFamily: font.bodySemibold, fontSize: 12 },
   resetMini: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 30, height: 30, borderRadius: 15,
+    alignItems: 'center', justifyContent: 'center',
     backgroundColor: colors.surface1,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderWidth: 1, borderColor: colors.border,
   },
-  // Empty state
+  // Empty
   emptyWrap: {
-    paddingHorizontal: space.xl,
-    paddingTop: 28,
-    paddingBottom: 32,
+    paddingHorizontal: space.xl, paddingTop: 22, paddingBottom: 24,
     alignItems: 'flex-start',
   },
   emptyTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 16 },
-  emptySub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, marginTop: 4, lineHeight: 18 },
-  suggestList: { marginTop: 14, gap: 4 },
+  emptySub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, marginTop: 4 },
+  suggestList: { marginTop: 12, gap: 4 },
   suggestRow: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 20 },
-  emptyActions: { flexDirection: 'row', gap: 8, marginTop: 18 },
+  emptyActions: { flexDirection: 'row', gap: 8, marginTop: 16 },
   emptyResetBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     height: 36, paddingHorizontal: 14, borderRadius: 18,
@@ -663,58 +590,48 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   emptyAltTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },
-  // Suggested rail
-  sugWrap: { paddingTop: 8, paddingBottom: 14 },
-  sugHead: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 10 },
-  sugTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 12, letterSpacing: 0.3 },
-  sugScroller: { gap: 8, alignItems: 'center' },
-  sugCard: {
-    width: 100,
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    borderRadius: radii.md,
-    backgroundColor: colors.surface1,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  sugAvatar: { width: 52, height: 52, borderRadius: 26, marginBottom: 8 },
-  sugName: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 11, textAlign: 'center' },
-  sugLoc: { color: colors.textTertiary, fontFamily: font.body, fontSize: 9, marginTop: 2, textAlign: 'center' },
   // Card
+  listContent: { paddingHorizontal: space.xl, paddingBottom: 28 },
   card: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingVertical: 12, paddingHorizontal: 12,
     backgroundColor: colors.surface1,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radii.md,
-    padding: 14,
-    marginBottom: 10,
+    borderWidth: 1, borderColor: colors.border,
+    borderRadius: 14,
+    marginBottom: 8,
+    alignItems: 'center',
   },
   cardElite: {
-    borderColor: 'rgba(245,166,35,0.35)',
-    backgroundColor: 'rgba(245,166,35,0.04)',
+    borderColor: 'rgba(245,166,35,0.3)',
+    backgroundColor: 'rgba(245,166,35,0.035)',
   },
-  cardTop: { flexDirection: 'row', gap: 12, alignItems: 'center' },
   avatarWrap: { position: 'relative' },
-  avatar: { width: 54, height: 54, borderRadius: 27 },
-  eliteRing: {
-    position: 'absolute', top: -2, left: -2, right: -2, bottom: -2,
-    borderRadius: 29, borderWidth: 1.5, borderColor: '#f5a623',
-  },
+  avatar: { width: CARD_AVATAR, height: CARD_AVATAR, borderRadius: CARD_AVATAR / 2 },
   avatarPh: {
     backgroundColor: colors.surface2,
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1, borderColor: colors.border,
   },
-  avatarPhTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 16 },
+  avatarPhTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 18 },
+  eliteRing: {
+    position: 'absolute', top: -2, left: -2, right: -2, bottom: -2,
+    borderRadius: (CARD_AVATAR + 4) / 2,
+    borderWidth: 1.5, borderColor: '#f5a623',
+  },
+  onlineDot: {
+    position: 'absolute', right: 0, bottom: 2,
+    width: 14, height: 14, borderRadius: 7,
+    backgroundColor: '#22c55e',
+    borderWidth: 2, borderColor: colors.surface1,
+  },
+  body: { flex: 1, gap: 3, minWidth: 0 },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' },
   name: { color: colors.text, fontFamily: font.bodyBold, fontSize: 15 },
-  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2, flexWrap: 'wrap' },
-  handle: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, flexShrink: 1 },
-  metaDot: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
-  locInline: { flexDirection: 'row', alignItems: 'center', gap: 3, flexShrink: 1 },
-  loc: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11 },
-  followers: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, marginTop: 4 },
+  handle: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  meta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11 },
+  specInline: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, marginTop: 1 },
   badge: {
     flexDirection: 'row', alignItems: 'center', gap: 3,
     paddingHorizontal: 5, paddingVertical: 2,
@@ -722,70 +639,44 @@ const s = StyleSheet.create({
   },
   badgeElite: { backgroundColor: '#f5a623', borderColor: '#f5a623' },
   badgePro: { backgroundColor: 'rgba(245,166,35,0.14)', borderColor: 'rgba(245,166,35,0.4)' },
-  badgeTxt: { fontFamily: font.bodyBold, fontSize: 8, letterSpacing: 0.6 },
-  specRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 10 },
-  specChip: {
-    paddingHorizontal: 8, paddingVertical: 4,
-    borderRadius: 4, backgroundColor: colors.surface2,
-  },
-  specTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10 },
-  actions: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  badgeTxt: { fontFamily: font.bodyBold, letterSpacing: 0.6 },
+  actionsCol: { gap: 6, width: ACT_W },
   actionBtn: {
-    flex: 1,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 4,
-    height: 36,
-    borderRadius: 10,
+    gap: 4, height: 32, borderRadius: 8,
   },
   actionFollow: { backgroundColor: colors.primary },
   actionFollowing: { backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border },
   actionMessage: { backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border },
-  actionTxt: { fontFamily: font.bodyBold, fontSize: 12 },
+  actionTxt: { fontFamily: font.bodyBold, fontSize: 11 },
 });
 
 const sheetS = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    justifyContent: 'flex-end',
-  },
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
   sheet: {
     backgroundColor: colors.surface1,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    paddingHorizontal: space.xl,
-    paddingTop: 8,
-    paddingBottom: space.xxl,
-    borderTopWidth: 1, borderLeftWidth: 1, borderRightWidth: 1,
-    borderColor: colors.border,
+    borderTopLeftRadius: 18, borderTopRightRadius: 18,
+    paddingHorizontal: space.xl, paddingTop: 8, paddingBottom: space.xxl,
+    borderTopWidth: 1, borderLeftWidth: 1, borderRightWidth: 1, borderColor: colors.border,
   },
-  grabber: {
-    width: 40, height: 4, borderRadius: 2,
-    backgroundColor: colors.border,
-    alignSelf: 'center', marginBottom: 12,
-  },
+  grabber: { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, alignSelf: 'center', marginBottom: 12 },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   title: { color: colors.text, fontFamily: font.bodyBold, fontSize: 15, marginBottom: 8 },
   headerLink: { color: colors.primary, fontFamily: font.bodySemibold, fontSize: 12 },
   row: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    height: 48,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
+    height: 48, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
   },
   rowTxt: { color: colors.text, fontFamily: font.body, fontSize: 14 },
   rowTxtActive: { color: colors.primary, fontFamily: font.bodySemibold },
-  specGrid: {
-    flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingTop: 4,
-  },
+  specGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingTop: 4 },
   specChip: {
     height: 36, paddingHorizontal: 14, borderRadius: 18,
     backgroundColor: colors.surface2,
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1, borderColor: 'transparent',
   },
-  specChipActive: {
-    backgroundColor: 'rgba(245,166,35,0.14)', borderColor: colors.primary,
-  },
+  specChipActive: { backgroundColor: 'rgba(245,166,35,0.14)', borderColor: colors.primary },
   specChipTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },
   specChipTxtActive: { color: colors.primary, fontFamily: font.bodySemibold },
 });
