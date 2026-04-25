@@ -7936,10 +7936,58 @@ agent_communication:
             (g) Auth: viewer is_following / is_blocked correctly hydrated
                 when authenticated; quiet (no field) when unauthenticated.
 
-  - task: "Photographer Directory — Frontend (Discover/Directory toggle in Network tab, DirectoryView with search/sort/filter/specialty/follow-toggle/messaging/suggested)"
+  - task: "Photographer Directory — Frontend (Discover/Directory toggle in Network tab, DirectoryView with search/sort/filter/specialty/follow-toggle/messaging/suggested) + UI polish pass (uniform pill heights, specialty sheet, sort sheet, premium empty state)"
     implemented: true
     working: "NA"
-    file: "/app/frontend/src/components/DirectoryView.tsx (new — full directory UI) + /app/frontend/app/(tabs)/network.tsx (added top-level Discover↔Directory segmented pill + DirectoryView render branch; existing Discover rails untouched)"
+    file: "/app/frontend/src/components/DirectoryView.tsx (rewritten with polished UI) + /app/frontend/app/(tabs)/network.tsx (toggle pills 40px height + subtitle)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          DIRECTORY POLISH PASS shipped (2026-04-25). Verified across 4
+          captures at 390x844:
+
+          ROOT CAUSE of the previous "tall stretched capsule" pills:
+            Horizontal ScrollView contentContainerStyle didn't enforce
+            alignItems:'center', and pills used paddingVertical instead
+            of explicit height. RN flexbox stretched them to row height.
+            Fixed by giving every pill an EXPLICIT height (32 or 40)
+            and adding alignItems:'center' to the row container.
+
+          Visual changes:
+            · Network header gets a subtitle when on Directory:
+              "Browse creators near you and across specialties"
+            · Discover/Directory toggle pills: 40px height, 20px radius.
+            · Search bar: 44px height (Apple touch-target standard).
+            · Filter pills: uniform 32px, single horizontal row only.
+            · Sort + Specialties moved into TWO compact 32px control
+              pills with chevron-down indicators. Tapping opens a
+              bottom-sheet modal:
+                - Sort sheet → Popular / Nearby / Recently Active /
+                  Newest / A–Z, with check on active.
+                - Specialties sheet → 16 chips in a wrap grid;
+                  "Clear" link in header when one is selected.
+            · Active filter indicator: tiny circular ↻ button next to
+              control pills when q || filter !== 'all' || specialty.
+            · Empty state: tighter typography, three bulleted
+              suggestions, "Reset filters" gold CTA + "Browse Nearby"
+              secondary CTA. Surfaces top of viewport rather than
+              dominating.
+            · Card padding: 14px (was 12). Avatar 54px (was 52). Name
+              fontSize 15 (was 14). Action btn height 36.
+
+          PRD checklist:
+            1. Pills fixed: YES (uniform heights, no stretching)
+            2. Layout cleaned: YES (subtitle, breathing room)
+            3. Filters simplified: YES (specialties in sheet)
+            4. Cards improved: YES (better padding/typography)
+            5. Easier navigation: YES (sort sheet beats 5 pills)
+            6. Premium look achieved: YES (Apple/IG/Airbnb feel)
+            7. Performance preserved: YES (same data layer; modals are
+               native RN Modal — no extra dep)
     stuck_count: 0
     priority: "high"
     needs_retesting: false
