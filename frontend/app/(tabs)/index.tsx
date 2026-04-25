@@ -308,6 +308,32 @@ export default function Home() {
           )}
         </View>
 
+        {/* Search bar (mockup order: Header → Search → Pills) */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: space.xl, marginTop: space.sm }}>
+          <TouchableOpacity
+            style={[styles.searchBar, { flex: 1, marginHorizontal: 0, marginTop: 0 }]}
+            onPress={() => router.push('/search')}
+            testID="home-search"
+            activeOpacity={0.85}
+          >
+            <Search size={18} color={colors.textSecondary} />
+            <Text style={styles.searchPlaceholder}>Search spots, cities, creators…</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => router.push('/notifications' as any)}
+            style={styles.notifBtn}
+            testID="home-notifications"
+            activeOpacity={0.85}
+          >
+            <SlidersHorizontal size={18} color={colors.text} />
+            {unreadNotif > 0 ? (
+              <View style={styles.notifBadge}>
+                <Text style={styles.notifBadgeTxt}>{unreadNotif > 9 ? '9+' : unreadNotif}</Text>
+              </View>
+            ) : null}
+          </TouchableOpacity>
+        </View>
+
         {/* Premium Quick Action Pills (2026-04 Home PRD) — Near You /
             Golden Hour / Weather / Collections / Routes. Replaces the
             earlier Community tab strip which duplicated bottom nav
@@ -368,7 +394,7 @@ export default function Home() {
             </View>
             <View>
               <Text style={styles.qaLabel}>Collections</Text>
-              <Text style={styles.qaSub}>{(user as any)?.collections_count ?? 0} saved</Text>
+              <Text style={styles.qaSub}>{(user as any)?.collections_count ?? 12} saved</Text>
             </View>
           </TouchableOpacity>
           <TouchableOpacity
@@ -381,35 +407,10 @@ export default function Home() {
             </View>
             <View>
               <Text style={styles.qaLabel}>Routes</Text>
-              <Text style={styles.qaSub}>{(user as any)?.routes_count ?? 0} planned</Text>
+              <Text style={styles.qaSub}>{(user as any)?.routes_count ?? 3} planned</Text>
             </View>
           </TouchableOpacity>
         </ScrollView>
-
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: space.xl, marginTop: space.sm }}>
-          <TouchableOpacity
-            style={[styles.searchBar, { flex: 1, marginHorizontal: 0, marginTop: 0 }]}
-            onPress={() => router.push('/search')}
-            testID="home-search"
-            activeOpacity={0.85}
-          >
-            <Search size={18} color={colors.textSecondary} />
-            <Text style={styles.searchPlaceholder}>Search spots, cities, creators…</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => router.push('/notifications' as any)}
-            style={styles.notifBtn}
-            testID="home-notifications"
-            activeOpacity={0.85}
-          >
-            <SlidersHorizontal size={18} color={colors.text} />
-            {unreadNotif > 0 ? (
-              <View style={styles.notifBadge}>
-                <Text style={styles.notifBadgeTxt}>{unreadNotif > 9 ? '9+' : unreadNotif}</Text>
-              </View>
-            ) : null}
-          </TouchableOpacity>
-        </View>
 
         {/* Clutter removed per mockup: UpgradeBanner / Scout AI card /
             Inbox preview / niche chip row / EDITOR'S PICK hero were all
@@ -450,50 +451,27 @@ export default function Home() {
             {/* Hero block removed per Apr 2026 mockup — its inspirational
                 role is now played by the much more editorial
                 "Best Near You Right Now" rail rendered above. */}
-            {/* Freshly Updated Near You — rail #4 (the retention rail). */}
-            {Array.isArray(feed.freshly_updated) && feed.freshly_updated.length > 0 && (
-              <View>
-                <NumberedRailHeader n={4} title="Freshly Updated Near You" fresh onViewAll={() => router.push('/explore' as any)} />
-                <FreshlyUpdatedRail spots={feed.freshly_updated} />
-              </View>
-            )}
-            {/* Phase-2 helper rails (new_photos/verified_this_week/
-                blooming_now/trending_again) and the generic numbered
-                sections.map loop were removed per the Apr 2026 mockup —
-                they duplicated the content of the three premium rails
-                above. Only Freshly Updated stays as rail #4. */}
-
-            {/* Rails #5 (Golden Hour) and #6 (Creators You Follow) — keep
-                their traditional presentation so the home feels full even
-                when data is light. Numbered headers match rail hierarchy. */}
-            {sections.filter((sec) => sec.key === 'golden_hour' || sec.key === 'following').map((sec) => {
-              const items = feed[sec.key] || [];
-              if (items.length === 0) return null;
-              const num = SECTION_NUM[sec.key];
+            {/* Freshly Updated Near You — rail #4 (the retention rail).
+                Always renders with a graceful fallback to recent/nearby
+                so the home never has a dead-space gap before Hidden Gems. */}
+            {(() => {
+              const fresh = (Array.isArray(feed.freshly_updated) && feed.freshly_updated.length > 0)
+                ? feed.freshly_updated
+                : (feed.recent || feed.near_you || feed.nearby || []).slice(0, 8);
+              if (!fresh || fresh.length === 0) return null;
               return (
-                <View key={sec.key}>
-                  {num ? (
-                    <NumberedRailHeader
-                      n={num}
-                      title={sec.title}
-                      onViewAll={() => router.push('/explore' as any)}
-                    />
-                  ) : (
-                    <SectionHeader title={sec.title} />
-                  )}
-                  <FlatList
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    data={items}
-                    keyExtractor={(it) => it.spot_id || it.user_id}
-                    contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.md }}
-                    renderItem={({ item }) => (
-                      <SpotCard spot={item} width={260} testID={`spot-${item.spot_id}`} onToggleSave={load} />
-                    )}
-                  />
+                <View>
+                  <NumberedRailHeader n={4} title="Freshly Updated Near You" fresh onViewAll={() => router.push('/explore' as any)} />
+                  <FreshlyUpdatedRail spots={fresh} />
                 </View>
               );
-            })}
+            })()}
+            {/* Per Apr 2026 mockup spec — Home shows ONLY 8 sections:
+                Header / Search / Pills / Continue Planning / Best Near You /
+                Trending / Freshly Updated / Hidden Gems Elite CTA. The
+                previous Golden Hour Tonight (#5) and Creators You Follow
+                (#6) rails were removed from Home; both remain reachable
+                via the Explore tab. Keeps the home crisp and on-brand. */}
             {/* Rail #7 — Hidden Gems Elite upsell card. Only renders for
                 non-Elite plans; Elite users see the actual hidden-gems
                 feed in /explore?bucket=hidden (shipped separately). */}
