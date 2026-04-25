@@ -126,23 +126,97 @@ export default function Explore() {
 
   const activeCount = Object.values(filters).filter((v) => v != null && v !== false && v !== '').length;
 
+  // Apr 2026 Explore premium upgrade — quick filter chips row (8 entries
+  // matching the PRD). 'All' clears niche; the rest set filters.niche or
+  // filters.type so the existing /spots query layer handles them.
+  const QUICK_CHIPS: Array<{ key: string; label: string; apply: () => void }> = [
+    { key: 'all', label: 'All', apply: () => setFilters({}) },
+    { key: 'golden', label: 'Golden Hour', apply: () => setFilters((f) => ({ ...f, niche: 'golden' })) },
+    { key: 'urban', label: 'Urban', apply: () => setFilters((f) => ({ ...f, niche: 'Urban' })) },
+    { key: 'nature', label: 'Nature', apply: () => setFilters((f) => ({ ...f, niche: 'Nature' })) },
+    { key: 'portrait', label: 'Portrait', apply: () => setFilters((f) => ({ ...f, niche: 'Portrait' })) },
+    { key: 'wedding', label: 'Wedding', apply: () => setFilters((f) => ({ ...f, niche: 'Wedding' })) },
+    { key: 'pet', label: 'Pet', apply: () => setFilters((f) => ({ ...f, niche: 'Pet' })) },
+    { key: 'gems', label: 'Hidden Gems', apply: () => router.push('/upgrade' as any) },
+  ];
+  const activeChip =
+    !filters.niche ? 'all' :
+    filters.niche === 'golden' ? 'golden' :
+    String(filters.niche).toLowerCase();
+
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
-      <View style={styles.searchRow}>
-        <TouchableOpacity style={styles.searchBar} onPress={() => router.push('/search')} testID="explore-search">
-          <Search size={18} color={colors.textSecondary} />
-          <Text style={styles.searchText}>Search location, city, or tag</Text>
+      {/* Premium header — matches Apr 2026 Explore PRD */}
+      <View style={styles.headerRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.kicker}>EXPLORE</Text>
+          <Text style={styles.headerTitle}>Find great places near you</Text>
+        </View>
+        <TouchableOpacity style={styles.headerBtn} onPress={() => router.push('/search')} testID="explore-search-icon">
+          <Search size={18} color={colors.text} />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.iconBtn} onPress={() => setFilterOpen(true)} testID="explore-filters">
+        <TouchableOpacity style={styles.headerBtn} onPress={() => setFilterOpen(true)} testID="explore-filters">
           <SlidersHorizontal size={18} color={colors.text} />
-          {activeCount > 0 && <View style={styles.badgeDot}><Text style={styles.badgeDotTxt}>{activeCount}</Text></View>}
+          {activeCount > 0 ? <View style={styles.badgeDot}><Text style={styles.badgeDotTxt}>{activeCount}</Text></View> : null}
         </TouchableOpacity>
       </View>
 
-      {/* Scout AI — helper row under the search bar (PRD Scout AI Phase 1). */}
-      <View style={{ paddingHorizontal: space.xl, paddingBottom: space.sm }}>
-        <ScoutAICard placement="explore" variant="row" />
+      {/* Premium segmented Map / List toggle */}
+      <View style={styles.segWrap}>
+        <View style={styles.seg}>
+          <TouchableOpacity
+            onPress={() => setView('map')}
+            style={[styles.segBtn, view === 'map' && styles.segBtnActive]}
+            testID="explore-seg-map"
+          >
+            <MapIcon size={14} color={view === 'map' ? colors.bg : colors.textSecondary} />
+            <Text style={[styles.segTxt, view === 'map' && styles.segTxtActive]}>Map</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setView('list')}
+            style={[styles.segBtn, view === 'list' && styles.segBtnActive]}
+            testID="explore-seg-list"
+          >
+            <List size={14} color={view === 'list' ? colors.bg : colors.textSecondary} />
+            <Text style={[styles.segTxt, view === 'list' && styles.segTxtActive]}>List</Text>
+          </TouchableOpacity>
+        </View>
       </View>
+
+      {/* Location + radius chips */}
+      <View style={styles.locRow}>
+        <View style={styles.locChip}>
+          <MapPin size={12} color={colors.primary} />
+          <Text style={styles.locChipTxt}>San Antonio, TX</Text>
+        </View>
+        <TouchableOpacity style={styles.locChip} onPress={() => setFilterOpen(true)} testID="explore-radius">
+          <Text style={styles.locChipTxt}>25 mi</Text>
+          <Text style={styles.locChipChev}>▾</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Quick filter chips row */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={{ flexGrow: 0, maxHeight: 44 }}
+        contentContainerStyle={styles.chipRow}
+      >
+        {QUICK_CHIPS.map((c) => {
+          const active = activeChip === c.key.toLowerCase();
+          return (
+            <TouchableOpacity
+              key={c.key}
+              onPress={c.apply}
+              style={[styles.chip, active && styles.chipActive]}
+              testID={`explore-chip-${c.key}`}
+            >
+              {c.key === 'gems' ? <Gem size={11} color={active ? colors.primary : colors.primary} /> : null}
+              <Text style={[styles.chipTxt, active && styles.chipTxtActive]}>{c.label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
 
       {view === 'map' && Platform.OS !== 'web' && MapView ? (
         <View style={{ flex: 1 }}>
@@ -422,6 +496,56 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.md,
   },
+  // Apr 2026 Explore premium upgrade styles ----------------------------
+  headerRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: space.xl, paddingTop: 4, paddingBottom: 6,
+  },
+  kicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.8 },
+  headerTitle: { color: colors.text, fontFamily: font.display, fontSize: 22, letterSpacing: -0.2, marginTop: 1 },
+  headerBtn: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: colors.surface1,
+    borderWidth: 1, borderColor: colors.border,
+    alignItems: 'center', justifyContent: 'center',
+    position: 'relative',
+  },
+  segWrap: { paddingHorizontal: space.xl, paddingTop: 6, paddingBottom: 6 },
+  seg: {
+    flexDirection: 'row',
+    backgroundColor: colors.surface1,
+    borderWidth: 1, borderColor: colors.border,
+    borderRadius: 22, padding: 3,
+  },
+  segBtn: {
+    flex: 1, height: 36, borderRadius: 19,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+  },
+  segBtnActive: { backgroundColor: colors.text },
+  segTxt: { color: colors.textSecondary, fontFamily: font.bodySemibold, fontSize: 13 },
+  segTxtActive: { color: colors.bg, fontFamily: font.bodyBold },
+  locRow: { flexDirection: 'row', gap: 6, paddingHorizontal: space.xl, paddingTop: 6, paddingBottom: 4 },
+  locChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    height: 30, paddingHorizontal: 12, borderRadius: 15,
+    backgroundColor: colors.surface1,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  locChipTxt: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 11 },
+  locChipChev: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10 },
+  chipRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: space.xl, paddingTop: 8, paddingBottom: 8,
+  },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    height: 32, paddingHorizontal: 12, borderRadius: 16,
+    backgroundColor: colors.surface1,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  chipActive: { backgroundColor: 'rgba(245,166,35,0.14)', borderColor: colors.primary },
+  chipTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
+  chipTxtActive: { color: colors.primary, fontFamily: font.bodySemibold },
   searchBar: {
     flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
