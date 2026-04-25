@@ -116,6 +116,9 @@ export default function NetworkTab() {
         <View style={{ flex: 1 }}>
           <Text style={s.kicker}>NETWORK</Text>
           <Text style={s.title}>Find photographers</Text>
+          {view === 'directory' ? (
+            <Text style={s.subtitle}>Browse creators near you and across specialties</Text>
+          ) : null}
         </View>
         {/* PRD: Share LumaScout — top-right parity with Home. */}
         <Pressable
@@ -292,18 +295,20 @@ const s = StyleSheet.create({
   // Photographer Directory PRD: top-level Discover ↔ Directory toggle.
   viewToggleRow: {
     flexDirection: 'row',
-    gap: 6,
+    alignItems: 'center',
+    gap: 8,
     paddingHorizontal: space.xl,
-    paddingTop: 4,
+    paddingTop: 8,
     paddingBottom: 12,
   },
   viewToggleBtn: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: radii.pill,
+    height: 40,
+    paddingHorizontal: 18,
+    borderRadius: 20,
     backgroundColor: colors.surface1,
     borderWidth: 1,
     borderColor: colors.border,
@@ -315,12 +320,19 @@ const s = StyleSheet.create({
   viewToggleTxt: {
     color: colors.textSecondary,
     fontFamily: font.bodySemibold,
-    fontSize: 12,
-    letterSpacing: 0.3,
+    fontSize: 13,
+    letterSpacing: 0.2,
   },
   viewToggleTxtActive: {
     color: colors.bg,
     fontFamily: font.bodyBold,
+  },
+  subtitle: {
+    color: colors.textSecondary,
+    fontFamily: font.body,
+    fontSize: 12,
+    marginTop: 2,
+    lineHeight: 16,
   },
   header: { paddingHorizontal: space.xl, paddingTop: space.sm, paddingBottom: space.sm, flexDirection: 'row', alignItems: 'center', gap: space.md },
   headerShareBtn: {
