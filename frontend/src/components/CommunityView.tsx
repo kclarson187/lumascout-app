@@ -1,26 +1,29 @@
 /**
- * CommunityView — Network ▸ Community segmented panel.
+ * CommunityView — Network ▸ Community premium creator social feed.
  *
- *   Restores the previously-removed Community feature as a third top-tab
- *   inside Network (alongside Discover and Directory). Consumes the
- *   existing GET /api/posts endpoint (no backend changes), renders a
- *   premium dark social feed with category pills, post cards, and the
- *   five PRD post types (Photo Feedback / Referral / Gear / Editing /
- *   General). Like / Comment / Share / Save / Message-User actions
- *   wire to existing backend endpoints (/posts/{id}/like, /comments,
- *   /dm/threads/start). Compose entrypoint deep-links into the
- *   existing /community/compose route.
+ *   Apr 2026 redesign — feels like a high-end creator community, not a
+ *   generic forum. Cards breathe, typography is editorial, and every
+ *   action lives in muscle-memory positions.
+ *
+ *   Layout (top → bottom):
+ *     1) Search posts bar + floating gold "+" Compose CTA
+ *     2) Category chips (All · Feedback · Referrals · Gear · Editing · Wins)
+ *     3) Smart retention strip (counts of feedback, referrals, active today)
+ *     4) Premium post cards — staggered fade-in entrance
+ *
+ *   Wires to: GET /api/posts, POST /api/posts/{id}/like (toggle),
+ *   POST /api/dm/threads/start, share sheet, /community/compose route.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, FlatList, Pressable, Image, ActivityIndicator,
-  ScrollView, Share, RefreshControl,
+  ScrollView, Share, RefreshControl, Animated, Easing, TextInput,
 } from 'react-native';
 import { router } from 'expo-router';
 import {
   Plus, Search, Heart, MessageCircle, Share2 as ShareIcon, Bookmark,
-  Briefcase, Camera, Settings, HelpCircle, MapPin, Sparkles, Flame,
-  ChevronRight,
+  Briefcase, Camera, Settings, Sparkles, MapPin, Trophy, Flame,
+  Send, ChevronRight,
 } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -28,17 +31,16 @@ import { api } from '../api';
 import { colors, font, space } from '../theme';
 
 // ============================================================================
-// Categories — top filter pills
+// Categories — Apr 2026 spec: All / Feedback / Referrals / Gear / Editing / Wins
 // ============================================================================
-type CategoryKey = 'all' | 'feedback' | 'referrals' | 'gear' | 'editing' | 'questions' | 'local';
-const CATEGORIES: { key: CategoryKey; label: string; icon?: any; accent: string }[] = [
-  { key: 'all',       label: 'All',       icon: Sparkles,    accent: colors.primary },
-  { key: 'feedback',  label: 'Feedback',  icon: Camera,      accent: '#22c55e' },
-  { key: 'referrals', label: 'Referrals', icon: Briefcase,   accent: '#9D59FF' },
-  { key: 'gear',      label: 'Gear',      icon: Settings,    accent: '#60A5FA' },
-  { key: 'editing',   label: 'Editing',   icon: Sparkles,    accent: '#F97316' },
-  { key: 'questions', label: 'Questions', icon: HelpCircle,  accent: colors.primary },
-  { key: 'local',     label: 'Local',     icon: MapPin,      accent: '#22c55e' },
+type CategoryKey = 'all' | 'feedback' | 'referrals' | 'gear' | 'editing' | 'wins';
+const CATEGORIES: { key: CategoryKey; label: string; icon: any; accent: string }[] = [
+  { key: 'all',       label: 'All',       icon: Sparkles,  accent: colors.primary },
+  { key: 'feedback',  label: 'Feedback',  icon: Camera,    accent: '#22c55e' },
+  { key: 'referrals', label: 'Referrals', icon: Briefcase, accent: '#9D59FF' },
+  { key: 'gear',      label: 'Gear',      icon: Settings,  accent: '#60A5FA' },
+  { key: 'editing',   label: 'Editing',   icon: Sparkles,  accent: '#F97316' },
+  { key: 'wins',      label: 'Wins',      icon: Trophy,    accent: colors.primary },
 ];
 
 // ============================================================================
@@ -72,6 +74,7 @@ export default function CommunityView() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [category, setCategory] = useState<CategoryKey>('all');
+  const [q, setQ] = useState('');
   const [likedMap, setLikedMap] = useState<Record<string, boolean>>({});
   const [savedMap, setSavedMap] = useState<Record<string, boolean>>({});
 
@@ -94,6 +97,19 @@ export default function CommunityView() {
   );
 
   useEffect(() => { load(); }, [load]);
+
+  // Local search filter — body / title / author name
+  const visiblePosts = useMemo(() => {
+    if (!q.trim()) return posts;
+    const needle = q.trim().toLowerCase();
+    return posts.filter((p) => {
+      const hay = [
+        p.title, p.body, p?.author?.name, p?.author?.username,
+        p?.author?.city, p.category,
+      ].filter(Boolean).join(' ').toLowerCase();
+      return hay.includes(needle);
+    });
+  }, [posts, q]);
 
   // Smart retention badges — counted from current feed
   const retentionStats = useMemo(() => {
@@ -123,7 +139,6 @@ export default function CommunityView() {
 
   const toggleSave = useCallback((postId: string) => {
     // Backend doesn't yet have /posts/save — keep optimistic local state
-    // so the bookmark toggles instantly and we wire the API later.
     Haptics.selectionAsync().catch(() => {});
     setSavedMap((p) => ({ ...p, [postId]: !p[postId] }));
   }, []);
@@ -139,7 +154,7 @@ export default function CommunityView() {
     } catch {}
   };
 
-  const onMessage = async (uid: string) => {
+  const onMessage = async (uid: string, refPostId?: string) => {
     Haptics.selectionAsync().catch(() => {});
     try {
       const r = await api.post('/dm/threads/start', { other_user_id: uid });
@@ -157,29 +172,35 @@ export default function CommunityView() {
 
   return (
     <View style={{ flex: 1 }}>
-      {/* Sticky header — Search + Compose CTAs */}
+      {/* Toolbar — search + floating gold compose */}
       <View style={s.toolbar}>
-        <Pressable
-          onPress={() => router.push('/search' as any)}
-          style={s.searchBtn}
-          testID="community-search"
-        >
+        <View style={s.searchBar}>
           <Search size={14} color={colors.textSecondary} />
-          <Text style={s.searchPlaceholder}>Search posts, people, topics</Text>
-        </Pressable>
+          <TextInput
+            value={q}
+            onChangeText={setQ}
+            placeholder="Search posts, people, topics"
+            placeholderTextColor={colors.textTertiary}
+            style={s.searchInp}
+            returnKeyType="search"
+            autoCapitalize="none"
+            autoCorrect={false}
+            testID="community-search"
+          />
+        </View>
         <Pressable
           onPress={() => {
             Haptics.selectionAsync().catch(() => {});
             router.push('/community/compose' as any);
           }}
-          style={s.composeBtn}
+          style={({ pressed }) => [s.composeBtn, pressed && s.composeBtnPressed]}
           testID="community-compose"
         >
-          <Plus size={16} color="#1a1300" />
+          <Plus size={18} color="#1a1300" strokeWidth={3} />
         </Pressable>
       </View>
 
-      {/* Category pills */}
+      {/* Category chips */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -187,6 +208,7 @@ export default function CommunityView() {
       >
         {CATEGORIES.map((c) => {
           const active = category === c.key;
+          const Icon = c.icon;
           return (
             <Pressable
               key={c.key}
@@ -196,21 +218,21 @@ export default function CommunityView() {
               }}
               style={[
                 s.catPill,
-                active && [s.catPillActive, { borderColor: c.accent, backgroundColor: c.accent + '20' }],
+                active && [s.catPillActive, { borderColor: c.accent + '88', backgroundColor: c.accent + '1a' }],
               ]}
               testID={`community-cat-${c.key}`}
             >
-              {c.icon ? (
-                <c.icon size={11} color={active ? c.accent : colors.textSecondary} />
-              ) : null}
-              <Text style={[s.catPillTxt, active && { color: c.accent }]}>{c.label}</Text>
+              <Icon size={11} color={active ? c.accent : colors.textSecondary} />
+              <Text style={[s.catPillTxt, active && { color: c.accent, fontFamily: font.bodyBold }]}>
+                {c.label}
+              </Text>
             </Pressable>
           );
         })}
       </ScrollView>
 
       {/* Retention strip */}
-      {(retentionStats.feedback > 0 || retentionStats.referrals > 0) ? (
+      {(retentionStats.feedback > 0 || retentionStats.referrals > 0 || retentionStats.activeToday > 0) ? (
         <View style={s.retentionStrip}>
           {retentionStats.feedback > 0 ? (
             <View style={[s.retBlip, { borderColor: 'rgba(34,197,94,0.45)' }]}>
@@ -240,13 +262,13 @@ export default function CommunityView() {
       ) : null}
 
       {/* Feed */}
-      {posts.length === 0 ? (
-        <EmptyState category={category} />
+      {visiblePosts.length === 0 ? (
+        <EmptyState category={category} hasQuery={!!q.trim()} />
       ) : (
         <FlatList
-          data={posts}
+          data={visiblePosts}
           keyExtractor={(p) => p.post_id}
-          contentContainerStyle={{ paddingHorizontal: space.xl, paddingBottom: 120, gap: 10 }}
+          contentContainerStyle={{ paddingHorizontal: space.xl, paddingBottom: 140, gap: 12 }}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -254,16 +276,19 @@ export default function CommunityView() {
               tintColor={colors.primary}
             />
           }
-          renderItem={({ item }) => (
-            <PostCard
-              p={item}
-              isLiked={!!likedMap[item.post_id] || !!item.is_liked}
-              isSaved={!!savedMap[item.post_id]}
-              onLike={() => toggleLike(item.post_id)}
-              onSave={() => toggleSave(item.post_id)}
-              onShare={() => onShare(item)}
-              onMessage={() => item.author?.user_id && onMessage(item.author.user_id)}
-            />
+          renderItem={({ item, index }) => (
+            <StaggeredCard index={index}>
+              <PostCard
+                p={item}
+                isLiked={!!likedMap[item.post_id] || !!item.is_liked}
+                isSaved={!!savedMap[item.post_id]}
+                onLike={() => toggleLike(item.post_id)}
+                onSave={() => toggleSave(item.post_id)}
+                onShare={() => onShare(item)}
+                onMessage={() => item.author?.user_id && onMessage(item.author.user_id, item.post_id)}
+                onApply={() => item.author?.user_id && onMessage(item.author.user_id, item.post_id)}
+              />
+            </StaggeredCard>
           )}
           showsVerticalScrollIndicator={false}
         />
@@ -273,10 +298,38 @@ export default function CommunityView() {
 }
 
 // ============================================================================
+// Staggered fade-in wrapper for feed cards
+// ============================================================================
+function StaggeredCard({ index, children }: { index: number; children: React.ReactNode }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  const translate = useRef(new Animated.Value(8)).current;
+
+  useEffect(() => {
+    const delay = Math.min(index * 45, 360);
+    Animated.parallel([
+      Animated.timing(opacity, {
+        toValue: 1, duration: 360, delay,
+        easing: Easing.out(Easing.cubic), useNativeDriver: true,
+      }),
+      Animated.timing(translate, {
+        toValue: 0, duration: 360, delay,
+        easing: Easing.out(Easing.cubic), useNativeDriver: true,
+      }),
+    ]).start();
+  }, [index, opacity, translate]);
+
+  return (
+    <Animated.View style={{ opacity, transform: [{ translateY: translate }] }}>
+      {children}
+    </Animated.View>
+  );
+}
+
+// ============================================================================
 // PostCard
 // ============================================================================
 function PostCard({
-  p, isLiked, isSaved, onLike, onSave, onShare, onMessage,
+  p, isLiked, isSaved, onLike, onSave, onShare, onMessage, onApply,
 }: {
   p: any;
   isLiked?: boolean;
@@ -285,8 +338,10 @@ function PostCard({
   onSave: () => void;
   onShare: () => void;
   onMessage: () => void;
+  onApply: () => void;
 }) {
   const meta = categoryMeta(p.category);
+  const hasKnownCat = !!CATEGORIES.find((c) => c.key === p.category && c.key !== 'all');
   const a = p.author || {};
   const isReferral = p.category === 'referrals';
   const elite = a.plan === 'elite';
@@ -299,10 +354,10 @@ function PostCard({
   return (
     <Pressable
       onPress={() => router.push(`/community/post/${p.post_id}` as any)}
-      style={[s.card, elite && s.cardElite]}
+      style={({ pressed }) => [s.card, elite && s.cardElite, pressed && s.cardPressed]}
       testID={`community-post-${p.post_id}`}
     >
-      {/* Author row */}
+      {/* Top: author row */}
       <View style={s.cardHead}>
         <Pressable
           onPress={() => a.user_id && router.push(`/user/${a.user_id}` as any)}
@@ -317,9 +372,10 @@ function PostCard({
               </Text>
             </View>
           )}
+          {elite ? <View style={s.eliteRing} pointerEvents="none" /> : null}
         </Pressable>
-        <View style={{ flex: 1, gap: 1 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+        <View style={{ flex: 1, gap: 2 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
             <Text style={s.name} numberOfLines={1}>{a.name || `@${a.username || 'user'}`}</Text>
             {verified ? (
               <View style={s.verifiedDot}>
@@ -334,23 +390,29 @@ function PostCard({
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
             {a.city ? (
-              <Text style={s.subtle} numberOfLines={1}>{a.city}{a.state ? `, ${a.state}` : ''} · </Text>
+              <>
+                <MapPin size={10} color={colors.textTertiary} />
+                <Text style={s.subtle} numberOfLines={1}>
+                  {a.city}{a.state ? `, ${a.state}` : ''}
+                </Text>
+                <Text style={s.subtleDot}>·</Text>
+              </>
             ) : null}
             <Text style={s.subtle}>{timeAgo(p.created_at)}</Text>
           </View>
         </View>
-        <View style={[s.catChip, { borderColor: meta.accent + '55', backgroundColor: meta.accent + '14' }]}>
-          {meta.icon ? <meta.icon size={9} color={meta.accent} /> : null}
+        <View style={[s.catChip, { borderColor: meta.accent + '66', backgroundColor: meta.accent + '18', opacity: hasKnownCat ? 1 : 0 }]}>
+          {meta.icon ? <meta.icon size={10} color={meta.accent} /> : null}
           <Text style={[s.catChipTxt, { color: meta.accent }]}>{meta.label}</Text>
         </View>
       </View>
 
-      {/* Title / body */}
+      {/* Body — title + body */}
       {p.title ? (
         <Text style={s.title} numberOfLines={2}>{p.title}</Text>
       ) : null}
       {p.body ? (
-        <Text style={s.body} numberOfLines={4}>{p.body}</Text>
+        <Text style={s.body} numberOfLines={5}>{p.body}</Text>
       ) : null}
 
       {/* Image (if uploaded) */}
@@ -366,48 +428,50 @@ function PostCard({
 
       {/* Action row */}
       <View style={s.actions}>
-        <Pressable onPress={onLike} hitSlop={6} style={s.actBtn} testID={`like-${p.post_id}`}>
+        <Pressable onPress={onLike} hitSlop={8} style={s.actBtn} testID={`like-${p.post_id}`}>
           <Heart
-            size={16}
+            size={17}
             color={isLiked ? '#ef4444' : colors.textSecondary}
             fill={isLiked ? '#ef4444' : 'transparent'}
           />
-          <Text style={[s.actTxt, isLiked && { color: '#ef4444' }]}>{likeCount}</Text>
+          {likeCount > 0 ? (
+            <Text style={[s.actTxt, isLiked && { color: '#ef4444' }]}>{likeCount}</Text>
+          ) : null}
         </Pressable>
         <Pressable
           onPress={() => router.push(`/community/post/${p.post_id}` as any)}
-          hitSlop={6}
+          hitSlop={8}
           style={s.actBtn}
         >
-          <MessageCircle size={16} color={colors.textSecondary} />
-          <Text style={s.actTxt}>{commentCount}</Text>
+          <MessageCircle size={17} color={colors.textSecondary} />
+          {commentCount > 0 ? <Text style={s.actTxt}>{commentCount}</Text> : null}
         </Pressable>
-        <Pressable onPress={onShare} hitSlop={6} style={s.actBtn}>
-          <ShareIcon size={15} color={colors.textSecondary} />
+        <Pressable onPress={onShare} hitSlop={8} style={s.actBtn}>
+          <ShareIcon size={16} color={colors.textSecondary} />
         </Pressable>
         <Pressable
           onPress={onSave}
-          hitSlop={6}
+          hitSlop={8}
           style={[s.actBtn, { marginLeft: 'auto' }]}
         >
           <Bookmark
-            size={15}
+            size={16}
             color={isSaved ? colors.primary : colors.textSecondary}
             fill={isSaved ? colors.primary : 'transparent'}
           />
         </Pressable>
       </View>
 
-      {/* Referral CTA row — only on referral posts */}
+      {/* Referral CTA row — Apply + Message */}
       {isReferral && a.user_id ? (
         <View style={s.referralRow}>
-          <Pressable onPress={onMessage} style={[s.refBtn, s.refBtnPrimary]}>
-            <MessageCircle size={12} color="#1a1300" />
-            <Text style={s.refBtnPrimaryTxt}>Message</Text>
+          <Pressable onPress={onApply} style={[s.refBtn, s.refBtnPrimary]}>
+            <Briefcase size={12} color="#1a1300" />
+            <Text style={s.refBtnPrimaryTxt}>Apply</Text>
           </Pressable>
           <Pressable onPress={onMessage} style={[s.refBtn, s.refBtnSecondary]}>
-            <Text style={s.refBtnSecondaryTxt}>I'm interested</Text>
-            <ChevronRight size={12} color={colors.text} />
+            <Send size={12} color={colors.text} />
+            <Text style={s.refBtnSecondaryTxt}>Message</Text>
           </Pressable>
         </View>
       ) : null}
@@ -418,24 +482,29 @@ function PostCard({
 // ============================================================================
 // Empty state
 // ============================================================================
-function EmptyState({ category }: { category: CategoryKey }) {
+function EmptyState({ category, hasQuery }: { category: CategoryKey; hasQuery: boolean }) {
   const meta = categoryMeta(category);
+  const Icon = meta.icon;
   return (
     <View style={s.empty}>
       <View style={[s.emptyIcon, { backgroundColor: meta.accent + '1a', borderColor: meta.accent + '55' }]}>
-        {meta.icon ? <meta.icon size={20} color={meta.accent} /> : null}
+        <Icon size={22} color={meta.accent} />
       </View>
       <Text style={s.emptyTitle}>
-        {category === 'all' ? 'No posts yet' : `No ${meta.label.toLowerCase()} posts yet`}
+        {hasQuery
+          ? 'No matching posts'
+          : category === 'all' ? 'No posts yet' : `No ${meta.label.toLowerCase()} posts yet`}
       </Text>
       <Text style={s.emptyBody}>
-        Start the conversation. Share your work, ask for feedback, or post a referral.
+        {hasQuery
+          ? 'Try a different keyword or clear the search.'
+          : 'Start the conversation. Share your work, ask for feedback, or post a referral.'}
       </Text>
       <Pressable
         onPress={() => router.push('/community/compose' as any)}
         style={s.emptyCta}
       >
-        <Plus size={14} color="#1a1300" />
+        <Plus size={14} color="#1a1300" strokeWidth={3} />
         <Text style={s.emptyCtaTxt}>Create a post</Text>
       </Pressable>
     </View>
@@ -450,29 +519,35 @@ const s = StyleSheet.create({
   toolbar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
     paddingHorizontal: space.xl,
-    paddingTop: 4,
+    paddingTop: 2,
     paddingBottom: 10,
   },
-  searchBtn: {
+  searchBar: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     paddingHorizontal: 14,
-    height: 42,
-    borderRadius: 21,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: colors.surface2,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
   },
-  searchPlaceholder: { color: colors.textTertiary, fontFamily: font.body, fontSize: 13 },
+  searchInp: { flex: 1, color: colors.text, fontFamily: font.body, fontSize: 13, padding: 0 },
   composeBtn: {
-    width: 42, height: 42, borderRadius: 21,
+    width: 44, height: 44, borderRadius: 22,
     alignItems: 'center', justifyContent: 'center',
     backgroundColor: colors.primary,
+    shadowColor: colors.primary,
+    shadowOpacity: 0.45,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
   },
+  composeBtnPressed: { opacity: 0.85, transform: [{ scale: 0.96 }] },
 
   // Category pills
   catRow: {
@@ -516,59 +591,79 @@ const s = StyleSheet.create({
 
   // Card
   card: {
-    padding: 12,
+    padding: 14,
     borderRadius: 22,
     backgroundColor: colors.surface1,
     borderWidth: 1,
     borderColor: colors.border,
-    gap: 10,
+    gap: 12,
   },
   cardElite: { borderColor: 'rgba(245,166,35,0.45)' },
+  cardPressed: { opacity: 0.92, transform: [{ scale: 0.997 }] },
+
   cardHead: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
-  avatarWrap: { width: 40, height: 40, borderRadius: 20 },
-  avatar: { width: 40, height: 40, borderRadius: 20 },
+  avatarWrap: { position: 'relative', width: 42, height: 42 },
+  avatar: { width: 42, height: 42, borderRadius: 21 },
   avatarFallback: {
     backgroundColor: colors.surface2,
     alignItems: 'center', justifyContent: 'center',
   },
   avatarTxt: {
-    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 14,
+    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 15,
   },
-  name: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13.5 },
+  eliteRing: {
+    position: 'absolute', top: -2, left: -2, right: -2, bottom: -2,
+    borderRadius: 23,
+    borderWidth: 1.5, borderColor: colors.primary,
+  },
+  name: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   subtle: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11 },
+  subtleDot: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
   verifiedDot: {
-    width: 12, height: 12, borderRadius: 6,
+    width: 13, height: 13, borderRadius: 6.5,
     backgroundColor: '#3b82f6',
     alignItems: 'center', justifyContent: 'center',
   },
-  verifiedDotTxt: { color: '#fff', fontFamily: font.bodyBold, fontSize: 7 },
+  verifiedDotTxt: { color: '#fff', fontFamily: font.bodyBold, fontSize: 8 },
   elitePill: {
-    paddingHorizontal: 5, paddingVertical: 1.5,
+    paddingHorizontal: 6, paddingVertical: 1.5,
     borderRadius: 999,
     backgroundColor: colors.primary,
   },
-  elitePillTxt: { color: '#1a1300', fontFamily: font.bodyBold, fontSize: 8, letterSpacing: 0.6 },
+  elitePillTxt: { color: '#1a1300', fontFamily: font.bodyBold, fontSize: 8.5, letterSpacing: 0.6 },
 
   catChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
     borderRadius: 999,
     borderWidth: 1,
   },
-  catChipTxt: { fontFamily: font.bodyBold, fontSize: 9.5, letterSpacing: 0.3 },
+  catChipTxt: { fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.4 },
 
-  title: { color: colors.text, fontFamily: font.bodyBold, fontSize: 15, letterSpacing: -0.1 },
-  body: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 18 },
+  // Body — editorial typography that breathes
+  title: {
+    color: colors.text,
+    fontFamily: font.display,
+    fontSize: 17,
+    letterSpacing: -0.2,
+    lineHeight: 22,
+  },
+  body: {
+    color: colors.textSecondary,
+    fontFamily: font.body,
+    fontSize: 13.5,
+    lineHeight: 19.5,
+  },
 
   imgWrap: {
-    height: 200,
+    height: 220,
     borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: colors.surface2,
@@ -579,29 +674,29 @@ const s = StyleSheet.create({
   actions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
-    paddingTop: 4,
+    gap: 18,
+    paddingTop: 2,
   },
   actBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 5,
   },
-  actTxt: { color: colors.textSecondary, fontFamily: font.bodySemibold, fontSize: 12 },
+  actTxt: { color: colors.textSecondary, fontFamily: font.bodySemibold, fontSize: 12.5 },
 
   referralRow: {
     flexDirection: 'row',
     gap: 8,
-    paddingTop: 6,
+    paddingTop: 4,
   },
   refBtn: {
     flex: 1,
-    height: 34,
-    borderRadius: 17,
+    height: 36,
+    borderRadius: 18,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 5,
+    gap: 6,
   },
   refBtnPrimary: { backgroundColor: colors.primary },
   refBtnSecondary: {
@@ -609,8 +704,8 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.12)',
   },
-  refBtnPrimaryTxt: { color: '#1a1300', fontFamily: font.bodyBold, fontSize: 12 },
-  refBtnSecondaryTxt: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 12 },
+  refBtnPrimaryTxt: { color: '#1a1300', fontFamily: font.bodyBold, fontSize: 12.5 },
+  refBtnSecondaryTxt: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 12.5 },
 
   // Empty state
   empty: {
@@ -621,20 +716,21 @@ const s = StyleSheet.create({
     gap: 8,
   },
   emptyIcon: {
-    width: 56, height: 56, borderRadius: 28,
+    width: 60, height: 60, borderRadius: 30,
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1,
   },
   emptyTitle: {
-    color: colors.text, fontFamily: font.bodyBold, fontSize: 16, marginTop: 4,
+    color: colors.text, fontFamily: font.display, fontSize: 18, marginTop: 6, letterSpacing: -0.2,
   },
   emptyBody: {
     color: colors.textSecondary, fontFamily: font.body, fontSize: 13,
-    textAlign: 'center', lineHeight: 18, marginBottom: 8,
+    textAlign: 'center', lineHeight: 18, marginBottom: 10,
+    maxWidth: 280,
   },
   emptyCta: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 18, height: 38, borderRadius: 19,
+    paddingHorizontal: 18, height: 40, borderRadius: 20,
     backgroundColor: colors.primary,
   },
   emptyCtaTxt: { color: '#1a1300', fontFamily: font.bodyBold, fontSize: 13 },

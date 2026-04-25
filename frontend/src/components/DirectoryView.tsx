@@ -507,7 +507,7 @@ const s = StyleSheet.create({
   // Search
   searchWrap: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    height: 44, marginHorizontal: space.xl, paddingHorizontal: 12,
+    height: 44, marginHorizontal: space.xl, marginTop: 2, paddingHorizontal: 12,
     borderRadius: 22, backgroundColor: colors.surface1,
     borderWidth: 1, borderColor: colors.border,
   },
@@ -520,7 +520,7 @@ const s = StyleSheet.create({
   // 3 filter cards row
   fcardRow: {
     flexDirection: 'row', gap: 8,
-    paddingHorizontal: space.xl, paddingTop: 12, paddingBottom: 4,
+    paddingHorizontal: space.xl, paddingTop: 10, paddingBottom: 4,
   },
   fcard: {
     flex: 1,
