@@ -10,7 +10,7 @@ import { Search, List, Map as MapIcon, SlidersHorizontal, Locate, X, Shield, Gem
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { api } from '../../src/api';
-import { colors, font, space, radii, BEST_TIMES } from '../../src/theme';
+import { colors, font, space, radii } from '../../src/theme';
 import SpotCard from '../../src/components/SpotCard';
 import { Chip, EmptyState } from '../../src/components/ui';
 import { Button } from '../../src/components/Button';
@@ -53,7 +53,7 @@ type Filters = {
 };
 
 const SHOOT_TYPES = ['Family', 'Pet', 'Wedding', 'Portrait', 'Seniors', 'Branding', 'Nature', 'Urban', 'Travel', 'Lifestyle'];
-const SEASONS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const SEASONS: string[] = []; // Apr 2026 cleanup: month/season filter removed; constant retained as no-op for backwards compat with any downstream import.
 
 export default function Explore() {
   const [spots, setSpots] = useState<any[]>([]);
