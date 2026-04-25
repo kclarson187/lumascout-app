@@ -169,7 +169,7 @@ export default function Explore() {
             style={[styles.segBtn, view === 'map' && styles.segBtnActive]}
             testID="explore-seg-map"
           >
-            <MapIcon size={14} color={view === 'map' ? colors.bg : colors.textSecondary} />
+            <MapIcon size={14} color={view === 'map' ? colors.primary : colors.textSecondary} />
             <Text style={[styles.segTxt, view === 'map' && styles.segTxtActive]}>Map</Text>
           </TouchableOpacity>
           <TouchableOpacity
@@ -177,7 +177,7 @@ export default function Explore() {
             style={[styles.segBtn, view === 'list' && styles.segBtnActive]}
             testID="explore-seg-list"
           >
-            <List size={14} color={view === 'list' ? colors.bg : colors.textSecondary} />
+            <List size={14} color={view === 'list' ? colors.primary : colors.textSecondary} />
             <Text style={[styles.segTxt, view === 'list' && styles.segTxtActive]}>List</Text>
           </TouchableOpacity>
         </View>
@@ -211,8 +211,16 @@ export default function Explore() {
               style={[styles.chip, active && styles.chipActive]}
               testID={`explore-chip-${c.key}`}
             >
-              {c.key === 'gems' ? <Gem size={11} color={active ? colors.primary : colors.primary} /> : null}
-              <Text style={[styles.chipTxt, active && styles.chipTxtActive]}>{c.label}</Text>
+              {c.key === 'gems' ? (
+                <>
+                  <Text style={[styles.chipTxt, active && styles.chipTxtActive]}>{c.label}</Text>
+                  <View style={styles.chipEliteSub}>
+                    <Text style={styles.chipEliteSubTxt}>Elite</Text>
+                  </View>
+                </>
+              ) : (
+                <Text style={[styles.chipTxt, active && styles.chipTxtActive]}>{c.label}</Text>
+              )}
             </TouchableOpacity>
           );
         })}
@@ -521,9 +529,9 @@ const styles = StyleSheet.create({
     flex: 1, height: 36, borderRadius: 19,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
   },
-  segBtnActive: { backgroundColor: colors.text },
+  segBtnActive: { backgroundColor: 'rgba(245,166,35,0.18)', borderWidth: 1, borderColor: colors.primary },
   segTxt: { color: colors.textSecondary, fontFamily: font.bodySemibold, fontSize: 13 },
-  segTxtActive: { color: colors.bg, fontFamily: font.bodyBold },
+  segTxtActive: { color: colors.primary, fontFamily: font.bodyBold },
   locRow: { flexDirection: 'row', gap: 6, paddingHorizontal: space.xl, paddingTop: 6, paddingBottom: 4 },
   locChip: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
@@ -546,6 +554,15 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: 'rgba(245,166,35,0.14)', borderColor: colors.primary },
   chipTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
   chipTxtActive: { color: colors.primary, fontFamily: font.bodySemibold },
+  // Inline ELITE sub-pill on the Hidden Gems chip — matches mockup spec.
+  chipEliteSub: {
+    paddingHorizontal: 6, paddingVertical: 1.5,
+    borderRadius: 6,
+    backgroundColor: 'rgba(245,166,35,0.18)',
+    borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(245,166,35,0.55)',
+    marginLeft: 2,
+  },
+  chipEliteSubTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 8, letterSpacing: 0.5 },
   searchBar: {
     flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
