@@ -17,17 +17,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, FlatList, Pressable, Image, ActivityIndicator,
-  ScrollView, Share, RefreshControl, Animated, Easing, TextInput,
+  ScrollView, Share, RefreshControl, Animated, Easing, TextInput, Alert,
 } from 'react-native';
 import { router } from 'expo-router';
 import {
   Plus, Search, Heart, MessageCircle, Share2 as ShareIcon, Bookmark,
   Briefcase, Camera, Settings, Sparkles, MapPin, Trophy, Flame,
-  Send, ChevronRight,
+  Send, ChevronRight, MoreHorizontal, Trash2,
 } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { api } from '../api';
+import { useAuth } from '../auth';
 import { colors, font, space } from '../theme';
 
 // ============================================================================
@@ -70,6 +71,8 @@ function categoryMeta(cat: string | undefined) {
 // MAIN
 // ============================================================================
 export default function CommunityView() {
+  const { user: me } = useAuth();
+  const isAdmin = !!me && (me.role === 'admin' || me.role === 'super_admin');
   const [posts, setPosts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -142,6 +145,33 @@ export default function CommunityView() {
     Haptics.selectionAsync().catch(() => {});
     setSavedMap((p) => ({ ...p, [postId]: !p[postId] }));
   }, []);
+
+  // FIX(2026-04 / Item #4): Community admin/owner delete.
+  // Backend: DELETE /api/posts/{id} \u2014 already supports admin override
+  // + audit log. We just gate the UI: post owner OR admin/super_admin.
+  const handleDelete = useCallback(async (post: any) => {
+    Alert.alert(
+      'Delete this post?',
+      isAdmin && post?.author?.user_id !== me?.user_id
+        ? 'This post will be removed from Community. The action will be recorded in the moderation audit log.'
+        : 'This post will be removed from Community. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete', style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.delete(`/posts/${post.post_id}`);
+              setPosts((p) => p.filter((x) => x.post_id !== post.post_id));
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+            } catch (e: any) {
+              Alert.alert('Could not delete', e?.message || 'Please try again.');
+            }
+          },
+        },
+      ],
+    );
+  }, [isAdmin, me?.user_id]);
 
   const onShare = async (post: any) => {
     Haptics.selectionAsync().catch(() => {});
@@ -282,11 +312,13 @@ export default function CommunityView() {
                 p={item}
                 isLiked={!!likedMap[item.post_id] || !!item.is_liked}
                 isSaved={!!savedMap[item.post_id]}
+                canDelete={isAdmin || (!!me && item?.author?.user_id === me.user_id)}
                 onLike={() => toggleLike(item.post_id)}
                 onSave={() => toggleSave(item.post_id)}
                 onShare={() => onShare(item)}
                 onMessage={() => item.author?.user_id && onMessage(item.author.user_id, item.post_id)}
                 onApply={() => item.author?.user_id && onMessage(item.author.user_id, item.post_id)}
+                onDelete={() => handleDelete(item)}
               />
             </StaggeredCard>
           )}
@@ -329,16 +361,18 @@ function StaggeredCard({ index, children }: { index: number; children: React.Rea
 // PostCard
 // ============================================================================
 function PostCard({
-  p, isLiked, isSaved, onLike, onSave, onShare, onMessage, onApply,
+  p, isLiked, isSaved, canDelete, onLike, onSave, onShare, onMessage, onApply, onDelete,
 }: {
   p: any;
   isLiked?: boolean;
   isSaved?: boolean;
+  canDelete?: boolean;
   onLike: () => void;
   onSave: () => void;
   onShare: () => void;
   onMessage: () => void;
   onApply: () => void;
+  onDelete: () => void;
 }) {
   const meta = categoryMeta(p.category);
   const hasKnownCat = !!CATEGORIES.find((c) => c.key === p.category && c.key !== 'all');
@@ -405,6 +439,16 @@ function PostCard({
           {meta.icon ? <meta.icon size={10} color={meta.accent} /> : null}
           <Text style={[s.catChipTxt, { color: meta.accent }]}>{meta.label}</Text>
         </View>
+        {canDelete ? (
+          <Pressable
+            onPress={(e) => { e.stopPropagation?.(); onDelete(); }}
+            hitSlop={10}
+            style={s.deleteBtn}
+            testID={`post-delete-${p.post_id}`}
+          >
+            <Trash2 size={14} color={colors.textSecondary} />
+          </Pressable>
+        ) : null}
       </View>
 
       {/* Body — title + body */}
@@ -646,6 +690,12 @@ const s = StyleSheet.create({
     borderWidth: 1,
   },
   catChipTxt: { fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.4 },
+  deleteBtn: {
+    width: 28, height: 28, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+  },
 
   // Body — editorial typography that breathes
   title: {

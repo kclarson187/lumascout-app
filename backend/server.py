@@ -608,8 +608,34 @@ class ResetPasswordIn(BaseModel):
 
 
 async def send_password_reset_email(email: str, reset_link: str) -> None:
-    """Stub: logs the link for now. Replace with Resend/SendGrid in production."""
-    logger.info("[email.stub] password reset link for %s → %s", email, reset_link)
+    """Send a password reset link via Postmark (Item #7).
+
+    Uses the noreply@lumascout.app sender for transactional notices.
+    Falls back to a log line if no Postmark token is configured.
+    """
+    try:
+        from email_service import send_email, SENDER_NOREPLY
+        full_link = f"https://lumascout.app{reset_link}"
+        await send_email(
+            to=email,
+            subject="Reset your LumaScout password",
+            text_body=(
+                "Tap the link below to reset your LumaScout password.\n"
+                f"{full_link}\n\n"
+                "This link expires in 30 minutes. If you didn't request this, "
+                "you can safely ignore this email."
+            ),
+            html_body=(
+                f"<p>Tap the link below to reset your LumaScout password.</p>"
+                f"<p><a href=\"{full_link}\">Reset password</a></p>"
+                f"<p style=\"color:#888\">This link expires in 30 minutes.</p>"
+            ),
+            sender=SENDER_NOREPLY,
+            tag="password-reset",
+        )
+    except Exception as exc:  # never block auth flow
+        logger.warning("[email] reset send failed for %s: %s", email, exc)
+    logger.info("[email] password reset link for %s -> %s", email, reset_link)
 
 
 @api.post("/auth/forgot-password")
@@ -824,6 +850,152 @@ async def update_me(body: UserUpdateIn, user: dict = Depends(get_current_user)):
     return updated
 
 
+# ============================================================================
+# EMAIL CHANGE FLOW (Item #8 — Apr 2026)
+# ----------------------------------------------------------------------------
+# Two-step verified change to support pros who want to switch from a free
+# email (gmail) to their custom domain (john@johnsphoto.com), without ever
+# orphaning the account.
+#
+#   POST /api/auth/email-change/request    {new_email, current_password}
+#       -> creates email_changes doc, sends verification link to NEW email
+#   GET  /api/auth/email-change/verify?token=...
+#       -> on first hit by the new owner, the email is switched. The OLD
+#          email is also notified that the change happened, per spec.
+#
+# Security:
+#   - Re-auth required (current_password) to initiate
+#   - Duplicate email block (no email change to an address already in use)
+#   - Audit log entry written to `email_change_audit` collection
+#   - Old email notified upon successful change
+# ============================================================================
+class EmailChangeRequestIn(BaseModel):
+    new_email: str
+    current_password: Optional[str] = None  # required for password accounts
+
+
+@api.post("/auth/email-change/request")
+async def request_email_change(body: EmailChangeRequestIn, user: dict = Depends(get_current_user)):
+    new_email = (body.new_email or "").lower().strip()
+    if not new_email or "@" not in new_email or "." not in new_email.split("@")[-1]:
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    if new_email == (user.get("email") or "").lower():
+        raise HTTPException(status_code=400, detail="That's already your current email")
+
+    # Reauth: password accounts must supply current_password. Google-only
+    # accounts (no password_hash) skip this step — they reauth via Google.
+    if user.get("password_hash"):
+        if not body.current_password:
+            raise HTTPException(status_code=400, detail="Enter your current password to confirm")
+        if not verify_password(body.current_password, user["password_hash"]):
+            raise HTTPException(status_code=401, detail="Incorrect password")
+
+    # Duplicate check
+    other = await db.users.find_one({"email": new_email})
+    if other and other.get("user_id") != user["user_id"]:
+        raise HTTPException(status_code=409, detail="This email is already in use")
+
+    # Invalidate any prior pending changes for this user
+    await db.email_changes.update_many(
+        {"user_id": user["user_id"], "used": False},
+        {"$set": {"used": True, "superseded_at": utcnow()}},
+    )
+
+    token = uuid.uuid4().hex + uuid.uuid4().hex
+    doc = {
+        "change_id": f"ec_{uuid.uuid4().hex[:12]}",
+        "user_id": user["user_id"],
+        "old_email": (user.get("email") or "").lower(),
+        "new_email": new_email,
+        "token": token,
+        "expires_at": utcnow() + timedelta(hours=2),
+        "used": False,
+        "created_at": utcnow(),
+    }
+    await db.email_changes.insert_one(doc)
+
+    verify_link = f"https://lumascout.app/verify-email?token={token}"
+    try:
+        from email_service import send_email, SENDER_NOREPLY
+        await send_email(
+            to=new_email,
+            subject="Verify your new LumaScout email",
+            text_body=(
+                "We received a request to change your LumaScout login email "
+                f"to this address.\n\nVerify within 2 hours:\n{verify_link}\n\n"
+                "If you didn't request this, you can ignore this email."
+            ),
+            sender=SENDER_NOREPLY,
+            tag="email-change-verify",
+        )
+    except Exception as exc:
+        logger.warning("[email-change] verify send failed: %s", exc)
+
+    return {
+        "ok": True,
+        "message": "Check your new email for a verification link.",
+        "expires_at": doc["expires_at"].isoformat(),
+        # Dev convenience — remove once Postmark sender domain is verified
+        "dev_token": token,
+    }
+
+
+@api.get("/auth/email-change/verify")
+async def verify_email_change(token: str):
+    if not token:
+        raise HTTPException(status_code=400, detail="Token is required")
+    rec = await db.email_changes.find_one({"token": token})
+    if not rec or rec.get("used"):
+        raise HTTPException(status_code=400, detail="Invalid or expired link")
+    exp = rec.get("expires_at")
+    now = utcnow()
+    if exp and (exp.replace(tzinfo=now.tzinfo) if exp.tzinfo is None else exp) < now:
+        raise HTTPException(status_code=400, detail="This verification link has expired")
+
+    user = await db.users.find_one({"user_id": rec["user_id"]})
+    if not user:
+        raise HTTPException(status_code=400, detail="Account not found")
+
+    # Final duplicate check (in case someone else grabbed the email since)
+    other = await db.users.find_one({"email": rec["new_email"]})
+    if other and other.get("user_id") != user["user_id"]:
+        raise HTTPException(status_code=409, detail="This email is now in use by another account")
+
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"email": rec["new_email"], "email_updated_at": utcnow()}},
+    )
+    await db.email_changes.update_one(
+        {"change_id": rec["change_id"]},
+        {"$set": {"used": True, "used_at": utcnow()}},
+    )
+    # Audit log + notify old email
+    await db.email_change_audit.insert_one({
+        "audit_id": f"eca_{uuid.uuid4().hex[:12]}",
+        "user_id": user["user_id"],
+        "old_email": rec["old_email"],
+        "new_email": rec["new_email"],
+        "at": utcnow(),
+    })
+    try:
+        from email_service import send_email, SENDER_NOREPLY
+        if rec.get("old_email"):
+            await send_email(
+                to=rec["old_email"],
+                subject="Your LumaScout email was changed",
+                text_body=(
+                    f"Your LumaScout login email was changed to {rec['new_email']}.\n\n"
+                    "If this wasn't you, please contact support@lumascout.app immediately."
+                ),
+                sender=SENDER_NOREPLY,
+                tag="email-change-notice-old",
+            )
+    except Exception:
+        pass
+
+    return {"ok": True, "message": "Email updated. Sign in with your new email next time."}
+
+
 @api.post("/auth/google/session")
 async def google_session(body: GoogleSessionIn):
     """Exchange Emergent session_id for our app JWT.
@@ -968,24 +1140,31 @@ async def home_feed(
     await attach_owners(scored)
 
     # ---- Distance center --------------------------------------------------
-    center_lat, center_lng = 30.2672, -97.7431  # Austin fallback
-    center_source = "default"
+    # FIX(2026-04 / Item #3): Strict policy — distance is computed ONLY from
+    # the device GPS. Previously we fell back to (a) the first profile-city
+    # spot's coordinates, and (b) Austin defaults — both produced wildly
+    # incorrect mileage (e.g. "Muleshoe Bend 1.4 mi" for a San Antonio user).
+    # Now: no GPS → distance_km/distance_mi remain None, and the frontend
+    # renders "Distance unavailable" instead of a fabricated value.
+    center_lat: Optional[float] = None
+    center_lng: Optional[float] = None
+    center_source = "unavailable"
     if lat is not None and lng is not None:
         center_lat, center_lng = float(lat), float(lng)
         center_source = "device_gps"
-    elif viewer and viewer.get("city"):
-        for s in scored:
-            if (s.get("city") or "").lower() == (viewer.get("city") or "").lower():
-                center_lat, center_lng = s["latitude"], s["longitude"]
-                center_source = "profile_city"
-                break
     for s in scored:
+        if center_lat is None or center_lng is None:
+            s["distance_km"], s["distance_mi"] = None, None
+            s["distance_source"] = "unavailable"
+            continue
         try:
             d_km = haversine_km(center_lat, center_lng, s["latitude"], s["longitude"])
             s["distance_km"] = round(d_km, 2)
             s["distance_mi"] = round(d_km * 0.621371, 2)
+            s["distance_source"] = center_source
         except Exception:
             s["distance_km"], s["distance_mi"] = None, None
+            s["distance_source"] = "unavailable"
 
     # ---- Personalization inputs -------------------------------------------
     viewer_specialties: set = set(viewer.get("specialties") or []) if viewer else set()

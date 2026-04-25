@@ -118,6 +118,12 @@ export default function SettingsHub() {
       onPress: () => router.push('/(tabs)/profile'),
     },
     {
+      key: 'email', icon: AtSign,
+      title: 'Email address',
+      subtitle: user?.email ? user.email : 'Update your login email',
+      onPress: () => router.push('/settings/email' as any),
+    },
+    {
       key: 'membership', icon: CreditCard,
       title: 'Membership',
       subtitle: `${planLabel(plan)} · Tap to manage, upgrade, or view history`,

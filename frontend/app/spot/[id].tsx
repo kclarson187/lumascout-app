@@ -85,8 +85,17 @@ export default function SpotDetail() {
   };
 
   const onShare = async () => {
+    // Item #2 (2026-04): Share a real public webpage for the spot, not
+    // just a text blob. Falls back to opening the app via deep link if
+    // installed on the recipient's device.
     try {
-      await Share.share({ message: `${spot.title} — ${spot.city}, ${spot.state} on LumaScout` });
+      const publicUrl = `https://lumascout.app/spot.html?id=${id}`;
+      const message = `Check out this photo location on LumaScout:\n${spot.title} — ${spot.city}, ${spot.state}\n${publicUrl}`;
+      await Share.share({
+        message,
+        url: publicUrl,           // iOS uses the dedicated url field
+        title: spot.title,
+      });
     } catch {}
   };
 
@@ -416,6 +425,33 @@ export default function SpotDetail() {
             {spot.fee_required && <LogisticsRow icon={<TicketIcon size={16} color={colors.warning} />} label="Fee" text={spot.fee_notes || 'Entry fee'} />}
             {spot.lens_recommendations && <LogisticsRow icon={<Camera size={16} color={colors.primary} />} label="Lens" text={spot.lens_recommendations} />}
           </View>
+
+          {/* Item #1 (Apr 2026) — Land Access disclosure */}
+          {(spot.land_access || spot.access_notes) ? (
+            <View style={{
+              marginTop: space.lg,
+              padding: 14,
+              borderRadius: 16,
+              borderWidth: 1,
+              borderColor: spot.land_access === 'private' ? 'rgba(157,89,255,0.45)' : 'rgba(34,197,94,0.35)',
+              backgroundColor: spot.land_access === 'private' ? 'rgba(157,89,255,0.08)' : 'rgba(34,197,94,0.06)',
+              gap: 6,
+            }}>
+              <Text style={{
+                color: spot.land_access === 'private' ? '#c8a8ff' : '#22c55e',
+                fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.6,
+              }}>
+                {spot.land_access === 'public' ? 'PUBLIC LAND'
+                  : spot.land_access === 'private' ? 'PRIVATE LAND — PERMISSION REQUIRED'
+                  : 'LAND ACCESS UNCONFIRMED'}
+              </Text>
+              {spot.access_notes ? (
+                <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 18 }}>
+                  {spot.access_notes}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
 
           <View style={styles.badgesRow}>
             {spot.dog_friendly && <Badge label="Dog friendly" />}
