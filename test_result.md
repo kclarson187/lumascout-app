@@ -12,6 +12,44 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Explore Map Bottom Sheet — Pixel-Match Mockup Polish (Apr 2026): large 132x132 hero image LEFT, VERIFIED green pill overlay on hero bottom-left, blue check verified mark inline with title, heart fav icon, share icon, score ring (44x44) with 'Score' label below, two prominent chips (gold 'Best at Sunset' + green 'Low Crowds'), 3 subtle outline tag chips (Urban / Easy Access / Great for Portraits), reordered triple-button row [Save | Directions GOLD MIDDLE | View Details], trending chip enhanced with 3-avatar stack + overflow + chevron"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(tabs)/explore.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Pixel-match polish to user-supplied mockup. PinPreview rebuilt:
+          row 1 = LEFT 132x132 rounded hero with VERIFIED green pill
+          overlay (Shield + 'VERIFIED' caps), RIGHT title row (sheetTitle
+          + blue circle ✓ verified mark + heart icon), city/distance
+          subrow with ShareIcon, score row with Apple-style score ring
+          (44x44, 2.5 stroke, color tier green≥90/gold≥75/blue) + 'SCORE'
+          uppercase label below + 2 prominent chips column (gold filled
+          'Best at Sunset' / green filled 'Low Crowds' / purple 'Elite');
+          subtleTagRow below = 3 outline pills (Urban / Easy Access /
+          Great for Portraits) computed from spot.niches/accessible
+          /score_portrait. Triple-button row reordered: Save (left
+          secondary) → Directions (MIDDLE GOLD primary, flex 1.3) →
+          View Details (right secondary). Heart icon fills red on save.
+          Trending chip upgraded: maps owner.avatar_url|profile_image
+          from up to 3 trending spots into an overlapped stack
+          (-8 marginLeft) + '+N' overflow text + ChevronRight.
+          Build: iOS bundled 2.3s 3747 modules clean, web bundled
+          clean. Web preview unaffected (web stub still returns null
+          for native map components). No backend / nav / tabs / msg /
+          subscription changes.
+          Needs on-device retest for: large hero image cropping,
+          verified pill positioning over hero, blue check legibility,
+          Save heart toggle visual, Directions button gold contrast,
+          avatar stack with real owner photos.
+
+
+
   - task: "Explore Map Premium Upgrade (Apr 2026): compressed 3-row header (35% less dead space), premium dark Apple-quality customMapStyle, branded gold-ring + camera-glyph PremiumMapPin (elite=purple, trending=orange-pulse, saved=blue-fill), glowing gold PremiumMapCluster with pulse, glassmorphism FAB stack (Recenter/Layers/List), Layers toggle (standard↔hybrid), 🔥 trending floating chip, triple-button bottom sheet (Save/Directions/Details) with optimistic save, photographer chips (Golden Hour countdown / Low crowds / Drone friendly / Permit needed / Sunrise favorite), expo-haptics on pin tap + map controls"
     implemented: true
     working: "NA"
