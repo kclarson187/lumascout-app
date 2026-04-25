@@ -12,6 +12,48 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Bug fixes — broken routes & wrong CTA actions: (1) Explore filter modal — removed Best time of day / Best season (month) / Light quality (Sunrise/Sunset/AM Golden/PM Golden) / Hidden gem switch per latest product direction; (2) Network Discover daily-freshness chip ('1 new photographers near you') no longer triggers the Share-app intent — converted to a non-Pressable informational banner; (3) Profile Stats Row — removed onPress from Followers/Following tiles (routes /followers and /following don't exist); (4) Profile Quick Actions — Upload Spot now correctly routes to /(tabs)/add (was /(tabs)/create), Create Post now routes to /community/compose (was /post/create), My Portfolio now prefixes user.website with https:// when missing (fixes iOS 'Unable to open URL' for raw 'www.PetographyTX.com/portfolio'), falls back to /user/{user_id} or onEdit"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(tabs)/explore.tsx, /app/frontend/src/components/DiscoverPremiumView.tsx, /app/frontend/src/components/PremiumProfileExtras.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Targeted bug fixes from user-reported screenshots:
+          1) explore.tsx filter modal — deleted four <Section> blocks
+             (Best time of day / Best season / Light quality /
+             Hidden gem switch). The Trust & freshness section now
+             only contains 'Verified in last 60 days' and 'Proven spot'
+             switches. BEST_TIMES + SEASONS imports left in place
+             (harmless dead imports — could be cleaned in follow-up).
+          2) DiscoverPremiumView.tsx — replaced the Pressable
+             freshness banner with a plain View; removed the
+             accidental onInvite handler + ChevronRight that
+             implied "tap to act". Daily blurb still rotates by date.
+          3) PremiumProfileExtras.tsx Stats Row — removed onPress on
+             Followers and Following tiles (no /followers or
+             /following route exists in app/). Other tiles (Profile
+             Views → /profile-viewers, Referrals → /referrals) still
+             route correctly.
+          4) PremiumProfileExtras.tsx Quick Actions —
+               Upload Spot → /(tabs)/add (was /(tabs)/create which
+                 doesn't exist; existing tab file is add.tsx)
+               Create Post → /community/compose (was /post/create
+                 which doesn't exist)
+               My Portfolio → if user.website is set, normalize the
+                 URL with https:// prefix when scheme is missing so
+                 iOS Linking treats it as a remote URL instead of a
+                 relative file path; falls back to /user/{user_id}
+                 on URL open failure or when website is empty.
+          Build: iOS bundled clean 3886ms 3656 modules. Web bundled
+          clean. Backend untouched. No regressions in other tabs.
+
+
+
   - task: "Apr 2026 Cleanup — Home + Explore decluttering: removed Golden Hour and Weather quick-action pills from Home (kept Near You / Collections / Routes); removed Hidden Gems Elite CTA upsell card from Home and replaced with Recently Saved Spots rail (graceful empty-state hide when no saved data); simplified Explore quick filter chips from 8 to 9 tightly-scoped (All / Nearby / Verified / New / Urban / Nature / Portrait / Wedding / Pet) — removed Golden Hour, Hidden Gems, season/time-of-day, light-quality, and other micro-filters; removed the 🔥 trending floating chip from Map mode (cleaner Apple-Maps feel)"
     implemented: true
     working: "NA"

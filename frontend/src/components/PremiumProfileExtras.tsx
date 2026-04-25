@@ -150,14 +150,12 @@ export default function PremiumProfileExtras({
             value={fmt(stats.followers ?? 0)}
             accent="#60A5FA"
             icon={<UserPlus size={14} color="#60A5FA" />}
-            onPress={() => router.push('/followers' as any)}
           />
           <StatTile
             label="Following"
             value={fmt(stats.following ?? 0)}
             accent="#60A5FA"
             icon={<UserPlus size={14} color="#60A5FA" />}
-            onPress={() => router.push('/following' as any)}
           />
           <StatTile
             label="Profile Views"
@@ -207,13 +205,13 @@ export default function PremiumProfileExtras({
           <QuickAction
             label={'Upload\nSpot'}
             icon={<Plus size={18} color={colors.text} />}
-            onPress={() => router.push('/(tabs)/create' as any)}
+            onPress={() => router.push('/(tabs)/add' as any)}
             testID="qa-upload"
           />
           <QuickAction
             label={'Create\nPost'}
             icon={<Edit3 size={17} color={colors.text} />}
-            onPress={() => router.push('/post/create' as any)}
+            onPress={() => router.push('/community/compose' as any)}
             testID="qa-post"
           />
           <QuickAction
@@ -226,8 +224,22 @@ export default function PremiumProfileExtras({
             label={'My\nPortfolio'}
             icon={<Camera size={17} color={colors.text} />}
             onPress={() => {
-              if (user?.website) Linking.openURL(user.website);
-              else onEdit?.();
+              // If the user has a portfolio website, ensure the URL is
+              // prefixed with https:// so iOS Linking doesn't treat it
+              // as a local file path (was throwing "Unable to open URL"
+              // for raw "www.PetographyTX.com/portfolio").
+              const w: string | undefined = user?.website;
+              if (w && typeof w === 'string') {
+                const url = /^https?:\/\//i.test(w) ? w : `https://${w}`;
+                Linking.openURL(url).catch(() => {
+                  // Fallback to in-app profile when external URL fails
+                  if (user?.user_id) router.push(`/user/${user.user_id}` as any);
+                });
+              } else if (user?.user_id) {
+                router.push(`/user/${user.user_id}` as any);
+              } else {
+                onEdit?.();
+              }
             }}
             testID="qa-portfolio"
           />
