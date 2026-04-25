@@ -489,14 +489,15 @@ export default function DiscoverPremiumView() {
         </View>
       ) : (
         <>
-          {/* Daily freshness banner */}
-          <Pressable style={s.freshness} onPress={onInvite} testID="discover-freshness">
+          {/* Daily freshness banner — informational only (no longer
+              points to the share-app intent). Tap is a no-op so it
+              doesn't surprise users with a share sheet. */}
+          <View style={s.freshness} testID="discover-freshness">
             <View style={s.freshnessIcon}>
               <Flame size={13} color={colors.primary} />
             </View>
             <Text style={s.freshnessTxt}>{dailyFreshness(rails)}</Text>
-            <ChevronRight size={14} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
-          </Pressable>
+          </View>
 
           {/* 2 — Best Matches For You */}
           {filteredRails.best_matches.length > 0 ? (

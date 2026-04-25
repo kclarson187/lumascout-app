@@ -761,28 +761,10 @@ function FilterSheet({
               ))}
             </Section>
 
-            <Section label="Best time of day">
-              {BEST_TIMES.map((t) => (
-                <Chip key={t.key} label={t.label} active={local.best_time_of_day === t.key}
-                  onPress={() => setLocal({ ...local, best_time_of_day: local.best_time_of_day === t.key ? undefined : t.key })}
-                  testID={`filter-time-${t.key}`} />
-              ))}
-            </Section>
-
-            <Section label="Best season (month)">
-              {SEASONS.map((m) => (
-                <Chip key={m} label={m.slice(0, 3)} active={local.best_season === m}
-                  onPress={() => setLocal({ ...local, best_season: local.best_season === m ? undefined : m })}
-                  testID={`filter-season-${m}`} />
-              ))}
-            </Section>
-
-            <Section label="Light quality">
-              <ScaleChips label="Sunrise ≥" value={local.min_sunrise_strength} onChange={(v) => setNumber('min_sunrise_strength', v)} />
-              <ScaleChips label="Sunset ≥" value={local.min_sunset_strength} onChange={(v) => setNumber('min_sunset_strength', v)} />
-              <ScaleChips label="AM Golden ≥" value={local.min_morning_golden} onChange={(v) => setNumber('min_morning_golden', v)} />
-              <ScaleChips label="PM Golden ≥" value={local.min_evening_golden} onChange={(v) => setNumber('min_evening_golden', v)} />
-            </Section>
+            {/* Apr 2026 cleanup — removed Best time of day, Best season,
+                Light quality, and Hidden gem filters per latest product
+                direction. Kept the actionable filters (shoot type,
+                access & logistics, accessibility, verified, proven). */}
 
             <Section label="Access & logistics">
               <ScaleChips label="Min parking ease" value={local.min_parking_ease} onChange={(v) => setNumber('min_parking_ease', v)} />
@@ -793,7 +775,6 @@ function FilterSheet({
 
             <Section label="Trust & freshness">
               <SwitchRow label="Verified in last 60 days" value={!!local.verified_recently} onChange={() => toggle('verified_recently')} />
-              <SwitchRow label="Hidden gem (high score, few saves)" value={!!local.hidden_gem} onChange={() => toggle('hidden_gem')} />
               <SwitchRow label="Proven spot (80+ & 3+ photos)" value={!!local.proven_spot} onChange={() => toggle('proven_spot')} />
             </Section>
 
