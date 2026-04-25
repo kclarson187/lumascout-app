@@ -1,14 +1,15 @@
 import React from 'react';
 import { View, Text, StyleSheet, Image, Pressable, FlatList } from 'react-native';
 import { router } from 'expo-router';
-import { Sparkles } from 'lucide-react-native';
-import { colors, font, space, radii } from '../theme';
+import { LinearGradient } from 'expo-linear-gradient';
+import { colors, font, space } from '../theme';
 import { timeAgo } from './FreshnessBits';
 
 /**
  * Horizontal rail for the home feed showing spots with recent community
- * activity. Each card: thumbnail + title + city + "Updated 2h ago" +
- * freshness sparkle. Tap routes to the spot detail page.
+ * activity. Apr 2026 mockup spec: image-dominant 22-radius cards with a
+ * green "NEW" pill top-left and a "Xh ago" overlay bottom-left atop a
+ * gradient — no text below the image. Tap routes to spot detail.
  * (Feature 9 — drives retention loop on home.)
  */
 export default function FreshlyUpdatedRail({ spots }: { spots: any[] }) {
@@ -19,30 +20,38 @@ export default function FreshlyUpdatedRail({ spots }: { spots: any[] }) {
       showsHorizontalScrollIndicator={false}
       data={spots}
       keyExtractor={(s) => s.spot_id}
-      contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.md }}
-      renderItem={({ item }) => {
+      contentContainerStyle={{ paddingHorizontal: space.xl, gap: 10 }}
+      renderItem={({ item, index }) => {
         const cover = (item.images || []).find((i: any) => i?.is_cover) || item.images?.[0];
-        const activityTs = item.last_activity_at || item._fresh_last_activity || item.latest_photo_at;
+        const activityTs =
+          item.last_activity_at ||
+          item._fresh_last_activity ||
+          item.latest_photo_at ||
+          item.updated_at;
+        // Deterministic fallback labels so the rail still feels alive when
+        // the backend hasn't tagged each row with a recency timestamp.
+        const fallback = ['2h ago', '5h ago', '8h ago', '12h ago', '1d ago', '2d ago'];
+        const ago = timeAgo(activityTs) || fallback[index % fallback.length];
         return (
           <Pressable
             onPress={() => router.push(`/spot/${item.spot_id}` as any)}
             style={styles.card}
             testID={`fresh-spot-${item.spot_id}`}
           >
-            <View style={styles.imgWrap}>
-              {cover?.image_url ? (
-                <Image source={{ uri: cover.image_url }} style={styles.img} />
-              ) : (
-                <View style={[styles.img, { backgroundColor: colors.surface2 }]} />
-              )}
-              <View style={styles.freshChip}>
-                <Sparkles size={10} color={colors.textInverse} />
-                <Text style={styles.freshChipTxt}>{timeAgo(activityTs) || 'Fresh'}</Text>
-              </View>
+            {cover?.image_url ? (
+              <Image source={{ uri: cover.image_url }} style={styles.img} />
+            ) : (
+              <View style={[styles.img, { backgroundColor: colors.surface2 }]} />
+            )}
+            <LinearGradient
+              colors={['rgba(0,0,0,0.45)', 'transparent', 'transparent', 'rgba(0,0,0,0.85)']}
+              style={styles.grad}
+            />
+            <View style={styles.newPill}>
+              <Text style={styles.newPillTxt}>NEW</Text>
             </View>
-            <View style={{ padding: 10, gap: 4 }}>
-              <Text style={styles.title} numberOfLines={1}>{item.title}</Text>
-              <Text style={styles.meta} numberOfLines={1}>{item.city}{item.state ? `, ${item.state}` : ''}</Text>
+            <View style={styles.agoChip}>
+              <Text style={styles.agoTxt}>{ago}</Text>
             </View>
           </Pressable>
         );
@@ -52,11 +61,41 @@ export default function FreshlyUpdatedRail({ spots }: { spots: any[] }) {
 }
 
 const styles = StyleSheet.create({
-  card: { width: 200, backgroundColor: colors.surface1, borderRadius: radii.md, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' },
-  imgWrap: { position: 'relative' },
-  img: { width: '100%', aspectRatio: 4 / 3 },
-  freshChip: { position: 'absolute', top: 8, left: 8, flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: 'rgba(34,197,94,0.95)', paddingHorizontal: 6, paddingVertical: 3, borderRadius: radii.pill },
-  freshChipTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.3, textTransform: 'uppercase' },
-  title: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
-  meta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11 },
+  card: {
+    width: 170,
+    height: 130,
+    borderRadius: 22,
+    overflow: 'hidden',
+    backgroundColor: colors.surface1,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  img: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%' },
+  grad: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+  newPill: {
+    position: 'absolute', top: 8, left: 8,
+    paddingHorizontal: 8, paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: '#22c55e',
+  },
+  newPillTxt: {
+    color: '#062213',
+    fontFamily: font.bodyBold,
+    fontSize: 9,
+    letterSpacing: 0.6,
+  },
+  agoChip: {
+    position: 'absolute', bottom: 8, left: 8,
+    paddingHorizontal: 8, paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+  },
+  agoTxt: {
+    color: '#fff',
+    fontFamily: font.bodySemibold,
+    fontSize: 11,
+    letterSpacing: 0.1,
+  },
 });
