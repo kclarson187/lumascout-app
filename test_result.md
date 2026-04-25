@@ -12,6 +12,57 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Network ▸ Discover Premium Upgrade (Apr 2026): rebuilt as opportunity engine — header with kicker/title/subtitle/invite icon, search bar w/ example chips (Austin wedding/San Antonio pet/Dallas portrait), filter pills (All/Nearby/Verified/Elite/New/Wedding/Portrait/Pet/Family), daily-rotating freshness banner, 8 intelligent rails (Best Matches/Active Near You/Trending This Week/Available For Referrals/Verified Pros/New Creators/Who Viewed You/Invite Friends), premium UserCardPremium (gold edge for elite, blue verified check, ELITE/PRO pills, context badges, online dot, Follow + Message buttons w/ optimistic toggle, deep-link to /dm/{thread_id}), viewers blur-state for free users w/ upgrade CTA"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/DiscoverPremiumView.tsx, /app/frontend/app/(tabs)/network.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Apr 2026 PRD redesign. Created a new component
+          (DiscoverPremiumView) that consumes the existing
+          /network/discover endpoint (no backend changes) and remaps
+          the rails:
+            • near_you           → Best Matches For You
+            • popular_in_city    → Active Near You (with deterministic
+              activity badges: Online now / Posted today / Viewed spots
+              nearby / New upload)
+            • top_contributors   → Trending This Week (with +N follows
+              context badge)
+            • available_for_referrals → Available For Referrals
+            • verified_pros      → Verified Pros
+            • new_members        → New Creators
+            • /me/viewers        → Who Viewed You (blur stub for free,
+              real cards for pro/elite via existing endpoint)
+          UserCardPremium (252px wide) renders avatar w/ optional gold
+          ring for elite, name + blue verified circle ✓ + ELITE/PRO
+          pill, @username, city w/ MapPin, follower count, context
+          badge first then specialty chips, action row with gold
+          "Follow" / outline "Message". Follow: optimistic
+          toggleFollow → POST /users/{id}/follow w/ rollback on error.
+          Message: POST /dm/threads/start → router.push(/dm/{id}).
+          Filter pills filter every rail in-place via useMemo
+          (no extra fetches). Search: debounced 300ms → /network/search.
+          Example chips inject the query string. Daily freshness banner
+          rotates by date(). Invite CTA = native Share.share().
+          Network shell (network.tsx) cleaned up: removed inline
+          rails/code, now thin wrapper that owns the Discover ↔
+          Directory toggle + header. UserPlus invite icon top-right.
+          Build: web bundled clean, iOS bundled 2.3s 3748 modules
+          clean. Verified visually @ 390x900 — every rail, card,
+          filter, freshness banner and invite CTA render correctly
+          with admin@lumascout.app account.
+          Needs functional retest on real device for: Follow optimistic
+          toggle persistence, Message deep-link, Share intent,
+          Who-Viewed-You upsell behavior for free users (admin is
+          Elite so unlocked path verified).
+
+
+
   - task: "Explore Map Bottom Sheet — Pixel-Match Mockup Polish (Apr 2026): large 132x132 hero image LEFT, VERIFIED green pill overlay on hero bottom-left, blue check verified mark inline with title, heart fav icon, share icon, score ring (44x44) with 'Score' label below, two prominent chips (gold 'Best at Sunset' + green 'Low Crowds'), 3 subtle outline tag chips (Urban / Easy Access / Great for Portraits), reordered triple-button row [Save | Directions GOLD MIDDLE | View Details], trending chip enhanced with 3-avatar stack + overflow + chevron"
     implemented: true
     working: "NA"
