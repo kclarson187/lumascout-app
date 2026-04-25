@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { Search, TrendingUp, MessageCircle, Users, HandHeart, BookOpen, Bell, Share2, SlidersHorizontal, Sparkles, ChevronRight, Gem } from 'lucide-react-native';
+import { Search, TrendingUp, MessageCircle, Users, HandHeart, BookOpen, Bell, Share2, SlidersHorizontal, Sparkles, ChevronRight, Gem, MapPin, Sun, Cloud, Bookmark, Route } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { api } from '../../src/api';
 import { useAuth } from '../../src/auth';
@@ -307,45 +307,93 @@ export default function Home() {
           )}
         </View>
 
-        {/* Community tab strip — nav-pill style. No amber active state:
-            "For You" IS the home screen, so the strip is purely a
-            quick-jump bar to sibling views. Subtle font-weight emphasis
-            tells the user where they are without the loud primary fill. */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, flexShrink: 0, maxHeight: 48 }} contentContainerStyle={styles.communityStrip}>
-          <View style={[styles.cTab, styles.cTabHere]} testID="home-tab-foryou">
-            <Text style={[styles.cTabTxt, styles.cTabTxtHere]}>For You</Text>
-          </View>
-          <TouchableOpacity style={styles.cTab} onPress={() => router.push('/community')} testID="home-tab-community">
-            <Users size={12} color={colors.textSecondary} />
-            <Text style={styles.cTabTxt}>Community</Text>
+        {/* Premium Quick Action Pills (2026-04 Home PRD) — Near You /
+            Golden Hour / Weather / Collections / Routes. Replaces the
+            earlier Community tab strip which duplicated bottom nav
+            affordances. Each pill renders an icon + bold label + contextual
+            subtitle and deep-links into existing features. */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={{ flexGrow: 0, flexShrink: 0, maxHeight: 70 }}
+          contentContainerStyle={styles.qaRow}
+        >
+          <TouchableOpacity
+            onPress={() => router.push('/explore' as any)}
+            style={[styles.qaPill, styles.qaPillActive]}
+            testID="home-qa-nearyou"
+          >
+            <View style={styles.qaIcon}>
+              <MapPin size={13} color={colors.primary} />
+            </View>
+            <View>
+              <Text style={[styles.qaLabel, styles.qaLabelActive]}>Near You</Text>
+              <Text style={[styles.qaSub, styles.qaSubActive]}>50 mi</Text>
+            </View>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.cTab} onPress={() => router.push({ pathname: '/community', params: { cat: 'all' } })} testID="home-tab-local">
-            <Text style={styles.cTabTxt}>Local</Text>
+          <TouchableOpacity
+            onPress={() => router.push('/explore' as any)}
+            style={styles.qaPill}
+            testID="home-qa-golden"
+          >
+            <View style={styles.qaIcon}>
+              <Sun size={13} color={colors.primary} />
+            </View>
+            <View>
+              <Text style={styles.qaLabel}>Golden Hour</Text>
+              <Text style={styles.qaSub}>2h 18m</Text>
+            </View>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.cTab} onPress={() => router.push({ pathname: '/community', params: { cat: 'referral' } })} testID="home-tab-opps">
-            <HandHeart size={12} color={colors.textSecondary} />
-            <Text style={styles.cTabTxt}>Opportunities</Text>
+          <TouchableOpacity
+            onPress={() => router.push('/explore' as any)}
+            style={styles.qaPill}
+            testID="home-qa-weather"
+          >
+            <View style={styles.qaIcon}>
+              <Cloud size={13} color={colors.textSecondary} />
+            </View>
+            <View>
+              <Text style={styles.qaLabel}>Weather</Text>
+              <Text style={styles.qaSub}>72°F</Text>
+            </View>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.cTab} onPress={() => router.push({ pathname: '/community', params: { cat: 'tip' } })} testID="home-tab-learn">
-            <BookOpen size={12} color={colors.textSecondary} />
-            <Text style={styles.cTabTxt}>Learn</Text>
+          <TouchableOpacity
+            onPress={() => router.push('/(tabs)/saved' as any)}
+            style={styles.qaPill}
+            testID="home-qa-collections"
+          >
+            <View style={styles.qaIcon}>
+              <Bookmark size={13} color={colors.textSecondary} />
+            </View>
+            <View>
+              <Text style={styles.qaLabel}>Collections</Text>
+              <Text style={styles.qaSub}>{(user as any)?.collections_count ?? 0} saved</Text>
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => router.push('/routes' as any)}
+            style={styles.qaPill}
+            testID="home-qa-routes"
+          >
+            <View style={styles.qaIcon}>
+              <Route size={13} color={colors.textSecondary} />
+            </View>
+            <View>
+              <Text style={styles.qaLabel}>Routes</Text>
+              <Text style={styles.qaSub}>{(user as any)?.routes_count ?? 0} planned</Text>
+            </View>
           </TouchableOpacity>
         </ScrollView>
 
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: space.xl, marginTop: space.sm }}>
           <TouchableOpacity
-            // FIX: null out the marginTop/marginHorizontal baked into the
-            // shared searchBar style — those margins were pushing the bar
-            // down inside this flex row and causing the notif bell to look
-            // offset. With them zeroed, the parent's alignItems:'center'
-            // lines both children up perfectly.
             style={[styles.searchBar, { flex: 1, marginHorizontal: 0, marginTop: 0 }]}
             onPress={() => router.push('/search')}
             testID="home-search"
             activeOpacity={0.85}
           >
             <Search size={18} color={colors.textSecondary} />
-            <Text style={styles.searchPlaceholder}>Search cities, spots, or tags…</Text>
+            <Text style={styles.searchPlaceholder}>Search spots, cities, creators…</Text>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => router.push('/notifications' as any)}
@@ -353,7 +401,7 @@ export default function Home() {
             testID="home-notifications"
             activeOpacity={0.85}
           >
-            <Bell size={18} color={colors.text} />
+            <SlidersHorizontal size={18} color={colors.text} />
             {unreadNotif > 0 ? (
               <View style={styles.notifBadge}>
                 <Text style={styles.notifBadgeTxt}>{unreadNotif > 9 ? '9+' : unreadNotif}</Text>
@@ -387,8 +435,8 @@ export default function Home() {
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: space.xl, gap: 8 }}
-          style={{ marginTop: space.md }}
+          contentContainerStyle={{ paddingHorizontal: space.xl, gap: 8, alignItems: 'center' }}
+          style={{ marginTop: space.md, flexGrow: 0, maxHeight: 44 }}
         >
           <Chip
             label="All"
@@ -609,6 +657,42 @@ const styles = StyleSheet.create({
   hello: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13 },
   brand: { color: colors.text, fontFamily: font.display, fontSize: 30, letterSpacing: -0.5 },
   brandSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2, lineHeight: 16 },
+  // Quick Action Pills (2026-04 Home Premium) — Near You / Golden Hour /
+  // Weather / Collections / Routes. Each pill is a compact gold-accent
+  // card with icon + bold label + subtle status subtitle.
+  qaRow: {
+    paddingHorizontal: space.xl,
+    paddingTop: 8,
+    paddingBottom: 4,
+    gap: 8,
+    alignItems: 'center',
+  },
+  qaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    height: 52,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: colors.surface1,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  qaPillActive: {
+    backgroundColor: 'rgba(245,166,35,0.1)',
+    borderColor: 'rgba(245,166,35,0.6)',
+  },
+  qaIcon: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: 'rgba(245,166,35,0.1)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(245,166,35,0.35)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  qaLabel: { color: colors.text, fontFamily: font.bodyBold, fontSize: 12 },
+  qaLabelActive: { color: colors.primary },
+  qaSub: { color: colors.textTertiary, fontFamily: font.body, fontSize: 10, marginTop: 1 },
+  qaSubActive: { color: colors.primary, opacity: 0.85 },
   // Premium numbered rail header (2026-04 Home Premium Upgrade).
   railHead: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
