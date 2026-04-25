@@ -55,7 +55,7 @@ export default function PostReferral() {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (perm.status !== 'granted') { Alert.alert('Permission required'); return; }
     const r = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       quality: 0.7, allowsEditing: false,
     });
     if (r.canceled || !r.assets?.[0]?.uri) return;

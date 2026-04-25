@@ -10,6 +10,14 @@ type PaywallHandler = (message: string) => void;
 let paywallHandler: PaywallHandler | null = null;
 export function onPaywallNeeded(fn: PaywallHandler) { paywallHandler = fn; }
 
+// Global handler for expired-token (401 responses) — wired by AuthProvider
+// at boot so the app can clear local state and redirect to login instead of
+// silently failing requests indefinitely. Critical for App-Store-quality
+// session UX.
+type UnauthHandler = () => void;
+let unauthHandler: UnauthHandler | null = null;
+export function onUnauthorized(fn: UnauthHandler) { unauthHandler = fn; }
+
 // Web-safe token storage: SecureStore on native, localStorage on web
 async function storageGet(key: string): Promise<string | null> {
   if (Platform.OS === 'web') {
@@ -39,7 +47,7 @@ class Api {
   constructor() {
     this.client = axios.create({
       baseURL: BASE_URL,
-      timeout: 20000,
+      timeout: 15000,
     });
     this.client.interceptors.request.use(async (config) => {
       if (!this.token) {
@@ -53,9 +61,26 @@ class Api {
     this.client.interceptors.response.use(
       (r) => r,
       (err) => {
-        if (err?.response?.status === 402 && paywallHandler) {
+        const status = err?.response?.status;
+        // 402 — paywall trigger (existing UX). 401 — expired/invalid
+        // session: clear local token + notify auth provider so the app
+        // bounces to the login screen instead of looping silently. We
+        // skip auto-logout for the auth endpoints themselves so failed
+        // login attempts still surface their own error.
+        if (status === 402 && paywallHandler) {
           const detail = err.response.data?.detail || 'Upgrade to continue.';
           paywallHandler(typeof detail === 'string' ? detail : 'Upgrade to continue.');
+        } else if (status === 401) {
+          const url: string = err?.config?.url || '';
+          const isAuthEndpoint = /^\/?auth\/(login|register|google|forgot|reset)/.test(url);
+          if (!isAuthEndpoint) {
+            // Fire-and-forget — clear token then notify
+            storageDelete(TOKEN_KEY).catch(() => {});
+            this.token = null;
+            if (unauthHandler) {
+              try { unauthHandler(); } catch {}
+            }
+          }
         }
         return Promise.reject(err);
       }

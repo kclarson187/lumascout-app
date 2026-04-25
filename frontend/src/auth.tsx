@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
-import { api } from './api';
+import { api, onUnauthorized } from './api';
+import { router } from 'expo-router';
 
 export type User = {
   user_id: string;
@@ -64,6 +65,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     })();
   }, [refresh]);
+
+  // Wire the api 401-handler so any expired-token failure clears local
+  // auth state and bounces to login. Prevents the "silent failure loop"
+  // App-Store reviewers regularly flag.
+  useEffect(() => {
+    onUnauthorized(() => {
+      setUser(null);
+      try { router.replace('/(auth)/login' as any); } catch {}
+    });
+  }, []);
 
   const login = async (email: string, password: string) => {
     const data = await api.post('/auth/login', { email, password });

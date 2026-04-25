@@ -24,7 +24,7 @@ export type UnreadCount = {
 
 const EMPTY: UnreadCount = { unread_messages: 0, unread_threads: 0, pending_requests: 0, total: 0 };
 
-export function useUnreadMessages(pollMs: number = 30000) {
+export function useUnreadMessages(pollMs: number = 60000) {
   const { user } = useAuth();
   const [count, setCount] = useState<UnreadCount>(EMPTY);
 
