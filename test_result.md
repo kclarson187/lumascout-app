@@ -12,6 +12,63 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Profile Premium Upgrade (Apr 2026): kicker header (PROFILE / Your creator hub + Share + Settings), 7-tile scrollable Stats Row (Followers/Following/Profile Views/Spot Saves/Posts/Reviews/Referrals — each with colored icon tile), 6-button Quick Actions row (Upload Spot/Create Post/View Messages/My Portfolio/Invite Friends/Upgrade or Manage Plan), Portfolio Highlights horizontal rail (FEATURED gold pill on top spot, gradient overlay, taps to /spot/{id}), Growth Insights card (4 blips: +N profile views / +N followers / Saved N times / #N in city — Saved+Rank blurred for free users with Lock icon), Subscription Status card (3 states: Free=Upgrade gold gradient, Pro=Enjoying Pro Benefits, Elite=Elite Creator Status Active with diamond Gem icon and gold gradient), reuses existing /me/spots /me/posts /me/viewers/summary /me/referrals — no backend changes"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/PremiumProfileExtras.tsx, /app/frontend/app/(tabs)/profile.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Apr 2026 Profile premium upgrade. Created
+          PremiumProfileExtras.tsx (700+ lines) — a self-contained
+          creator dashboard panel that consumes already-loaded mySpots
+          /myPosts /photos arrays from the parent + lazy-fetches
+          /me/viewers/summary and /me/referrals for live profile-view
+          and referral counts.
+          Sections rendered top→bottom:
+            1. Stats Row (7 tiles, scrollable, fmt'd K/M)
+            2. Quick Actions (6 pills, gold border on Upgrade for free)
+            3. Portfolio Highlights (rail; first card 200px FEATURED;
+               graceful empty-state CTA when user has 0 spots)
+            4. Growth Insights (2x2 grid; bottom-row blurred + Lock
+               icon when plan==free; "Unlock with Pro" gold CTA below
+               for free users)
+            5. Subscription Status (3 distinct cards by plan: Free
+               gold-gradient w/ "Go Pro" CTA → Pro w/ benefits list →
+               Elite w/ gold-disc Gem icon and gold linear-gradient
+               background)
+          Profile.tsx changes:
+            • New kickerHeader at top of the ScrollView ("PROFILE /
+              Your creator hub" + 36px Share + Settings glass buttons)
+              — replaces the implicit identity statement that lived
+              inside the banner only.
+            • Replaced the 4-stat statsRow (Followers/Following/Spots
+              /Posts) with <PremiumProfileExtras /> — the new component
+              owns all 7 stats + extras.
+            • All other sections (banner upload, hero card edit/share,
+              specialty pills, availability badges, role tools, share-
+              app card, account list, tabs) untouched.
+          Build: iOS bundled 2.5s 3749 modules clean, web bundled
+          clean. Verified visually with admin@lumascout.app (elite
+          plan) at 390x900 — all 9 sections render correctly:
+          PROFILE kicker, hero card, Your stats (Followers 3, Following
+          2, Profile Views 4 …), Quick actions (Upload/Create/Messages
+          /Portfolio/Invite/Manage Plan), Portfolio highlights
+          (FEATURED gold pill on top spot), Growth insights (4 blips,
+          unblurred for elite), Elite Creator Status Active gold card,
+          existing badges/share-app/tools/account/tabs intact.
+          Needs functional retest on real device for: free-user
+          blur-state on Growth Insights bottom row, /me/referrals
+          empty-array fallback (admin had 0), Quick Action deep-links
+          (especially /post/create and /(tabs)/create), Subscription
+          card upgrade flow when plan transitions free → pro → elite.
+
+
+
   - task: "Network ▸ Discover Premium Upgrade (Apr 2026): rebuilt as opportunity engine — header with kicker/title/subtitle/invite icon, search bar w/ example chips (Austin wedding/San Antonio pet/Dallas portrait), filter pills (All/Nearby/Verified/Elite/New/Wedding/Portrait/Pet/Family), daily-rotating freshness banner, 8 intelligent rails (Best Matches/Active Near You/Trending This Week/Available For Referrals/Verified Pros/New Creators/Who Viewed You/Invite Friends), premium UserCardPremium (gold edge for elite, blue verified check, ELITE/PRO pills, context badges, online dot, Follow + Message buttons w/ optimistic toggle, deep-link to /dm/{thread_id}), viewers blur-state for free users w/ upgrade CTA"
     implemented: true
     working: "NA"

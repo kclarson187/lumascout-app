@@ -51,6 +51,7 @@ import { Button } from '../../src/components/Button';
 import { Input, Chip, EmptyState } from '../../src/components/ui';
 import SpotCard from '../../src/components/SpotCard';
 import VerifiedBadge from '../../src/components/VerifiedBadge';
+import PremiumProfileExtras from '../../src/components/PremiumProfileExtras';
 
 
 type TabKey = 'posts' | 'spots' | 'photos' | 'reviews' | 'collections' | 'about';
@@ -275,6 +276,33 @@ export default function Profile() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <ScrollView contentContainerStyle={{ paddingBottom: 60 }}>
+          {/* Apr 2026 — Premium kicker header. "PROFILE / Your creator hub"
+              + Share + Settings icons sits ABOVE the banner so the page
+              opens with a clear identity statement instead of jumping
+              straight into the cover photo. */}
+          <View style={styles.kickerHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.kickerLabel}>PROFILE</Text>
+              <Text style={styles.kickerTitle}>Your creator hub</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.kickerIconBtn}
+              onPress={shareProfile}
+              testID="profile-kicker-share"
+              hitSlop={8}
+            >
+              <Share2 size={16} color={colors.text} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.kickerIconBtn}
+              onPress={() => router.push('/settings')}
+              testID="profile-kicker-settings"
+              hitSlop={8}
+            >
+              <Settings size={16} color={colors.text} />
+            </TouchableOpacity>
+          </View>
+
           {/* Banner */}
           <TouchableOpacity
             activeOpacity={0.9}
@@ -439,12 +467,19 @@ export default function Profile() {
             </View>
           </View>
 
-          {/* Stats row */}
-          <View style={styles.statsRow}>
-            <StatCell label="Followers" value={stats.followers ?? 0} onPress={() => {}} />
-            <StatCell label="Following" value={stats.following ?? 0} onPress={() => {}} />
-            <StatCell label="Spots"     value={stats.spots_created ?? mySpots.length} />
-            <StatCell label="Posts"     value={stats.posts_count ?? myPosts.length} />
+          {/* Apr 2026 — Premium creator-dashboard sections (replaces the
+              4-stat row with a 7-tile scrollable strip + Quick Actions
+              + Portfolio highlights + Growth insights + Subscription
+              card). All data flows from already-loaded state, so no
+              extra API surface for the parent. */}
+          <View style={{ paddingHorizontal: 0, paddingTop: 4, paddingBottom: 8 }}>
+            <PremiumProfileExtras
+              user={user}
+              mySpots={mySpots}
+              myPosts={myPosts}
+              photos={photos}
+              onEdit={() => setEditMode(true)}
+            />
           </View>
 
           {/* PRD #4: Badges strip — visual shorthand for who this photographer
@@ -997,6 +1032,35 @@ const viewersStyles = StyleSheet.create({
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
+  // Apr 2026 — Premium kicker header above the banner
+  kickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: space.xl,
+    paddingTop: space.sm,
+    paddingBottom: space.sm,
+    gap: 8,
+  },
+  kickerLabel: {
+    color: colors.primary,
+    fontFamily: font.bodyBold,
+    fontSize: 10,
+    letterSpacing: 0.8,
+  },
+  kickerTitle: {
+    color: colors.text,
+    fontFamily: font.display,
+    fontSize: 22,
+    marginTop: 2,
+    letterSpacing: -0.3,
+  },
+  kickerIconBtn: {
+    width: 36, height: 36, borderRadius: 18,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.surface1,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
   loadingWrap: { flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center', gap: 16, padding: space.xl },
   loadingTitle: { color: colors.text, fontFamily: font.display, fontSize: 28 },
 
