@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { Search, TrendingUp, MessageCircle, Users, HandHeart, BookOpen, Bell, Share2 } from 'lucide-react-native';
+import { Search, TrendingUp, MessageCircle, Users, HandHeart, BookOpen, Bell, Share2, SlidersHorizontal, Sparkles, ChevronRight, Gem } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { api } from '../../src/api';
 import { useAuth } from '../../src/auth';
@@ -171,14 +171,22 @@ export default function Home() {
     setFilterResults(r);
   };
 
+  // Premium home rail order (June 2026 Home Premium Upgrade PRD):
+  //   1. Continue Planning      (saved spots — proxy until /routes/in-progress lands)
+  //   2. Best Near You Right Now (= existing 'nearby')
+  //   3. Trending This Week     (= existing 'trending')
+  //   4. Freshly Updated Near You (rendered separately above, see freshly_updated key)
+  //   5. Golden Hour Tonight    (= existing 'golden_hour')
+  //   6. Creators You Follow    (= existing 'following')
+  //   7. Hidden Gems            (Elite upsell card, rendered separately)
+  // The order list below intentionally drops 'recent' / 'seasonal' / 'best_for_you'
+  // from the visible Home — they're still computed by the backend and reachable via
+  // the Explore tab; keeping the Home crisp and on-brand wins over showing every rail.
   const sections = [
-    { key: 'nearby', title: 'Nearby spots' },
-    { key: 'trending', title: 'Trending this week' },
-    { key: 'golden_hour', title: 'Golden hour favorites' },
-    { key: 'best_for_you', title: 'Best for your shoots' },
-    { key: 'seasonal', title: 'Seasonal highlights' },
-    { key: 'following', title: 'From photographers you follow' },
-    { key: 'recent', title: 'Recently added' },
+    { key: 'nearby', title: 'Best Near You Right Now' },
+    { key: 'trending', title: 'Trending This Week' },
+    { key: 'golden_hour', title: 'Golden Hour Tonight' },
+    { key: 'following', title: 'Creators You Follow' },
   ].filter((s) => Array.isArray(feed[s.key]) && feed[s.key].length > 0);
   // ^ hide every empty section globally — prevents blank headers in production UI
 
@@ -201,18 +209,52 @@ export default function Home() {
 
   const hero = (feed.trending || [])[0];
 
+  // Premium numbered rail header (June 2026 Home Premium Upgrade).
+  // Renders a circled gold number, serif title, and a "View all"
+  // chevron link aligned right. Used inline below to override the
+  // generic SectionHeader for the new home rail order.
+  const NumberedRailHeader = ({
+    n, title, onViewAll, fresh,
+  }: { n: number; title: string; onViewAll?: () => void; fresh?: boolean }) => (
+    <View style={styles.railHead}>
+      <View style={styles.railHeadLeft}>
+        <View style={styles.railNum}><Text style={styles.railNumTxt}>{n}</Text></View>
+        <Text style={styles.railTitle}>{title}</Text>
+        {fresh ? (
+          <View style={styles.railFreshDot} />
+        ) : null}
+      </View>
+      {onViewAll ? (
+        <TouchableOpacity onPress={onViewAll} hitSlop={8} testID={`rail-view-all-${n}`}>
+          <Text style={styles.railViewAll}>View all</Text>
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
+
+  // Map section keys → numbered rail position (1=Continue Planning,
+  // 2=Best Near You, 3=Trending, 4=Freshly Updated, 5=Golden Hour,
+  // 6=Creators You Follow, 7=Hidden Gems).
+  const SECTION_NUM: Record<string, number> = {
+    nearby: 2,
+    trending: 3,
+    golden_hour: 5,
+    following: 6,
+  };
+
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
       <ScoutAIIntroModal />
       <ScrollView
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.primary} />}
-        contentContainerStyle={{ paddingBottom: space.xxxl }}
+        contentContainerStyle={{ paddingBottom: space.lg }}
       >
         <View style={styles.header}>
           <View style={{ flex: 1 }}>
             <Text style={styles.hello}>Hello{user ? `, ${user.name.split(' ')[0]}` : ''}</Text>
             <Text style={styles.brand}>LumaScout</Text>
+            <Text style={styles.brandSub}>Find epic places. Plan the perfect shot.</Text>
           </View>
           <TouchableOpacity
             onPress={() => router.push('/inbox')}
@@ -406,35 +448,32 @@ export default function Home() {
                 </View>
               </TouchableOpacity>
             )}
-            {/* Freshly Updated Near You (Feature 9) — the retention rail. */}
+            {/* Freshly Updated Near You — rail #4 (the retention rail). */}
             {Array.isArray(feed.freshly_updated) && feed.freshly_updated.length > 0 && (
               <View>
-                <SectionHeader title="Freshly updated near you" />
+                <NumberedRailHeader n={4} title="Freshly Updated Near You" fresh onViewAll={() => router.push('/explore' as any)} />
                 <FreshlyUpdatedRail spots={feed.freshly_updated} />
               </View>
             )}
-            {/* New Photos Added (Phase 2) */}
+            {/* Phase-2 helper rails — kept secondary, no number bullet. */}
             {Array.isArray(feed.new_photos) && feed.new_photos.length > 0 && (
               <View>
                 <SectionHeader title="New photos added" />
                 <FreshlyUpdatedRail spots={feed.new_photos} />
               </View>
             )}
-            {/* Verified This Week (Phase 2) */}
             {Array.isArray(feed.verified_this_week) && feed.verified_this_week.length > 0 && (
               <View>
                 <SectionHeader title="Verified this week" />
                 <FreshlyUpdatedRail spots={feed.verified_this_week} />
               </View>
             )}
-            {/* Blooming Now (Phase 2) */}
             {Array.isArray(feed.blooming_now) && feed.blooming_now.length > 0 && (
               <View>
                 <SectionHeader title="Blooming now" />
                 <FreshlyUpdatedRail spots={feed.blooming_now} />
               </View>
             )}
-            {/* Trending Again (Phase 2 bonus) */}
             {Array.isArray(feed.trending_again) && feed.trending_again.length > 0 && (
               <View>
                 <SectionHeader title="Trending again" />
@@ -444,10 +483,6 @@ export default function Home() {
             {sections.map((sec) => {
               const items = feed[sec.key] || [];
               if (items.length === 0) return null;
-              // Section-specific visual treatment:
-              //  - Carousel style for inspirational sections (hero-like cards)
-              //  - Compact vertical list for skimmable utility sections
-              // Also drive per-section metadata emphasis inside the cards.
               const useCompact = sec.key === 'recent' || sec.key === 'seasonal';
               const emphasis: any =
                 sec.key === 'nearby' ? 'distance' :
@@ -457,9 +492,18 @@ export default function Home() {
                 sec.key === 'recent' ? 'fresh' :
                 sec.key === 'best_for_you' ? 'score' :
                 'fresh';
+              const num = SECTION_NUM[sec.key];
               return (
                 <View key={sec.key}>
-                  <SectionHeader title={sec.title} />
+                  {num ? (
+                    <NumberedRailHeader
+                      n={num}
+                      title={sec.title}
+                      onViewAll={() => router.push('/explore' as any)}
+                    />
+                  ) : (
+                    <SectionHeader title={sec.title} />
+                  )}
                   {useCompact ? (
                     <View style={{ paddingHorizontal: space.xl, gap: 8 }}>
                       {items.slice(0, 6).map((item: any) => (
@@ -486,6 +530,29 @@ export default function Home() {
                 </View>
               );
             })}
+            {/* Rail #7 — Hidden Gems Elite upsell card. Only renders for
+                non-Elite plans; Elite users see the actual hidden-gems
+                feed in /explore?bucket=hidden (shipped separately). */}
+            {(user as any)?.plan !== 'elite' && (user as any)?.plan !== 'comp_elite' && (user as any)?.plan !== 'trial_elite' ? (
+              <TouchableOpacity
+                onPress={() => router.push('/upgrade' as any)}
+                style={styles.gemsCard}
+                activeOpacity={0.9}
+                testID="home-hidden-gems"
+              >
+                <View style={styles.gemsIcon}>
+                  <Gem size={20} color={colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.gemsTitle}>Unlock Hidden Gems</Text>
+                  <Text style={styles.gemsSub}>Discover 200+ handpicked spots only Elite members can see.</Text>
+                </View>
+                <View style={styles.gemsCta}>
+                  <Text style={styles.gemsCtaTxt}>Explore Elite</Text>
+                  <ChevronRight size={14} color={colors.textInverse} />
+                </View>
+              </TouchableOpacity>
+            ) : null}
           </>
         )}
       </ScrollView>
@@ -541,6 +608,49 @@ const styles = StyleSheet.create({
   cTabTxtHere: { color: colors.text, fontFamily: font.bodySemibold },
   hello: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13 },
   brand: { color: colors.text, fontFamily: font.display, fontSize: 30, letterSpacing: -0.5 },
+  brandSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2, lineHeight: 16 },
+  // Premium numbered rail header (2026-04 Home Premium Upgrade).
+  railHead: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: space.xl, marginTop: space.md, marginBottom: 8,
+  },
+  railHeadLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  railNum: {
+    width: 22, height: 22, borderRadius: 11,
+    backgroundColor: 'rgba(245,166,35,0.14)',
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.45)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  railNumTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 11 },
+  railTitle: { color: colors.text, fontFamily: font.display, fontSize: 18, flexShrink: 1 },
+  railFreshDot: {
+    width: 7, height: 7, borderRadius: 4,
+    backgroundColor: '#22c55e',
+    marginLeft: 2,
+  },
+  railViewAll: { color: colors.primary, fontFamily: font.bodySemibold, fontSize: 12 },
+  // Hidden Gems Elite upsell card — rail #7.
+  gemsCard: {
+    marginHorizontal: space.xl, marginTop: space.lg, marginBottom: space.sm,
+    padding: 16, borderRadius: 16,
+    backgroundColor: 'rgba(245,166,35,0.06)',
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.35)',
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+  },
+  gemsIcon: {
+    width: 42, height: 42, borderRadius: 21,
+    backgroundColor: 'rgba(245,166,35,0.14)',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.45)',
+  },
+  gemsTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
+  gemsSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, marginTop: 3, lineHeight: 16 },
+  gemsCta: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16,
+    backgroundColor: colors.primary,
+  },
+  gemsCtaTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 11 },
   avatar: { width: 44, height: 44, borderRadius: 22 },
   avatarPh: {
     width: 44, height: 44, borderRadius: 22,
