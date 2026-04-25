@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Search, TrendingUp, MessageCircle, Users, HandHeart, BookOpen, Bell, Share2, SlidersHorizontal, Sparkles, ChevronRight, Gem, MapPin, Sun, Cloud, Bookmark, Route } from 'lucide-react-native';
+import { ContinuePlanningRail, BestNearYouRail, TrendingRail } from '../../src/components/PremiumHomeRails';
 import { LinearGradient } from 'expo-linear-gradient';
 import { api } from '../../src/api';
 import { useAuth } from '../../src/auth';
@@ -410,50 +411,21 @@ export default function Home() {
           </TouchableOpacity>
         </View>
 
-        {/* PRD #9 — Contextual monetisation: dismissible Pro upsell shown only
-            to free users at the top of their For-You feed. */}
-        <View style={{ paddingHorizontal: space.xl, marginTop: space.md }}>
-          <UpgradeBanner
-            placement="home-feed"
-            title="Unlock the full photographer network"
-            subtitle="Pro members save unlimited spots, get AI shot lists, and message anyone."
-            cta="Go Pro"
-            targetPlan="pro"
-          />
-        </View>
+        {/* Clutter removed per mockup: UpgradeBanner / Scout AI card /
+            Inbox preview / niche chip row / EDITOR'S PICK hero were all
+            pulled off the Home. Scout AI and notifications remain
+            reachable via the header icons. Hero content is now surfaced
+            through the much more editorial "Best Near You Right Now"
+            rail below. */}
 
-        {/* Scout AI — official in-app assistant entry point (PRD Scout AI Phase 1). */}
-        <View style={{ paddingHorizontal: space.xl, marginTop: space.md }}>
-          <ScoutAICard placement="home" />
-        </View>
+        {/* Rail #1 — Continue Planning */}
+        <ContinuePlanningRail items={feed.saved_plans || feed.recent || feed.near_you || feed.nearby || []} />
 
-        {/* Tier 1 Messaging: compact inbox preview row — renders only when
-            the viewer has at least one active thread. Stays above the fold
-            so DMs feel alive without polluting the home experience. */}
-        <HomeInboxPreview limit={3} />
+        {/* Rail #2 — Best Near You Right Now */}
+        <BestNearYouRail items={feed.nearby || feed.near_you || feed.trending || []} />
 
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: space.xl, gap: 8, alignItems: 'center' }}
-          style={{ marginTop: space.md, flexGrow: 0, maxHeight: 44 }}
-        >
-          <Chip
-            label="All"
-            active={!activeFilter}
-            onPress={() => applyFilter(null)}
-            testID="filter-all"
-          />
-          {QUICK_FILTERS.map((f) => (
-            <Chip
-              key={f}
-              label={f}
-              active={activeFilter === f}
-              onPress={() => applyFilter(f)}
-              testID={`filter-${f}`}
-            />
-          ))}
-        </ScrollView>
+        {/* Rail #3 — Trending This Week */}
+        <TrendingRail items={feed.trending || feed.trending_again || feed.nearby || []} />
 
         {filterResults ? (
           <>
@@ -475,27 +447,9 @@ export default function Home() {
           </>
         ) : (
           <>
-            {hero && (
-              <TouchableOpacity
-                style={styles.heroCard}
-                onPress={() => router.push(`/spot/${hero.spot_id}`)}
-                testID="home-hero"
-                activeOpacity={0.9}
-              >
-                <Image source={{ uri: (hero.images?.find((i: any) => i.is_cover) || hero.images?.[0])?.image_url }} style={styles.heroImg} />
-                <LinearGradient colors={['transparent', 'rgba(10,10,10,0.9)']} style={styles.heroGrad} />
-                <View style={styles.heroTop}>
-                  <View style={styles.heroTag}>
-                    <TrendingUp size={12} color={colors.textInverse} />
-                    <Text style={styles.heroTagTxt}>EDITOR'S PICK</Text>
-                  </View>
-                </View>
-                <View style={styles.heroBottom}>
-                  <Text style={styles.heroTitle} numberOfLines={2}>{hero.title}</Text>
-                  <Text style={styles.heroMeta}>{hero.city}, {hero.state} · Shoot Score {hero.shoot_score}</Text>
-                </View>
-              </TouchableOpacity>
-            )}
+            {/* Hero block removed per Apr 2026 mockup — its inspirational
+                role is now played by the much more editorial
+                "Best Near You Right Now" rail rendered above. */}
             {/* Freshly Updated Near You — rail #4 (the retention rail). */}
             {Array.isArray(feed.freshly_updated) && feed.freshly_updated.length > 0 && (
               <View>
@@ -503,43 +457,18 @@ export default function Home() {
                 <FreshlyUpdatedRail spots={feed.freshly_updated} />
               </View>
             )}
-            {/* Phase-2 helper rails — kept secondary, no number bullet. */}
-            {Array.isArray(feed.new_photos) && feed.new_photos.length > 0 && (
-              <View>
-                <SectionHeader title="New photos added" />
-                <FreshlyUpdatedRail spots={feed.new_photos} />
-              </View>
-            )}
-            {Array.isArray(feed.verified_this_week) && feed.verified_this_week.length > 0 && (
-              <View>
-                <SectionHeader title="Verified this week" />
-                <FreshlyUpdatedRail spots={feed.verified_this_week} />
-              </View>
-            )}
-            {Array.isArray(feed.blooming_now) && feed.blooming_now.length > 0 && (
-              <View>
-                <SectionHeader title="Blooming now" />
-                <FreshlyUpdatedRail spots={feed.blooming_now} />
-              </View>
-            )}
-            {Array.isArray(feed.trending_again) && feed.trending_again.length > 0 && (
-              <View>
-                <SectionHeader title="Trending again" />
-                <FreshlyUpdatedRail spots={feed.trending_again} />
-              </View>
-            )}
-            {sections.map((sec) => {
+            {/* Phase-2 helper rails (new_photos/verified_this_week/
+                blooming_now/trending_again) and the generic numbered
+                sections.map loop were removed per the Apr 2026 mockup —
+                they duplicated the content of the three premium rails
+                above. Only Freshly Updated stays as rail #4. */}
+
+            {/* Rails #5 (Golden Hour) and #6 (Creators You Follow) — keep
+                their traditional presentation so the home feels full even
+                when data is light. Numbered headers match rail hierarchy. */}
+            {sections.filter((sec) => sec.key === 'golden_hour' || sec.key === 'following').map((sec) => {
               const items = feed[sec.key] || [];
               if (items.length === 0) return null;
-              const useCompact = sec.key === 'recent' || sec.key === 'seasonal';
-              const emphasis: any =
-                sec.key === 'nearby' ? 'distance' :
-                sec.key === 'golden_hour' ? 'golden' :
-                sec.key === 'trending' ? 'score' :
-                sec.key === 'seasonal' ? 'seasonal' :
-                sec.key === 'recent' ? 'fresh' :
-                sec.key === 'best_for_you' ? 'score' :
-                'fresh';
               const num = SECTION_NUM[sec.key];
               return (
                 <View key={sec.key}>
@@ -552,29 +481,16 @@ export default function Home() {
                   ) : (
                     <SectionHeader title={sec.title} />
                   )}
-                  {useCompact ? (
-                    <View style={{ paddingHorizontal: space.xl, gap: 8 }}>
-                      {items.slice(0, 6).map((item: any) => (
-                        <SpotCardCompact
-                          key={item.spot_id}
-                          spot={item}
-                          emphasis={emphasis}
-                          testID={`spot-${item.spot_id}`}
-                        />
-                      ))}
-                    </View>
-                  ) : (
-                    <FlatList
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      data={items}
-                      keyExtractor={(it) => it.spot_id}
-                      contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.md }}
-                      renderItem={({ item }) => (
-                        <SpotCard spot={item} width={260} testID={`spot-${item.spot_id}`} onToggleSave={load} />
-                      )}
-                    />
-                  )}
+                  <FlatList
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    data={items}
+                    keyExtractor={(it) => it.spot_id || it.user_id}
+                    contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.md }}
+                    renderItem={({ item }) => (
+                      <SpotCard spot={item} width={260} testID={`spot-${item.spot_id}`} onToggleSave={load} />
+                    )}
+                  />
                 </View>
               );
             })}
