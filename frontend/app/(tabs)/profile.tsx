@@ -322,15 +322,10 @@ export default function Profile() {
                 {uploading === 'banner' ? 'Uploading…' : banner ? 'Change cover' : 'Add cover photo'}
               </Text>
             </View>
-            {/* Top-right quick actions */}
-            <View style={styles.bannerTopRight}>
-              <TouchableOpacity style={styles.iconBtnDark} onPress={shareProfile} testID="profile-share">
-                <Share2 size={16} color={colors.textInverse} />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.iconBtnDark} onPress={() => router.push('/settings')} testID="profile-settings">
-                <Settings size={16} color={colors.textInverse} />
-              </TouchableOpacity>
-            </View>
+            {/* Apr 2026 cleanup: removed duplicate Share + Settings
+                icons that floated over the cover photo — both actions
+                now live exclusively in the kicker header at the top
+                of the screen. */}
           </TouchableOpacity>
 
           {/* Avatar overlapping banner */}
