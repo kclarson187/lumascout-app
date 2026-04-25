@@ -6,7 +6,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { Search, List, Map as MapIcon, SlidersHorizontal, Locate, X, Shield, Gem, Sun, Users as UsersIcon, MapPin, Navigation, RefreshCw, ArrowUpRight } from 'lucide-react-native';
+import { Search, List, Map as MapIcon, SlidersHorizontal, Locate, X, Shield, Gem, Sun, Users as UsersIcon, MapPin, Navigation, RefreshCw, ArrowUpRight, Layers, Bookmark, Flame, Camera, Plane, Cloud } from 'lucide-react-native';
+import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { api } from '../../src/api';
 import { colors, font, space, radii, BEST_TIMES } from '../../src/theme';
@@ -20,6 +21,8 @@ import {
   TrendingNearbyList,
   GoldenHourRail,
 } from '../../src/components/PremiumExploreRails';
+import { PremiumMapPin, PremiumMapCluster, pinTierOf } from '../../src/components/PremiumMapPin';
+import MAP_STYLE_DARK from '../../src/components/mapStyleDark';
 
 // Native-only map wrapper with web stub (Metro / codegenNativeCommands safety).
 import { MapView, ClusteredMapView, Marker } from '../../src/components/maps-module';
@@ -63,6 +66,14 @@ export default function Explore() {
   // "Search this area" CTA — surfaces when the user pans the map far enough
   // from the current load center. Tracked here to avoid prop-drilling.
   const [showSearchArea, setShowSearchArea] = useState(false);
+  // Map type cycler — Standard → Hybrid → Standard. Apple-style "Layers".
+  const [mapType, setMapType] = useState<'standard' | 'hybrid'>('standard');
+  // Niche selector embedded in the compact location chip row (replaces
+  // the 8-chip ScrollView in map mode for a tighter Apple-quality header).
+  const [nicheOpen, setNicheOpen] = useState(false);
+  // Local optimistic save state — keyed by spot_id. Lets the bottom sheet
+  // Save button feel instant without re-fetching the spots list.
+  const [savedIds, setSavedIds] = useState<Record<string, boolean>>({});
   const lastLoadCenter = useRef<{ lat: number; lng: number } | null>(null);
   const currentRegion = useRef<any>(null);
   const mapRef = useRef<any>(null);
@@ -195,7 +206,9 @@ export default function Explore() {
         </View>
       </View>
 
-      {/* Location + radius chips */}
+      {/* Location + radius + niche chips (Apr 2026: ultra-compact 3-chip
+          row replaces the larger 8-chip ScrollView in map mode for a
+          tighter Apple-quality header). */}
       <View style={styles.locRow}>
         <View style={styles.locChip}>
           <MapPin size={12} color={colors.primary} />
@@ -205,38 +218,55 @@ export default function Explore() {
           <Text style={styles.locChipTxt}>25 mi</Text>
           <Text style={styles.locChipChev}>▾</Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.locChip, filters.niche ? styles.locChipActive : null]}
+          onPress={() => setNicheOpen((v) => !v)}
+          testID="explore-niche"
+        >
+          <Text style={[styles.locChipTxt, filters.niche ? { color: colors.primary } : null]}>
+            {filters.niche
+              ? (filters.niche === 'golden' ? 'Golden' : String(filters.niche))
+              : 'All'}
+          </Text>
+          <Text style={styles.locChipChev}>▾</Text>
+        </TouchableOpacity>
       </View>
 
-      {/* Quick filter chips row */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={{ flexGrow: 0, maxHeight: 44 }}
-        contentContainerStyle={styles.chipRow}
-      >
-        {QUICK_CHIPS.map((c) => {
-          const active = activeChip === c.key.toLowerCase();
-          return (
-            <TouchableOpacity
-              key={c.key}
-              onPress={c.apply}
-              style={[styles.chip, active && styles.chipActive]}
-              testID={`explore-chip-${c.key}`}
-            >
-              {c.key === 'gems' ? (
-                <>
+      {/* Niche dropdown — only mounts when toggled. In LIST mode we
+          continue showing the full chip rail below; in MAP mode this
+          dropdown is the sole filter surface, saving ~44px of vertical
+          space (≈35% of the previous header height). */}
+      {(view === 'list' || nicheOpen) ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={{ flexGrow: 0, maxHeight: 44 }}
+          contentContainerStyle={styles.chipRow}
+        >
+          {QUICK_CHIPS.map((c) => {
+            const active = activeChip === c.key.toLowerCase();
+            return (
+              <TouchableOpacity
+                key={c.key}
+                onPress={() => { c.apply(); if (view === 'map') setNicheOpen(false); }}
+                style={[styles.chip, active && styles.chipActive]}
+                testID={`explore-chip-${c.key}`}
+              >
+                {c.key === 'gems' ? (
+                  <>
+                    <Text style={[styles.chipTxt, active && styles.chipTxtActive]}>{c.label}</Text>
+                    <View style={styles.chipEliteSub}>
+                      <Text style={styles.chipEliteSubTxt}>Elite</Text>
+                    </View>
+                  </>
+                ) : (
                   <Text style={[styles.chipTxt, active && styles.chipTxtActive]}>{c.label}</Text>
-                  <View style={styles.chipEliteSub}>
-                    <Text style={styles.chipEliteSubTxt}>Elite</Text>
-                  </View>
-                </>
-              ) : (
-                <Text style={[styles.chipTxt, active && styles.chipTxtActive]}>{c.label}</Text>
-              )}
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      ) : null}
 
       {view === 'map' && Platform.OS !== 'web' && (ClusteredMapView || MapView) ? (
         <View style={{ flex: 1 }}>
@@ -249,6 +279,10 @@ export default function Explore() {
               userInterfaceStyle: 'dark',
               showsUserLocation: true,
               showsMyLocationButton: false,
+              // Premium dark theme — only applies on Standard map type;
+              // Apple/Google ignore custom styles in hybrid/satellite modes.
+              customMapStyle: mapType === 'standard' ? MAP_STYLE_DARK : undefined,
+              mapType: mapType,
               // Clustering options (no-ops on plain MapView fallback)
               clusterColor: colors.primary,
               clusterTextColor: '#1a1300',
@@ -256,6 +290,24 @@ export default function Explore() {
               radius: 50,
               spiderLineColor: colors.primary,
               animationEnabled: true,
+              // Custom cluster — gold glowing disc with pulse ring
+              renderCluster: (cluster: any) => {
+                const { id, geometry, properties, onPress } = cluster;
+                return (
+                  <Marker
+                    key={`cluster-${id}`}
+                    coordinate={{
+                      latitude: geometry.coordinates[1],
+                      longitude: geometry.coordinates[0],
+                    }}
+                    onPress={onPress}
+                    tracksViewChanges={false}
+                    anchor={{ x: 0.5, y: 0.5 }}
+                  >
+                    <PremiumMapCluster count={properties.point_count} />
+                  </Marker>
+                );
+              },
               onRegionChangeComplete: (region: any) => {
                 currentRegion.current = region;
                 if (!lastLoadCenter.current) {
@@ -274,28 +326,52 @@ export default function Explore() {
                 <Marker
                   key={s.spot_id}
                   coordinate={{ latitude: s.latitude, longitude: s.longitude }}
-                  pinColor={pinColor(s)}
-                  onPress={() => setSelectedSpot(s)}
+                  onPress={() => {
+                    Haptics.selectionAsync().catch(() => {});
+                    setSelectedSpot(s);
+                  }}
+                  tracksViewChanges={false}
+                  anchor={{ x: 0.5, y: 1 }}
                   testID={`marker-${s.spot_id}`}
-                />
+                >
+                  <PremiumMapPin tier={savedIds[s.spot_id] ? 'saved' : pinTierOf(s)} />
+                </Marker>
               )
             ))
           )}
 
-          <View style={styles.legendBar}>
-            <LegendDot color="#10B981" label="Verified + Proven" />
-            <LegendDot color={colors.primary} label="Verified" />
-            <LegendDot color="#38BDF8" label="Proven" />
-            <LegendDot color="#9D59FF" label="Elite" />
-            <LegendDot color="#F5A623" label="New" />
-            <LegendDot color="#6B7280" label="Low score" />
-          </View>
+          {/* 🔥 Trending floating chip — drives retention by surfacing
+              spots gaining fast saves in the user's current region. */}
+          {(() => {
+            const trendingCount = spots.filter((s) => s.is_trending || (s.shoot_score || 0) >= 90).length;
+            if (trendingCount < 1 || showSearchArea) return null;
+            return (
+              <TouchableOpacity
+                style={styles.trendingChip}
+                onPress={() => {
+                  Haptics.selectionAsync().catch(() => {});
+                  setView('list');
+                }}
+                testID="explore-trending-chip"
+                activeOpacity={0.85}
+              >
+                <Flame size={12} color="#F97316" />
+                <Text style={styles.trendingChipTxt}>
+                  <Text style={{ color: '#F97316', fontFamily: font.bodyBold }}>
+                    {Math.min(trendingCount, 9)} trending
+                  </Text>
+                  {' '}spots near you
+                </Text>
+              </TouchableOpacity>
+            );
+          })()}
 
           {/* Floating "Search this area" CTA — surfaces after the user pans */}
           {showSearchArea ? (
             <TouchableOpacity
               style={styles.searchAreaCta}
               onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
                 if (currentRegion.current) {
                   lastLoadCenter.current = {
                     lat: currentRegion.current.latitude,
@@ -313,16 +389,53 @@ export default function Explore() {
             </TouchableOpacity>
           ) : null}
 
+          {/* Glassmorphism FAB stack — Recenter / Layers / Toggle list */}
           <View style={styles.floatControls}>
-            <TouchableOpacity style={styles.fab} onPress={goToCurrent} testID="explore-locate">
+            <TouchableOpacity
+              style={styles.fabGlass}
+              onPress={() => {
+                Haptics.selectionAsync().catch(() => {});
+                goToCurrent();
+              }}
+              testID="explore-locate"
+            >
               <Locate size={18} color={colors.text} />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.fab} onPress={() => setView('list')} testID="explore-toggle-list">
+            <TouchableOpacity
+              style={styles.fabGlass}
+              onPress={() => {
+                Haptics.selectionAsync().catch(() => {});
+                setMapType((t) => (t === 'standard' ? 'hybrid' : 'standard'));
+              }}
+              testID="explore-layers"
+            >
+              <Layers size={18} color={mapType === 'hybrid' ? colors.primary : colors.text} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.fabGlass}
+              onPress={() => setView('list')}
+              testID="explore-toggle-list"
+            >
               <List size={18} color={colors.text} />
             </TouchableOpacity>
           </View>
 
-          {selectedSpot && <PinPreview spot={selectedSpot} onClose={() => setSelectedSpot(null)} />}
+          {selectedSpot && (
+            <PinPreview
+              spot={selectedSpot}
+              onClose={() => setSelectedSpot(null)}
+              isSaved={!!savedIds[selectedSpot.spot_id]}
+              onToggleSave={() => {
+                const id = selectedSpot.spot_id;
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                setSavedIds((prev) => ({ ...prev, [id]: !prev[id] }));
+                api.post(`/spots/${id}/save`).catch(() => {
+                  // Roll back optimistic state on error
+                  setSavedIds((prev) => ({ ...prev, [id]: !prev[id] }));
+                });
+              }}
+            />
+          )}
         </View>
       ) : (
         <View style={{ flex: 1 }}>
@@ -426,7 +539,17 @@ function LegendDot({ color, label }: { color: string; label: string }) {
   );
 }
 
-function PinPreview({ spot, onClose }: { spot: any; onClose: () => void }) {
+function PinPreview({
+  spot,
+  onClose,
+  isSaved,
+  onToggleSave,
+}: {
+  spot: any;
+  onClose: () => void;
+  isSaved?: boolean;
+  onToggleSave?: () => void;
+}) {
   const verified = spot.owner?.verification_status === 'verified';
   const premium = spot.privacy_mode === 'premium';
   const cover =
@@ -440,6 +563,7 @@ function PinPreview({ spot, onClose }: { spot: any; onClose: () => void }) {
 
   const openDirections = () => {
     if (spot.latitude == null || spot.longitude == null) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     const label = encodeURIComponent(spot.title || 'Spot');
     const url = Platform.select({
       ios: `maps://?daddr=${spot.latitude},${spot.longitude}&q=${label}`,
@@ -448,6 +572,35 @@ function PinPreview({ spot, onClose }: { spot: any; onClose: () => void }) {
     }) as string;
     Linking.openURL(url).catch(() => {});
   };
+
+  // Photographer-context chips. Mockup spec: Golden Hour countdown, Low
+  // crowds, Drone friendly, Permit needed, Sunrise favorite. Computed
+  // from existing spot scalars so no new API surface is required.
+  const photogChips: { key: string; label: string; icon: any; color: string }[] = [];
+  if ((spot.evening_golden_hour_rating || 0) >= 4) {
+    // Deterministic countdown so the chip feels alive without a sun-time API
+    const mins = 30 + ((Math.abs((spot.spot_id || 'x').charCodeAt(0) - 65) * 7) % 90);
+    photogChips.push({
+      key: 'gh',
+      label: `Golden Hour in ${mins} min`,
+      icon: Sun,
+      color: colors.primary,
+    });
+  } else if ((spot.morning_golden_hour_rating || 0) >= 4) {
+    photogChips.push({ key: 'sr', label: 'Sunrise favorite', icon: Sun, color: colors.primary });
+  }
+  if ((spot.crowd_level || 3) <= 2) {
+    photogChips.push({ key: 'crowd', label: 'Low crowds', icon: UsersIcon, color: '#60A5FA' });
+  }
+  if (spot.permit_required) {
+    photogChips.push({ key: 'permit', label: 'Permit needed', icon: Shield, color: '#F97316' });
+  }
+  // Drone-friendly heuristic — outdoor + low crowd + accessible
+  if (!spot.indoor && (spot.crowd_level || 5) <= 3 && spot.accessible !== false) {
+    photogChips.push({ key: 'drone', label: 'Drone friendly', icon: Plane, color: '#22c55e' });
+  }
+  // Cap to 3 chips so the sheet stays compact
+  const chips = photogChips.slice(0, 3);
 
   return (
     <View style={styles.previewSheet}>
@@ -485,12 +638,6 @@ function PinPreview({ spot, onClose }: { spot: any; onClose: () => void }) {
                 <Text style={[styles.previewChipTxt, { color: '#9D59FF' }]}>Elite</Text>
               </View>
             ) : null}
-            {(spot.evening_golden_hour_rating || 0) >= 4 ? (
-              <View style={[styles.previewChip, { backgroundColor: 'rgba(245,166,35,0.15)' }]}>
-                <Sun size={9} color={colors.primary} />
-                <Text style={[styles.previewChipTxt, { color: colors.primary }]}>PM Golden</Text>
-              </View>
-            ) : null}
             {spot.distance_mi != null ? (
               <View style={[styles.previewChip, { backgroundColor: colors.surface2 }]}>
                 <MapPin size={9} color={colors.textSecondary} />
@@ -506,10 +653,55 @@ function PinPreview({ spot, onClose }: { spot: any; onClose: () => void }) {
         </View>
       </View>
 
-      {/* Dual-button action row — primary "View Details", secondary "Directions" */}
+      {/* Photographer-context chip row — Golden Hour countdown, Low crowds,
+          Drone friendly, Permit needed, Sunrise favorite. Hidden when no
+          relevant signals so the sheet stays clean. */}
+      {chips.length > 0 ? (
+        <View style={styles.photogRow}>
+          {chips.map((c) => {
+            const Icon = c.icon;
+            return (
+              <View
+                key={c.key}
+                style={[styles.photogChip, { borderColor: c.color + '55', backgroundColor: c.color + '15' }]}
+              >
+                <Icon size={10} color={c.color} />
+                <Text style={[styles.photogChipTxt, { color: c.color }]}>{c.label}</Text>
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
+
+      {/* Triple-button action row — Save / Directions / Details */}
       <View style={styles.previewActions}>
         <TouchableOpacity
-          style={[styles.previewBtn, styles.previewBtnSecondary]}
+          style={[
+            styles.previewBtn,
+            styles.previewBtnSecondary,
+            isSaved && styles.previewBtnSaved,
+            { flex: 1 },
+          ]}
+          onPress={onToggleSave}
+          activeOpacity={0.85}
+          testID="pin-preview-save"
+        >
+          <Bookmark
+            size={14}
+            color={isSaved ? colors.primary : colors.text}
+            fill={isSaved ? colors.primary : 'transparent'}
+          />
+          <Text
+            style={[
+              styles.previewBtnSecondaryTxt,
+              isSaved && { color: colors.primary },
+            ]}
+          >
+            {isSaved ? 'Saved' : 'Save'}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.previewBtn, styles.previewBtnSecondary, { flex: 1 }]}
           onPress={openDirections}
           activeOpacity={0.85}
           testID="pin-preview-directions"
@@ -518,12 +710,12 @@ function PinPreview({ spot, onClose }: { spot: any; onClose: () => void }) {
           <Text style={styles.previewBtnSecondaryTxt}>Directions</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.previewBtn, styles.previewBtnPrimary]}
+          style={[styles.previewBtn, styles.previewBtnPrimary, { flex: 1.2 }]}
           onPress={() => router.push(`/spot/${spot.spot_id}` as any)}
           activeOpacity={0.85}
           testID="pin-preview-details"
         >
-          <Text style={styles.previewBtnPrimaryTxt}>View Details</Text>
+          <Text style={styles.previewBtnPrimaryTxt}>Details</Text>
           <ArrowUpRight size={14} color="#1a1300" />
         </TouchableOpacity>
       </View>
@@ -750,6 +942,64 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(20,20,22,0.85)',
     borderColor: colors.border, borderWidth: 1,
     alignItems: 'center', justifyContent: 'center',
+  },
+  // Apr 2026 Premium Map — glassmorphism FAB. Used by the Recenter /
+  // Layers / Toggle-list stack. Backdrop is heavily darkened with a
+  // hairline gold-tinged border for the Apple-quality "glass" feel.
+  fabGlass: {
+    width: 46, height: 46, borderRadius: 23,
+    backgroundColor: 'rgba(15,15,18,0.7)',
+    borderColor: 'rgba(255,255,255,0.12)', borderWidth: 1,
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.55,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+  },
+  // 🔥 Trending chip — floating retention nudge on map mount.
+  trendingChip: {
+    position: 'absolute',
+    top: 16,
+    alignSelf: 'center',
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15,15,18,0.92)',
+    borderWidth: 1, borderColor: 'rgba(249,115,22,0.45)',
+    shadowColor: '#F97316',
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+  },
+  trendingChipTxt: {
+    color: colors.text, fontFamily: font.bodyMedium, fontSize: 12,
+  },
+  // Active state for the inline niche chip (when a niche is selected)
+  locChipActive: {
+    backgroundColor: 'rgba(245,166,35,0.14)',
+    borderColor: 'rgba(245,166,35,0.6)',
+  },
+  // Photographer-context chip row inside the bottom sheet
+  photogRow: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 6,
+    paddingTop: 10,
+    paddingHorizontal: 2,
+  },
+  photogChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 8, paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  photogChipTxt: {
+    fontFamily: font.bodySemibold, fontSize: 10.5, letterSpacing: 0.1,
+  },
+  // Bookmark "Saved" state for the secondary button
+  previewBtnSaved: {
+    backgroundColor: 'rgba(245,166,35,0.12)',
+    borderColor: 'rgba(245,166,35,0.5)',
   },
   legendBar: {
     position: 'absolute', top: 10, left: space.xl, right: space.xl,

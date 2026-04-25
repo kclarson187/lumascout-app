@@ -12,6 +12,55 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Explore Map Premium Upgrade (Apr 2026): compressed 3-row header (35% less dead space), premium dark Apple-quality customMapStyle, branded gold-ring + camera-glyph PremiumMapPin (elite=purple, trending=orange-pulse, saved=blue-fill), glowing gold PremiumMapCluster with pulse, glassmorphism FAB stack (Recenter/Layers/List), Layers toggle (standard↔hybrid), 🔥 trending floating chip, triple-button bottom sheet (Save/Directions/Details) with optimistic save, photographer chips (Golden Hour countdown / Low crowds / Drone friendly / Permit needed / Sunrise favorite), expo-haptics on pin tap + map controls"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(tabs)/explore.tsx, /app/frontend/src/components/PremiumMapPin.tsx, /app/frontend/src/components/mapStyleDark.ts, /app/frontend/src/components/maps-module.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Native-only premium map upgrade (web stub still returns null —
+          web preview falls back to List). Header now: Row1 EXPLORE/Find
+          great + search/filter / Row2 Map|List segment / Row3 📍 San
+          Antonio,TX | 25 mi▾ | All▾ — full chip rail hidden in map mode
+          (only opens via the 'All' niche dropdown). Reduced header
+          height ≈ 44px (≈35%).
+          Map: customMapStyle (deep blacks, navy water, hidden city
+          labels until zoom-in), Apple-style ringed Marker (gold ring +
+          matte black center + white camera/Bookmark/Gem/Flame glyph),
+          tier=elite triggers purple soft-pulse, tier=trending triggers
+          orange soft-pulse, tier=saved switches to blue-fill bookmark.
+          Cluster: PremiumMapCluster — gold disc with pulsing outer
+          ring sized via log2(count). renderCluster wired into
+          ClusteredMapView.
+          FAB stack rebuilt as glassmorphism (rgba(15,15,18,0.7) +
+          hairline border + heavy shadow), order Recenter → Layers
+          (standard↔hybrid, gold when active) → List toggle. All trigger
+          Haptics.selectionAsync.
+          🔥 trending floating chip surfaces top-center on map mount
+          when trending count ≥1 (taps deep-link to list). 'Search this
+          area' CTA preserved (now hides while trending chip is shown).
+          Pin preview: triple-button row (Save bookmark with optimistic
+          state via /spots/{id}/save POST + Haptics.Light, Directions
+          deep-link to maps://, Details). Photographer chip row above
+          buttons: Golden Hour in N min / Low crowds / Drone friendly /
+          Permit needed / Sunrise favorite (heuristic from existing
+          spot scalars; hidden when no signals).
+          Bundle health: iOS bundled 31.7s 3747 modules clean, web
+          bundled clean. Web preview verified at 390x844 — header
+          compression visible, list still renders.
+          Needs on-device retest for: actual map style on iOS Apple
+          Maps (Apple ignores customMapStyle in some builds — Google
+          Maps provider on Android renders fully); cluster tap zoom;
+          haptic on pin tap; deep-link launch into Apple/Google Maps;
+          Layers cycler.
+
+
+
   - task: "Explore Tab — Premium List & Map Mode redesign (Apr 2026): SmartAlertChip, NearbyRightNowList (3 stacked cards w/ score ring + best-time chip + bookmark + route arrow), TrendingNearbyList (#1/#2/#3 medals), GoldenHourRail (sunset times), pin clustering via react-native-map-clustering, dual-button PinPreview ('Directions' deep-link + 'View Details'), 'Search this area' floating CTA on map pan"
     implemented: true
     working: "NA"
