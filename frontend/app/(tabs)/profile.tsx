@@ -822,7 +822,7 @@ export default function Profile() {
                     title="Build your first collection"
                     subtitle="Group your favorite spots into curated collections — seasonal picks, bridal locations, or family-friendly."
                     icon={<Store size={28} color={colors.textSecondary} />}
-                    action={<Button title="Create a collection" variant="secondary" onPress={() => router.push('/collections')} />}
+                    action={<Button title="Create a collection" variant="secondary" onPress={() => router.push('/(tabs)/saved')} />}
                   />
                 : collections.map((c: any) => (
                     <TouchableOpacity key={c.collection_id} style={styles.postCard} onPress={() => router.push(`/collection/${c.collection_id}`)}>
