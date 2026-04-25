@@ -8,15 +8,16 @@
  * filter pills, and ScrollView so the parent only manages the toggle.
  */
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Share } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Share, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Compass, BookOpen, UserPlus } from 'lucide-react-native';
+import { Compass, BookOpen, MessageSquare, UserPlus } from 'lucide-react-native';
 import { colors, font, space } from '../../src/theme';
 import DirectoryView from '../../src/components/DirectoryView';
 import DiscoverPremiumView from '../../src/components/DiscoverPremiumView';
+import CommunityView from '../../src/components/CommunityView';
 
 export default function NetworkTab() {
-  const [view, setView] = useState<'discover' | 'directory'>('discover');
+  const [view, setView] = useState<'discover' | 'directory' | 'community'>('discover');
 
   const onShareApp = async () => {
     try {
@@ -29,19 +30,22 @@ export default function NetworkTab() {
     } catch {}
   };
 
+  const headerTitle =
+    view === 'directory' ? 'Browse photographers'
+    : view === 'community' ? 'Community'
+    : 'Discover photographers';
+  const headerSubtitle =
+    view === 'directory' ? 'Browse creators near you and across specialties'
+    : view === 'community' ? 'Connect with photographers — share, ask, refer.'
+    : 'Find creators, collaborators, and opportunities near you.';
+
   return (
     <SafeAreaView style={s.root}>
       <View style={s.header}>
         <View style={{ flex: 1 }}>
           <Text style={s.kicker}>NETWORK</Text>
-          <Text style={s.title}>
-            {view === 'directory' ? 'Browse photographers' : 'Discover photographers'}
-          </Text>
-          <Text style={s.subtitle}>
-            {view === 'directory'
-              ? 'Browse creators near you and across specialties'
-              : 'Find creators, collaborators, and opportunities near you.'}
-          </Text>
+          <Text style={s.title}>{headerTitle}</Text>
+          <Text style={s.subtitle}>{headerSubtitle}</Text>
         </View>
         <Pressable
           onPress={onShareApp}
@@ -52,8 +56,12 @@ export default function NetworkTab() {
         </Pressable>
       </View>
 
-      {/* Discover ↔ Directory segmented toggle */}
-      <View style={s.viewToggleRow}>
+      {/* Discover ↔ Directory ↔ Community segmented toggle (3 tabs) */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={s.viewToggleRow}
+      >
         <Pressable
           onPress={() => setView('discover')}
           style={[s.viewToggleBtn, view === 'discover' && s.viewToggleBtnActive]}
@@ -74,9 +82,21 @@ export default function NetworkTab() {
             Directory
           </Text>
         </Pressable>
-      </View>
+        <Pressable
+          onPress={() => setView('community')}
+          style={[s.viewToggleBtn, view === 'community' && s.viewToggleBtnActive]}
+          testID="network-view-community"
+        >
+          <MessageSquare size={14} color={view === 'community' ? colors.bg : colors.textSecondary} />
+          <Text style={[s.viewToggleTxt, view === 'community' && s.viewToggleTxtActive]}>
+            Community
+          </Text>
+        </Pressable>
+      </ScrollView>
 
-      {view === 'directory' ? <DirectoryView /> : <DiscoverPremiumView />}
+      {view === 'directory' ? <DirectoryView />
+        : view === 'community' ? <CommunityView />
+        : <DiscoverPremiumView />}
     </SafeAreaView>
   );
 }
