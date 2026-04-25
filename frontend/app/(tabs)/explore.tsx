@@ -149,22 +149,25 @@ export default function Explore() {
 
   const activeCount = Object.values(filters).filter((v) => v != null && v !== false && v !== '').length;
 
-  // Apr 2026 Explore premium upgrade — quick filter chips row (8 entries
-  // matching the PRD). 'All' clears niche; the rest set filters.niche or
-  // filters.type so the existing /spots query layer handles them.
+  // Apr 2026 cleanup — simplified filter set per latest product
+  // direction. Removed Golden Hour, Hidden Gems, season/time-of-day,
+  // light-quality, and other micro-filters. Kept the 9 useful chips.
   const QUICK_CHIPS: Array<{ key: string; label: string; apply: () => void }> = [
     { key: 'all', label: 'All', apply: () => setFilters({}) },
-    { key: 'golden', label: 'Golden Hour', apply: () => setFilters((f) => ({ ...f, niche: 'golden' })) },
+    { key: 'nearby', label: 'Nearby', apply: () => setFilters((f) => ({ ...f, sort: 'distance' })) },
+    { key: 'verified', label: 'Verified', apply: () => setFilters((f) => ({ ...f, verified: true })) },
+    { key: 'new', label: 'New', apply: () => setFilters((f) => ({ ...f, new_only: true })) },
     { key: 'urban', label: 'Urban', apply: () => setFilters((f) => ({ ...f, niche: 'Urban' })) },
     { key: 'nature', label: 'Nature', apply: () => setFilters((f) => ({ ...f, niche: 'Nature' })) },
     { key: 'portrait', label: 'Portrait', apply: () => setFilters((f) => ({ ...f, niche: 'Portrait' })) },
     { key: 'wedding', label: 'Wedding', apply: () => setFilters((f) => ({ ...f, niche: 'Wedding' })) },
     { key: 'pet', label: 'Pet', apply: () => setFilters((f) => ({ ...f, niche: 'Pet' })) },
-    { key: 'gems', label: 'Hidden Gems', apply: () => router.push('/upgrade' as any) },
   ];
   const activeChip =
+    filters.verified ? 'verified' :
+    filters.new_only ? 'new' :
+    filters.sort === 'distance' && !filters.niche ? 'nearby' :
     !filters.niche ? 'all' :
-    filters.niche === 'golden' ? 'golden' :
     String(filters.niche).toLowerCase();
 
   return (
@@ -252,16 +255,7 @@ export default function Explore() {
                 style={[styles.chip, active && styles.chipActive]}
                 testID={`explore-chip-${c.key}`}
               >
-                {c.key === 'gems' ? (
-                  <>
-                    <Text style={[styles.chipTxt, active && styles.chipTxtActive]}>{c.label}</Text>
-                    <View style={styles.chipEliteSub}>
-                      <Text style={styles.chipEliteSubTxt}>Elite</Text>
-                    </View>
-                  </>
-                ) : (
-                  <Text style={[styles.chipTxt, active && styles.chipTxtActive]}>{c.label}</Text>
-                )}
+                <Text style={[styles.chipTxt, active && styles.chipTxtActive]}>{c.label}</Text>
               </TouchableOpacity>
             );
           })}
@@ -340,55 +334,9 @@ export default function Explore() {
             ))
           )}
 
-          {/* 🔥 Trending floating chip — drives retention by surfacing
-              spots gaining fast saves in the user's current region.
-              Mockup spec: avatar stack on right + "+N" + chevron. */}
-          {(() => {
-            const trendingSpots = spots.filter((s) => s.is_trending || (s.shoot_score || 0) >= 90);
-            const trendingCount = trendingSpots.length;
-            if (trendingCount < 1 || showSearchArea) return null;
-            // Pull up to 3 owner avatars from the trending list for the
-            // social stack treatment.
-            const avatars = trendingSpots
-              .map((s) => s.owner?.avatar_url || s.owner?.profile_image)
-              .filter(Boolean)
-              .slice(0, 3);
-            const overflow = Math.max(0, trendingCount - 3);
-            return (
-              <TouchableOpacity
-                style={styles.trendingChip}
-                onPress={() => {
-                  Haptics.selectionAsync().catch(() => {});
-                  setView('list');
-                }}
-                testID="explore-trending-chip"
-                activeOpacity={0.85}
-              >
-                <Flame size={13} color="#F97316" />
-                <Text style={styles.trendingChipTxt}>
-                  <Text style={{ color: '#F97316', fontFamily: font.bodyBold }}>
-                    {Math.min(trendingCount, 9)} trending
-                  </Text>
-                  {' '}spots near you
-                </Text>
-                {avatars.length > 0 ? (
-                  <View style={styles.trendAvatarStack}>
-                    {avatars.map((url: string, i: number) => (
-                      <Image
-                        key={i}
-                        source={{ uri: url }}
-                        style={[styles.trendAvatar, { marginLeft: i === 0 ? 0 : -8, zIndex: 10 - i }]}
-                      />
-                    ))}
-                    {overflow > 0 ? (
-                      <Text style={styles.trendOverflow}>+{overflow}</Text>
-                    ) : null}
-                  </View>
-                ) : null}
-                <ChevronRight size={14} color={colors.textSecondary} />
-              </TouchableOpacity>
-            );
-          })()}
+          {/* Apr 2026 cleanup — trending floating chip removed per
+              latest product direction (cleaner Apple-Maps feel,
+              fewer noisy banners on the map surface). */}
 
           {/* Floating "Search this area" CTA — surfaces after the user pans */}
           {showSearchArea ? (
