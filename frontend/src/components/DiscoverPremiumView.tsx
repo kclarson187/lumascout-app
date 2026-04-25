@@ -633,7 +633,7 @@ export default function DiscoverPremiumView() {
 function ViewersUpsell({ locked, count }: { locked: boolean; count: number }) {
   return (
     <Pressable
-      onPress={() => locked ? router.push('/upgrade' as any) : router.push('/profile-viewers' as any)}
+      onPress={() => locked ? router.push('/paywall' as any) : router.push('/profile-viewers' as any)}
       style={s.viewersBlur}
       testID="viewers-upsell"
     >

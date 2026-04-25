@@ -275,7 +275,7 @@ export default function PremiumProfileExtras({
         </View>
         {highlights.length === 0 ? (
           <Pressable
-            onPress={() => router.push('/(tabs)/create' as any)}
+            onPress={() => router.push('/(tabs)/add' as any)}
             style={st.portfolioEmpty}
           >
             <View style={st.portfolioEmptyIcon}>
