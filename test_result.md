@@ -12,6 +12,46 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Network Tab Premium Redesign Pass — unified shell across Discover · Directory · Community: (1) Compact premium header (kicker + display title + tight subtitle, paddingTop:4, paddingBottom:6) with mode-aware copy; (2) Premium circular gold Invite/UserPlus button (38px, gold border, pressed-state scale); (3) New segmented switch component — 3 equal-width buttons with sliding white indicator (Animated.timing + cubic ease, 240ms), active = white fill / black bold text, inactive = surface1; (4) Lazy-mount + cross-fade animation per tab — only active tab is initialised on first render, after visiting a tab once it stays mounted via absolute layer (opacity:0 + pointerEvents:none) so scroll state is preserved across switches; (5) Discover redesign — removed specialty filter pollution (Wedding/Portrait/Pet/Family pills), kept only All/Nearby/Verified/Elite/New; renamed 'Active Near You' → 'Creators Near You' and 'New Creators' → 'Recently Joined' per spec; tightened search bar height 48→44 and filter strip vertical padding 12→6; (6) Directory tightened — searchWrap marginTop:2, fcardRow paddingTop 12→10; cards & sheet logic untouched (already strongest mode); (7) Community premium rebuild — categories changed to All/Feedback/Referrals/Gear/Editing/Wins (replaced Questions/Local with Wins per spec, Trophy icon); search bar + floating gold + Compose CTA in toolbar with shadow + pressed-state; live local search across body/title/author/city; staggered fade-in + slide-up animation on feed cards (45ms cascade, capped 360ms); editorial Playfair display title + body line-height 19.5; 220px image height with overlay gradient; clean action row (Like w/ red fill, Comment, Share, Save w/ gold fill); referral CTA changed from 'I'm interested' to 'Apply' + 'Message' (both wired to /dm/threads/start); category chip on cards now hidden when post.category is unknown/missing (no more spammy 'All' badges); (8) Empty state — Playfair title, contextual messaging for query vs category, gold Create-a-post CTA; respects safe areas via SafeAreaView edges:['top','left','right']; bottom dead space fix via paddingBottom:140 in feed FlatList"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(tabs)/network.tsx, /app/frontend/src/components/CommunityView.tsx, /app/frontend/src/components/DiscoverPremiumView.tsx, /app/frontend/src/components/DirectoryView.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Apr 2026 — Network Tab Premium Redesign Pass.
+          Verified visually via screenshot tool at 390x844 viewport
+          on all 3 modes (Discover / Directory / Community):
+          • Header: NETWORK kicker → display title → tight subtitle.
+            Premium circular gold UserPlus on the right.
+          • Segmented switch: 3 equal-width buttons inside surface1
+            track (38px tall, 19px radius, 3px padding, sliding
+            white indicator with cubic ease).
+          • Discover: search → 3 example chips → 5-pill filter row
+            (All/Nearby/Verified/Elite/New) → freshness banner →
+            'Best Matches For You' rail → 'Creators Near You' rail.
+          • Directory: tighter top spacing, search bar, 3 filter
+            cards, Sort + Specialties row, premium creator cards
+            with ELITE pills + Follow/Message stack.
+          • Community: search bar + floating gold + Compose;
+            category chips with active gold accent; clean post
+            cards with avatar + verified ✓ + ELITE pill + city +
+            time ago; editorial title; Like/Comment/Share/Save
+            actions; Apply + Message CTAs on referral posts;
+            staggered fade-in entrance.
+          • Lazy mount + cross-fade preserves scroll state per tab.
+          • Backend not modified — wires to existing /api/posts,
+            /api/posts/{id}/like, /api/dm/threads/start,
+            /api/network/discover.
+          Visual QA captured: /tmp/v2_discover.png,
+          /tmp/v2_directory.png, /tmp/v2_community.png.
+
+
+
   - task: "Bug fixes — broken routes & wrong CTA actions: (1) Explore filter modal — removed Best time of day / Best season (month) / Light quality (Sunrise/Sunset/AM Golden/PM Golden) / Hidden gem switch per latest product direction; (2) Network Discover daily-freshness chip ('1 new photographers near you') no longer triggers the Share-app intent — converted to a non-Pressable informational banner; (3) Profile Stats Row — removed onPress from Followers/Following tiles (routes /followers and /following don't exist); (4) Profile Quick Actions — Upload Spot now correctly routes to /(tabs)/add (was /(tabs)/create), Create Post now routes to /community/compose (was /post/create), My Portfolio now prefixes user.website with https:// when missing (fixes iOS 'Unable to open URL' for raw 'www.PetographyTX.com/portfolio'), falls back to /user/{user_id} or onEdit"
     implemented: true
     working: "NA"

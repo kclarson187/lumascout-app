@@ -43,10 +43,6 @@ const FILTERS = [
   { key: 'verified', label: 'Verified' },
   { key: 'elite', label: 'Elite' },
   { key: 'new', label: 'New' },
-  { key: 'wedding', label: 'Wedding' },
-  { key: 'portrait', label: 'Portrait' },
-  { key: 'pet', label: 'Pet' },
-  { key: 'family', label: 'Family' },
 ] as const;
 type FilterKey = typeof FILTERS[number]['key'];
 
@@ -336,15 +332,6 @@ export default function DiscoverPremiumView() {
         case 'nearby':
           // Already handled by near_you rail; here fold across all rails
           return arr;
-        case 'wedding':
-        case 'portrait':
-        case 'pet':
-        case 'family':
-          return arr.filter((u) =>
-            Array.isArray(u.specialties)
-              ? u.specialties.some((sp: string) => String(sp).toLowerCase().includes(filter))
-              : String(u.specialties || '').toLowerCase().includes(filter),
-          );
         default: return arr;
       }
     };
@@ -417,7 +404,7 @@ export default function DiscoverPremiumView() {
       keyboardShouldPersistTaps="handled"
     >
       {/* Search bar */}
-      <View style={{ paddingHorizontal: space.xl, paddingTop: 4 }}>
+      <View style={{ paddingHorizontal: space.xl, paddingTop: 2 }}>
         <View style={s.searchBar}>
           <Search size={16} color={colors.textSecondary} />
           <TextInput
@@ -512,11 +499,11 @@ export default function DiscoverPremiumView() {
             </View>
           ) : null}
 
-          {/* 3 — Active Near You */}
+          {/* 3 — Creators Near You */}
           {filteredRails.active.length > 0 ? (
             <View style={{ marginTop: 18 }}>
               <SectionHeader
-                title="Active Near You"
+                title="Creators Near You"
                 subtitle="Online or posting today"
                 icon={<Zap size={13} color="#22c55e" />}
                 accent="#22c55e"
@@ -564,11 +551,11 @@ export default function DiscoverPremiumView() {
             </View>
           ) : null}
 
-          {/* 7 — New Creators */}
+          {/* 7 — Recently Joined */}
           {filteredRails.new_creators.length > 0 ? (
             <View style={{ marginTop: 18 }}>
               <SectionHeader
-                title="New Creators"
+                title="Recently Joined"
                 subtitle="Joined LumaScout in the last 30 days"
                 icon={<Sparkles size={13} color={colors.primary} />}
                 accent={colors.primary}
@@ -676,7 +663,7 @@ const s = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     paddingHorizontal: 14,
-    height: 48,
+    height: 44,
     borderRadius: radii.pill,
     backgroundColor: colors.surface2,
     borderWidth: 1,
@@ -695,7 +682,8 @@ const s = StyleSheet.create({
 
   filterStrip: {
     paddingHorizontal: space.xl,
-    paddingVertical: 12,
+    paddingTop: 10,
+    paddingBottom: 6,
     gap: 8,
     alignItems: 'center',
   },
