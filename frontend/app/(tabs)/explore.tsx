@@ -2,11 +2,11 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useFocusEffect } from 'expo-router';
 import {
   View, Text, StyleSheet, TouchableOpacity, Platform,
-  FlatList, ActivityIndicator, ScrollView, Modal, Switch,
+  ActivityIndicator, ScrollView, Modal, Switch, Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { Search, List, Map as MapIcon, SlidersHorizontal, Locate, X, Shield, Gem, Sun, Users as UsersIcon, MapPin } from 'lucide-react-native';
+import { Search, List, Map as MapIcon, SlidersHorizontal, Locate, X, Shield, Gem, Sun, Users as UsersIcon, MapPin, Navigation, RefreshCw, ArrowUpRight } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { api } from '../../src/api';
 import { colors, font, space, radii, BEST_TIMES } from '../../src/theme';
@@ -14,9 +14,16 @@ import SpotCard from '../../src/components/SpotCard';
 import { Chip, EmptyState } from '../../src/components/ui';
 import { Button } from '../../src/components/Button';
 import ScoutAICard from '../../src/components/ScoutAICard';
+import {
+  SmartAlertChip,
+  NearbyRightNowList,
+  TrendingNearbyList,
+  GoldenHourRail,
+} from '../../src/components/PremiumExploreRails';
 
 // Native-only map wrapper with web stub (Metro / codegenNativeCommands safety).
-import { MapView, Marker } from '../../src/components/maps-module';
+import { MapView, ClusteredMapView, Marker } from '../../src/components/maps-module';
+import { Linking } from 'react-native';
 
 type Filters = {
   shoot_type?: string;
@@ -53,6 +60,11 @@ export default function Explore() {
   const [filterOpen, setFilterOpen] = useState(false);
   const [selectedSpot, setSelectedSpot] = useState<any | null>(null);
   const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
+  // "Search this area" CTA — surfaces when the user pans the map far enough
+  // from the current load center. Tracked here to avoid prop-drilling.
+  const [showSearchArea, setShowSearchArea] = useState(false);
+  const lastLoadCenter = useRef<{ lat: number; lng: number } | null>(null);
+  const currentRegion = useRef<any>(null);
   const mapRef = useRef<any>(null);
 
   const load = useCallback(async () => {
@@ -226,17 +238,38 @@ export default function Explore() {
         })}
       </ScrollView>
 
-      {view === 'map' && Platform.OS !== 'web' && MapView ? (
+      {view === 'map' && Platform.OS !== 'web' && (ClusteredMapView || MapView) ? (
         <View style={{ flex: 1 }}>
-          <MapView
-            ref={mapRef}
-            style={{ flex: 1 }}
-            initialRegion={{ latitude: 30.5, longitude: -98.5, latitudeDelta: 0.8, longitudeDelta: 0.8 }}
-            userInterfaceStyle="dark"
-            showsUserLocation
-            showsMyLocationButton={false}
-          >
-            {spots.map((s) => (
+          {React.createElement(
+            ClusteredMapView || MapView,
+            {
+              ref: mapRef,
+              style: { flex: 1 },
+              initialRegion: { latitude: 30.5, longitude: -98.5, latitudeDelta: 0.8, longitudeDelta: 0.8 },
+              userInterfaceStyle: 'dark',
+              showsUserLocation: true,
+              showsMyLocationButton: false,
+              // Clustering options (no-ops on plain MapView fallback)
+              clusterColor: colors.primary,
+              clusterTextColor: '#1a1300',
+              clusterFontFamily: font.bodyBold,
+              radius: 50,
+              spiderLineColor: colors.primary,
+              animationEnabled: true,
+              onRegionChangeComplete: (region: any) => {
+                currentRegion.current = region;
+                if (!lastLoadCenter.current) {
+                  lastLoadCenter.current = { lat: region.latitude, lng: region.longitude };
+                  return;
+                }
+                const dLat = Math.abs(region.latitude - lastLoadCenter.current.lat);
+                const dLng = Math.abs(region.longitude - lastLoadCenter.current.lng);
+                // Surface CTA only when user has panned ~30%+ of the visible span
+                const threshold = Math.max(region.latitudeDelta, region.longitudeDelta) * 0.3;
+                if (dLat > threshold || dLng > threshold) setShowSearchArea(true);
+              },
+            },
+            spots.map((s) => (
               s.latitude != null && s.longitude != null && (
                 <Marker
                   key={s.spot_id}
@@ -246,8 +279,8 @@ export default function Explore() {
                   testID={`marker-${s.spot_id}`}
                 />
               )
-            ))}
-          </MapView>
+            ))
+          )}
 
           <View style={styles.legendBar}>
             <LegendDot color="#10B981" label="Verified + Proven" />
@@ -257,6 +290,28 @@ export default function Explore() {
             <LegendDot color="#F5A623" label="New" />
             <LegendDot color="#6B7280" label="Low score" />
           </View>
+
+          {/* Floating "Search this area" CTA — surfaces after the user pans */}
+          {showSearchArea ? (
+            <TouchableOpacity
+              style={styles.searchAreaCta}
+              onPress={() => {
+                if (currentRegion.current) {
+                  lastLoadCenter.current = {
+                    lat: currentRegion.current.latitude,
+                    lng: currentRegion.current.longitude,
+                  };
+                }
+                setShowSearchArea(false);
+                load();
+              }}
+              testID="explore-search-area"
+              activeOpacity={0.85}
+            >
+              <RefreshCw size={14} color="#1a1300" />
+              <Text style={styles.searchAreaTxt}>Search this area</Text>
+            </TouchableOpacity>
+          ) : null}
 
           <View style={styles.floatControls}>
             <TouchableOpacity style={styles.fab} onPress={goToCurrent} testID="explore-locate">
@@ -276,14 +331,69 @@ export default function Explore() {
           ) : spots.length === 0 ? (
             <EmptyState title="No spots match" subtitle="Loosen your filters to see more." />
           ) : (
-            <FlatList
-              data={spots}
-              keyExtractor={(i) => i.spot_id}
-              contentContainerStyle={{ paddingVertical: space.md, paddingHorizontal: 12, paddingBottom: 100 }}
-              ItemSeparatorComponent={() => <View style={{ height: space.md }} />}
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={{ paddingBottom: 120 }}
               showsVerticalScrollIndicator={false}
-              renderItem={({ item }) => <SpotCard spot={item} testID={`list-spot-${item.spot_id}`} />}
-            />
+            >
+              {/* Smart alert chip — surfaces newly-added spots */}
+              <SmartAlertChip
+                count={Math.min(2, spots.filter((s) => s.is_new).length || 2)}
+                onPress={() => router.push('/search' as any)}
+              />
+
+              {/* Section 1 — Nearby Right Now (3 stacked premium cards) */}
+              <NearbyRightNowList items={spots} />
+
+              {/* Section 2 — Trending Nearby (#1 / #2 / #3 medals) */}
+              <TrendingNearbyList
+                items={[...spots]
+                  .sort((a, b) => (b.shoot_score || 0) - (a.shoot_score || 0))
+                  .slice(0, 3)}
+              />
+
+              {/* Section 3 — Golden Hour Tonight (horizontal sunset rail) */}
+              <GoldenHourRail
+                items={[...spots]
+                  .filter((sp) => (sp.evening_golden_hour_rating || 0) >= 3 || (sp.sunset_rating || 0) >= 3)
+                  .sort(
+                    (a, b) =>
+                      (b.evening_golden_hour_rating || 0) -
+                      (a.evening_golden_hour_rating || 0),
+                  )
+                  .slice(0, 8)}
+              />
+
+              {/* Tail — full editorial cards for the long-tail browse */}
+              <View
+                style={{
+                  paddingHorizontal: space.xl,
+                  marginTop: 22,
+                  marginBottom: 12,
+                }}
+              >
+                <Text
+                  style={{
+                    color: colors.textSecondary,
+                    fontFamily: font.bodyMedium,
+                    fontSize: 11,
+                    letterSpacing: 0.6,
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  All Nearby Spots
+                </Text>
+              </View>
+              <View style={{ paddingHorizontal: 12, gap: space.md }}>
+                {spots.slice(0, 24).map((item) => (
+                  <SpotCard
+                    key={item.spot_id}
+                    spot={item}
+                    testID={`list-spot-${item.spot_id}`}
+                  />
+                ))}
+              </View>
+            </ScrollView>
           )}
           {Platform.OS !== 'web' && (
             <TouchableOpacity
@@ -319,49 +429,103 @@ function LegendDot({ color, label }: { color: string; label: string }) {
 function PinPreview({ spot, onClose }: { spot: any; onClose: () => void }) {
   const verified = spot.owner?.verification_status === 'verified';
   const premium = spot.privacy_mode === 'premium';
+  const cover =
+    spot.hero_cover_image_url ||
+    (Array.isArray(spot.images)
+      ? (spot.images.find((i: any) => i.is_cover)?.image_url || spot.images[0]?.image_url)
+      : null);
+  const score = Math.round(spot.shoot_score ?? spot.score ?? 88);
+  const scoreColor =
+    score >= 90 ? '#22c55e' : score >= 75 ? colors.primary : '#60A5FA';
+
+  const openDirections = () => {
+    if (spot.latitude == null || spot.longitude == null) return;
+    const label = encodeURIComponent(spot.title || 'Spot');
+    const url = Platform.select({
+      ios: `maps://?daddr=${spot.latitude},${spot.longitude}&q=${label}`,
+      android: `geo:${spot.latitude},${spot.longitude}?q=${spot.latitude},${spot.longitude}(${label})`,
+      default: `https://www.google.com/maps/dir/?api=1&destination=${spot.latitude},${spot.longitude}`,
+    }) as string;
+    Linking.openURL(url).catch(() => {});
+  };
+
   return (
-    <View style={styles.previewWrap}>
-      <TouchableOpacity style={styles.previewClose} onPress={onClose}>
-        <X size={16} color={colors.text} />
+    <View style={styles.previewSheet}>
+      {/* Drag indicator */}
+      <View style={styles.previewHandle} />
+
+      <TouchableOpacity style={styles.previewCloseV2} onPress={onClose} hitSlop={8}>
+        <X size={14} color={colors.text} />
       </TouchableOpacity>
-      <SpotCard spot={spot} width={undefined as any} />
-      <View style={styles.previewChipRow}>
-        {verified && (
-          <View style={[styles.previewChip, { backgroundColor: 'rgba(16,185,129,0.15)' }]}>
-            <Shield size={10} color="#10B981" />
-            <Text style={[styles.previewChipTxt, { color: '#10B981' }]}>Verified</Text>
+
+      {/* Hero row — image + title + score ring */}
+      <View style={styles.previewHero}>
+        <View style={styles.previewThumbWrap}>
+          {cover ? (
+            <Image source={{ uri: cover }} style={styles.previewThumb} />
+          ) : (
+            <View style={[styles.previewThumb, { backgroundColor: colors.surface2 }]} />
+          )}
+        </View>
+        <View style={{ flex: 1, paddingHorizontal: 12, gap: 2 }}>
+          <Text style={styles.previewTitle} numberOfLines={1}>{spot.title}</Text>
+          <Text style={styles.previewCity} numberOfLines={1}>
+            {spot.city}{spot.state ? `, ${spot.state}` : ''}
+          </Text>
+          <View style={styles.previewMetaRow}>
+            {verified ? (
+              <View style={[styles.previewChip, { backgroundColor: 'rgba(16,185,129,0.15)' }]}>
+                <Shield size={9} color="#10B981" />
+                <Text style={[styles.previewChipTxt, { color: '#10B981' }]}>Verified</Text>
+              </View>
+            ) : null}
+            {premium ? (
+              <View style={[styles.previewChip, { backgroundColor: 'rgba(157,89,255,0.15)' }]}>
+                <Gem size={9} color="#9D59FF" />
+                <Text style={[styles.previewChipTxt, { color: '#9D59FF' }]}>Elite</Text>
+              </View>
+            ) : null}
+            {(spot.evening_golden_hour_rating || 0) >= 4 ? (
+              <View style={[styles.previewChip, { backgroundColor: 'rgba(245,166,35,0.15)' }]}>
+                <Sun size={9} color={colors.primary} />
+                <Text style={[styles.previewChipTxt, { color: colors.primary }]}>PM Golden</Text>
+              </View>
+            ) : null}
+            {spot.distance_mi != null ? (
+              <View style={[styles.previewChip, { backgroundColor: colors.surface2 }]}>
+                <MapPin size={9} color={colors.textSecondary} />
+                <Text style={[styles.previewChipTxt, { color: colors.textSecondary }]}>
+                  {spot.distance_mi} mi
+                </Text>
+              </View>
+            ) : null}
           </View>
-        )}
-        {premium && (
-          <View style={[styles.previewChip, { backgroundColor: 'rgba(157,89,255,0.15)' }]}>
-            <Gem size={10} color="#9D59FF" />
-            <Text style={[styles.previewChipTxt, { color: '#9D59FF' }]}>Elite</Text>
-          </View>
-        )}
-        {(spot.morning_golden_hour_rating || 0) >= 4 && (
-          <View style={[styles.previewChip, { backgroundColor: 'rgba(245,166,35,0.15)' }]}>
-            <Sun size={10} color={colors.primary} />
-            <Text style={[styles.previewChipTxt, { color: colors.primary }]}>AM Golden</Text>
-          </View>
-        )}
-        {(spot.evening_golden_hour_rating || 0) >= 4 && (
-          <View style={[styles.previewChip, { backgroundColor: 'rgba(245,166,35,0.15)' }]}>
-            <Sun size={10} color={colors.primary} />
-            <Text style={[styles.previewChipTxt, { color: colors.primary }]}>PM Golden</Text>
-          </View>
-        )}
-        {(spot.crowd_level || 3) <= 2 && (
-          <View style={[styles.previewChip, { backgroundColor: 'rgba(96,165,250,0.15)' }]}>
-            <UsersIcon size={10} color="#60A5FA" />
-            <Text style={[styles.previewChipTxt, { color: '#60A5FA' }]}>Low crowds</Text>
-          </View>
-        )}
-        {spot.distance_mi != null && (
-          <View style={[styles.previewChip, { backgroundColor: colors.surface2 }]}>
-            <MapPin size={10} color={colors.textSecondary} />
-            <Text style={[styles.previewChipTxt, { color: colors.textSecondary }]}>{spot.distance_mi} mi</Text>
-          </View>
-        )}
+        </View>
+        <View style={[styles.previewScore, { borderColor: scoreColor }]}>
+          <Text style={[styles.previewScoreTxt, { color: scoreColor }]}>{score}</Text>
+        </View>
+      </View>
+
+      {/* Dual-button action row — primary "View Details", secondary "Directions" */}
+      <View style={styles.previewActions}>
+        <TouchableOpacity
+          style={[styles.previewBtn, styles.previewBtnSecondary]}
+          onPress={openDirections}
+          activeOpacity={0.85}
+          testID="pin-preview-directions"
+        >
+          <Navigation size={14} color={colors.text} />
+          <Text style={styles.previewBtnSecondaryTxt}>Directions</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.previewBtn, styles.previewBtnPrimary]}
+          onPress={() => router.push(`/spot/${spot.spot_id}` as any)}
+          activeOpacity={0.85}
+          testID="pin-preview-details"
+        >
+          <Text style={styles.previewBtnPrimaryTxt}>View Details</Text>
+          <ArrowUpRight size={14} color="#1a1300" />
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -603,6 +767,102 @@ const styles = StyleSheet.create({
   previewChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
   previewChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: radii.pill },
   previewChipTxt: { fontFamily: font.bodyBold, fontSize: 10 },
+
+  // Apr 2026 — Premium Map Pin Preview bottom sheet (dual-button)
+  previewSheet: {
+    position: 'absolute',
+    left: space.lg,
+    right: space.lg,
+    bottom: space.xxl,
+    backgroundColor: 'rgba(15,15,18,0.95)',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    paddingTop: 14,
+    paddingBottom: 12,
+    paddingHorizontal: 14,
+    shadowColor: '#000',
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 12,
+  },
+  previewHandle: {
+    width: 36, height: 4, borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignSelf: 'center',
+    marginBottom: 10,
+  },
+  previewCloseV2: {
+    position: 'absolute', right: 10, top: 10, zIndex: 2,
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  previewHero: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  previewThumbWrap: {
+    width: 64, height: 64, borderRadius: 16, overflow: 'hidden',
+    backgroundColor: colors.surface2,
+  },
+  previewThumb: { width: '100%', height: '100%' },
+  previewTitle: {
+    color: colors.text, fontFamily: font.bodyBold, fontSize: 15, letterSpacing: -0.1,
+  },
+  previewCity: {
+    color: colors.textSecondary, fontFamily: font.body, fontSize: 11, marginTop: 1,
+  },
+  previewMetaRow: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 5,
+  },
+  previewScore: {
+    width: 44, height: 44, borderRadius: 22,
+    borderWidth: 2,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  previewScoreTxt: { fontFamily: font.bodyBold, fontSize: 13 },
+  previewActions: {
+    flexDirection: 'row', gap: 8, marginTop: 12,
+  },
+  previewBtn: {
+    flex: 1, height: 44, borderRadius: 22,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+  },
+  previewBtnSecondary: {
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)',
+  },
+  previewBtnSecondaryTxt: {
+    color: colors.text, fontFamily: font.bodySemibold, fontSize: 13,
+  },
+  previewBtnPrimary: {
+    backgroundColor: colors.primary,
+  },
+  previewBtnPrimaryTxt: {
+    color: '#1a1300', fontFamily: font.bodyBold, fontSize: 13,
+  },
+
+  // "Search this area" floating CTA
+  searchAreaCta: {
+    position: 'absolute',
+    top: 70,
+    alignSelf: 'center',
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 16, paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: colors.primary,
+    shadowColor: '#000', shadowOpacity: 0.45,
+    shadowRadius: 12, shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+  },
+  searchAreaTxt: {
+    color: '#1a1300', fontFamily: font.bodyBold, fontSize: 12.5, letterSpacing: 0.1,
+  },
+
   modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
   sheet: { backgroundColor: colors.surface1, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '88%' },
   sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.surface3, alignSelf: 'center', marginTop: 10 },

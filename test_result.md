@@ -12,6 +12,41 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Explore Tab — Premium List & Map Mode redesign (Apr 2026): SmartAlertChip, NearbyRightNowList (3 stacked cards w/ score ring + best-time chip + bookmark + route arrow), TrendingNearbyList (#1/#2/#3 medals), GoldenHourRail (sunset times), pin clustering via react-native-map-clustering, dual-button PinPreview ('Directions' deep-link + 'View Details'), 'Search this area' floating CTA on map pan"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(tabs)/explore.tsx, /app/frontend/src/components/PremiumExploreRails.tsx, /app/frontend/src/components/maps-module.ts, /app/frontend/src/components/maps-module.web.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          UI-only mobile redesign. Verified visually via Playwright @ 390x844:
+          List view shows the 'EXPLORE / Find great places near you' header,
+          Map/List segmented toggle, SAT/25mi location chips, quick filter
+          row, '2 new spots near you' alert, 'Nearby Right Now · LIVE'
+          section with 3 stacked cards (0.8mi/1.4mi/2.1mi green pills,
+          'Best at sunset' gold time chip, 100 score ring, bookmark + gold
+          arrow), 'Trending Nearby' with #1 (gold) / #2 / #3 medals + saves
+          + distance, 'Golden Hour Tonight' horizontal rail with 7:42 PM /
+          7:51 PM gold time chips, and 'All Nearby Spots' tail.
+          Map mode (native only, web stub returns null): now uses
+          ClusteredMapView from react-native-map-clustering@4.0.0 with
+          clusterColor=primary, radius=50; PinPreview rebuilt as bottom
+          sheet with 64x64 thumb, title/city, verified/elite/golden/dist
+          chips, scoreRing, dual-button row ('Directions' triggers
+          Linking.openURL with maps://?daddr=... on iOS, geo:// on Android,
+          google.com fallback) + ('View Details' router.push). 'Search
+          this area' floating CTA appears centered top after the user
+          pans >30% of the visible region.
+          iOS bundle compiles clean (3576 modules), web bundle clean.
+          Needs on-device retest for: cluster-tap zoom behavior,
+          deep-link to Apple/Google Maps, region-pan threshold tuning.
+
+
+
   - task: "Photographer Directory — GET /api/directory + GET /api/directory/suggested (sort/filter pills, multi-token search, specialty/city/state, pagination, premium plan_rank soft-boost, viewer-aware is_following/is_blocked)"
     implemented: true
     working: true
