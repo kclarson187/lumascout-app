@@ -82,38 +82,9 @@ memory/test_credentials.md
 android-sdk/web/node_modules/@next/swc-linux-arm64-musl/next-swc.linux-arm64-musl.node
 web/node_modules/@next/swc-linux-arm64-gnu/next-swc.linux-arm64-gnu.node
 web/node_modules/@next/swc-linux-arm64-musl/next-swc.linux-arm64-musl.node
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
+
+# Credentials only — .env files are intentionally NOT ignored
+# because the Emergent deployment pipeline needs them at build time.
 credentials.json
 *.pem
 *.key
