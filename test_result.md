@@ -12,6 +12,133 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+
+  - task: "POST /api/admin/users/bulk-delete (super_admin Users panel — Apr 2026 priority sprint item #1)"
+    implemented: true
+    working: true
+    file: "/app/backend/routes/super_admin.py (super_bulk_delete_users @ L341-385, UserBulkDeleteIn @ L65-69)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          FULL VALIDATION PASS — 25/25 assertions green via
+          /app/backend_test_bulk_delete.py against
+          https://photo-finder-60.preview.emergentagent.com/api.
+          Super_admin: admin@lumascout.app / admin123
+          (user_6daa7d0a3abc, role=super_admin, plan=elite). All
+          throwaway users registered fresh via POST /api/auth/register
+          using @lumascout-qa.com TLD (note: @test.local / @example.com
+          may be rejected by email-validator's special-use list;
+          @lumascout-qa.com works reliably).
+
+          (1) Auth guard — PASS (2/2):
+              · Regular `user` role → POST /admin/users/bulk-delete
+                {user_ids:["user_fake_xyz"], reason_code:"other"} →
+                403 Forbidden (detail="Forbidden") via
+                require_role("super_admin").
+              · Admin `admin` role (elevated via PATCH /admin/users/
+                {id} {role:"admin"}) → 403 Forbidden. Confirms only
+                super_admin may invoke. Both 403s came from the same
+                require_role dependency, exactly as expected.
+
+          (2) Schema validation — PASS (3/3):
+              · {user_ids:[], reason_code:"other"} → 422 (Pydantic
+                min_length=1 on List[str]).
+              · {user_ids:[201 strings], reason_code:"other"} → 422
+                (max_length=200).
+              · Missing user_ids field → 422 (Field(...) required).
+              All three rejected at the Pydantic layer before any DB
+              work, as designed.
+
+          (3) Happy path — PASS (12/12):
+              · Registered 3 throwaway users (bulk_test_1..3_<sfx>@
+                lumascout-qa.com) → got user_ids
+                [user_e8ab8e926c6c, user_0b2c4b7fed58,
+                 user_a9baa045649c].
+              · POST /admin/users/bulk-delete {user_ids:[...3...],
+                reason_code:"other", reason_note:"qa bulk-delete
+                happy path"} → 200 with body:
+                  {ok:true, requested:3,
+                   succeeded:[{user_id, archive_id} × 3],
+                   failed:[]}
+              · Every succeeded entry carried a non-null archive_id
+                of the form `deluser_<12hex>` (set by
+                super_delete_user at routes/super_admin.py:220).
+              · DB cross-check via Mongo motor:
+                  - users.find_one({user_id}) for each: still exists
+                    (soft-delete, NOT removed).
+                  - email anonymized to deleted+<8hex>@lumascout.app
+                    (e.g., deleted+bd960919@lumascout.app) ✓
+                  - username anonymized to deleted_user_<8hex>
+                    (e.g., deleted_user_bd960919) ✓
+                  - name="Deleted user", role="user", plan="free",
+                    status="deleted", deleted=true (set by the $set
+                    block at routes/super_admin.py:248-285).
+              · deleted_users.count_documents({original_user_id:
+                {$in:[3 ids]}}) = 3 ✓ — full PII archived
+                (original_email, original_username, original_role,
+                deleted_by_user_id, deleted_at, reason_code,
+                reason_note).
+
+          (4) Partial failure — PASS (3/3):
+              · Mixed payload: 2 valid throwaway user_ids + 2
+                garbage strings (fake-user-id-<6hex>).
+              · Response 200 with succeeded.length=2, failed.length=2.
+              · Each failed entry carries error="User not found"
+                (from HTTPException at routes/super_admin.py:199
+                propagated as e.detail at L365). status=404 also
+                included in failed entry. Confirms the
+                except-HTTPException branch correctly captures the
+                inner 404 from super_delete_user without aborting
+                the whole request.
+
+          (5) Self-protect — PASS (2/2):
+              · POST with [throwaway_id, super_admin_user_id] → 200.
+              · Response body's `failed` list contains
+                {user_id:"user_6daa7d0a3abc",
+                 error:"Cannot delete your own account"}.
+                Source: short-circuit at routes/super_admin.py:354
+                (`if uid == me["user_id"]`) — does NOT invoke
+                super_delete_user, so no archive entry created for
+                admin and no anonymization. (The L202 check inside
+                super_delete_user is a redundant safety net for
+                single-user calls.)
+              · Post-test re-login as admin@lumascout.app/admin123
+                → 200 with role=super_admin intact. Admin account
+                fully unaffected.
+
+          (6) Audit log — PASS (3/3):
+              · audit_logs.count_documents({action:
+                "user.bulk_delete_soft"}) baseline=0 before tests.
+              · After 3 bulk-delete calls (happy path / partial /
+                self-protect) → count=3. Exactly +1 entry per call
+                regardless of how many users were in the payload —
+                confirms the audit_log call at routes/super_admin.
+                py:369 fires once per bulk request, not per user.
+              · Most recent entry shape verified:
+                  target_type="user", target_id="bulk",
+                  notes="[SUPER ADMIN] Bulk soft-deleted 1/2 users.",
+                  before={requested:2}, after={ok:1, failed:1}.
+
+          ── VERDICT ──────────────────────────────────────────────
+          POST /api/admin/users/bulk-delete is launch-ready.
+          Auth guard, schema validation, happy path soft-delete with
+          anonymization + archive, partial-failure handling, self-
+          protect, and bulk-level audit logging all behave per spec.
+          The implementation correctly REUSES super_delete_user for
+          per-row work which means cascade cleanup (push_tokens,
+          follows, group_members, spot_saves, poll_votes, post_likes,
+          best-effort Stripe cancel) runs for every successful row
+          identical to the single-user DELETE endpoint.
+
+          No 500s observed. No backend errors during the test run.
+          Test harness: /app/backend_test_bulk_delete.py.
+
+
+
   - task: "URGENT round-3 distance fix — Explore tab 'Nearby Right Now'. ROOT CAUSE: the Explore tab calls `GET /api/spots?sort=quality&limit=200` but the backend `/api/spots` route never accepted lat/lng AND never computed distance — so frontend was rendering whatever stale or fabricated value happened to flow through (the 1.4 mi for Muleshoe Bend report originated from a baked-in default in the previous Explore List Mode renderer). FIX: (a) Backend `routes/spots.py` `list_spots()` now accepts `Optional[float] lat, lng` query params and applies the same strict policy as `/api/feed/home`: device GPS or null + `distance_source='unavailable'`. After the haversine compute pass, when sort='quality' AND user GPS provided, we blend a tie-breaker so closer high-quality spots win. (b) Frontend `app/(tabs)/explore.tsx` GPS state machine: introduced `gpsState: 'idle'|'requesting'|'granted'|'denied'|'error'`, `userCoords` now carries a `ts` timestamp (max-age 30 min for caching); new `requestGPS()` callback runs high-accuracy with 8s timeout then falls back to balanced; permission denied → state='denied' (no fake distance shown); on focus refresh re-fires. `load()` only attaches `lat`/`lng` to the API call when the cached coord is fresher than 30 min, otherwise the request goes without coords (backend returns null → UI shows the trust strip). (c) UI trust strip — green pin + 'Using your current location' when granted; gold pin + 'Locating you…' during request; gray + 'Location access off · enable for accurate nearby spots' + Retry pill when denied; gray + 'Distance unavailable' on error. Strip lives directly above the Nearby Right Now section. (d) Backend live API verified end-to-end with admin user @ SA (29.4241, -98.4936): Muleshoe Bend=81.92 mi · McKinney Falls (Austin)=69.97 mi · East Side Mural Alleys (Austin)=73.87 mi · Enchanted Rock=77.3 mi · Fredericksburg Vineyard=63.03 mi · Kemah Boardwalk (near Houston)=209.05 mi. With no lat/lng → all spots return distance_mi=None, distance_source=unavailable. Display rules from the previous round (formatDistance helper) already render correctly: <100 mi=1dp, 100-249=whole mile, ≥250=state code; null=hidden chip + trust strip says 'Distance unavailable'."
     implemented: true
     working: true
@@ -9188,3 +9315,29 @@ test at end of #13 per user directive.
 ## Ready for final batch test
 Per user directive, this is the Phase 3 boundary. All 13 mobile PRD items
 shipped across Phases 1-3. Recommend handing off to frontend testing agent.
+
+# Apr 2026 Priority Sprint — Phase 4 Super Admin (Bulk Delete)
+
+## New backend endpoint to test
+- POST /api/admin/users/bulk-delete (super_admin only)
+
+## File: /app/backend/routes/super_admin.py
+- New `UserBulkDeleteIn` Pydantic model (user_ids: 1..200, reason_code, reason_note)
+- New `super_bulk_delete_users` handler that re-uses the single-user
+  `super_delete_user` logic per id and returns:
+    { ok: true, requested: N, succeeded: [...], failed: [...] }
+- Self-protection: skips deleting the calling super_admin's own account
+- Audits a single bulk entry: action="user.bulk_delete_soft"
+
+## Test focus areas
+1. ✅ Auth: non-super_admin must receive 403
+2. ✅ Validates min=1 / max=200 user_ids
+3. ✅ Self-delete attempt is blocked (returns failed entry, doesn't 500)
+4. ✅ Mixing valid + invalid user_ids → partial success (failed entries listed)
+5. ✅ Soft-delete behavior matches single-user delete (anonymized email/username, role/plan archived)
+6. ✅ Audit log entry created
+7. ✅ Cascade: old user_id is no longer findable via /admin/users (because role is changed and email anonymized) — but a cleanup confirmation that follower/save records are gone
+
+## Test credentials
+See /app/memory/test_credentials.md (super_admin account is the seeded admin@lumascout.app).
+Throwaway test users can be seeded via /api/auth/register.
