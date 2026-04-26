@@ -23,6 +23,7 @@ import {
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
+import { formatDistance } from '../../src/utils/distance';
 import ScoreRing from '../../src/components/ScoreRing';
 import SpotCard from '../../src/components/SpotCard';
 import { Button } from '../../src/components/Button';
@@ -209,7 +210,7 @@ export default function SpotDetail() {
           <View style={styles.metaRow}>
             <MapPin size={14} color={colors.textSecondary} />
             <Text style={styles.meta}>{spot.city}, {spot.state}</Text>
-            {spot.distance_km != null && <Text style={styles.meta}>  ·  {spot.distance_km}km away</Text>}
+            {(() => { const d = formatDistance(spot); return d ? <Text style={styles.meta}>  ·  {d}</Text> : null; })()}
           </View>
 
           {(spot.freshness && spot.freshness !== 'unknown') && (

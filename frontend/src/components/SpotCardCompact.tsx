@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Image, Pressable } from 'react-native';
 import { router } from 'expo-router';
 import { Star, Sun, Clock, MapPin } from 'lucide-react-native';
 import { colors, radii, space, font } from '../theme';
+import { formatDistance } from '../utils/distance';
 import VerifiedBadge from './VerifiedBadge';
 import SpotImageFallback from './SpotImageFallback';
 import { goldenHourLabel } from '../utils/sun';
@@ -28,8 +29,9 @@ export default function SpotCardCompact({
   const go = () => router.push(`/spot/${spot.spot_id}`);
   const gLabel = goldenHourLabel(spot.latitude, spot.longitude);
 
+  const distLabel = formatDistance(spot);
   const primary =
-    emphasis === 'distance' && spot.distance_mi != null ? { icon: <MapPin size={11} color={colors.primary} />, text: `${spot.distance_mi} mi away` } :
+    emphasis === 'distance' && distLabel ? { icon: <MapPin size={11} color={colors.primary} />, text: `${distLabel} away` } :
     emphasis === 'golden' && gLabel ? { icon: <Sun size={11} color={colors.primary} />, text: gLabel } :
     emphasis === 'score' ? { icon: <Star size={11} color={colors.primary} fill={colors.primary} />, text: `Score ${spot.shoot_score || 0}` } :
     emphasis === 'seasonal' && spot.best_months?.length ? { icon: <Clock size={11} color={colors.primary} />, text: `Best in ${spot.best_months[0]}` } :
@@ -61,7 +63,7 @@ export default function SpotCardCompact({
         </View>
         <Text style={styles.city} numberOfLines={1}>
           {spot.city || '—'}{spot.state ? `, ${spot.state}` : ''}
-          {spot.distance_mi != null && emphasis !== 'distance' ? `  ·  ${spot.distance_mi} mi` : ''}
+          {(() => { const d = formatDistance(spot); return d && emphasis !== 'distance' ? `  ·  ${d}` : ''; })()}
         </Text>
         {primary && (
           <View style={styles.primaryRow}>

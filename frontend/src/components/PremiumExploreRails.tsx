@@ -22,6 +22,7 @@ import {
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, font, space } from '../theme';
+import { formatDistance } from '../utils/distance';
 
 const SCREEN_W = Dimensions.get('window').width;
 
@@ -38,9 +39,10 @@ function coverOf(sp: any): string | null {
 }
 
 function distancePill(sp: any, fallbackIdx: number): string {
-  if (typeof sp?.distance_mi === 'number') return `${sp.distance_mi.toFixed(1)} mi`;
-  if (typeof sp?.distance_miles === 'number') return `${sp.distance_miles.toFixed(1)} mi`;
-  if (typeof sp?.distance_km === 'number') return `${(sp.distance_km * 0.621).toFixed(1)} mi`;
+  if (typeof sp?.distance_mi === 'number' || typeof sp?.distance_miles === 'number' || typeof sp?.distance_km === 'number') {
+    const v = formatDistance(sp);
+    if (v) return v;
+  }
   // Deterministic demo fallback so the UI feels alive even without geo
   const demo = [0.8, 1.4, 2.1, 3.6, 4.8, 6.2, 7.5, 9.1];
   return `${demo[fallbackIdx % demo.length]} mi`;
