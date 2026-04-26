@@ -3656,6 +3656,12 @@ async def create_post(body: CommunityPostIn, user: dict = Depends(get_current_us
         logger.warning("spam scoring failed: %s", _spam_err)
 
     await db.community_posts.insert_one(doc)
+    doc.pop("_id", None)
+    out = await _hydrate_posts([doc], user)
+    return out[0]
+
+
+@api.get("/posts")
 async def list_posts(
     category: Optional[str] = None,
     city: Optional[str] = None,

@@ -162,12 +162,15 @@ export default function SpotDetail() {
             <TouchableOpacity onPress={onReport} style={styles.headBtn} testID="spot-report">
               <Flag color={colors.text} size={18} />
             </TouchableOpacity>
-            {isAdminUser && (
+            {/* Apr 2026 — featured-photo polish: spot owners (creators)
+                can also access the cover editor to choose their featured
+                photo. Backend now allows owner+admin (was admin-only). */}
+            {(isAdminUser || (!!user && spot?.created_by === user?.user_id)) && (
               <TouchableOpacity
                 onPress={() => router.push(`/admin/spots/${id}/cover`)}
                 style={[styles.headBtn, styles.headBtnAdmin]}
                 testID="spot-admin-edit-cover"
-                accessibilityLabel="Edit cover photo (admin)"
+                accessibilityLabel={isAdminUser ? "Edit cover photo (admin)" : "Choose featured photo"}
               >
                 <Wand2 color={colors.textInverse} size={16} />
               </TouchableOpacity>

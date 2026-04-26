@@ -81,8 +81,13 @@ export default function CoverEditor() {
   const panStartY = useSharedValue(0.5);
   const pinchStart = useSharedValue(1.0);
 
+  // Apr 2026 — owners can edit their own cover too. We rely on the
+  // backend to enforce role/ownership and return 403 if not allowed.
+  // Old hard client-gate removed; backend errors surface via Alert.
   const isAdmin = !!user && ['admin', 'super_admin'].includes(user.role);
   const isSuperAdmin = !!user && user.role === 'super_admin';
+  const isOwner = !!user && !!data && (data as any).created_by === user.user_id;
+  const canEdit = isAdmin || isOwner;
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -233,13 +238,13 @@ export default function CoverEditor() {
     top:  focalY.value * CANVAS_H - 14,
   }));
 
-  if (!isAdmin) {
+  if (!canEdit && !loading) {
     return (
       <SafeAreaView style={styles.root}>
         <Stack.Screen options={{ headerShown: false }} />
         <View style={styles.empty}>
           <ShieldCheck size={30} color={colors.textTertiary} />
-          <Text style={styles.emptyTxt}>Admin access required.</Text>
+          <Text style={styles.emptyTxt}>You can only edit covers on your own spots, or as an admin.</Text>
         </View>
       </SafeAreaView>
     );
