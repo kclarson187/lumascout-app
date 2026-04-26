@@ -62,6 +62,13 @@ class UserDeleteIn(BaseModel):
     reason_note: Optional[str] = Field(default=None, max_length=500)
 
 
+class UserBulkDeleteIn(BaseModel):
+    """Bulk-delete request payload for the super-admin Users panel."""
+    user_ids: List[str] = Field(..., min_length=1, max_length=200)
+    reason_code: Optional[str] = Field(default=None)
+    reason_note: Optional[str] = Field(default=None, max_length=500)
+
+
 def _clean(doc: Optional[dict]) -> Optional[dict]:
     if not doc:
         return doc
@@ -324,6 +331,57 @@ async def super_delete_user(
         "strategy": "soft_delete_anonymize",
         "stripe_cancelled": stripe_cancelled,
         "cascade": cascade,
+    }
+
+
+# ============================================================================
+# BULK USER DELETE
+# (Apr 2026 priority sprint — Super Admin Panel item #1)
+# ============================================================================
+@router.post("/admin/users/bulk-delete")
+async def super_bulk_delete_users(
+    body: UserBulkDeleteIn,
+    me: dict = Depends(require_role("super_admin")),
+):
+    """Soft-delete N users in one call. Returns per-user success/failure
+    detail so the admin UI can render an accurate confirmation toast.
+    Each deletion is idempotent and audit-logged just like a single delete.
+    """
+    succeeded: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    for uid in body.user_ids:
+        # Avoid the admin nuking themselves in a bulk action by accident.
+        if uid == me["user_id"]:
+            failed.append({"user_id": uid, "error": "Cannot delete your own account"})
+            continue
+        try:
+            res = await super_delete_user(  # reuse single-user logic for parity
+                user_id=uid,
+                body=UserDeleteIn(reason_code=body.reason_code, reason_note=body.reason_note),
+                me=me,
+            )
+            succeeded.append({"user_id": uid, "archive_id": res.get("archive_id")})
+        except HTTPException as e:
+            failed.append({"user_id": uid, "error": e.detail, "status": e.status_code})
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("bulk-delete failed for %s", uid)
+            failed.append({"user_id": uid, "error": str(exc), "status": 500})
+    await audit_log(
+        me,
+        "user.bulk_delete_soft",
+        target_type="user",
+        target_id="bulk",
+        before={"requested": len(body.user_ids)},
+        after={"ok": len(succeeded), "failed": len(failed)},
+        notes=(
+            f"[SUPER ADMIN] Bulk soft-deleted {len(succeeded)}/{len(body.user_ids)} users."
+        ),
+    )
+    return {
+        "ok": True,
+        "requested": len(body.user_ids),
+        "succeeded": succeeded,
+        "failed": failed,
     }
 
 

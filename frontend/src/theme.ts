@@ -90,5 +90,7 @@ export const PRIVACY_MODES = [
   { key: 'public', label: 'Public', help: 'Visible on the map to everyone. Goes through quick review.' },
   { key: 'followers', label: 'Followers', help: 'Only people who follow you can see this spot.' },
   { key: 'private', label: 'Private', help: 'Just for you. Never shared.' },
-  { key: 'premium', label: 'Premium', help: 'Requires subscription to view. (Coming soon)' },
+  // (Apr 2026) Removed "Premium - requires subscription to view" — direct
+  // user feedback: the option created confusion and was never actually
+  // shipping a paywall on individual spots. Marketplace handles paid content.
 ];
