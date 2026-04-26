@@ -18,6 +18,10 @@ expo-env.d.ts
 *.key
 *.mobileprovision
 
+# Allow EAS local credentials for iOS App Store deployment
+!credentials/ios/distribution.p12
+!credentials/ios/profile.mobileprovision
+
 # Metro
 .metro-health-check*
 
