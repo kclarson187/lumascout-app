@@ -950,15 +950,8 @@ export default function AddSpot() {
               />
               <Text style={styles.helper}>Pros cover: parking hack, best arrival time, composition spots, seasonal gotchas, permits.</Text>
 
-              {/* Item #1 (Apr 2026) — Land Access disclosure */}
-              <View style={{ marginTop: 18 }}>
-                <LandAccessSelector
-                  value={draft.land_access}
-                  accessNotes={draft.access_notes}
-                  onChange={(v) => setDraft({ ...draft, land_access: v })}
-                  onAccessNotesChange={(s) => setDraft({ ...draft, access_notes: s })}
-                />
-              </View>
+              {/* Land access moved to Step 3 (Access & Rules) — all access
+                  disclosures live in one place per Apr 2026 simplification. */}
 
               {aiAssistTips.length > 0 && (
                 <View style={styles.aiTipsBox}>
@@ -1029,10 +1022,10 @@ export default function AddSpot() {
 
           {step === 3 && (
             <View style={{ gap: space.lg }}>
-              <Text style={styles.heading}>Ratings & Notes</Text>
-              <Text style={styles.sub}>Rate real conditions, then jot anything future-you would want to know.</Text>
+              <Text style={styles.heading}>Access & Rules</Text>
+              <Text style={styles.sub}>Help future photographers prepare and respect the location.</Text>
 
-              {/* ---- Best time of day ---- */}
+              {/* ---- Best time of day (kept; lightweight planning info, not scoring) ---- */}
               <Text style={styles.subSectionLabel}>Best time of day</Text>
               <View style={styles.chipRow}>
                 {BEST_TIMES.map((t) => (
@@ -1045,63 +1038,56 @@ export default function AddSpot() {
                 ))}
               </View>
 
-              {/* ---- Group 1: Light ---- */}
-              <View style={styles.groupCard}>
-                <View style={styles.groupHead}>
-                  <Sun size={14} color={colors.primary} />
-                  <Text style={styles.groupLabel}>Light</Text>
-                </View>
-                <Rating label="Sunrise quality" value={draft.sunrise_rating} onChange={(v) => setDraft({ ...draft, sunrise_rating: v })} showHint />
-                <Rating label="Sunset quality" value={draft.sunset_rating} onChange={(v) => setDraft({ ...draft, sunset_rating: v })} />
-                <Rating label="Morning golden hour" value={draft.morning_golden_hour_rating} onChange={(v) => setDraft({ ...draft, morning_golden_hour_rating: v })} />
-                <Rating label="Evening golden hour" value={draft.evening_golden_hour_rating} onChange={(v) => setDraft({ ...draft, evening_golden_hour_rating: v })} />
-              </View>
-
-              {/* ---- Group 2: Logistics ---- */}
-              <View style={styles.groupCard}>
-                <View style={styles.groupHead}>
-                  <MapPin size={14} color={colors.primary} />
-                  <Text style={styles.groupLabel}>Logistics</Text>
-                </View>
-                <Rating label="Shade availability" value={draft.shade_rating} onChange={(v) => setDraft({ ...draft, shade_rating: v })} />
-                <Rating label="Crowd level (5 = very crowded)" value={draft.crowd_level} onChange={(v) => setDraft({ ...draft, crowd_level: v })} />
-                <Rating label="Parking ease (5 = easy)" value={draft.parking_rating} onChange={(v) => setDraft({ ...draft, parking_rating: v })} />
-                <Rating label="Walking distance (1 = trailhead, 5 = long hike)" value={draft.walk_rating} onChange={(v) => setDraft({ ...draft, walk_rating: v })} />
-              </View>
-
-              {/* ---- Group 3: Creative ---- */}
-              <View style={styles.groupCard}>
-                <View style={styles.groupHead}>
-                  <Edit3 size={14} color={colors.primary} />
-                  <Text style={styles.groupLabel}>Creative</Text>
-                </View>
-                <Rating label="Background variety" value={draft.variety_rating} onChange={(v) => setDraft({ ...draft, variety_rating: v })} />
-                <Rating label="Composition flexibility" value={draft.composition_flex} onChange={(v) => setDraft({ ...draft, composition_flex: v })} />
-                <Input
-                  label="Best lens range"
-                  value={draft.best_lens_range}
-                  onChangeText={(t) => setDraft({ ...draft, best_lens_range: t })}
-                  placeholder="e.g. 35-85mm"
-                  testID="add-lens-range"
+              {/* ---- Land access (REQUIRED) ---- */}
+              <View style={{ marginTop: 6 }}>
+                <LandAccessSelector
+                  value={draft.land_access}
+                  accessNotes={undefined /* moved to dedicated 'Best access' field below */}
+                  onChange={(v) => setDraft({ ...draft, land_access: v })}
+                  onAccessNotesChange={() => {}}
                 />
               </View>
 
-              {/* ---- Binary flags ---- */}
-              <Text style={styles.subSectionLabel}>Access & rules</Text>
+              {/* ---- Parking notes ---- */}
+              <Input
+                label="Parking notes"
+                value={draft.parking_notes}
+                onChangeText={(t) => setDraft({ ...draft, parking_notes: t.slice(0, 500) })}
+                placeholder="Where to park, gate codes, capacity, etc."
+                multiline
+                numberOfLines={2}
+                maxLength={500}
+                textAlignVertical="top"
+                style={{ minHeight: 70, paddingTop: 12 }}
+                testID="add-parking-notes"
+              />
+
+              {/* ---- Permit + Fee toggles ---- */}
               <View style={{ gap: space.md }}>
-                <Toggle label="Dog friendly" value={draft.dog_friendly} onChange={(v) => setDraft({ ...draft, dog_friendly: v })} />
-                <Toggle label="Kid friendly" value={draft.kid_friendly} onChange={(v) => setDraft({ ...draft, kid_friendly: v })} />
-                <Toggle label="Wheelchair accessible" value={draft.accessible} onChange={(v) => setDraft({ ...draft, accessible: v })} />
-                <Toggle label="Indoor option" value={draft.indoor} onChange={(v) => setDraft({ ...draft, indoor: v })} />
-                <Toggle label="Permit required" value={draft.permit_required} onChange={(v) => setDraft({ ...draft, permit_required: v })} />
-                <Toggle label="Fee required" value={draft.fee_required} onChange={(v) => setDraft({ ...draft, fee_required: v })} />
+                <Toggle label="Permit needed?" value={draft.permit_required} onChange={(v) => setDraft({ ...draft, permit_required: v })} />
+                <Toggle label="Entry fee?" value={draft.fee_required} onChange={(v) => setDraft({ ...draft, fee_required: v })} />
               </View>
 
+              {/* ---- Best access instructions ---- */}
               <Input
-                label="Notes (for future-you)"
+                label="Best access instructions"
+                value={draft.access_notes}
+                onChangeText={(t) => setDraft({ ...draft, access_notes: (t || '').slice(0, 1000) })}
+                placeholder="Trail name, gate, recommended approach, what to avoid…"
+                multiline
+                numberOfLines={3}
+                maxLength={1000}
+                textAlignVertical="top"
+                style={{ minHeight: 90, paddingTop: 12 }}
+                testID="add-access-notes"
+              />
+
+              {/* ---- Notes for Future You (free-form) ---- */}
+              <Input
+                label="Notes for Future You"
                 value={draft.notes}
                 onChangeText={(t) => setDraft({ ...draft, notes: t.slice(0, 2000) })}
-                placeholder="Parking, gate codes, permit info, gotchas — anything future-you would want to know."
+                placeholder="Anything you'd want to remember later…"
                 multiline
                 numberOfLines={4}
                 maxLength={2000}
@@ -1123,39 +1109,16 @@ export default function AddSpot() {
                 Choose who can see this spot. Public spots go into community review — private and followers-only spots post instantly.
               </Text>
               {PRIVACY_MODES.map((p) => {
-                const isPremiumOption = p.key === 'premium';
-                const canPickPremium = user?.plan === 'elite';
-                const locked = isPremiumOption && !canPickPremium;
                 const active = draft.privacy_mode === p.key;
                 return (
                   <TouchableOpacity
                     key={p.key}
-                    onPress={() => {
-                      if (locked) {
-                        Alert.alert(
-                          'Elite plan required',
-                          'Premium spots are only available to Elite creators. Upgrade to list paid or subscription-only spots.',
-                          [
-                            { text: 'Not now', style: 'cancel' },
-                            { text: 'See plans', onPress: () => router.push('/paywall') },
-                          ]
-                        );
-                        return;
-                      }
-                      setDraft({ ...draft, privacy_mode: p.key });
-                    }}
-                    style={[styles.privCard, active && styles.privCardActive, locked && { opacity: 0.6 }]}
+                    onPress={() => setDraft({ ...draft, privacy_mode: p.key })}
+                    style={[styles.privCard, active && styles.privCardActive]}
                     testID={`privacy-${p.key}`}
                   >
                     <View style={{ flex: 1 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <Text style={{ color: colors.text, fontFamily: font.bodySemibold, fontSize: 15 }}>{p.label}</Text>
-                        {isPremiumOption && (
-                          <View style={styles.elitePill}>
-                            <Text style={styles.elitePillTxt}>ELITE</Text>
-                          </View>
-                        )}
-                      </View>
+                      <Text style={{ color: colors.text, fontFamily: font.bodySemibold, fontSize: 15 }}>{p.label}</Text>
                       <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 4 }}>{p.help}</Text>
                     </View>
                     {active && <Check size={20} color={colors.primary} />}
@@ -1163,25 +1126,14 @@ export default function AddSpot() {
                 );
               })}
 
-              {draft.privacy_mode === 'premium' && user?.plan !== 'elite' && (
-                <View style={styles.upgradeInline}>
-                  <Crown size={18} color={colors.primary} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.upgradeInlineTitle}>Unlock Premium spots</Text>
-                    <Text style={styles.upgradeInlineBody}>Sell access or require subscribers. Available on the Elite plan.</Text>
-                  </View>
-                  <TouchableOpacity style={styles.upgradeBtn} onPress={() => router.push('/paywall')}>
-                    <Text style={styles.upgradeBtnTxt}>Upgrade</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
+              {/* (Apr 2026) Premium privacy mode + upgrade banner removed —
+                  paid content lives in the Marketplace tab. */}
 
               <Text style={styles.subSectionLabel}>Coordinate display</Text>
               <View style={styles.chipRow}>
                 {[
                   { k: 'exact', l: 'Exact' },
                   { k: 'approximate', l: 'Approximate (~1km)' },
-                  { k: 'hidden', l: 'Hidden' },
                 ].map((m) => (
                   <Chip
                     key={m.k}
@@ -1192,9 +1144,9 @@ export default function AddSpot() {
                 ))}
               </View>
               <Text style={styles.helper}>
-                Hidden & Approximate modes still show the city and state so other photographers
-                can plan trips — only the exact pin is redacted. Use Approximate for fragile
-                environments (bluebonnet fields, nesting grounds, fragile overlooks).
+                Approximate mode still shows the city and state so other photographers can plan
+                trips — only the exact pin is fuzzed by ~1km. Use it for fragile environments
+                (bluebonnet fields, nesting grounds, fragile overlooks).
               </Text>
             </View>
           )}
