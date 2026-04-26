@@ -18,18 +18,20 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, FlatList, Pressable, Image, ActivityIndicator,
   ScrollView, Share, RefreshControl, Animated, Easing, TextInput, Alert,
+  Modal,
 } from 'react-native';
 import { router } from 'expo-router';
 import {
   Plus, Search, Heart, MessageCircle, Share2 as ShareIcon, Bookmark,
   Briefcase, Camera, Settings, Sparkles, MapPin, Trophy, Flame,
   Send, ChevronRight, MoreHorizontal, Trash2,
+  CheckCircle2, Circle, X, ShieldAlert, EyeOff, AlertTriangle, Shield,
 } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
-import { api } from '../api';
+import { api, formatApiError } from '../api';
 import { useAuth } from '../auth';
-import { colors, font, space } from '../theme';
+import { colors, font, space, radii } from '../theme';
 
 // ============================================================================
 // Categories — Apr 2026 spec: All / Feedback / Referrals / Gear / Editing / Wins
@@ -73,6 +75,7 @@ function categoryMeta(cat: string | undefined) {
 export default function CommunityView() {
   const { user: me } = useAuth();
   const isAdmin = !!me && (me.role === 'admin' || me.role === 'super_admin');
+  const isSuperAdmin = !!me && me.role === 'super_admin';
   const [posts, setPosts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -80,6 +83,36 @@ export default function CommunityView() {
   const [q, setQ] = useState('');
   const [likedMap, setLikedMap] = useState<Record<string, boolean>>({});
   const [savedMap, setSavedMap] = useState<Record<string, boolean>>({});
+
+  // ---- Bulk moderation mode (Apr 2026 — Path 2 sprint) ----------------------
+  // Admins/super-admins enter "Moderate" mode to multi-select posts. Tapping
+  // a card while in mode toggles selection instead of opening detail. A
+  // sticky action bar gives bulk options powered by the existing
+  // /api/admin/community/bulk-moderate endpoint.
+  const [modMode, setModMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkAction, setBulkAction] = useState<null | {
+    label: string;
+    action: 'soft_delete' | 'hide' | 'mark_spam' | 'restore' | 'hard_delete';
+    danger: boolean;
+    description: string;
+  }>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  const toggleSelect = useCallback((postId: string) => {
+    Haptics.selectionAsync().catch(() => {});
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(postId)) next.delete(postId);
+      else next.add(postId);
+      return next;
+    });
+  }, []);
+
+  const exitModMode = useCallback(() => {
+    setModMode(false);
+    setSelectedIds(new Set());
+  }, []);
 
   const load = useCallback(
     async (isRefresh = false) => {
@@ -113,6 +146,42 @@ export default function CommunityView() {
       return hay.includes(needle);
     });
   }, [posts, q]);
+
+  // ---- Bulk moderate executor ----------------------------------------------
+  const performBulk = useCallback(async () => {
+    if (!bulkAction || selectedIds.size === 0) return;
+    setBulkBusy(true);
+    try {
+      const ids = Array.from(selectedIds);
+      const r = await api.post('/admin/community/bulk-moderate', {
+        type: 'post',
+        ids,
+        action: bulkAction.action,
+        reason: `[bulk ${bulkAction.action}] ${ids.length} posts via Community Moderate mode`,
+      });
+      const ok = r.applied ?? 0;
+      const failed = r.failed ?? 0;
+      // Optimistically remove acted-on posts from the feed unless the action
+      // is `restore`, which makes them re-appear via reload.
+      if (bulkAction.action !== 'restore') {
+        setPosts((prev) => prev.filter((p) => !selectedIds.has(p.post_id)));
+      }
+      setBulkAction(null);
+      exitModMode();
+      Alert.alert(
+        'Moderation complete',
+        failed === 0
+          ? `${bulkAction.label}: ${ok} ${ok === 1 ? 'post' : 'posts'} succeeded.`
+          : `${bulkAction.label}: ${ok} succeeded · ${failed} failed. Check audit log.`,
+      );
+      // Hard refresh on restore so the posts re-enter the feed.
+      if (bulkAction.action === 'restore') load(true);
+    } catch (e) {
+      Alert.alert('Bulk action failed', formatApiError(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  }, [bulkAction, selectedIds, exitModMode, load]);
 
   // Smart retention badges — counted from current feed
   const retentionStats = useMemo(() => {
@@ -228,7 +297,124 @@ export default function CommunityView() {
         >
           <Plus size={18} color="#1a1300" strokeWidth={3} />
         </Pressable>
+        {/* Apr 2026 — admins/super-admins enter Moderate mode */}
+        {isAdmin ? (
+          <Pressable
+            onPress={() => {
+              Haptics.selectionAsync().catch(() => {});
+              setModMode((m) => !m);
+              if (modMode) setSelectedIds(new Set());
+            }}
+            style={[s.modBtn, modMode && s.modBtnActive]}
+            testID="community-mod-toggle"
+          >
+            <Shield size={16} color={modMode ? '#1a1300' : colors.primary} />
+          </Pressable>
+        ) : null}
       </View>
+
+      {/* Sticky action bar — Apr 2026 bulk moderation mode */}
+      {modMode ? (
+        <View style={s.modBar} testID="community-mod-bar">
+          <View style={s.modBarHead}>
+            <Pressable onPress={exitModMode} hitSlop={8} style={s.modBarClose}>
+              <X size={16} color={colors.text} />
+            </Pressable>
+            <Text style={s.modBarTitle}>
+              {selectedIds.size === 0
+                ? 'Tap posts to select'
+                : `${selectedIds.size} selected`}
+            </Text>
+            <Pressable
+              onPress={() => {
+                if (selectedIds.size === visiblePosts.length) {
+                  setSelectedIds(new Set());
+                } else {
+                  setSelectedIds(new Set(visiblePosts.map((p) => p.post_id)));
+                }
+              }}
+              style={s.modBarSelectAll}
+              hitSlop={6}
+            >
+              <Text style={s.modBarSelectAllTxt}>
+                {selectedIds.size === visiblePosts.length && visiblePosts.length > 0 ? 'Clear all' : 'Select all'}
+              </Text>
+            </Pressable>
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={s.modBarActions}
+            keyboardShouldPersistTaps="handled"
+          >
+            <ModAction
+              icon={EyeOff}
+              label="Remove from feed"
+              count={selectedIds.size}
+              disabled={selectedIds.size === 0}
+              onPress={() => setBulkAction({
+                label: 'Remove from feed',
+                action: 'hide',
+                danger: false,
+                description: `Soft-hides ${selectedIds.size} ${selectedIds.size === 1 ? 'post' : 'posts'} from the Community feed. Authors can still see their own posts. Reversible from the audit log.`,
+              })}
+            />
+            <ModAction
+              icon={AlertTriangle}
+              label="Mark spam"
+              count={selectedIds.size}
+              danger
+              disabled={selectedIds.size === 0}
+              onPress={() => setBulkAction({
+                label: 'Mark spam',
+                action: 'mark_spam',
+                danger: true,
+                description: `Removes ${selectedIds.size} ${selectedIds.size === 1 ? 'post' : 'posts'} and adds a strike to each author. Trains the spam-detection signal.`,
+              })}
+            />
+            <ModAction
+              icon={Trash2}
+              label="Soft delete"
+              count={selectedIds.size}
+              danger
+              disabled={selectedIds.size === 0}
+              onPress={() => setBulkAction({
+                label: 'Delete (soft)',
+                action: 'soft_delete',
+                danger: true,
+                description: `Marks ${selectedIds.size} ${selectedIds.size === 1 ? 'post' : 'posts'} as removed. Author content history preserved; reversible by Restore.`,
+              })}
+            />
+            {isSuperAdmin ? (
+              <ModAction
+                icon={ShieldAlert}
+                label="Delete permanently"
+                count={selectedIds.size}
+                danger
+                disabled={selectedIds.size === 0}
+                onPress={() => setBulkAction({
+                  label: 'Delete permanently',
+                  action: 'hard_delete',
+                  danger: true,
+                  description: `PERMANENTLY removes ${selectedIds.size} ${selectedIds.size === 1 ? 'post' : 'posts'} from the database, including comments and image references. THIS CANNOT BE UNDONE.`,
+                })}
+              />
+            ) : null}
+            <ModAction
+              icon={CheckCircle2}
+              label="Restore"
+              count={selectedIds.size}
+              disabled={selectedIds.size === 0}
+              onPress={() => setBulkAction({
+                label: 'Restore',
+                action: 'restore',
+                danger: false,
+                description: `Restores ${selectedIds.size} previously hidden or removed ${selectedIds.size === 1 ? 'post' : 'posts'} back to the live feed.`,
+              })}
+            />
+          </ScrollView>
+        </View>
+      ) : null}
 
       {/* Category chips */}
       <ScrollView
@@ -306,28 +492,147 @@ export default function CommunityView() {
               tintColor={colors.primary}
             />
           }
-          renderItem={({ item, index }) => (
-            <StaggeredCard index={index}>
-              <PostCard
-                p={item}
-                isLiked={!!likedMap[item.post_id] || !!item.is_liked}
-                isSaved={!!savedMap[item.post_id]}
-                canDelete={isAdmin || (!!me && item?.author?.user_id === me.user_id)}
-                onLike={() => toggleLike(item.post_id)}
-                onSave={() => toggleSave(item.post_id)}
-                onShare={() => onShare(item)}
-                onMessage={() => item.author?.user_id && onMessage(item.author.user_id, item.post_id)}
-                onApply={() => item.author?.user_id && onMessage(item.author.user_id, item.post_id)}
-                onDelete={() => handleDelete(item)}
-              />
-            </StaggeredCard>
-          )}
+          renderItem={({ item, index }) => {
+            const isSelected = selectedIds.has(item.post_id);
+            return (
+              <StaggeredCard index={index}>
+                <Pressable
+                  onPress={modMode ? () => toggleSelect(item.post_id) : undefined}
+                  style={modMode ? { position: 'relative' } : undefined}
+                >
+                  <PostCard
+                    p={item}
+                    isLiked={!!likedMap[item.post_id] || !!item.is_liked}
+                    isSaved={!!savedMap[item.post_id]}
+                    canDelete={isAdmin || (!!me && item?.author?.user_id === me.user_id)}
+                    onLike={() => toggleLike(item.post_id)}
+                    onSave={() => toggleSave(item.post_id)}
+                    onShare={() => onShare(item)}
+                    onMessage={() => item.author?.user_id && onMessage(item.author.user_id, item.post_id)}
+                    onApply={() => item.author?.user_id && onMessage(item.author.user_id, item.post_id)}
+                    onDelete={() => handleDelete(item)}
+                    moderationOverlay={modMode ? (isSelected ? 'selected' : 'unselected') : null}
+                  />
+                </Pressable>
+              </StaggeredCard>
+            );
+          }}
           showsVerticalScrollIndicator={false}
         />
       )}
+
+      {/* ---- Bulk-action confirmation modal ---- */}
+      <Modal
+        visible={!!bulkAction}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !bulkBusy && setBulkAction(null)}
+      >
+        <View style={s.modalBackdrop}>
+          <View style={s.modalCard}>
+            <View style={[
+              s.modalIconWrap,
+              { backgroundColor: bulkAction?.danger ? 'rgba(217,80,67,0.15)' : 'rgba(245,166,35,0.15)' },
+            ]}>
+              {bulkAction?.danger
+                ? <AlertTriangle size={26} color={colors.secondary} />
+                : <Shield size={26} color={colors.primary} />}
+            </View>
+            <Text style={s.modalTitle}>
+              {bulkAction?.action === 'hard_delete'
+                ? `Delete ${selectedIds.size} ${selectedIds.size === 1 ? 'post' : 'posts'} permanently?`
+                : bulkAction?.action === 'hide'
+                ? `Remove ${selectedIds.size} ${selectedIds.size === 1 ? 'post' : 'posts'} from community feed?`
+                : `${bulkAction?.label} ${selectedIds.size} ${selectedIds.size === 1 ? 'post' : 'posts'}?`}
+            </Text>
+            <Text style={s.modalBody}>{bulkAction?.description}</Text>
+            <View style={s.modalActions}>
+              <Pressable
+                onPress={() => setBulkAction(null)}
+                style={[s.modalBtn, s.modalBtnGhost]}
+                disabled={bulkBusy}
+              >
+                <Text style={s.modalBtnGhostTxt}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={performBulk}
+                style={[
+                  s.modalBtn,
+                  bulkAction?.danger ? s.modalBtnDanger : s.modalBtnPrimary,
+                  bulkBusy && { opacity: 0.6 },
+                ]}
+                disabled={bulkBusy}
+                testID="community-mod-confirm"
+              >
+                {bulkBusy ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text style={bulkAction?.danger ? s.modalBtnDangerTxt : s.modalBtnPrimaryTxt}>
+                    {bulkAction?.action === 'hide' ? 'Remove' : 'Confirm'}
+                  </Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
+
+// ---- Sticky-bar action button ---------------------------------------------
+function ModAction({ icon: Icon, label, count, danger, disabled, onPress }: {
+  icon: any; label: string; count: number; danger?: boolean; disabled?: boolean; onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      style={[
+        styles_modAction.btn,
+        danger && styles_modAction.btnDanger,
+        disabled && styles_modAction.btnDisabled,
+      ]}
+    >
+      <Icon size={14} color={disabled ? colors.textTertiary : danger ? colors.secondary : colors.text} />
+      <Text style={[
+        styles_modAction.txt,
+        danger && { color: colors.secondary },
+        disabled && { color: colors.textTertiary },
+      ]}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+const styles_modAction = StyleSheet.create({
+  btn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: radii.pill,
+    backgroundColor: colors.surface1,
+    borderColor: colors.border,
+    borderWidth: 1,
+  },
+  btnDanger: {
+    backgroundColor: 'rgba(217,80,67,0.08)',
+    borderColor: 'rgba(217,80,67,0.30)',
+  },
+  btnDisabled: {
+    backgroundColor: colors.surface2,
+    borderColor: colors.border,
+    opacity: 0.6,
+  },
+  txt: {
+    color: colors.text,
+    fontFamily: font.bodySemibold,
+    fontSize: 12.5,
+  },
+});
 
 // ============================================================================
 // Staggered fade-in wrapper for feed cards
@@ -362,6 +667,7 @@ function StaggeredCard({ index, children }: { index: number; children: React.Rea
 // ============================================================================
 function PostCard({
   p, isLiked, isSaved, canDelete, onLike, onSave, onShare, onMessage, onApply, onDelete,
+  moderationOverlay,
 }: {
   p: any;
   isLiked?: boolean;
@@ -373,6 +679,9 @@ function PostCard({
   onMessage: () => void;
   onApply: () => void;
   onDelete: () => void;
+  /** When set, the card is rendered in moderation-mode with a checkbox
+   *  overlay and gold selection border. */
+  moderationOverlay?: 'selected' | 'unselected' | null;
 }) {
   const meta = categoryMeta(p.category);
   const hasKnownCat = !!CATEGORIES.find((c) => c.key === p.category && c.key !== 'all');
@@ -384,13 +693,31 @@ function PostCard({
   const commentCount = p.comment_count ?? p.comments ?? 0;
   const cover = (Array.isArray(p.images) ? p.images[0] : null);
   const coverUrl = cover?.image_url || cover?.url || (typeof cover === 'string' ? cover : null);
+  const inModMode = !!moderationOverlay;
+  const isSelected = moderationOverlay === 'selected';
 
   return (
     <Pressable
-      onPress={() => router.push(`/community/post/${p.post_id}` as any)}
-      style={({ pressed }) => [s.card, elite && s.cardElite, pressed && s.cardPressed]}
+      onPress={inModMode ? undefined : () => router.push(`/community/post/${p.post_id}` as any)}
+      style={({ pressed }) => [
+        s.card,
+        elite && s.cardElite,
+        pressed && !inModMode && s.cardPressed,
+        isSelected && s.cardModSelected,
+        inModMode && !isSelected && s.cardModUnselected,
+      ]}
       testID={`community-post-${p.post_id}`}
     >
+      {/* Moderation checkbox overlay (Apr 2026 sprint) */}
+      {inModMode ? (
+        <View style={s.cardModBadge} pointerEvents="none">
+          {isSelected ? (
+            <CheckCircle2 size={22} color={colors.primary} />
+          ) : (
+            <Circle size={22} color="rgba(255,255,255,0.7)" />
+          )}
+        </View>
+      ) : null}
       {/* Top: author row */}
       <View style={s.cardHead}>
         <Pressable
@@ -593,6 +920,103 @@ const s = StyleSheet.create({
   },
   composeBtnPressed: { opacity: 0.85, transform: [{ scale: 0.96 }] },
 
+  // ---- Apr 2026 — Bulk Moderate mode ----
+  modBtn: {
+    width: 44, height: 44, borderRadius: 22,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.surface1,
+    borderColor: 'rgba(245,166,35,0.35)',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  modBtnActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  modBar: {
+    marginHorizontal: space.xl,
+    marginBottom: space.sm,
+    paddingVertical: 10,
+    paddingHorizontal: space.md,
+    backgroundColor: 'rgba(245,166,35,0.08)',
+    borderColor: 'rgba(245,166,35,0.35)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radii.lg,
+    gap: 10,
+  },
+  modBarHead: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+  },
+  modBarClose: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: colors.surface1,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  modBarTitle: {
+    flex: 1,
+    color: colors.text, fontFamily: font.bodyBold, fontSize: 14,
+    letterSpacing: -0.1,
+  },
+  modBarSelectAll: {
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: radii.pill,
+    backgroundColor: colors.surface1,
+    borderColor: colors.border, borderWidth: 1,
+  },
+  modBarSelectAllTxt: {
+    color: colors.primary, fontFamily: font.bodyBold, fontSize: 11.5, letterSpacing: 0.2,
+  },
+  modBarActions: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingVertical: 2,
+  },
+
+  // Modal
+  modalBackdrop: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.7)',
+    alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: space.xl,
+  },
+  modalCard: {
+    width: '100%', maxWidth: 400,
+    backgroundColor: colors.surface1,
+    borderRadius: radii.xl,
+    borderColor: colors.border, borderWidth: 1,
+    padding: space.xl,
+    alignItems: 'center',
+  },
+  modalIconWrap: {
+    width: 56, height: 56, borderRadius: 28,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: space.md,
+  },
+  modalTitle: {
+    color: colors.text, fontFamily: font.bodyBold, fontSize: 17,
+    textAlign: 'center', marginBottom: 8, letterSpacing: -0.2,
+  },
+  modalBody: {
+    color: colors.textSecondary, fontFamily: font.body, fontSize: 13,
+    textAlign: 'center', lineHeight: 19, marginBottom: space.lg,
+  },
+  modalActions: {
+    flexDirection: 'row', gap: space.md, width: '100%',
+  },
+  modalBtn: {
+    flex: 1,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 12,
+    borderRadius: radii.md,
+  },
+  modalBtnGhost: {
+    backgroundColor: colors.surface2,
+    borderColor: colors.border, borderWidth: 1,
+  },
+  modalBtnGhostTxt: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
+  modalBtnPrimary: { backgroundColor: colors.primary },
+  modalBtnPrimaryTxt: { color: '#1a0a06', fontFamily: font.bodyBold, fontSize: 14 },
+  modalBtnDanger: { backgroundColor: colors.secondary },
+  modalBtnDangerTxt: { color: '#fff', fontFamily: font.bodyBold, fontSize: 14 },
+
   // Category pills
   catRow: {
     paddingHorizontal: space.xl,
@@ -644,6 +1068,23 @@ const s = StyleSheet.create({
   },
   cardElite: { borderColor: 'rgba(245,166,35,0.45)' },
   cardPressed: { opacity: 0.92, transform: [{ scale: 0.997 }] },
+
+  // Apr 2026 — moderation-mode visual states
+  cardModSelected: {
+    borderColor: colors.primary,
+    borderWidth: 2,
+  },
+  cardModUnselected: {
+    opacity: 0.85,
+  },
+  cardModBadge: {
+    position: 'absolute',
+    top: 12, right: 12,
+    width: 28, height: 28, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    zIndex: 5,
+  },
 
   cardHead: {
     flexDirection: 'row',
