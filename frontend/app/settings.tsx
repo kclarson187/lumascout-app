@@ -22,6 +22,7 @@ import {
 import { useAuth } from '../src/auth';
 import { api } from '../src/api';
 import { colors, font, space, radii } from '../src/theme';
+import { isElite, isPaid as entitlementsIsPaid, isAdmin, planLabel as entitlementPlanLabel } from '../src/utils/entitlements';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Types + helpers
@@ -52,7 +53,7 @@ type RowSpec = {
   destructive?: boolean;
 };
 
-function planLabel(p: string | undefined): string {
+function planTitleCase(p: string | undefined): string {
   return (p || 'free').charAt(0).toUpperCase() + (p || 'free').slice(1);
 }
 function comingSoon(feature: string) {
@@ -80,6 +81,9 @@ export default function SettingsHub() {
   const [refreshing, setRefreshing] = useState(false);
 
   const plan: Plan = ((user?.plan as Plan) || 'free');
+  const userIsPaid = entitlementsIsPaid(user);
+  const userIsElite = isElite(user);
+  const userIsAdmin = isAdmin(user);
   const isStaff = STAFF_ROLES.includes(user?.role || '');
 
   const loadStats = useCallback(async () => {
@@ -129,7 +133,7 @@ export default function SettingsHub() {
     {
       key: 'membership', icon: CreditCard,
       title: 'Membership',
-      subtitle: `${planLabel(plan)} · Tap to manage, upgrade, or view history`,
+      subtitle: `${entitlementPlanLabel(user)} · Tap to manage, upgrade, or view history`,
       onPress: () => router.push('/billing'),
     },
     {
@@ -311,7 +315,7 @@ export default function SettingsHub() {
     { label: 'Saved', value: stats?.saved ?? 0 },
     { label: 'Followers', value: stats?.followers ?? 0 },
     { label: 'Views / 7d', value: stats?.views_7d ?? 0 },
-    { label: 'Plan', value: planLabel(plan), isPlan: true },
+    { label: 'Plan', value: entitlementPlanLabel(user), isPlan: true },
   ];
 
   return (
@@ -357,7 +361,7 @@ export default function SettingsHub() {
           <View style={styles.statsRow}>
             {miniStats.map((s) => (
               <View key={s.label} style={styles.statCell}>
-                <Text style={[styles.statValue, s.isPlan && { color: plan === 'elite' ? colors.primary : plan === 'pro' ? '#7BC47F' : colors.text }]} numberOfLines={1}>
+                <Text style={[styles.statValue, s.isPlan && { color: userIsElite ? colors.primary : userIsPaid ? '#7BC47F' : colors.text }]} numberOfLines={1}>
                   {String(s.value)}
                 </Text>
                 <Text style={styles.statLabel}>{s.label}</Text>
@@ -366,8 +370,9 @@ export default function SettingsHub() {
           </View>
         </View>
 
-        {/* Upgrade CTA (conditional) */}
-        {plan !== 'elite' && (
+        {/* Upgrade CTA — only for users without any paid entitlement.
+            Comp_pro / comp_elite / trial / admin all suppress the upsell. */}
+        {!userIsPaid && !userIsElite && (
           <TouchableOpacity style={styles.upsell} onPress={() => router.push('/paywall')} testID="settings-upsell">
             <View style={styles.upsellIconWrap}>
               <Crown size={22} color={colors.textInverse} />
@@ -384,6 +389,24 @@ export default function SettingsHub() {
             </View>
             <ArrowUpRight size={18} color={colors.textInverse} />
           </TouchableOpacity>
+        )}
+
+        {/* Comp / Admin badge banner — replaces the upsell so the user sees
+            confirmation that their elevated access is recognized. */}
+        {(userIsPaid && (userIsAdmin || (user?.plan === 'comp_pro' || user?.plan === 'comp_elite'))) && (
+          <View style={styles.compBanner} testID="settings-comp-banner">
+            <View style={styles.compIconWrap}>
+              <ShieldCheck size={20} color={colors.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.compTitle}>{entitlementPlanLabel(user)}</Text>
+              <Text style={styles.compBody}>
+                {userIsAdmin
+                  ? 'Admin access — all premium features unlocked.'
+                  : 'Complimentary access granted by LumaScout staff.'}
+              </Text>
+            </View>
+          </View>
         )}
 
         {/* Grouped sections */}
@@ -548,6 +571,24 @@ const styles = StyleSheet.create({
   },
   upsellTitle: { fontFamily: font.bodyBold, fontSize: 15, color: colors.textInverse, letterSpacing: -0.2 },
   upsellBody: { fontFamily: font.body, fontSize: 12, color: 'rgba(0,0,0,0.8)', marginTop: 2 },
+
+  // Comp / Admin badge banner — replaces upsell
+  compBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: space.md,
+    backgroundColor: 'rgba(245,166,35,0.10)',
+    borderColor: 'rgba(245,166,35,0.35)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radii.xl,
+    paddingVertical: space.md, paddingHorizontal: space.lg,
+    marginTop: space.lg,
+  },
+  compIconWrap: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(245,166,35,0.15)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  compTitle: { fontFamily: font.bodyBold, fontSize: 14, color: colors.primary, letterSpacing: 0.5 },
+  compBody: { fontFamily: font.body, fontSize: 12.5, color: colors.textSecondary, marginTop: 2 },
 
   // Section
   section: { marginTop: space.xxl },

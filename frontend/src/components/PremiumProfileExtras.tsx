@@ -26,6 +26,11 @@ import {
 } from 'lucide-react-native';
 import { api } from '../api';
 import { colors, font, space } from '../theme';
+import {
+  isPaid as entitlementsIsPaid,
+  isPro as entitlementsIsPro,
+  isElite as entitlementsIsElite,
+} from '../utils/entitlements';
 
 // ============================================================================
 // 1. Stats Row (7 metrics — scrollable)
@@ -78,9 +83,11 @@ export default function PremiumProfileExtras({
   onEdit?: () => void;
 }) {
   const plan = user?.plan || 'free';
-  const isFree = plan === 'free';
-  const isPro = plan === 'pro';
-  const isElite = plan === 'elite';
+  // Use centralized entitlement helpers so comp_pro / comp_elite / trial /
+  // admin all properly hide the upsell + show paid UX.
+  const isFree = !entitlementsIsPaid(user);
+  const isPro = entitlementsIsPro(user) && !entitlementsIsElite(user);
+  const isElite = entitlementsIsElite(user);
   const stats = user?.stats || {};
 
   // Lazy-fetched daily metrics
@@ -262,11 +269,11 @@ export default function PremiumProfileExtras({
       </View>
 
       {/* ========================================================== */}
-      {/* SECTION — Portfolio Highlights                             */}
+      {/* SECTION — Uploaded Locations                              */}
       {/* ========================================================== */}
       <View>
         <View style={st.secTitleRow}>
-          <Text style={st.secTitle}>Portfolio highlights</Text>
+          <Text style={st.secTitle}>Uploaded locations</Text>
           {highlights.length > 0 ? (
             <Pressable onPress={() => router.push(`/user/${user.user_id}` as any)} hitSlop={8}>
               <Text style={st.seeAll}>See all</Text>
@@ -282,9 +289,9 @@ export default function PremiumProfileExtras({
               <Camera size={20} color={colors.primary} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={st.portfolioEmptyTitle}>Upload your best work</Text>
+              <Text style={st.portfolioEmptyTitle}>Share your first location</Text>
               <Text style={st.portfolioEmptyBody}>
-                Photos attract followers, drive saves, and rank you on the Directory.
+                Locations you upload appear here and on your public profile.
               </Text>
             </View>
             <View style={st.portfolioEmptyCta}>

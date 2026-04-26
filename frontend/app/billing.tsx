@@ -14,6 +14,7 @@ import { api, formatApiError } from '../src/api';
 import { useAuth } from '../src/auth';
 import { colors, font, space, radii } from '../src/theme';
 import { Button } from '../src/components/Button';
+import { isPaid as entitlementsIsPaid, isAdmin, planLabel } from '../src/utils/entitlements';
 
 export default function Billing() {
   const { user, refresh } = useAuth();
@@ -76,9 +77,11 @@ export default function Billing() {
     );
   }
 
-  const plan = (data.plan || 'free').toUpperCase();
-  const isPaid = data.plan === 'pro' || data.plan === 'elite';
-  const isComp = data.billing_status === 'comp';
+  const plan = planLabel({ plan: data.plan, role: user?.role });
+  // Treat admins, paid plans, comp plans, and trial plans all as "paid" for
+  // entitlement purposes — none of them should ever see an upsell.
+  const isPaid = entitlementsIsPaid({ plan: data.plan, role: user?.role });
+  const isComp = data.billing_status === 'comp' || data.plan === 'comp_pro' || data.plan === 'comp_elite';
   const status = (data.billing_status || '').toLowerCase();
   const statusLabel = isComp
     ? 'COMPLIMENTARY'

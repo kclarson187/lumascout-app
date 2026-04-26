@@ -73,7 +73,8 @@ export default function Home() {
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [unreadNotif, setUnreadNotif] = useState(0);
   const [filterResults, setFilterResults] = useState<any[] | null>(null);
-  const { coords } = useGps();
+  const { coords, loading: gpsLoading, error: gpsError } = useGps();
+  const [showGpsBanner, setShowGpsBanner] = useState(false);
 
   // PERF #1: unread-notification poll is deferred 500ms so the Home shell
   // can paint first. First page render no longer blocks on this call.
@@ -138,18 +139,37 @@ export default function Home() {
     return () => { alive = false; };
   }, []);
 
-  // Single-fetch orchestration — waits briefly for GPS, then fires once.
+  // Single-fetch orchestration — waits for GPS to resolve (or be denied)
+  // before firing. We give the OS up to 5s to deliver coords (covers the
+  // "user just tapped Allow on the permission prompt" case on iOS where
+  // the dialog itself takes 1-2s). If GPS never resolves we still fire so
+  // users with denied permissions don't see a perpetual skeleton.
+  // If GPS arrives AFTER the no-coords fetch fired, we re-fetch with
+  // coords so distances become accurate as soon as possible.
+  const firedNoCoordsRef = useRef(false);
   useEffect(() => {
     if (coords) {
       doFetch(true);
+      firedNoCoordsRef.current = false; // re-fetch on coord refresh
       return;
     }
-    // GPS not ready yet — don't fire immediately. Give GPS up to 1.2s to
-    // resolve; otherwise fire without coords so we don't deadlock users
-    // who denied location permission.
-    const t = setTimeout(() => doFetch(false), 1200);
-    return () => clearTimeout(t);
-  }, [coords, doFetch]);
+    if (gpsLoading) {
+      // GPS still resolving — wait up to 5s
+      const t = setTimeout(() => {
+        if (!firedNoCoordsRef.current) {
+          firedNoCoordsRef.current = true;
+          doFetch(false);
+        }
+      }, 5000);
+      return () => clearTimeout(t);
+    }
+    // GPS finished but no coords (denied or failed). Show banner + fire once.
+    if (gpsError === 'permission_denied') setShowGpsBanner(true);
+    if (!firedNoCoordsRef.current) {
+      firedNoCoordsRef.current = true;
+      doFetch(false);
+    }
+  }, [coords, doFetch, gpsLoading, gpsError]);
 
   // Back-compat entry point for pull-to-refresh / manual reload buttons.
   const load = useCallback(async () => {
@@ -337,6 +357,25 @@ export default function Home() {
             ) : null}
           </TouchableOpacity>
         </View>
+
+        {/* Subtle GPS-denied banner — appears only when location permission
+            was explicitly denied. Encourages users to enable foreground
+            location for accurate "Best Near You" distances. */}
+        {showGpsBanner ? (
+          <Pressable
+            onPress={() => router.push('/settings/location' as any)}
+            style={styles.gpsBanner}
+            testID="home-gps-banner"
+          >
+            <View style={styles.gpsBannerIcon}>
+              <MapPin size={14} color={colors.primary} />
+            </View>
+            <Text style={styles.gpsBannerTxt}>
+              Enable location for accurate nearby spots.
+            </Text>
+            <ChevronRight size={14} color={colors.textSecondary} />
+          </Pressable>
+        ) : null}
 
         {/* Premium Quick Action Pills (2026-04 Home PRD) — Near You /
             Golden Hour / Weather / Collections / Routes. Replaces the
@@ -585,6 +624,34 @@ const styles = StyleSheet.create({
   hello: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13 },
   brand: { color: colors.text, fontFamily: font.display, fontSize: 30, letterSpacing: -0.5 },
   brandSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2, lineHeight: 16 },
+
+  // GPS-permission banner — shown only when the user explicitly denied
+  // location. Subtle gold pill that deep-links into Location settings.
+  gpsBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginHorizontal: space.xl,
+    marginTop: space.xs,
+    paddingHorizontal: space.md,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(245,166,35,0.08)',
+    borderColor: 'rgba(245,166,35,0.28)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radii.lg,
+  },
+  gpsBannerIcon: {
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: 'rgba(245,166,35,0.18)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  gpsBannerTxt: {
+    flex: 1,
+    fontFamily: font.body,
+    fontSize: 13,
+    color: colors.text,
+  },
+
   // Quick Action Pills (2026-04 Home Premium) — Near You / Golden Hour /
   // Weather / Collections / Routes. Each pill is a compact gold-accent
   // card with icon + bold label + subtle status subtitle.

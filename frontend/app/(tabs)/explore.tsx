@@ -59,7 +59,11 @@ const SEASONS: string[] = []; // Apr 2026 cleanup: month/season filter removed; 
 export default function Explore() {
   const [spots, setSpots] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'map' | 'list'>(Platform.OS === 'web' ? 'list' : 'map');
+  // (Apr 2026) Map/List toggle removed — Explore is now a dedicated map
+  // experience. List discovery lives on the Home tab. We keep the legacy
+  // `view` const so call sites that reference it (legend / niche dropdown
+  // gating) keep working without a sweeping refactor.
+  const view: 'map' = 'map';
   const [filters, setFilters] = useState<Filters>({});
   const [filterOpen, setFilterOpen] = useState(false);
   const [selectedSpot, setSelectedSpot] = useState<any | null>(null);
@@ -214,27 +218,9 @@ export default function Explore() {
         </TouchableOpacity>
       </View>
 
-      {/* Premium segmented Map / List toggle */}
-      <View style={styles.segWrap}>
-        <View style={styles.seg}>
-          <TouchableOpacity
-            onPress={() => setView('map')}
-            style={[styles.segBtn, view === 'map' && styles.segBtnActive]}
-            testID="explore-seg-map"
-          >
-            <MapIcon size={14} color={view === 'map' ? colors.primary : colors.textSecondary} />
-            <Text style={[styles.segTxt, view === 'map' && styles.segTxtActive]}>Map</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => setView('list')}
-            style={[styles.segBtn, view === 'list' && styles.segBtnActive]}
-            testID="explore-seg-list"
-          >
-            <List size={14} color={view === 'list' ? colors.primary : colors.textSecondary} />
-            <Text style={[styles.segTxt, view === 'list' && styles.segTxtActive]}>List</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+      {/* (Apr 2026) Map/List segmented toggle removed — Explore is map-only.
+          Keeping the location chip row immediately below the search header
+          gives the map ~44px more vertical room and a cleaner, premium feel. */}
 
       {/* Location + radius + niche chips (Apr 2026: ultra-compact 3-chip
           row replaces the larger 8-chip ScrollView in map mode for a
@@ -410,13 +396,7 @@ export default function Explore() {
             >
               <Layers size={18} color={mapType === 'hybrid' ? colors.primary : colors.text} />
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.fabGlass}
-              onPress={() => setView('list')}
-              testID="explore-toggle-list"
-            >
-              <List size={18} color={colors.text} />
-            </TouchableOpacity>
+            {/* (Apr 2026) Removed list-toggle FAB — Explore is map-only now. */}
           </View>
 
           {selectedSpot && (
@@ -536,15 +516,7 @@ export default function Explore() {
               </View>
             </ScrollView>
           )}
-          {Platform.OS !== 'web' && (
-            <TouchableOpacity
-              style={[styles.fab, { position: 'absolute', right: space.xl, bottom: space.xl }]}
-              onPress={() => setView('map')}
-              testID="explore-toggle-map"
-            >
-              <MapIcon size={18} color={colors.text} />
-            </TouchableOpacity>
-          )}
+          {/* (Apr 2026) Map-toggle FAB removed — Explore is dedicated map. */}
         </View>
       )}
 

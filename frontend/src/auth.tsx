@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef, ReactNode } from 'react';
+import { AppState, AppStateStatus } from 'react-native';
 import { api, onUnauthorized } from './api';
 import { router } from 'expo-router';
 
@@ -17,7 +18,7 @@ export type User = {
   role?: string;
   verification_status?: string;
   auth_provider?: string;
-  plan?: 'free' | 'pro' | 'elite';
+  plan?: 'free' | 'pro' | 'elite' | 'comp_pro' | 'comp_elite' | 'trial_pro' | 'trial_elite';
   limits?: { saves: number; private_spots: number; collections: number; advanced_filters: boolean; sell_packs: boolean };
   usage?: { saves: number; private_spots: number; collections: number };
 };
@@ -75,6 +76,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try { router.replace('/(auth)/login' as any); } catch {}
     });
   }, []);
+
+  // Refresh user record whenever the app comes back to foreground. This
+  // ensures admin-granted plan changes (comp_pro / comp_elite, role
+  // promotions) propagate within seconds without forcing a logout.
+  const lastRefreshRef = useRef<number>(0);
+  useEffect(() => {
+    const onChange = (state: AppStateStatus) => {
+      if (state === 'active') {
+        const now = Date.now();
+        // Throttle to at most once every 10s to avoid spam during quick
+        // app-switching.
+        if (now - lastRefreshRef.current > 10_000) {
+          lastRefreshRef.current = now;
+          refresh();
+        }
+      }
+    };
+    const sub = AppState.addEventListener('change', onChange);
+    return () => sub.remove();
+  }, [refresh]);
 
   const login = async (email: string, password: string) => {
     const data = await api.post('/auth/login', { email, password });
