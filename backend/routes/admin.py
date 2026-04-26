@@ -37,6 +37,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 
 from server import (
@@ -270,6 +271,82 @@ async def admin_restore_post(
                     before={"status": post.get("status")}, after={"status": "active"})
     return {"ok": True, "post_id": post_id, "status": "active"}
 
+
+# ============================================================================
+# EXPORT EVIDENCE LOG (Apr 2026 — Community Moderation Stage 2)
+# ============================================================================
+@router.get("/admin/community/export-evidence")
+async def admin_export_evidence(
+    target_type: Optional[str] = "post",   # post | comment | user
+    action: Optional[str] = None,          # filter to a specific action
+    moderator_id: Optional[str] = None,    # filter to one mod's actions
+    days: int = 30,                        # window
+    me: dict = Depends(require_role("admin")),
+):
+    """Streams a CSV of moderation actions for the given window.
+
+    Used for off-platform legal/compliance archiving and quarterly reviews.
+    Each row: timestamp, moderator_name, moderator_role, action, target_type,
+    target_id, reason, before_status, after_status.
+    """
+    days = max(1, min(days, 365))
+    cutoff = utcnow() - timedelta(days=days)
+    filt: Dict[str, Any] = {
+        "created_at": {"$gte": cutoff},
+        "target_type": target_type,
+        "action": {"$regex": "^(post\\.|comment\\.|user\\.)", "$options": ""},
+    }
+    if action:
+        filt["action"] = action
+    if moderator_id:
+        filt["actor_id"] = moderator_id
+
+    async def _row_iter():
+        # CSV header
+        yield "timestamp,moderator_id,moderator_name,moderator_role,action,target_type,target_id,reason,before,after\n"
+        cur = db.audit_logs.find(filt, {"_id": 0}).sort("created_at", -1).limit(50_000)
+        # Cache moderator lookups for nicer rows
+        cache: Dict[str, Dict[str, Any]] = {}
+        async for log in cur:
+            actor_id = log.get("actor_id") or ""
+            if actor_id and actor_id not in cache:
+                u = await db.users.find_one(
+                    {"user_id": actor_id},
+                    {"_id": 0, "user_id": 1, "name": 1, "role": 1},
+                )
+                cache[actor_id] = u or {}
+            actor = cache.get(actor_id, {})
+            row = [
+                (log.get("created_at") or "").isoformat() if log.get("created_at") else "",
+                actor_id,
+                _csv_escape(actor.get("name", "")),
+                actor.get("role", ""),
+                log.get("action", ""),
+                log.get("target_type", ""),
+                log.get("target_id", ""),
+                _csv_escape(log.get("notes", "") or log.get("reason", "")),
+                _csv_escape(str(log.get("before", ""))),
+                _csv_escape(str(log.get("after", ""))),
+            ]
+            yield ",".join(row) + "\n"
+
+    filename = f"lumascout_moderation_evidence_{days}d_{utcnow().strftime('%Y%m%d')}.csv"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    await audit_log(
+        me, "admin.export_evidence", "audit", "csv",
+        notes=f"days={days} target_type={target_type} action={action or '*'}",
+    )
+    return StreamingResponse(_row_iter(), media_type="text/csv", headers=headers)
+
+
+def _csv_escape(v: Any) -> str:
+    """Minimal CSV-safe escaping: wrap in quotes if contains special chars."""
+    s = str(v) if v is not None else ""
+    if any(c in s for c in [",", "\"", "\n", "\r"]):
+        s = s.replace("\"", "\"\"")
+        return f'"{s}"'
+    return s
+
 # --- BulkModerationIn (server.py:5237-5241) ---
 class BulkModerationIn(BaseModel):
     type: str
@@ -316,6 +393,8 @@ async def admin_community_content(
     type: str = "post",
     status: Optional[str] = None,        # active | removed | hidden | spam | pinned | featured
     reported: Optional[bool] = None,     # only items with pending reports
+    auto_flagged: Optional[bool] = None, # Apr 2026: items with spam_score>=40
+    no_comments: Optional[bool] = None,  # Apr 2026: posts with 0 comments
     q: Optional[str] = None,
     limit: int = 50,
     skip: int = 0,
@@ -354,6 +433,23 @@ async def admin_community_content(
         )
         ids = list({r["target_id"] async for r in report_cur})
         filt[id_field] = {"$in": ids}
+    # ---- Apr 2026 — auto-spam filter ----
+    if auto_flagged:
+        # Show anything our heuristic flagged. Either auto_flagged=True OR
+        # has any signals (covers older auto-hidden posts).
+        filt["$or"] = filt.get("$or", []) + [
+            {"auto_flagged": True},
+            {"spam_signals.0": {"$exists": True}},
+            {"spam_score": {"$gte": 40}},
+        ]
+    # ---- Apr 2026 — no comments filter ----
+    if no_comments and type == "post":
+        filt["$and"] = filt.get("$and", []) + [
+            {"$or": [
+                {"comment_count": {"$exists": False}},
+                {"comment_count": 0},
+            ]},
+        ]
 
     limit = max(1, min(limit, 200))
     skip = max(0, skip)
