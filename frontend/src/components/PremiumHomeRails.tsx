@@ -17,6 +17,7 @@ import { View, Text, StyleSheet, Image, ScrollView, Pressable, Dimensions } from
 import { router } from 'expo-router';
 import { Bookmark, Sparkles, Sun, Cloud, Signal, MapPin } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { formatDistance } from '../utils/distance';
 import { colors, font, space } from '../theme';
 
 const SCREEN_W = Dimensions.get('window').width;
@@ -86,9 +87,7 @@ export function BestNearYouRail({ items }: { items: any[] }) {
       >
         {items.slice(0, 10).map((sp, idx) => {
           const img = sp.cover_image_url || (sp.images?.find((i: any) => i.is_cover) || sp.images?.[0])?.image_url;
-          const dist = typeof sp.distance_km === 'number' ? `${Math.round(sp.distance_km * 0.621)} mi`
-                     : typeof sp.distance_miles === 'number' ? `${Math.round(sp.distance_miles)} mi`
-                     : null;
+          const dist = formatDistance(sp);
           const score = sp.shoot_score ?? sp.score ?? 90;
           // Deterministic demo data for sunrise / weather / difficulty
           const sunTime = sp.sunrise || `6:${48 + (idx * 4) % 20} AM`;

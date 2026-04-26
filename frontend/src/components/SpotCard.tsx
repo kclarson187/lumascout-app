@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Pressable, Platform, Animated
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { Bookmark, Star, Shield, Lock, EyeOff, MapPin, Sun, MoreVertical, TrendingUp, Sparkles, ShieldCheck } from 'lucide-react-native';
+import { formatDistance } from '../utils/distance';
 import { colors, radii, space, font } from '../theme';
 import { api } from '../api';
 import { useAuth } from '../auth';
@@ -227,7 +228,7 @@ function SpotCardImpl({
         <View style={styles.metaRow}>
           <Text style={styles.city} numberOfLines={1}>
             {spot.city}, {spot.state}
-            {spot.distance_mi != null ? ` · ${spot.distance_mi} mi` : spot.distance_km != null ? ` · ${spot.distance_km} km` : ''}
+            {(() => { const d = formatDistance(spot); return d ? ` · ${d}` : ''; })()}
           </Text>
         </View>
         <View style={styles.tagRow}>

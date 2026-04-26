@@ -113,7 +113,10 @@ export default function Home() {
       const data = await api.get('/feed/home', Object.keys(params).length ? params : undefined);
       const clean = sanitizeFeed(data);
       setFeed(clean);
-      writeCache('feed:home', clean).catch(() => {});
+      // Cache key is versioned (v2) — bumped after the Apr 2026 distance
+      // bug fix so any pre-fix caches with fabricated mileage are
+      // discarded rather than briefly painted on next mount.
+      writeCache('feed:home:v2', clean).catch(() => {});
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -125,7 +128,7 @@ export default function Home() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const cached = await readCache<Feed>('feed:home');
+      const cached = await readCache<Feed>('feed:home:v2');
       if (alive && cached && !hydratedOnceRef.current) {
         setFeed(cached);
         setLoading(false);
@@ -390,6 +393,16 @@ export default function Home() {
           </TouchableOpacity>
         </ScrollView>
 
+        {/* Location-trust strip — Apr 2026 Item #3.
+            Tells the user whether 'Near You' values are real GPS or
+            unavailable. Subtle, non-blocking. */}
+        <View style={styles.locTrustStrip} testID="home-location-trust">
+          <MapPin size={10} color={coords ? '#22c55e' : colors.textTertiary} />
+          <Text style={[styles.locTrustTxt, { color: coords ? '#22c55e' : colors.textTertiary }]}>
+            {coords ? 'Using current location' : 'Enable location for accurate nearby results'}
+          </Text>
+        </View>
+
         {/* Clutter removed per mockup: UpgradeBanner / Scout AI card /
             Inbox preview / niche chip row / EDITOR'S PICK hero were all
             pulled off the Home. Scout AI and notifications remain
@@ -554,6 +567,14 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   communityStrip: { paddingHorizontal: space.xl, paddingBottom: space.sm, gap: 6, alignItems: 'center' },
+  // Apr 2026 Item #3 — location-trust strip on Home
+  locTrustStrip: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: space.xl, paddingTop: 4, paddingBottom: 8,
+  },
+  locTrustTxt: {
+    fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.2,
+  },
   cTab: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1 },
   // Subtle "you are here" — no primary fill. Just a darker surface and
   // slightly bolder typography so the current tab is distinguishable

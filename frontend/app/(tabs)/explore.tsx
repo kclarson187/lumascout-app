@@ -9,6 +9,7 @@ import { router } from 'expo-router';
 import { Search, List, Map as MapIcon, SlidersHorizontal, Locate, X, Shield, Gem, Sun, Users as UsersIcon, MapPin, Navigation, RefreshCw, ArrowUpRight, Layers, Bookmark, Flame, Camera, Plane, Cloud, Heart, Share2 as ShareIcon, ChevronRight } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
+import { formatDistance } from '../../src/utils/distance';
 import { api } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
 import SpotCard from '../../src/components/SpotCard';
@@ -577,14 +578,9 @@ function PinPreview({
   else if ((spot.evening_golden_hour_rating || 0) >= 4) subtleTags.push('Golden Hour');
   else subtleTags.push('Photogenic');
 
-  const distMi =
-    typeof spot.distance_mi === 'number'
-      ? spot.distance_mi.toFixed(1)
-      : typeof spot.distance_miles === 'number'
-        ? spot.distance_miles.toFixed(1)
-        : typeof spot.distance_km === 'number'
-          ? (spot.distance_km * 0.621).toFixed(1)
-          : '2.4';
+  // Item #3 Apr 2026 fix — never show fake distance. If GPS is
+  // unavailable, render '—' rather than fabricating a value.
+  const distMi = formatDistance(spot) || '—';
 
   return (
     <View style={styles.previewSheet}>
