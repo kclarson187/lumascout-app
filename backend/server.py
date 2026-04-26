@@ -489,6 +489,11 @@ class UserUpdateIn(BaseModel):
     primary_region: Optional[str] = None    # State/Province
     timezone: Optional[str] = None          # IANA zone, e.g. "America/Chicago"
     language_hint: Optional[str] = None     # "en", "es", "fr"
+    # --- Settings prefs (Apr 2026) ------------------------------------------
+    # Stored as flat sub-documents so we can grow without migrations.
+    location_prefs: Optional[Dict[str, Any]] = None
+    gear_prefs: Optional[Dict[str, Any]] = None
+    travel_prefs: Optional[Dict[str, Any]] = None
 
 
 

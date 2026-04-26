@@ -56,7 +56,10 @@ function planLabel(p: string | undefined): string {
   return (p || 'free').charAt(0).toUpperCase() + (p || 'free').slice(1);
 }
 function comingSoon(feature: string) {
-  Alert.alert(feature, 'Coming soon in a future release. We’re polishing this for App Store.');
+  // Last-resort fallback for any future row that hasn't yet been wired
+  // to a real screen. Real settings rows below all route to working
+  // pages — this helper is intentionally not user-visible anymore.
+  Alert.alert(feature, 'Available soon. We add this in a future release.');
 }
 async function openUrl(url: string) {
   try {
@@ -190,20 +193,20 @@ export default function SettingsHub() {
     {
       key: 'location', icon: MapPin,
       title: 'Location preferences',
-      subtitle: 'Map app · Units · GPS metadata · Sunrise alerts',
-      onPress: () => comingSoon('Location preferences'),
+      subtitle: 'Discovery radius · Default city · GPS · Privacy',
+      onPress: () => router.push('/settings/location' as any),
     },
     {
       key: 'camera', icon: Camera,
-      title: 'Camera & gear',
-      subtitle: 'Brand, gear tags, RAW workflow',
-      onPress: () => comingSoon('Camera workflow'),
+      title: 'Camera gear',
+      subtitle: 'Brand, body, favorite lenses, shoot styles',
+      onPress: () => router.push('/settings/gear' as any),
     },
     {
       key: 'explore', icon: Compass,
       title: 'Travel & explore',
-      subtitle: 'Home city · Discovery radius · Seasonal alerts',
-      onPress: () => comingSoon('Travel & explore'),
+      subtitle: 'Travel radius · Paid jobs · Bucket list',
+      onPress: () => router.push('/settings/travel' as any),
     },
   ];
 
@@ -224,13 +227,13 @@ export default function SettingsHub() {
       key: 'report-spot', icon: Flag,
       title: 'Report a bad spot',
       subtitle: 'Wrong location · closed · unsafe · duplicate',
-      onPress: () => comingSoon('Report a bad spot'),
+      onPress: () => openUrl('mailto:support@lumascout.app?subject=LumaScout%20%E2%80%94%20Report%20a%20bad%20spot&body=Spot%20name%3A%0ASpot%20URL%2Fid%3A%0AReason%20(wrong%20location%20%2F%20closed%20%2F%20unsafe%20%2F%20duplicate)%3A%0AAdditional%20notes%3A'),
     },
     {
       key: 'report-user', icon: UserX,
       title: 'Report a user',
       subtitle: 'Spam · harassment · fake content',
-      onPress: () => comingSoon('Report a user'),
+      onPress: () => openUrl('mailto:support@lumascout.app?subject=LumaScout%20%E2%80%94%20Report%20a%20user&body=User%20handle%3A%0AUser%20URL%2Fid%3A%0AReason%20(spam%20%2F%20harassment%20%2F%20fake)%3A%0AEvidence%2Fcontext%3A'),
     },
     {
       key: 'feature', icon: Lightbulb,
@@ -241,8 +244,8 @@ export default function SettingsHub() {
   ];
 
   const legal: RowSpec[] = [
-    { key: 'privacy', icon: Shield, title: 'Privacy policy', onPress: () => openUrl(PRIVACY_URL) },
-    { key: 'terms', icon: FileText, title: 'Terms of use', onPress: () => openUrl(TERMS_URL) },
+    { key: 'privacy', icon: Shield, title: 'Privacy policy', onPress: () => router.push('/legal/privacy' as any) },
+    { key: 'terms', icon: FileText, title: 'Terms of use', onPress: () => router.push('/legal/terms' as any) },
     { key: 'seller-terms', icon: Gavel, title: 'Marketplace seller terms', onPress: () => openUrl(SELLER_TERMS_URL) },
     { key: 'community', icon: ScrollText, title: 'Community guidelines', onPress: () => openUrl(COMMUNITY_URL) },
     { key: 'refund', icon: RotateCcw, title: 'Refund policy', onPress: () => openUrl(REFUND_URL) },
@@ -266,7 +269,7 @@ export default function SettingsHub() {
       key: 'about', icon: Info,
       title: 'About LumaScout',
       subtitle: 'Our mission + the team',
-      onPress: () => openUrl('https://lumascout.app/about'),
+      onPress: () => router.push('/about' as any),
     },
     {
       key: 'version', icon: Sparkles,
@@ -278,7 +281,7 @@ export default function SettingsHub() {
       key: 'whats-new', icon: Zap,
       title: "What's new",
       subtitle: 'Release notes and what changed',
-      onPress: () => openUrl('https://lumascout.app/changelog'),
+      onPress: () => router.push('/whats-new' as any),
     },
     {
       key: 'rate', icon: Star,
@@ -385,8 +388,8 @@ export default function SettingsHub() {
 
         {/* Grouped sections */}
         <Section title="Account" rows={account} />
+        <Section title="Preferences" rows={fieldTools} />
         <Section title="Creator tools" rows={creatorTools} />
-        <Section title="Field tools" rows={fieldTools} />
         <Section title="Support" rows={support} />
         <Section title="Legal" rows={legal} />
         <Section title="About" rows={about} />
