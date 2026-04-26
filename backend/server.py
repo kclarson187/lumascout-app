@@ -3613,13 +3613,49 @@ async def create_post(body: CommunityPostIn, user: dict = Depends(get_current_us
         if not sp:
             raise HTTPException(status_code=404, detail="Spot not found")
         doc["spot_id"] = body.spot_id
+    # ---- Auto-spam scoring (Apr 2026 Community Moderation Stage 2) ----
+    # Compute heuristic signals on every new post. Posts scoring >= 70
+    # auto-hide pending review; 40-69 auto-flag for the Reported queue.
+    try:
+        from utils.spam_signals import compute_spam_signals  # local import keeps server.py boot fast
+        # Cheap context lookups
+        ten_min_ago = utcnow() - timedelta(minutes=10)
+        recent_count = await db.community_posts.count_documents({
+            "author_user_id": user["user_id"],
+            "created_at": {"$gte": ten_min_ago},
+        })
+        twentyfour_h_ago = utcnow() - timedelta(hours=24)
+        dup_count = 0
+        if doc["body"]:
+            dup_count = await db.community_posts.count_documents({
+                "author_user_id": user["user_id"],
+                "body": doc["body"],
+                "created_at": {"$gte": twentyfour_h_ago},
+            })
+        author_age_h: Optional[float] = None
+        u_created = user.get("created_at")
+        if u_created:
+            try:
+                author_age_h = max(0.0, (utcnow() - u_created).total_seconds() / 3600.0)
+            except Exception:
+                author_age_h = None
+        spam = compute_spam_signals(
+            doc["body"],
+            author_recent_post_count=recent_count,
+            duplicate_count_24h=dup_count,
+            author_age_hours=author_age_h,
+        )
+        doc["spam_score"] = spam["score"]
+        doc["spam_signals"] = spam["signals"]
+        if spam["auto_hide"]:
+            doc["status"] = "hidden"
+            doc["auto_hidden_reason"] = "spam_score>=70"
+        elif spam["auto_flag"]:
+            doc["auto_flagged"] = True
+    except Exception as _spam_err:  # never let spam scoring block writes
+        logger.warning("spam scoring failed: %s", _spam_err)
+
     await db.community_posts.insert_one(doc)
-    doc.pop("_id", None)
-    out = await _hydrate_posts([doc], user)
-    return out[0]
-
-
-@api.get("/posts")
 async def list_posts(
     category: Optional[str] = None,
     city: Optional[str] = None,

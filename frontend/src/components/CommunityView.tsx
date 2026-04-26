@@ -114,22 +114,45 @@ export default function CommunityView() {
     setSelectedIds(new Set());
   }, []);
 
+  // ---- Apr 2026 — Stage 2 — Mod filter ----
+  // Admin filter chips visible only in moderate mode. 'all' uses the
+  // standard consumer feed; the others swap to /admin/community/content
+  // so admins can see hidden/auto-flagged posts that consumers can't.
+  type ModFilter = 'all' | 'reported' | 'auto_flagged' | 'no_comments';
+  const [modFilter, setModFilter] = useState<ModFilter>('all');
+
   const load = useCallback(
     async (isRefresh = false) => {
       isRefresh ? setRefreshing(true) : setLoading(true);
       try {
-        const r = await api.get('/posts', {
-          category: category === 'all' ? undefined : category,
-          limit: 25,
-        });
-        setPosts(Array.isArray(r) ? r : (r?.items || []));
+        if (modMode && modFilter !== 'all') {
+          // Admin-elevated content list
+          const params: any = { type: 'post', limit: 50 };
+          if (modFilter === 'reported') params.reported = true;
+          if (modFilter === 'auto_flagged') params.auto_flagged = true;
+          if (modFilter === 'no_comments') params.no_comments = true;
+          const r = await api.get('/admin/community/content', params);
+          // /admin/community/content returns { items, total, ... }
+          const items = (r?.items || []).map((it: any) => ({
+            ...it,
+            // Normalize to consumer-feed shape so PostCard renders correctly
+            author: it._author || it.author,
+          }));
+          setPosts(items);
+        } else {
+          const r = await api.get('/posts', {
+            category: category === 'all' ? undefined : category,
+            limit: 25,
+          });
+          setPosts(Array.isArray(r) ? r : (r?.items || []));
+        }
       } catch {
         setPosts([]);
       } finally {
         isRefresh ? setRefreshing(false) : setLoading(false);
       }
     },
-    [category],
+    [category, modMode, modFilter],
   );
 
   useEffect(() => { load(); }, [load]);
@@ -412,6 +435,33 @@ export default function CommunityView() {
                 description: `Restores ${selectedIds.size} previously hidden or removed ${selectedIds.size === 1 ? 'post' : 'posts'} back to the live feed.`,
               })}
             />
+          </ScrollView>
+          {/* Filter chips — Apr 2026 Stage 2 */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={s.modBarFilters}
+            keyboardShouldPersistTaps="handled"
+          >
+            {([
+              { k: 'all', l: 'All' },
+              { k: 'reported', l: 'Reported' },
+              { k: 'auto_flagged', l: 'Auto-flagged' },
+              { k: 'no_comments', l: 'No comments' },
+            ] as { k: ModFilter; l: string }[]).map((f) => (
+              <Pressable
+                key={f.k}
+                onPress={() => {
+                  setModFilter(f.k);
+                  setSelectedIds(new Set());
+                }}
+                style={[s.modBarFilterChip, modFilter === f.k && s.modBarFilterChipActive]}
+              >
+                <Text style={[s.modBarFilterTxt, modFilter === f.k && s.modBarFilterTxtActive]}>
+                  {f.l}
+                </Text>
+              </Pressable>
+            ))}
           </ScrollView>
         </View>
       ) : null}
@@ -969,6 +1019,34 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
     paddingVertical: 2,
+  },
+  // Apr 2026 — Stage 2 filter chips
+  modBarFilters: {
+    flexDirection: 'row',
+    gap: 6,
+    paddingVertical: 2,
+  },
+  modBarFilterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: radii.pill,
+    backgroundColor: 'rgba(0,0,0,0.25)',
+    borderColor: 'rgba(245,166,35,0.20)',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  modBarFilterChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  modBarFilterTxt: {
+    color: colors.textSecondary,
+    fontFamily: font.bodyMedium,
+    fontSize: 11.5,
+    letterSpacing: 0.2,
+  },
+  modBarFilterTxtActive: {
+    color: '#1a0a06',
+    fontFamily: font.bodyBold,
   },
 
   // Modal
