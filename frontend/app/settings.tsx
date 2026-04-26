@@ -218,8 +218,8 @@ export default function SettingsHub() {
     {
       key: 'help', icon: HelpCircle,
       title: 'Help center',
-      subtitle: 'FAQs for photographers',
-      onPress: () => openUrl('https://help.lumascout.app'),
+      subtitle: 'Searchable FAQs for photographers',
+      onPress: () => router.push('/help' as any),
     },
     {
       key: 'contact', icon: LifeBuoy,
@@ -250,9 +250,9 @@ export default function SettingsHub() {
   const legal: RowSpec[] = [
     { key: 'privacy', icon: Shield, title: 'Privacy policy', onPress: () => router.push('/legal/privacy' as any) },
     { key: 'terms', icon: FileText, title: 'Terms of use', onPress: () => router.push('/legal/terms' as any) },
-    { key: 'seller-terms', icon: Gavel, title: 'Marketplace seller terms', onPress: () => openUrl(SELLER_TERMS_URL) },
-    { key: 'community', icon: ScrollText, title: 'Community guidelines', onPress: () => openUrl(COMMUNITY_URL) },
-    { key: 'refund', icon: RotateCcw, title: 'Refund policy', onPress: () => openUrl(REFUND_URL) },
+    { key: 'seller-terms', icon: Gavel, title: 'Marketplace seller terms', onPress: () => router.push('/legal/seller-terms' as any) },
+    { key: 'community', icon: ScrollText, title: 'Community guidelines', onPress: () => router.push('/legal/community-guidelines' as any) },
+    { key: 'refund', icon: RotateCcw, title: 'Refund policy', onPress: () => router.push('/legal/refund-policy' as any) },
     {
       key: 'delete', icon: Trash2, title: 'Delete account',
       subtitle: 'Permanently delete your data',
