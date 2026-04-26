@@ -660,18 +660,24 @@ class AdminSpotCoverIn(BaseModel):
 @router.patch("/admin/spots/{spot_id}/cover")
 async def admin_set_spot_cover(
     spot_id: str, body: AdminSpotCoverIn,
-    user: dict = Depends(require_role("admin")),
+    user: dict = Depends(get_current_user),
 ):
-    """Set an admin cover override on a spot. This takes priority 0 over the
-    community-driven rotation stack (see build_spot_detail_response) and
-    persists focal point + scale + rotation so the crop survives rehydration.
+    """Set the cover override on a spot. Now (Apr 2026) allows spot owners
+    to choose their own featured photo, in addition to admins/super_admins.
+    Falls through priority 0 over the community rotation, persists focal
+    point + scale + rotation so the crop survives rehydration.
 
     The image_url must already exist on the spot or in its community uploads —
-    we reject arbitrary URLs so admins can't inject off-platform media.
+    we reject arbitrary URLs so nobody can inject off-platform media.
     """
     spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0})
     if not spot:
         raise HTTPException(status_code=404, detail="Spot not found")
+
+    is_admin_role = user.get("role") in ("admin", "super_admin", "moderator")
+    is_owner = spot.get("created_by") == user["user_id"] or spot.get("user_id") == user["user_id"]
+    if not (is_admin_role or is_owner):
+        raise HTTPException(status_code=403, detail="Only the spot owner or an admin can set the cover.")
 
     # Validate image_url exists on spot.images[] or in community uploads
     allowed_urls: set[str] = set()
@@ -774,13 +780,21 @@ async def admin_reorder_spot_gallery(
 # --- admin_spot_cover_editor (server.py:5690-5747) ---
 @router.get("/admin/spots/{spot_id}/cover-editor")
 async def admin_spot_cover_editor(
-    spot_id: str, user: dict = Depends(require_role("admin")),
+    spot_id: str, user: dict = Depends(get_current_user),
 ):
     """Bundled payload for the cover-editor UI: spot meta, all available
-    cover-candidate image URLs, current override, and admin quick actions."""
+    cover-candidate image URLs, current override, and admin quick actions.
+
+    (Apr 2026) Open to spot owner OR admin/super_admin so creators can
+    pick their own featured photo without an admin gate.
+    """
     spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0})
     if not spot:
         raise HTTPException(status_code=404, detail="Spot not found")
+    is_admin_role = user.get("role") in ("admin", "super_admin", "moderator")
+    is_owner = spot.get("created_by") == user["user_id"] or spot.get("user_id") == user["user_id"]
+    if not (is_admin_role or is_owner):
+        raise HTTPException(status_code=403, detail="Only the spot owner or an admin can edit the cover.")
 
     images: list[dict] = []
     for im in (spot.get("images") or []):

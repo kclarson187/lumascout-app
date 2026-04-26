@@ -712,15 +712,34 @@ export default function AddSpot() {
               ) : null}
               <View style={styles.imgGrid}>
                 {draft.images.map((img, i) => (
-                  <TouchableOpacity key={i} style={styles.imgWrap} onPress={() => setCover(i)}>
+                  <TouchableOpacity
+                    key={i}
+                    style={[styles.imgWrap, img.is_cover && styles.imgWrapFeatured]}
+                    onPress={() => setCover(i)}
+                    onLongPress={() => removeImg(i)}
+                    testID={`add-photo-thumb-${i}`}
+                  >
                     <Image source={{ uri: img.image_url }} style={styles.imgThumb} />
-                    {img.is_cover && <View style={styles.coverBadge}><Text style={styles.coverTxt}>COVER</Text></View>}
+                    {img.is_cover ? (
+                      <View style={styles.coverBadge}>
+                        <Text style={styles.coverTxt}>FEATURED</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.tapToFeatureHint} pointerEvents="none">
+                        <Text style={styles.tapToFeatureTxt}>Tap to feature</Text>
+                      </View>
+                    )}
                     <TouchableOpacity style={styles.imgRemove} onPress={() => removeImg(i)}>
                       <X size={14} color="#fff" />
                     </TouchableOpacity>
                   </TouchableOpacity>
                 ))}
               </View>
+              {draft.images.length > 0 ? (
+                <Text style={styles.galleryHint}>
+                  Tap any photo to make it the featured cover · Long-press or × to remove
+                </Text>
+              ) : null}
             </View>
           )}
 
@@ -1565,13 +1584,45 @@ const styles = StyleSheet.create({
   gpsChipTxt: { color: '#16a34a', fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.2 },
 
   imgGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  imgWrap: { width: '31%', aspectRatio: 1, position: 'relative' },
+  imgWrap: { width: '31%', aspectRatio: 1, position: 'relative', borderRadius: radii.md, overflow: 'hidden' },
+  // Apr 2026 — featured-photo polish: 2px gold border + soft shadow on the
+  // chosen cover thumbnail so creators can see the selection at a glance.
+  imgWrapFeatured: {
+    borderWidth: 2,
+    borderColor: colors.primary,
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+  },
   imgThumb: { width: '100%', height: '100%', borderRadius: radii.md },
   coverBadge: {
     position: 'absolute', bottom: 6, left: 6,
     backgroundColor: colors.primary, paddingHorizontal: 8, paddingVertical: 3, borderRadius: radii.sm,
   },
   coverTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.4 },
+  // Subtle "Tap to feature" hint on non-featured thumbnails. Disappears
+  // the moment the user taps another image — instant gold-border swap.
+  tapToFeatureHint: {
+    position: 'absolute', bottom: 6, left: 6, right: 6,
+    paddingHorizontal: 6, paddingVertical: 3,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: radii.sm,
+    alignItems: 'center',
+  },
+  tapToFeatureTxt: {
+    color: 'rgba(255,255,255,0.85)',
+    fontFamily: font.bodyMedium,
+    fontSize: 9,
+    letterSpacing: 0.3,
+  },
+  galleryHint: {
+    color: colors.textTertiary,
+    fontFamily: font.body,
+    fontSize: 11,
+    marginTop: 4,
+    textAlign: 'center',
+  },
   imgRemove: {
     position: 'absolute', top: 6, right: 6,
     width: 22, height: 22, borderRadius: 11,
