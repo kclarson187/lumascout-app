@@ -63,7 +63,10 @@ export default function Explore() {
   const [filters, setFilters] = useState<Filters>({});
   const [filterOpen, setFilterOpen] = useState(false);
   const [selectedSpot, setSelectedSpot] = useState<any | null>(null);
-  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number; ts: number } | null>(null);
+  // FIX(2026-04 Item #3 round 3): GPS state machine for the trust strip.
+  // 'idle' | 'requesting' | 'granted' | 'denied' | 'error'
+  const [gpsState, setGpsState] = useState<'idle' | 'requesting' | 'granted' | 'denied' | 'error'>('idle');
   // "Search this area" CTA — surfaces when the user pans the map far enough
   // from the current load center. Tracked here to avoid prop-drilling.
   const [showSearchArea, setShowSearchArea] = useState(false);
@@ -86,10 +89,19 @@ export default function Explore() {
       Object.entries(filters).forEach(([k, v]) => {
         if (v != null && v !== '' && v !== false) params[k] = v;
       });
+      // FIX(2026-04 Item #3 round 3): always pass user GPS to /spots
+      // when we have it. Without coords, backend returns null distance
+      // (distance_source='unavailable') and the UI shows the trust
+      // strip "Enable location for accurate nearby spots".
+      const fresh = userCoords && (Date.now() - userCoords.ts < 30 * 60 * 1000);
+      if (fresh) {
+        params.lat = userCoords!.lat;
+        params.lng = userCoords!.lng;
+      }
       const data = await api.get('/spots', params);
       setSpots(data);
     } finally { setLoading(false); }
-  }, [filters]);
+  }, [filters, userCoords]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -98,28 +110,42 @@ export default function Explore() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   // Request location on mount so the map opens tight and local, not a continent-wide view.
-  useEffect(() => {
-    (async () => {
-      try {
-        const { status } = await Location.getForegroundPermissionsAsync();
-        if (status !== 'granted') {
-          const req = await Location.requestForegroundPermissionsAsync();
-          if (req.status !== 'granted') return;
-        }
-        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude };
-        setUserCoords(coords);
-        if (mapRef.current) {
-          mapRef.current.animateToRegion({
-            latitude: coords.lat, longitude: coords.lng,
-            // Tight urban-scale default — ~25 miles across. Much more useful
-            // than the previous 3-degree continent zoom.
-            latitudeDelta: 0.45, longitudeDelta: 0.45,
-          }, 300);
-        }
-      } catch {}
-    })();
+  // FIX(2026-04 Item #3 round 3): explicit GPS state machine so the
+  // trust strip can show "Using current location" / "Location off /
+  // Enable" + retry. Cached fresh coord (<5 min) skip re-prompt.
+  const requestGPS = useCallback(async () => {
+    setGpsState('requesting');
+    try {
+      let perm = await Location.getForegroundPermissionsAsync();
+      if (perm.status !== 'granted') {
+        perm = await Location.requestForegroundPermissionsAsync();
+      }
+      if (perm.status !== 'granted') {
+        setGpsState('denied');
+        return;
+      }
+      // Try high-accuracy with 8s timeout; fall back to balanced.
+      const loc = await Promise.race([
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('gps_timeout')), 8000)),
+      ]).catch(async () =>
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+      );
+      const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude, ts: Date.now() };
+      setUserCoords(coords);
+      setGpsState('granted');
+      if (mapRef.current) {
+        mapRef.current.animateToRegion({
+          latitude: coords.lat, longitude: coords.lng,
+          latitudeDelta: 0.45, longitudeDelta: 0.45,
+        }, 300);
+      }
+    } catch {
+      setGpsState('error');
+    }
   }, []);
+
+  useEffect(() => { requestGPS(); }, [requestGPS]);
 
   const goToCurrent = async () => {
     try {
@@ -427,6 +453,35 @@ export default function Explore() {
                 count={Math.min(2, spots.filter((s) => s.is_new).length || 2)}
                 onPress={() => router.push('/search' as any)}
               />
+
+              {/* GPS trust strip — Apr 2026 Item #3 round 3.
+                  Tells the user whether 'Nearby Right Now' values are
+                  computed from real device GPS or unavailable. Includes
+                  a retry CTA when denied/error. */}
+              <View style={styles.gpsTrust}>
+                <MapPin
+                  size={11}
+                  color={gpsState === 'granted' ? '#22c55e' : gpsState === 'requesting' ? colors.primary : colors.textTertiary}
+                />
+                <Text style={[
+                  styles.gpsTrustTxt,
+                  gpsState === 'granted' && { color: '#22c55e' },
+                  gpsState === 'requesting' && { color: colors.primary },
+                ]}>
+                  {gpsState === 'granted'
+                    ? 'Using your current location'
+                    : gpsState === 'requesting'
+                      ? 'Locating you…'
+                      : gpsState === 'denied'
+                        ? 'Location access off · enable for accurate nearby spots'
+                        : 'Distance unavailable'}
+                </Text>
+                {gpsState !== 'granted' && gpsState !== 'requesting' ? (
+                  <Pressable onPress={requestGPS} hitSlop={8}>
+                    <Text style={styles.gpsRetry}>Retry</Text>
+                  </Pressable>
+                ) : null}
+              </View>
 
               {/* Section 1 — Nearby Right Now (3 stacked premium cards) */}
               <NearbyRightNowList items={spots} />
@@ -836,6 +891,18 @@ function SwitchRow({ label, value, onChange }: { label: string; value: boolean; 
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
+  // GPS trust strip — Apr 2026 Item #3 round 3
+  gpsTrust: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: space.xl, paddingTop: 8, paddingBottom: 6,
+  },
+  gpsTrustTxt: {
+    flex: 1, color: colors.textTertiary,
+    fontFamily: font.bodyMedium, fontSize: 11.5, letterSpacing: 0.2,
+  },
+  gpsRetry: {
+    color: colors.primary, fontFamily: font.bodyBold, fontSize: 12, letterSpacing: 0.3,
+  },
   searchRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.md,

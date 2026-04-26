@@ -585,6 +585,13 @@ async def list_spots(
     q: Optional[str] = None,
     sort: str = "recent",  # recent, trending, golden_hour, score
     limit: int = 40,
+    # FIX(2026-04 Item #3 round 3): URGENT distance bug.
+    # Explore was calling /spots WITHOUT user GPS, so distance_km was
+    # never computed and the frontend rendered any stale value present.
+    # Now we accept lat/lng and apply the same strict policy as
+    # /api/feed/home: device GPS or null+distance_source='unavailable'.
+    lat: Optional[float] = None,
+    lng: Optional[float] = None,
     viewer: Optional[dict] = Depends(get_optional_user),
 ):
     query: dict = {
@@ -684,6 +691,35 @@ async def list_spots(
         out.sort(key=lambda s: s.get("created_at") or utcnow(), reverse=True)
 
     out = out[:limit]
+    # FIX(2026-04 Item #3 round 3): compute distance from device GPS.
+    # Strict policy: device GPS or null+distance_source='unavailable'.
+    # Never fabricate. If no lat/lng was provided we still scrub any
+    # stale distance fields baked into the document so the UI cannot
+    # render a wrong number.
+    for s in out:
+        try:
+            if lat is not None and lng is not None and s.get("latitude") is not None and s.get("longitude") is not None:
+                d_km = haversine_km(float(lat), float(lng), float(s["latitude"]), float(s["longitude"]))
+                s["distance_km"] = round(d_km, 2)
+                s["distance_mi"] = round(d_km * 0.621371, 2)
+                s["distance_source"] = "device_gps"
+            else:
+                s["distance_km"] = None
+                s["distance_mi"] = None
+                s["distance_source"] = "unavailable"
+        except Exception:
+            s["distance_km"] = None
+            s["distance_mi"] = None
+            s["distance_source"] = "unavailable"
+    # When user GPS is present and they're sorting by quality, blend in
+    # a small proximity bonus so closer high-quality spots win ties.
+    if lat is not None and lng is not None and sort == "quality":
+        out.sort(key=lambda s: (
+            -(float(s.get("quality_score") or 0)
+              + (8 if s.get("is_trending") else 0)
+              + (4 if s.get("is_fresh") else 0)),
+            (s.get("distance_km") if s.get("distance_km") is not None else 99999),
+        ))
     await attach_owners(out)
     return out
 
