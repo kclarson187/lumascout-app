@@ -479,14 +479,46 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface2, color: colors.text, fontFamily: font.body,
     paddingHorizontal: space.lg, paddingVertical: 14, borderRadius: radii.md, fontSize: 15,
   },
-  // Sort / filter rails for Favorites
-  sortRail: { paddingVertical: 6 },
-  sortChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
+  // Sort / filter rails for Favorites — Apr 2026 polish:
+  // Chips were 6px tall, 11px text, low contrast — "cramped + unreadable".
+  // Bumped to 36px height, 14px semibold labels, snap-style spacing,
+  // higher-contrast text. No clipping on iPhone SE / small Androids.
+  sortRail: { paddingVertical: 8 },
+  sortChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    minHeight: 36,
+    borderRadius: radii.pill,
+    backgroundColor: colors.surface1,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   sortChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  sortChipTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.3 },
-  filterChip: { paddingHorizontal: 11, paddingVertical: 5, borderRadius: radii.pill, backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border },
+  sortChipTxt: {
+    color: colors.text,
+    fontFamily: font.bodyBold,
+    fontSize: 14,
+    letterSpacing: 0.1,
+  },
+  filterChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    minHeight: 36,
+    borderRadius: radii.pill,
+    backgroundColor: colors.surface2,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   filterChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  filterChipTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
+  filterChipTxt: {
+    color: colors.text,
+    fontFamily: font.bodyMedium,
+    fontSize: 14,
+  },
   // New collection CTA row
   newColCta: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
