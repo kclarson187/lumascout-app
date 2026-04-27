@@ -467,10 +467,14 @@ export default function CommunityView() {
         </View>
       ) : null}
 
-      {/* Category chips */}
+      {/* Category chips — FIX(community gap on iOS): horizontal ScrollViews
+          without an explicit height constraint inflate vertically under
+          a flex parent on iOS, creating ~400px of dead space between the
+          chip row and the first post. Lock to a fixed 44px height. */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        style={s.catRowScroll}
         contentContainerStyle={s.catRow}
       >
         {CATEGORIES.map((c) => {
@@ -1101,9 +1105,14 @@ const s = StyleSheet.create({
   modalBtnDangerTxt: { color: '#fff', fontFamily: font.bodyBold, fontSize: 14 },
 
   // Category pills
+  // FIX(community gap): catRowScroll locks the horizontal ScrollView to a
+  // fixed height so it doesn't inflate vertically under flex parents,
+  // collapsing the dead space between filter chips and the first post.
+  catRowScroll: { flexGrow: 0, flexShrink: 0, height: 44 },
   catRow: {
     paddingHorizontal: space.xl,
-    paddingBottom: 10,
+    paddingVertical: 6,
+    alignItems: 'center',
     gap: 6,
   },
   catPill: {
