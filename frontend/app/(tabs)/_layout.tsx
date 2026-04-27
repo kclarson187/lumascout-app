@@ -4,6 +4,7 @@ import { Home, Map, Plus, Users, User } from 'lucide-react-native';
 import { View, StyleSheet, Platform } from 'react-native';
 import { colors, font } from '../../src/theme';
 import { useUnreadMessages } from '../../src/hooks/useUnreadMessages';
+import { useWebStyles } from '../../src/webStyles';
 
 /**
  * 5-tab bottom nav for the photographer-network pivot:
@@ -16,6 +17,7 @@ import { useUnreadMessages } from '../../src/hooks/useUnreadMessages';
  * useUnreadMessages hook so it stays consistent with the home avatar dot.
  */
 function ProfileTabIcon({ color }: { color: string }) {
+  useWebStyles();
   const unread = useUnreadMessages();
   return (
     <View style={styles.iconWrap}>

@@ -692,6 +692,14 @@ function StaggeredCard({ index, children }: { index: number; children: React.Rea
   const opacity = useRef(new Animated.Value(0)).current;
   const translate = useRef(new Animated.Value(8)).current;
 
+  // FIX(UX cleanup #4): only run the entrance animation ONCE on mount.
+  // Previously `index` was a dependency, which meant any re-numbering of
+  // the list (e.g. after a post delete) would re-trigger the animation
+  // for every downstream card. When combined with `useNativeDriver`'s
+  // out-of-tree opacity reset, this created the visible "gap-then-pop"
+  // effect users saw above the next post. We capture the initial index
+  // for the stagger delay and never re-fire.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const delay = Math.min(index * 45, 360);
     Animated.parallel([
@@ -704,7 +712,7 @@ function StaggeredCard({ index, children }: { index: number; children: React.Rea
         easing: Easing.out(Easing.cubic), useNativeDriver: true,
       }),
     ]).start();
-  }, [index, opacity, translate]);
+  }, []);
 
   return (
     <Animated.View style={{ opacity, transform: [{ translateY: translate }] }}>
