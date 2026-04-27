@@ -417,7 +417,10 @@ export default function DirectoryView() {
       ) : (
         <FlatList
           data={items}
-          keyExtractor={(u: DirItem) => u.user_id}
+          // Defensive: append index to key so a transient duplicate from
+          // cursor pagination overlap can never trigger a "two children
+          // with the same key" warning. Order remains stable.
+          keyExtractor={(u: DirItem, idx: number) => `${u.user_id}_${idx}`}
           contentContainerStyle={s.listContent}
           renderItem={({ item }) => (
             <CreatorCard
