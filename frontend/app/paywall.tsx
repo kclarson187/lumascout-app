@@ -118,13 +118,17 @@ export default function Paywall() {
           <ChevronLeft size={22} color={colors.text} />
         </TouchableOpacity>
       </View>
-      <ScrollView contentContainerStyle={{ paddingBottom: 60 }}>
-        {/* Top-header hero banner — branded LumaScout image with cinematic overlay */}
+      <ScrollView contentContainerStyle={{ paddingBottom: 60, backgroundColor: '#000000' }}>
+        {/* Top-header hero banner — branded LumaScout image with cinematic
+            overlay. FIX(pre-launch cleanup #7): gradient now finishes at
+            solid pure-black by 80% so the hero artwork is fully blacked
+            out well before the pricing cards. Eliminates the "blue bleed"
+            into the pricing tiers section. */}
         <View style={styles.heroWrap}>
           <Image source={HERO} style={styles.heroImg} resizeMode="cover" />
           <LinearGradient
-            colors={['rgba(10,10,10,0.20)', 'rgba(10,10,10,0.70)', colors.bg]}
-            locations={[0, 0.65, 1]}
+            colors={['rgba(0,0,0,0.25)', 'rgba(0,0,0,0.80)', '#000000', '#000000']}
+            locations={[0, 0.55, 0.85, 1]}
             style={StyleSheet.absoluteFill}
           />
           <View style={styles.heroBadge}>
@@ -132,7 +136,11 @@ export default function Paywall() {
             <Text style={styles.heroBadgeTxt}>LUMASCOUT MEMBERSHIP</Text>
           </View>
         </View>
-        <View style={{ paddingHorizontal: space.xl }}>
+        {/* Solid-black guardrail strip — guarantees the pricing area below
+            never shows any of the hero image, regardless of platform
+            gradient rounding differences. */}
+        <View style={styles.heroFadeStop} />
+        <View style={{ paddingHorizontal: space.xl, backgroundColor: '#000000' }}>
         <Text style={styles.title}>Scout smarter.{'\n'}Shoot better.</Text>
         <Text style={styles.sub}>
           {user?.plan && user.plan !== 'free' && !params.reason
@@ -303,6 +311,10 @@ const styles = StyleSheet.create({
     marginBottom: space.lg,
   },
   heroImg: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  // FIX(pre-launch cleanup #7): solid-black guardrail strip immediately
+  // below the hero. Eliminates any chance of the hero artwork or its
+  // gradient bleeding into the pricing tiers area on any platform.
+  heroFadeStop: { height: 16, backgroundColor: '#000000', marginTop: -1 },
   heroBadge: {
     flexDirection: 'row',
     alignItems: 'center',

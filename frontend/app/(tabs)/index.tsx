@@ -12,6 +12,7 @@ import {
   TextInput,
   Share,
   Pressable,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -418,8 +419,19 @@ export default function Home() {
             </View>
           </TouchableOpacity>
           <TouchableOpacity
-            onPress={() => router.push('/routes' as any)}
-            style={styles.qaPill}
+            onPress={() => {
+              // FIX(pre-launch cleanup): Routes / Road Trips feature is not
+              // shipped yet. Show a non-blocking "coming soon" toast instead
+              // of routing to /routes which would render the Unmatched Route
+              // 404 page. Once the feature is built, swap the body back to
+              // `router.push('/routes')`.
+              if (typeof window !== 'undefined' && (window as any).alert) {
+                (window as any).alert('Routes are launching soon. Stay tuned!');
+              } else {
+                Alert.alert('Coming soon', 'Routes are launching soon. Stay tuned!');
+              }
+            }}
+            style={[styles.qaPill, { opacity: 0.7 }]}
             testID="home-qa-routes"
           >
             <View style={styles.qaIcon}>
@@ -427,7 +439,7 @@ export default function Home() {
             </View>
             <View>
               <Text style={styles.qaLabel}>Routes</Text>
-              <Text style={styles.qaSub}>{(user as any)?.routes_count ?? 3} planned</Text>
+              <Text style={styles.qaSub}>Launching soon</Text>
             </View>
           </TouchableOpacity>
         </ScrollView>

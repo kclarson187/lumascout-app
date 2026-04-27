@@ -1025,6 +1025,11 @@ async def admin_users(
     query: dict = {}
     if not include_test:
         query["is_test_account"] = {"$ne": True}
+    # FIX(pre-launch cleanup #5): hide soft-deleted users from the admin
+    # users table by default. The 'status' filter still lets admins
+    # opt-in to view deleted users for moderation forensics.
+    if status != "deleted":
+        query["deleted_at"] = {"$exists": False}
     if q:
         # Case-insensitive partial match across multiple identifying fields
         rgx = {"$regex": q, "$options": "i"}

@@ -231,18 +231,15 @@ export default function Explore() {
           Keeping the location chip row immediately below the search header
           gives the map ~44px more vertical room and a cleaner, premium feel. */}
 
-      {/* Location + radius + niche chips (Apr 2026: ultra-compact 3-chip
-          row replaces the larger 8-chip ScrollView in map mode for a
-          tighter Apple-quality header). */}
+      {/* (Apr 2026) Compact location row — Apr 2026 cleanup pass:
+          removed redundant "25 mi" chip that was misleading (looked like
+          a radius selector but actually just opened the filters modal).
+          Radius now lives inside the filters modal. Order: Location | Category. */}
       <View style={styles.locRow}>
         <View style={styles.locChip}>
           <MapPin size={12} color={colors.primary} />
           <Text style={styles.locChipTxt}>San Antonio, TX</Text>
         </View>
-        <TouchableOpacity style={styles.locChip} onPress={() => setFilterOpen(true)} testID="explore-radius">
-          <Text style={styles.locChipTxt}>25 mi</Text>
-          <Text style={styles.locChipChev}>▾</Text>
-        </TouchableOpacity>
         <TouchableOpacity
           style={[styles.locChip, filters.niche ? styles.locChipActive : null]}
           onPress={() => setNicheOpen((v) => !v)}
