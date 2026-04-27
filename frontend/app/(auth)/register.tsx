@@ -8,9 +8,7 @@ import {
   Platform,
   ScrollView,
   Alert,
-  ImageBackground,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ArrowLeft } from 'lucide-react-native';
@@ -21,8 +19,6 @@ import { colors, font, space } from '../../src/theme';
 import { Button } from '../../src/components/Button';
 import { Input } from '../../src/components/ui';
 import { formatApiError } from '../../src/api';
-
-const HERO = require('../../assets/brand/branding-hero.png');
 
 export default function Register() {
   const { register, googleExchange } = useAuth();
@@ -76,90 +72,73 @@ export default function Register() {
   };
 
   return (
-    <ImageBackground source={HERO} style={styles.hero} resizeMode="cover">
-      <LinearGradient
-        colors={['rgba(10,10,10,0.55)', 'rgba(10,10,10,0.85)', 'rgba(10,10,10,0.97)']}
-        locations={[0, 0.45, 1]}
-        style={StyleSheet.absoluteFill}
-      />
-      <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
-          <ScrollView
-            contentContainerStyle={styles.scrollContent}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
-            <TouchableOpacity onPress={() => router.back()} style={styles.back} testID="register-back">
-              <ArrowLeft color={colors.text} size={22} />
+    <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <TouchableOpacity onPress={() => router.back()} style={styles.back} testID="register-back">
+            <ArrowLeft color={colors.text} size={22} />
+          </TouchableOpacity>
+
+          <Text style={styles.head}>Create account</Text>
+          <Text style={styles.sub}>Start logging your shoot locations in seconds.</Text>
+
+          <View style={{ gap: space.lg, marginTop: space.xxl }}>
+            <Input
+              label="Your name"
+              value={name}
+              onChangeText={setName}
+              placeholder="Sophie Reyes"
+              testID="register-name"
+            />
+            <Input
+              label="Email"
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              autoComplete="email"
+              keyboardType="email-address"
+              placeholder="you@example.com"
+              testID="register-email"
+            />
+            <Input
+              label="Password"
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+              placeholder="At least 6 characters"
+              testID="register-password"
+            />
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+            <Button title="Create account" onPress={onSubmit} loading={loading} testID="register-submit" />
+            <View style={styles.divider}>
+              <View style={styles.divLine} />
+              <Text style={styles.divText}>OR</Text>
+              <View style={styles.divLine} />
+            </View>
+            <Button title="Continue with Google" variant="secondary" onPress={onGoogle} testID="register-google" />
+          </View>
+
+          <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: space.xxxl }}>
+            <Text style={styles.footerTxt}>Already have an account? </Text>
+            <TouchableOpacity onPress={() => router.replace('/(auth)/login')} testID="register-goto-login">
+              <Text style={styles.footerLink}>Sign in</Text>
             </TouchableOpacity>
-
-            <View style={styles.brandWrap}>
-              <Text style={styles.brand}>LumaScout</Text>
-              <Text style={styles.tagline}>Find your light.</Text>
-            </View>
-
-            <Text style={styles.head}>Create account</Text>
-            <Text style={styles.sub}>Start logging your shoot locations in seconds.</Text>
-
-            <View style={{ gap: space.lg, marginTop: space.xxl }}>
-              <Input
-                label="Your name"
-                value={name}
-                onChangeText={setName}
-                placeholder="Sophie Reyes"
-                testID="register-name"
-              />
-              <Input
-                label="Email"
-                value={email}
-                onChangeText={setEmail}
-                autoCapitalize="none"
-                autoComplete="email"
-                keyboardType="email-address"
-                placeholder="you@example.com"
-                testID="register-email"
-              />
-              <Input
-                label="Password"
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-                placeholder="At least 6 characters"
-                testID="register-password"
-              />
-              {error ? <Text style={styles.error}>{error}</Text> : null}
-              <Button title="Create account" onPress={onSubmit} loading={loading} testID="register-submit" />
-              <View style={styles.divider}>
-                <View style={styles.divLine} />
-                <Text style={styles.divText}>OR</Text>
-                <View style={styles.divLine} />
-              </View>
-              <Button title="Continue with Google" variant="secondary" onPress={onGoogle} testID="register-google" />
-            </View>
-
-            <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: space.xxxl }}>
-              <Text style={styles.footerTxt}>Already have an account? </Text>
-              <TouchableOpacity onPress={() => router.replace('/(auth)/login')} testID="register-goto-login">
-                <Text style={styles.footerLink}>Sign in</Text>
-              </TouchableOpacity>
-            </View>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </SafeAreaView>
-    </ImageBackground>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  hero: { flex: 1, backgroundColor: colors.bg },
+  root: { flex: 1, backgroundColor: '#000000' },
   scrollContent: { padding: space.xl, paddingBottom: space.xxxl, minHeight: '100%' },
   back: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', marginBottom: space.lg },
-  brandWrap: { marginTop: space.xxl, marginBottom: space.xxl, alignItems: 'flex-start' },
-  brand: { color: colors.text, fontFamily: font.display, fontSize: 32, letterSpacing: -0.5 },
-  tagline: {
-    color: colors.primary, fontFamily: font.bodyMedium, fontSize: 13, letterSpacing: 1.4, marginTop: 4, textTransform: 'uppercase',
-  },
-  head: { color: colors.text, fontFamily: font.display, fontSize: 36, letterSpacing: -0.6 },
+  head: { color: colors.text, fontFamily: font.display, fontSize: 36, letterSpacing: -0.6, marginTop: space.xxl },
   sub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 15, marginTop: space.sm },
   error: { color: colors.secondary, fontFamily: font.body, fontSize: 13, marginTop: -space.sm },
   divider: { flexDirection: 'row', alignItems: 'center', gap: 12, marginVertical: space.sm },
