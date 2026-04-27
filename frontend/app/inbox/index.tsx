@@ -7,6 +7,7 @@ import { api, formatApiError } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
 import { timeAgo } from '../../src/components/FreshnessBits';
 import EliteBadge from '../../src/components/EliteBadge';
+import UserBadge from '../../src/components/UserBadge';
 import ThreadActionSheet, { ThreadActionTarget } from '../../src/components/ThreadActionSheet';
 import SwipeableThreadRow from '../../src/components/SwipeableThreadRow';
 import { useUnreadMessages } from '../../src/hooks/useUnreadMessages';
@@ -184,7 +185,7 @@ export default function InboxScreen() {
               {pinned ? <Pin size={11} color="#f5a623" fill="#f5a623" /> : null}
               <Text style={[s.tName, unreadRow && { fontFamily: font.bodyBold }]} numberOfLines={1}>{o.name || '@'+o.username}</Text>
               {o.verification_status === 'verified' ? <ShieldCheck size={12} color="#3b82f6"/> : null}
-              {o.plan === 'elite' ? <EliteBadge variant="compact" /> : null}
+              <UserBadge user={o} variant="compact" />
               {item.is_muted ? <BellOff size={11} color={colors.textTertiary}/> : null}
               <Text style={s.tTime}>{timeAgo(item.last_message_at) || timeAgo(item.created_at)}</Text>
             </View>

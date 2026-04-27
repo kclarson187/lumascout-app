@@ -10,6 +10,7 @@ import {
   Route, Film, Layout, Headphones,
 } from 'lucide-react-native';
 import { colors, font, space, radii } from '../theme';
+import UserBadge from './UserBadge';
 
 export type Product = {
   product_id: string;
@@ -129,9 +130,7 @@ export default function ProductCard({
             {displayName}
           </Text>
           {isVerified ? <ShieldCheck size={10} color="#3b82f6" /> : null}
-          {isElite ? (
-            <Star size={10} color={colors.primary} fill={colors.primary} strokeWidth={0} />
-          ) : null}
+          <UserBadge user={product.seller} variant="inline" />
         </View>
 
         <View style={styles.footerRow}>

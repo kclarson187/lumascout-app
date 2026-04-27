@@ -10,6 +10,7 @@ import { colors, font, space, radii } from '../../src/theme';
 import { timeAgo } from '../../src/components/FreshnessBits';
 import { KeyboardSafeDocked } from '../../src/components/KeyboardSafe';
 import ReadReceipt from '../../src/components/ReadReceipt';
+import UserBadge from '../../src/components/UserBadge';
 
 const QUICK_STARTERS = [
   'Love your work.',
@@ -87,7 +88,10 @@ export default function ThreadScreen() {
           {other?.avatar_url ? <Image source={{ uri: other.avatar_url }} style={s.hAvatar}/> : <View style={[s.hAvatar,{backgroundColor:colors.surface2,alignItems:'center',justifyContent:'center'}]}><Text style={{color:colors.textSecondary,fontFamily:font.bodyBold,fontSize:12}}>{other?.name?.[0]?.toUpperCase() || '?'}</Text></View>}
           <View style={{ flex: 1 }}>
             <Text style={s.hName} numberOfLines={1}>{other?.name || '@'+(other?.username || '')} {other?.verification_status === 'verified' ? <ShieldCheck size={13} color="#3b82f6"/> : null}</Text>
-            <Text style={s.hMeta} numberOfLines={1}>{other?.city ? `${other.city}${other.state ? `, ${other.state}` : ''}` : 'Photographer'}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <UserBadge user={other} variant="compact" />
+              <Text style={s.hMeta} numberOfLines={1}>{other?.city ? `${other.city}${other.state ? `, ${other.state}` : ''}` : 'Photographer'}</Text>
+            </View>
           </View>
         </Pressable>
       </View>

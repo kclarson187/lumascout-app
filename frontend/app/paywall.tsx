@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Pressable, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Pressable, Platform, Image } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ChevronLeft, Check, Crown, Sparkles } from 'lucide-react-native';
@@ -9,6 +10,8 @@ import { colors, font, space, radii } from '../src/theme';
 import { Button } from '../src/components/Button';
 import { api, formatApiError } from '../src/api';
 import { useAuth } from '../src/auth';
+
+const HERO = require('../assets/brand/branding-hero.png');
 
 type BillingCycle = 'monthly' | 'annual';
 
@@ -115,8 +118,21 @@ export default function Paywall() {
           <ChevronLeft size={22} color={colors.text} />
         </TouchableOpacity>
       </View>
-      <ScrollView contentContainerStyle={{ padding: space.xl, paddingBottom: 60 }}>
-        <View style={styles.crown}><Crown size={28} color={colors.primary} /></View>
+      <ScrollView contentContainerStyle={{ paddingBottom: 60 }}>
+        {/* Top-header hero banner — branded LumaScout image with cinematic overlay */}
+        <View style={styles.heroWrap}>
+          <Image source={HERO} style={styles.heroImg} resizeMode="cover" />
+          <LinearGradient
+            colors={['rgba(10,10,10,0.20)', 'rgba(10,10,10,0.70)', colors.bg]}
+            locations={[0, 0.65, 1]}
+            style={StyleSheet.absoluteFill}
+          />
+          <View style={styles.heroBadge}>
+            <Crown size={16} color={colors.primary} />
+            <Text style={styles.heroBadgeTxt}>LUMASCOUT MEMBERSHIP</Text>
+          </View>
+        </View>
+        <View style={{ paddingHorizontal: space.xl }}>
         <Text style={styles.title}>Scout smarter.{'\n'}Shoot better.</Text>
         <Text style={styles.sub}>
           {user?.plan && user.plan !== 'free' && !params.reason
@@ -266,18 +282,46 @@ export default function Paywall() {
         </View>
 
         {loading && <Text style={[styles.fine, { marginTop: space.lg }]}>Loading plans…</Text>}
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  head: { flexDirection: 'row', paddingHorizontal: space.xl, paddingTop: space.sm },
-  backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  crown: {
-    width: 60, height: 60, borderRadius: 30,
-    backgroundColor: 'rgba(245,166,35,0.15)', borderColor: 'rgba(245,166,35,0.4)', borderWidth: 1,
-    alignItems: 'center', justifyContent: 'center', alignSelf: 'center', marginTop: space.lg,
+  head: { flexDirection: 'row', paddingHorizontal: space.xl, paddingTop: space.sm, position: 'absolute', top: space.sm, left: 0, right: 0, zIndex: 10 },
+  backBtn: {
+    width: 40, height: 40, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(10,10,10,0.55)', borderRadius: 20,
+  },
+  heroWrap: {
+    width: '100%',
+    height: 220,
+    overflow: 'hidden',
+    backgroundColor: '#0A0A0A',
+    justifyContent: 'flex-end',
+    marginBottom: space.lg,
+  },
+  heroImg: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  heroBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginLeft: space.xl,
+    marginBottom: space.lg,
+    backgroundColor: 'rgba(10,10,10,0.65)',
+    borderColor: 'rgba(245,166,35,0.45)',
+    borderWidth: 1,
+    borderRadius: radii.pill,
+  },
+  heroBadgeTxt: {
+    color: colors.primary,
+    fontFamily: font.bodyBold,
+    fontSize: 10,
+    letterSpacing: 1.2,
   },
   title: {
     color: colors.text, fontFamily: font.display, fontSize: 36,

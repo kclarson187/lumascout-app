@@ -32,6 +32,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { api, formatApiError } from '../api';
 import { useAuth } from '../auth';
 import { colors, font, space, radii } from '../theme';
+import UserBadge from './UserBadge';
 
 // ============================================================================
 // Categories — Apr 2026 spec: All / Feedback / Referrals / Gear / Editing / Wins
@@ -793,11 +794,7 @@ function PostCard({
                 <Text style={s.verifiedDotTxt}>✓</Text>
               </View>
             ) : null}
-            {elite ? (
-              <View style={s.elitePill}>
-                <Text style={s.elitePillTxt}>ELITE</Text>
-              </View>
-            ) : null}
+            <UserBadge user={a} variant="inline" />
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
             {a.city ? (

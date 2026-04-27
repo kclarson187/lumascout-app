@@ -51,6 +51,7 @@ import { Button } from '../../src/components/Button';
 import { Input, Chip, EmptyState } from '../../src/components/ui';
 import SpotCard from '../../src/components/SpotCard';
 import VerifiedBadge from '../../src/components/VerifiedBadge';
+import UserBadge from '../../src/components/UserBadge';
 import PremiumProfileExtras from '../../src/components/PremiumProfileExtras';
 
 
@@ -355,6 +356,7 @@ export default function Profile() {
                   <ShieldCheck size={14} color={colors.textInverse} />
                 </View>
               )}
+              <UserBadge user={user} variant="header" />
             </View>
             <Text style={styles.handle}>@{user.username}</Text>
             {(user.city || user.state) && (

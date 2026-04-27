@@ -19,6 +19,7 @@ import { router, Stack, usePathname } from 'expo-router';
 import { ChevronLeft, ShieldCheck, Gem, MapPin } from 'lucide-react-native';
 import { api } from '../api';
 import { colors, font, space } from '../theme';
+import UserBadge from './UserBadge';
 
 type FollowUser = {
   user_id: string;
@@ -154,12 +155,7 @@ function UserRow({ u }: { u: FollowUser }) {
               <Text style={s.verifiedDotTxt}>✓</Text>
             </View>
           ) : null}
-          {elite ? (
-            <View style={s.elitePill}>
-              <Gem size={9} color="#1a1300" />
-              <Text style={s.elitePillTxt}>ELITE</Text>
-            </View>
-          ) : null}
+          <UserBadge user={u} variant="compact" />
         </View>
         {u.username ? (
           <Text style={s.username} numberOfLines={1}>@{u.username}</Text>
