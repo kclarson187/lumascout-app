@@ -261,8 +261,8 @@ async def my_networking_analytics(
 
     # Messaging — threads created + conversion (we count distinct thread starts via dm_requests)
     threads_active = await db.dm_threads.count_documents({
-        "participant_user_ids": uid, "last_message_at": {"$ne": None},
-        "last_message_at": {"$gte": cutoff},
+        "participant_user_ids": uid,
+        "last_message_at": {"$ne": None, "$gte": cutoff},
     })
 
     base = {
