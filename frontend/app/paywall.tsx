@@ -119,27 +119,17 @@ export default function Paywall() {
         </TouchableOpacity>
       </View>
       <ScrollView contentContainerStyle={{ paddingBottom: 60, backgroundColor: '#000000' }}>
-        {/* Top-header hero banner — branded LumaScout image with cinematic
-            overlay. FIX(pre-launch cleanup #7): gradient now finishes at
-            solid pure-black by 80% so the hero artwork is fully blacked
-            out well before the pricing cards. Eliminates the "blue bleed"
-            into the pricing tiers section. */}
-        <View style={styles.heroWrap}>
-          <Image source={HERO} style={styles.heroImg} resizeMode="cover" />
-          <LinearGradient
-            colors={['rgba(0,0,0,0.25)', 'rgba(0,0,0,0.80)', '#000000', '#000000']}
-            locations={[0, 0.55, 0.85, 1]}
-            style={StyleSheet.absoluteFill}
-          />
+        {/* (Apr 2026 minor cleanup) Hero artwork removed entirely — the
+            giant "LumaScout" watermark behind the pill consumed too much
+            vertical real estate on iPhone, pushing the pricing tiers below
+            the fold. Replaced with a clean solid-black header that keeps
+            only the gold "LUMASCOUT MEMBERSHIP" pill. */}
+        <View style={styles.cleanHead}>
           <View style={styles.heroBadge}>
             <Crown size={16} color={colors.primary} />
             <Text style={styles.heroBadgeTxt}>LUMASCOUT MEMBERSHIP</Text>
           </View>
         </View>
-        {/* Solid-black guardrail strip — guarantees the pricing area below
-            never shows any of the hero image, regardless of platform
-            gradient rounding differences. */}
-        <View style={styles.heroFadeStop} />
         <View style={{ paddingHorizontal: space.xl, backgroundColor: '#000000' }}>
         <Text style={styles.title}>Scout smarter.{'\n'}Shoot better.</Text>
         <Text style={styles.sub}>
@@ -302,19 +292,15 @@ const styles = StyleSheet.create({
     width: 40, height: 40, alignItems: 'center', justifyContent: 'center',
     backgroundColor: 'rgba(10,10,10,0.55)', borderRadius: 20,
   },
-  heroWrap: {
-    width: '100%',
-    height: 220,
-    overflow: 'hidden',
-    backgroundColor: '#0A0A0A',
-    justifyContent: 'flex-end',
-    marginBottom: space.lg,
+  // (Apr 2026 minor cleanup) Replaced 220px hero+gradient with a slim
+  // header strip so pricing tiers sit higher on the screen.
+  cleanHead: {
+    paddingTop: space.xxl,
+    paddingBottom: space.lg,
+    alignItems: 'center',
+    backgroundColor: '#000000',
   },
   heroImg: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
-  // FIX(pre-launch cleanup #7): solid-black guardrail strip immediately
-  // below the hero. Eliminates any chance of the hero artwork or its
-  // gradient bleeding into the pricing tiers area on any platform.
-  heroFadeStop: { height: 16, backgroundColor: '#000000', marginTop: -1 },
   heroBadge: {
     flexDirection: 'row',
     alignItems: 'center',
