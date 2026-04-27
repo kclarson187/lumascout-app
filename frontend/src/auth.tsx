@@ -19,8 +19,23 @@ export type User = {
   verification_status?: string;
   auth_provider?: string;
   plan?: 'free' | 'pro' | 'elite' | 'comp_pro' | 'comp_elite' | 'trial_pro' | 'trial_elite';
-  limits?: { saves: number; private_spots: number; collections: number; advanced_filters: boolean; sell_packs: boolean };
-  usage?: { saves: number; private_spots: number; collections: number };
+  limits?: {
+    saves: number;
+    private_spots: number;
+    collections: number;
+    advanced_filters: boolean;
+    sell_packs: boolean;
+    monthly_outbound_dms?: number;
+    active_routes?: number;
+    max_uploads?: number;
+  };
+  usage?: {
+    saves: number;
+    private_spots: number;
+    collections: number;
+    uploads?: number;
+    outbound_threads_30d?: number;
+  };
 };
 
 type AuthState = {

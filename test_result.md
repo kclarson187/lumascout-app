@@ -13,6 +13,139 @@
 #====================================================================================================
 
 
+  - task: "Membership Tier Conversion Update — Free-tier caps (3 saves / 5 uploads / 3 outbound DM threads per month), updated /api/plans copy, updated /api/auth/me usage fields"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py (PLAN_LIMITS @ L60-118, /api/plans @ L849-914, /api/auth/me @ L808-844), /app/backend/routes/spots.py (create_spot max_uploads gate @ L347-372, toggle_save saves gate @ L1086-1100), /app/backend/routes/network.py (dm_start_thread monthly_outbound_dms gate @ L453-499)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          FULL VALIDATION PASS — 59/59 assertions green via
+          /app/backend_test_membership.py against
+          https://photo-finder-60.preview.emergentagent.com/api.
+          Super_admin: admin@lumascout.app / admin123
+          (user_6daa7d0a3abc, plan=elite). Fresh free-tier users
+          registered via POST /api/auth/register with @lumascout-qa.com
+          TLD (no email-validator rejection).
+
+          T1. GET /api/plans (no auth) — PASS (19/19):
+              · 200 with plans array length 3.
+              · Plan keys: free, pro, elite (all present).
+              · Prices: free monthly_price="$0", pro="$9.99",
+                elite="$19.99" — exact match.
+              · Free features include "Save up to 3 spots" AND
+                "Up to 5 spots you can upload" — both substrings
+                ("3 spot" and "5 spot") detected case-insensitively.
+              · Free limits: saves=3, collections=0,
+                monthly_outbound_dms=3, active_routes=1, max_uploads=5
+                — all match spec exactly.
+              · Pro features list contains "Unlimited saved spots &
+                uploads" AND "Pro creator badge" — both verified.
+              · Elite features list contains "Everything in Pro" AND
+                at least one of "Animated Elite badge" /
+                "Sell curated spot packs" / "Priority support"
+                (all three actually present).
+
+          T2. GET /api/auth/me as super_admin — PASS (10/10):
+              · 200, plan="elite".
+              · usage object contains all 5 keys: saves,
+                private_spots, collections, uploads,
+                outbound_threads_30d (all numeric ints).
+              · limits.monthly_outbound_dms=10000,
+                limits.max_uploads=10000, limits.active_routes=10000
+                — Pro/Elite uncapped sentinel values intact.
+
+          T3. Free-tier outbound DM thread cap — PASS (9/9):
+              · Registered fresh free user U1 (user_96647766d952).
+              · POST /dm/threads/start to super_admin → 200, returned
+                thread_id (net-new thread #1).
+              · POST /dm/threads/start to fresh free U2 → 200 (#2).
+              · POST /dm/threads/start to fresh free U3 → 200 (#3).
+              · POST /dm/threads/start to fresh free U4 → 402 with
+                detail "Free plan allows 3 new message threads per
+                month. Upgrade to Pro for unlimited photographer DMs."
+                — contains both "message" AND "thread" (case-
+                insensitive). Source: routes/network.py:485-499 gate
+                `outbound_30d >= free_limit` with HTTPException(402).
+              · POST /dm/threads/start to super_admin (REUSE existing
+                thread) → 200. Confirms `existing_thread = await
+                db.dm_threads.find_one({"thread_key": ...})` short-
+                circuits the cap check at routes/network.py:482-485
+                — replies and reusing existing threads do NOT count.
+              · GET /auth/me → usage.outbound_threads_30d == 3
+                (exact). Counter is computed from
+                db.dm_threads.count_documents({creator_user_id,
+                created_at: {$gte: 30d_ago}}) per server.py:818-822.
+
+          T4. Free-tier max_uploads cap — PASS (8/8):
+              · Registered fresh free user (user_54f1356f2046).
+              · 5 sequential POST /spots with privacy_mode="public",
+                save_as_draft=false, distinct titles, San Antonio
+                coords (29.42, -98.49) + 1x1 PNG data URI image —
+                all 5 returned 200.
+              · 6th POST /spots → 402 with detail "Free plan allows
+                5 uploaded spots. Upgrade to Pro for unlimited
+                uploads." — contains "upload" (case-insensitive).
+                Source: routes/spots.py:357-372 gate
+                `existing_uploads >= max_uploads` with the
+                `visibility_status: {"$ne": "draft"}` filter so
+                drafts are excluded from the count.
+              · 7th POST /spots with save_as_draft=true → 200.
+                Confirms `if not body.save_as_draft:` short-circuit
+                at routes/spots.py:357 — drafts bypass the entire
+                upload-cap branch.
+
+          T5. Free-tier save cap regression — PASS (9/9):
+              · Registered fresh free user (user_d0489caffd08).
+              · GET /spots?limit=10 returned >=4 distinct public
+                spot_ids.
+              · POST /spots/{id}/save on first 3 distinct ids → 200
+                each with body.saved=true.
+              · POST /spots/{id}/save on the 4th id → 402 with
+                detail "Free plan allows 3 saves. Upgrade to Pro
+                for unlimited saves." — contains "save" (case-
+                insensitive). Source: routes/spots.py:1093-1100
+                gate `current >= limits["saves"]`. No regression.
+
+          T6. Pro/Elite NOT capped — PASS (4/4):
+              · Super_admin (elite) POST /spots/{id}/save on 6
+                different spots → all 200, no 402. (Saves toggled
+                back off afterward to keep admin's library clean.)
+              · Super_admin POST /dm/threads/start to 4 fresh new
+                free users → all 200, no 402.
+              · Super_admin POST /spots with save_as_draft=false on
+                6 fresh public spots in Austin → all 200 (spot_ids:
+                spot_b480865760a6, spot_ae6ede99a446,
+                spot_9eb76e46b4ab, spot_412d42c2983a,
+                spot_587f02d1fa4f, spot_8013c956c841) — no 402.
+
+          CLEANUP: All 6 admin-created QA spots successfully
+          DELETE'd via /api/spots/{id} → 200 each. Free QA users
+          remain in DB (small footprint).
+
+          ── VERDICT ──────────────────────────────────────────────
+          Membership Tier Conversion Update is launch-ready.
+          • /api/plans returns the new 3-plan structure with the
+            correct prices, features, and limits.
+          • /api/auth/me exposes both new usage fields (uploads,
+            outbound_threads_30d) alongside the legacy fields.
+          • Free-tier creator caps fire at exactly the 4th DM
+            thread, 6th public upload, and 4th save with 402s
+            carrying the spec-required keywords ('message'/'thread',
+            'upload', 'save'). Drafts and reused threads are
+            correctly excluded from the counters.
+          • Pro/Elite users (super_admin) are unaffected by all
+            three caps.
+
+          No 500s observed. Backend logs clean. Test harness:
+          /app/backend_test_membership.py.
+
+
+
   - task: "POST /api/admin/users/bulk-delete (super_admin Users panel — Apr 2026 priority sprint item #1)"
     implemented: true
     working: true
@@ -8632,13 +8765,115 @@ agent_communication:
               doesn't have @shopify/flash-list installed and the list
               size is small enough that windowed FlatList is plenty.
 
+  - task: "Membership Tier Conversion Update — backend (PLAN_LIMITS, /api/plans copy, /auth/me usage exposes uploads + outbound_threads_30d, monthly outbound DM cap, max_uploads cap)"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py (PLAN_LIMITS L54-118, /api/plans L837-898, /auth/me L808-832, _dm_get_or_create_thread L2058-2086), /app/backend/routes/network.py (dm_start_thread L452-555 — monthly_outbound_dms cap), /app/backend/routes/spots.py (create_spot L348-409 — max_uploads cap)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          NEW WORK — implements the user-requested membership conversion
+          changes. Free tier tightened to drive Pro conversions while
+          keeping browsing/following entirely free.
+
+          Backend changes shipped:
+
+          (1) PLAN_LIMITS already had the correct caps from a prior pass
+              (saves=3, private_spots=1, collections=0, monthly_outbound_dms=3,
+              active_routes=1, max_uploads=5). Verified unchanged.
+
+          (2) /api/plans features list rewritten end-to-end. Free now
+              advertises: "Browse all public spots / Follow photographers
+              + community feed / Save up to 3 spots / Up to 5 spots you
+              can upload / Plan 1 active route / 3 new message threads /
+              month". Pro = "Unlimited saves & uploads / Unlimited custom
+              collections / Unlimited active routes / Advanced map &
+              search filters / Unlimited photographer DMs / See full
+              Profile Viewers list / Pro creator badge". Elite = "Everything
+              in Pro / Animated Elite badge / Advanced spot analytics /
+              Sell curated spot packs / Featured spotlight rotation /
+              Early access to new features / Priority support".
+
+          (3) /auth/me usage object now also exposes:
+                · `uploads` — total spots created by user (any privacy)
+                · `outbound_threads_30d` — DM threads where user is the
+                  creator within the last 30 days
+              Existing fields (saves / private_spots / collections) are
+              UNCHANGED. This lets the frontend show tasteful "X / Y
+              used" banners before the user attempts an action that
+              would exceed the cap.
+
+          (4) _dm_get_or_create_thread now accepts an optional
+              `creator_user_id` and stamps it on creation so we can
+              accurately count net-new outbound threads. Existing
+              threads are unaffected (no migration needed).
+
+          (5) routes/network.py dm_start_thread enforces the new
+              `monthly_outbound_dms=3` cap for free tier on net-new
+              threads only (replies on existing threads remain free
+              forever). Returns 402 with detail "Free plan allows 3 new
+              message threads per month. Upgrade to Pro for unlimited
+              photographer DMs." — the global UpgradeGate maps any
+              detail containing 'thread' or 'message' to reason='messaging'.
+
+          (6) routes/spots.py create_spot enforces `max_uploads=5` for
+              free tier (drafts excluded — drafts don't count). Returns
+              402 with detail "Free plan allows 5 uploaded spots.
+              Upgrade to Pro for unlimited uploads." — global gate maps
+              'upload' → reason='uploads'.
+
+          Frontend (already wired to global 402 → UpgradeGateModal so
+          no per-screen changes needed for the new caps):
+            · UpgradeGateModal REASONS map updated: saves copy now says
+              "save 3 spots" (was 5), collections copy clarifies Free
+              has 0 custom collections, messaging copy says "3 new
+              threads / month", added new reasons: uploads / routes /
+              viewers.
+            · _layout.tsx detailToReason mapper extended: "upload" →
+              uploads, "route" → routes, "viewer" → viewers (was lumped
+              with analytics).
+            · paywall.tsx compare table refreshed: 14 rows reflecting
+              new tier matrix (Saved 3/∞/∞, Uploaded 5/∞/∞, Threads
+              3/∞/∞, Routes 1/∞/∞, Collections —/∞/∞, Profile viewers
+              Blurred/Full/Full+analytics, etc.).
+            · saved.tsx contextual upgrade banner trigger lowered from
+              5 to 2 (Free cap is 3, so 2 is the right "you're getting
+              close" point).
+
+          NEEDS BACKEND TEST. Specifically:
+            (a) GET /api/plans returns 3 plans with the new feature
+                lists and PLAN_LIMITS unchanged.
+            (b) GET /api/auth/me returns usage.uploads (int) and
+                usage.outbound_threads_30d (int) for both free and
+                paid users. Existing keys still present.
+            (c) POST /api/dm/threads/start (free user) — first 3
+                net-new threads succeed; 4th returns 402 with detail
+                containing 'message' or 'thread'. Reusing an existing
+                thread (re-calling /start with a user you already
+                threaded) does NOT count and does NOT 402.
+            (d) POST /api/spots (free user) — 5 successful non-draft
+                creates, 6th returns 402 with detail containing
+                'upload'. Drafts (`save_as_draft=true`) do NOT count.
+            (e) POST /api/spots/{id}/save (free user) — 3 succeeds,
+                4th returns 402 with detail containing 'save' (existing
+                behaviour, regression check).
+            (f) Pro/Elite users not affected by any of the new caps.
+
+          Use admin@lumascout.app / admin123 (super_admin / elite) for
+          paid path. Spin up a fresh @lumascout-qa.com user for free
+          path tests. Cleanup afterwards.
+
 metadata:
-  test_sequence: 12
+  test_sequence: 13
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Photographer Directory — GET /api/directory + GET /api/directory/suggested (search/sort/filter/specialty/cursor pagination, premium soft-boost, follow/block hydration)"
+    - "Membership Tier Conversion Update — /api/plans copy, /auth/me usage exposes uploads + outbound_threads_30d, monthly outbound DM cap (3/mo for free), max_uploads cap (5 lifetime for free), updated 402 detail strings for global UpgradeGate routing"
   stuck_tasks: []
   test_all: false
   test_priority: "stuck_first"

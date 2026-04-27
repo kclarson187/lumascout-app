@@ -32,7 +32,8 @@ from server import (
     _user_public_view,
     _compute_trust_metrics,
     _dm_get_or_create_thread, _dm_insert_message, _thread_is_accepted,
-    check_rate_limit,
+    _thread_key,
+    check_rate_limit, limits_for,
     DMSendIn, DMStartIn,
 )
 
@@ -471,7 +472,35 @@ async def dm_start_thread(
     blocked = await db.dm_blocks.find_one({"blocker_user_id": target_id, "blocked_user_id": user["user_id"]})
     if blocked:
         raise HTTPException(status_code=403, detail="You cannot message this user")
-    thread = await _dm_get_or_create_thread(user["user_id"], target_id)
+
+    # FIX(membership conversion update): Free-tier monthly outbound DM
+    # thread cap. We only count *net-new* threads the user initiates in
+    # the last 30 days. Reopening / reusing an existing thread (replies)
+    # is always free. This is a tasteful gate — backend returns 402 with
+    # 'message' in the detail so the global UpgradeGateModal can surface
+    # the messaging upsell instead of a hard error.
+    existing_thread = await db.dm_threads.find_one(
+        {"thread_key": _thread_key(user["user_id"], target_id)}
+    )
+    if not existing_thread and _effective_plan(plan_of(user)) == "free":
+        free_limit = limits_for(user).get("monthly_outbound_dms", 3)
+        month_ago = utcnow() - timedelta(days=30)
+        outbound_30d = await db.dm_threads.count_documents({
+            "creator_user_id": user["user_id"],
+            "created_at": {"$gte": month_ago},
+        })
+        if outbound_30d >= free_limit:
+            raise HTTPException(
+                status_code=402,
+                detail=(
+                    f"Free plan allows {free_limit} new message threads per month. "
+                    "Upgrade to Pro for unlimited photographer DMs."
+                ),
+            )
+
+    thread = await _dm_get_or_create_thread(
+        user["user_id"], target_id, creator_user_id=user["user_id"],
+    )
     # Message request if recipient doesn't follow sender and hasn't accepted
     target_follows_sender = await db.follows.find_one({
         "follower_user_id": target_id, "followed_user_id": user["user_id"],

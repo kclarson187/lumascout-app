@@ -348,6 +348,28 @@ async def check_duplicates(
 @router.post("/spots")
 async def create_spot(body: SpotCreateIn, user: dict = Depends(get_current_user)):
     check_rate_limit("spot_create", user["user_id"])
+    # FIX(membership conversion update): Free tier total upload cap.
+    # Drafts don't count — drafts are owner-only and shouldn't punish
+    # exploration. Once a user moves a draft to public/private, the
+    # outgoing count goes up. The error message includes the word
+    # 'upload' so the global UpgradeGateModal can route to the
+    # 'uploads' reason and show the right upsell copy.
+    if not body.save_as_draft:
+        upload_limits = limits_for(user)
+        max_uploads = upload_limits.get("max_uploads", 10_000)
+        if max_uploads < 10_000:  # only enforce on Free / suspended
+            existing_uploads = await db.spots.count_documents({
+                "owner_user_id": user["user_id"],
+                "visibility_status": {"$ne": "draft"},
+            })
+            if existing_uploads >= max_uploads:
+                raise HTTPException(
+                    status_code=402,
+                    detail=(
+                        f"Free plan allows {max_uploads} uploaded spots. "
+                        "Upgrade to Pro for unlimited uploads."
+                    ),
+                )
     # Feature gating: free plan can only create 3 private/followers/invite_only spots
     if body.privacy_mode in ("private", "followers", "invite_only"):
         limits = limits_for(user)
