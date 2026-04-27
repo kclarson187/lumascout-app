@@ -52,15 +52,69 @@ ACCESS_TOKEN_DAYS = 30
 
 # Plan feature gating
 PLAN_LIMITS = {
-    "free": {"saves": 5, "private_spots": 1, "collections": 1, "advanced_filters": False, "sell_packs": False, "creator_analytics": False},
-    "pro": {"saves": 10_000, "private_spots": 10_000, "collections": 500, "advanced_filters": True, "sell_packs": False, "creator_analytics": False},
-    "elite": {"saves": 10_000, "private_spots": 10_000, "collections": 10_000, "advanced_filters": True, "sell_packs": True, "creator_analytics": True},
+    # FIX(membership conversion update): Free tier tightened to drive upgrades
+    # while keeping the experience usable — saves 5→3, collections fully
+    # locked, new outbound DMs capped at 3/mo, route plans capped at 1
+    # active, uploads capped at 5 lifetime, advanced filters locked.
+    "free": {
+        "saves": 3,
+        "private_spots": 1,
+        "collections": 0,
+        "advanced_filters": False,
+        "sell_packs": False,
+        "creator_analytics": False,
+        "monthly_outbound_dms": 3,
+        "active_routes": 1,
+        "max_uploads": 5,
+    },
+    "pro": {
+        "saves": 10_000,
+        "private_spots": 10_000,
+        "collections": 500,
+        "advanced_filters": True,
+        "sell_packs": False,
+        "creator_analytics": False,
+        "monthly_outbound_dms": 10_000,
+        "active_routes": 10_000,
+        "max_uploads": 10_000,
+    },
+    "elite": {
+        "saves": 10_000,
+        "private_spots": 10_000,
+        "collections": 10_000,
+        "advanced_filters": True,
+        "sell_packs": True,
+        "creator_analytics": True,
+        "monthly_outbound_dms": 10_000,
+        "active_routes": 10_000,
+        "max_uploads": 10_000,
+    },
     # Comp plans mirror their paid counterparts for feature gating purposes.
-    "comp_pro": {"saves": 10_000, "private_spots": 10_000, "collections": 500, "advanced_filters": True, "sell_packs": False, "creator_analytics": False},
-    "comp_elite": {"saves": 10_000, "private_spots": 10_000, "collections": 10_000, "advanced_filters": True, "sell_packs": True, "creator_analytics": True},
-    "trial_pro": {"saves": 10_000, "private_spots": 10_000, "collections": 500, "advanced_filters": True, "sell_packs": False, "creator_analytics": False},
-    "trial_elite": {"saves": 10_000, "private_spots": 10_000, "collections": 10_000, "advanced_filters": True, "sell_packs": True, "creator_analytics": True},
-    "suspended": {"saves": 0, "private_spots": 0, "collections": 0, "advanced_filters": False, "sell_packs": False, "creator_analytics": False},
+    "comp_pro": {
+        "saves": 10_000, "private_spots": 10_000, "collections": 500,
+        "advanced_filters": True, "sell_packs": False, "creator_analytics": False,
+        "monthly_outbound_dms": 10_000, "active_routes": 10_000, "max_uploads": 10_000,
+    },
+    "comp_elite": {
+        "saves": 10_000, "private_spots": 10_000, "collections": 10_000,
+        "advanced_filters": True, "sell_packs": True, "creator_analytics": True,
+        "monthly_outbound_dms": 10_000, "active_routes": 10_000, "max_uploads": 10_000,
+    },
+    "trial_pro": {
+        "saves": 10_000, "private_spots": 10_000, "collections": 500,
+        "advanced_filters": True, "sell_packs": False, "creator_analytics": False,
+        "monthly_outbound_dms": 10_000, "active_routes": 10_000, "max_uploads": 10_000,
+    },
+    "trial_elite": {
+        "saves": 10_000, "private_spots": 10_000, "collections": 10_000,
+        "advanced_filters": True, "sell_packs": True, "creator_analytics": True,
+        "monthly_outbound_dms": 10_000, "active_routes": 10_000, "max_uploads": 10_000,
+    },
+    "suspended": {
+        "saves": 0, "private_spots": 0, "collections": 0,
+        "advanced_filters": False, "sell_packs": False, "creator_analytics": False,
+        "monthly_outbound_dms": 0, "active_routes": 0, "max_uploads": 0,
+    },
 }
 
 # Display pricing in USD (cents). Stripe billing is not wired yet — these power
