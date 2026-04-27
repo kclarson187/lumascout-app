@@ -18,6 +18,7 @@ import { AuthProvider, useAuth } from '../src/auth';
 import { colors } from '../src/theme';
 import { onPaywallNeeded } from '../src/api';
 import UpgradeGateModal, { GateReason } from '../src/components/UpgradeGateModal';
+import RootErrorBoundary from '../src/components/RootErrorBoundary';
 
 /**
  * Mount once at app root: wire push-notification tap handler so notifications
@@ -84,21 +85,23 @@ export default function RootLayout() {
   }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <AuthProvider>
-        <StatusBar style="light" />
-        <PushDeepLinkMount />
-        <Gate />
-        <GlobalUpgradeGate />
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: colors.bg },
-            animation: 'fade',
-          }}
-        />
-      </AuthProvider>
-    </GestureHandlerRootView>
+    <RootErrorBoundary>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <AuthProvider>
+          <StatusBar style="light" />
+          <PushDeepLinkMount />
+          <Gate />
+          <GlobalUpgradeGate />
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: colors.bg },
+              animation: 'fade',
+            }}
+          />
+        </AuthProvider>
+      </GestureHandlerRootView>
+    </RootErrorBoundary>
   );
 }
 

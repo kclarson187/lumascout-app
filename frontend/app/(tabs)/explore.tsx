@@ -82,12 +82,17 @@ export default function Explore() {
   // Local optimistic save state — keyed by spot_id. Lets the bottom sheet
   // Save button feel instant without re-fetching the spots list.
   const [savedIds, setSavedIds] = useState<Record<string, boolean>>({});
+  // FIX(P1-5 pre-release audit): explicit error state so a transient API
+  // failure doesn't leave the screen stuck on a spinner. We surface a
+  // small "Couldn't load — Tap to retry" banner without losing the map.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const lastLoadCenter = useRef<{ lat: number; lng: number } | null>(null);
   const currentRegion = useRef<any>(null);
   const mapRef = useRef<any>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const params: any = { limit: 200, sort: 'quality' };
       Object.entries(filters).forEach(([k, v]) => {
@@ -104,6 +109,10 @@ export default function Explore() {
       }
       const data = await api.get('/spots', params);
       setSpots(data);
+    } catch (e: any) {
+      // Do NOT clear `spots` — keep last-known good data visible while
+      // showing a retry pill. Only reset on success.
+      setLoadError(e?.message || 'Couldn\'t load spots. Check your connection.');
     } finally { setLoading(false); }
   }, [filters, userCoords]);
 
@@ -273,6 +282,34 @@ export default function Explore() {
             );
           })}
         </ScrollView>
+      ) : null}
+
+      {/* (FIX P1-5 pre-release audit) Persistent error pill — appears when
+          a /spots fetch fails. Keeps last-known good data visible while
+          giving the user a one-tap retry path instead of a silent freeze. */}
+      {loadError ? (
+        <TouchableOpacity
+          onPress={load}
+          activeOpacity={0.8}
+          testID="explore-retry"
+          style={styles.errorPill}
+        >
+          <Text style={styles.errorPillTxt} numberOfLines={1}>
+            Couldn't load spots — Tap to retry
+          </Text>
+        </TouchableOpacity>
+      ) : null}
+
+      {/* (FIX P1-3 pre-release audit) Web is currently in list-fallback
+          mode because the web map provider hasn't shipped yet. Surface a
+          small contextual hint so desktop visitors understand why the
+          map isn't interactive. Mobile users never see this. */}
+      {Platform.OS === 'web' ? (
+        <View style={styles.webHint} testID="explore-web-hint">
+          <Text style={styles.webHintTxt}>
+            Map view is mobile-only for now — showing list. Open LumaScout on iOS / Android for the full map.
+          </Text>
+        </View>
       ) : null}
 
       {view === 'map' && Platform.OS !== 'web' && (ClusteredMapView || MapView) ? (
@@ -863,6 +900,43 @@ function SwitchRow({ label, value, onChange }: { label: string; value: boolean; 
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
+  // FIX(P1-5 pre-release audit) Inline error retry pill
+  errorPill: {
+    marginHorizontal: space.xl,
+    marginBottom: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 8,
+    backgroundColor: 'rgba(220,90,90,0.14)',
+    borderColor: 'rgba(220,90,90,0.4)',
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  errorPillTxt: {
+    color: '#ff8c8c',
+    fontFamily: font.bodySemibold,
+    fontSize: 12.5,
+    letterSpacing: 0.2,
+  },
+  // FIX(P1-3 pre-release audit) Web-only "list-fallback" hint chip
+  webHint: {
+    marginHorizontal: space.xl,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderColor: 'rgba(255,255,255,0.10)',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  webHintTxt: {
+    color: colors.textTertiary,
+    fontFamily: font.body,
+    fontSize: 11.5,
+    lineHeight: 16,
+  },
   // GPS trust strip — Apr 2026 Item #3 round 3
   gpsTrust: {
     flexDirection: 'row', alignItems: 'center', gap: 6,

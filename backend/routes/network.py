@@ -479,17 +479,26 @@ async def dm_start_thread(
     accepted = await _thread_is_accepted(thread, target_id)
     is_request = not target_follows_sender and not accepted
     if is_request:
-        # Phase B.3 — Free-tier gate: max 5 concurrent PENDING requests.
-        # Pro/Elite are unlimited. Rate limit still applies (5/hr).
+        # Phase B.3 — Free-tier gate: max 5 concurrent PENDING requests
+        # within the last 30 days. Pro/Elite are unlimited. Rate limit
+        # (5/hr) still applies independently below.
+        # FIX(P1-6 pre-release audit): previous version had no time
+        # window, so once a free user accumulated 5 unaccepted requests
+        # they were permanently locked out (every "pending" forever
+        # counted toward the cap). Scoping to a 30-day rolling window
+        # lets stale unanswered requests fall out naturally.
         tier = _effective_plan(plan_of(user))
         if tier == "free":
+            window_start = utcnow() - timedelta(days=30)
             pending_total = await db.dm_requests.count_documents({
-                "from_user_id": user["user_id"], "status": "pending",
+                "from_user_id": user["user_id"],
+                "status": "pending",
+                "created_at": {"$gte": window_start},
             })
             if pending_total >= 5:
                 raise HTTPException(
                     status_code=402,
-                    detail="Free plan limit: 5 pending message requests. Upgrade to Pro for unlimited.",
+                    detail="Free plan limit: 5 pending message requests in 30 days. Upgrade to Pro for unlimited.",
                 )
         # Rate limit: max 5 pending requests per hour from free-tier senders.
         # Pro / Elite are not rate-limited (feature they pay for).
