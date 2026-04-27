@@ -33,6 +33,11 @@ html,body{background:var(--bg)!important;font-family:var(--ff-body)!important;-w
 #ls-sidebar a.active{color:var(--gold);background:rgba(245,166,35,.1)}
 @media(min-width:768px){#ls-nav{display:flex}#ls-sidebar{display:flex}}
 @media(max-width:767px){#ls-nav{height:52px}#ls-nav .nav-links,#ls-nav .nav-search-wrap{display:none}#ls-sidebar{display:none}}
+/* Push content past sidebar */
+@media(min-width:768px){
+  [data-testid="rnc-tabs"], #root > div > div, .css-view-175oi2r:first-child > .css-view-175oi2r { margin-left: 220px !important; }
+  [role="tablist"], div[aria-label^="tab"] { display: none !important; }
+}
 `;
 
 export function useWebStyles() {
