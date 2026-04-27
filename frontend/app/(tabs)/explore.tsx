@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useFocusEffect } from 'expo-router';
 import {
   View, Text, StyleSheet, TouchableOpacity, Platform,
@@ -28,6 +28,36 @@ import MAP_STYLE_DARK from '../../src/components/mapStyleDark';
 // Native-only map wrapper with web stub (Metro / codegenNativeCommands safety).
 import { MapView, ClusteredMapView, Marker } from '../../src/components/maps-module';
 import { Linking } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useAuth } from '../../src/auth';
+
+// FIX(pre-launch UX cleanup #1): Map default region fallback chain.
+// Priority: live GPS → cached coords → user.city geo → US fallback default.
+// Never shows random unrelated regions.
+const DEFAULT_FALLBACK = { lat: 29.4241, lng: -98.4936 }; // San Antonio, TX
+const LAST_KNOWN_KEY = 'lumascout:last_known_coords:v1';
+// Lightweight US-city geo dictionary so users with a saved city in their
+// profile but no GPS still land near home. Extend as we onboard more markets.
+const CITY_GEO: Record<string, { lat: number; lng: number }> = {
+  'san antonio': { lat: 29.4241, lng: -98.4936 },
+  'austin': { lat: 30.2672, lng: -97.7431 },
+  'houston': { lat: 29.7604, lng: -95.3698 },
+  'dallas': { lat: 32.7767, lng: -96.7970 },
+  'new york': { lat: 40.7128, lng: -74.0060 },
+  'los angeles': { lat: 34.0522, lng: -118.2437 },
+  'san francisco': { lat: 37.7749, lng: -122.4194 },
+  'chicago': { lat: 41.8781, lng: -87.6298 },
+  'miami': { lat: 25.7617, lng: -80.1918 },
+  'seattle': { lat: 47.6062, lng: -122.3321 },
+  'denver': { lat: 39.7392, lng: -104.9903 },
+  'portland': { lat: 45.5152, lng: -122.6784 },
+  'boston': { lat: 42.3601, lng: -71.0589 },
+  'atlanta': { lat: 33.7490, lng: -84.3880 },
+  'phoenix': { lat: 33.4484, lng: -112.0740 },
+  'nashville': { lat: 36.1627, lng: -86.7816 },
+  'las vegas': { lat: 36.1699, lng: -115.1398 },
+  'san diego': { lat: 32.7157, lng: -117.1611 },
+};
 
 type Filters = {
   shoot_type?: string;
@@ -68,6 +98,40 @@ export default function Explore() {
   const [filterOpen, setFilterOpen] = useState(false);
   const [selectedSpot, setSelectedSpot] = useState<any | null>(null);
   const [userCoords, setUserCoords] = useState<{ lat: number; lng: number; ts: number } | null>(null);
+  const { user } = useAuth();
+
+  // FIX(pre-launch UX cleanup #1): Hydrate last-known coords from
+  // AsyncStorage on mount so the map can center near home immediately on
+  // cold start, even before the live GPS handle resolves. Coords older
+  // than 7 days are treated as stale.
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(LAST_KNOWN_KEY);
+        if (!raw) return;
+        const cached = JSON.parse(raw);
+        if (cached?.lat && cached?.lng && cached?.ts && (Date.now() - cached.ts < 7 * 24 * 60 * 60 * 1000)) {
+          setUserCoords((cur) => cur || cached);
+        }
+      } catch {}
+    })();
+  }, []);
+
+  // Initial region for the map — priority chain:
+  //   1. Live / cached GPS
+  //   2. user.city geo-lookup
+  //   3. San Antonio, TX (premium default market)
+  // This computation runs every render but is cheap (constant-time table
+  // lookup) and gives us the latest fallback as state populates.
+  const initialRegion = useMemo(() => {
+    if (userCoords?.lat && userCoords?.lng) {
+      return { latitude: userCoords.lat, longitude: userCoords.lng, latitudeDelta: 0.45, longitudeDelta: 0.45 };
+    }
+    const cityKey = (user?.city || '').toLowerCase().trim();
+    const cityCoords = cityKey ? CITY_GEO[cityKey] : null;
+    const seed = cityCoords || DEFAULT_FALLBACK;
+    return { latitude: seed.lat, longitude: seed.lng, latitudeDelta: 0.45, longitudeDelta: 0.45 };
+  }, [userCoords, user?.city]);
   // FIX(2026-04 Item #3 round 3): GPS state machine for the trust strip.
   // 'idle' | 'requesting' | 'granted' | 'denied' | 'error'
   const [gpsState, setGpsState] = useState<'idle' | 'requesting' | 'granted' | 'denied' | 'error'>('idle');
@@ -146,6 +210,9 @@ export default function Explore() {
       );
       const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude, ts: Date.now() };
       setUserCoords(coords);
+      // Persist last-known coords so cold-start has a near-instant fallback
+      // before the OS GPS handle resolves on the next session.
+      try { AsyncStorage.setItem(LAST_KNOWN_KEY, JSON.stringify(coords)); } catch {}
       setGpsState('granted');
       if (mapRef.current) {
         mapRef.current.animateToRegion({
@@ -316,7 +383,7 @@ export default function Explore() {
             {
               ref: mapRef,
               style: { flex: 1 },
-              initialRegion: { latitude: 30.5, longitude: -98.5, latitudeDelta: 0.8, longitudeDelta: 0.8 },
+              initialRegion: initialRegion,
               userInterfaceStyle: 'dark',
               showsUserLocation: true,
               showsMyLocationButton: false,

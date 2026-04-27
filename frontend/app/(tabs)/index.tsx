@@ -21,6 +21,7 @@ import { ContinuePlanningRail, BestNearYouRail, TrendingRail } from '../../src/c
 import { LinearGradient } from 'expo-linear-gradient';
 import { api } from '../../src/api';
 import { useAuth } from '../../src/auth';
+import { injectWebNav, injectWebSidebar } from '../../src/webStyles';
 import { useGps } from '../../src/hooks/useGps';
 import { colors, font, space, radii, QUICK_FILTERS } from '../../src/theme';
 import SpotCard from '../../src/components/SpotCard';
@@ -67,6 +68,12 @@ function sanitizeFeed(data: any): any {
 
 export default function Home() {
   const { user } = useAuth();
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      injectWebNav(user, () => {}, () => {}, () => {});
+      injectWebSidebar(user, () => {});
+    }
+  }, [user]);
   const unread = useUnreadMessages();
   const [feed, setFeed] = useState<Feed>({});
   const [loading, setLoading] = useState(true);

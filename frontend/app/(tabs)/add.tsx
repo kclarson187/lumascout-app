@@ -60,6 +60,7 @@ type Draft = {
   shoot_types: string[];
   style_tags: string[];
   best_time_of_day?: string;
+  best_light_notes?: string;
   sunrise_rating: number;
   sunset_rating: number;
   morning_golden_hour_rating: number;
@@ -528,6 +529,7 @@ export default function AddSpot() {
     shoot_types: draft.shoot_types,
     style_tags: draft.style_tags,
     best_time_of_day: draft.best_time_of_day,
+    best_light_notes: draft.best_light_notes,
     sunrise_rating: draft.sunrise_rating,
     sunset_rating: draft.sunset_rating,
     morning_golden_hour_rating: draft.morning_golden_hour_rating,
@@ -1044,18 +1046,21 @@ export default function AddSpot() {
               <Text style={styles.heading}>Access & Rules</Text>
               <Text style={styles.sub}>Help future photographers prepare and respect the location.</Text>
 
-              {/* ---- Best time of day (kept; lightweight planning info, not scoring) ---- */}
-              <Text style={styles.subSectionLabel}>Best time of day</Text>
-              <View style={styles.chipRow}>
-                {BEST_TIMES.map((t) => (
-                  <Chip
-                    key={t.key}
-                    label={t.label}
-                    active={draft.best_time_of_day === t.key}
-                    onPress={() => setDraft({ ...draft, best_time_of_day: t.key })}
-                  />
-                ))}
-              </View>
+              {/* (FIX UX cleanup #2) "Best time of day" multi-select removed.
+                  Replaced with an optional free-text "Best Light Notes" field
+                  for higher-quality data with less form friction. The legacy
+                  draft.best_time_of_day field still exists in the schema but
+                  is no longer collected via UI; back-end parses best_light_notes
+                  passed alongside. */}
+              <Input
+                label="Best light notes (optional)"
+                value={draft.best_light_notes || ''}
+                onChangeText={(t) => setDraft({ ...draft, best_light_notes: t.slice(0, 240) })}
+                placeholder="e.g. Best 30 min before sunset · Morning side light · Golden hour through trees · Blue hour city lights"
+                multiline
+                numberOfLines={2}
+                testID="add-best-light-notes"
+              />
 
               {/* ---- Land access (REQUIRED) ---- */}
               <View style={{ marginTop: 6 }}>

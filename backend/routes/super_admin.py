@@ -244,45 +244,19 @@ async def super_delete_user(
         except Exception as exc:
             logger.warning("stripe cancel failed for user %s: %s", user_id, exc)
 
-    # ---- Anonymize user doc ---------------------------------------------
-    await db.users.update_one(
-        {"user_id": user_id},
-        {
-            "$set": {
-                "email": anon_email,
-                "username": anon_username,
-                "name": "Deleted user",
-                "bio": None,
-                "avatar_url": None,
-                "cover_image_url": None,
-                "phone": None,
-                "city": None,
-                "state": None,
-                "country": None,
-                "password_hash": None,
-                "role": "user",
-                "plan": "free",
-                "status": "deleted",
-                "deleted": True,
-                "deleted_at": utcnow(),
-                "deleted_by": me["user_id"],
-                "delete_reason": reason,
-                "mentorship_available": False,
-                "looking_for_mentor": False,
-                "is_bot": False,
-                "stripe_customer_id": None,
-                "stripe_subscription_id": None,
-                "stripe_subscription_status": None,
-                "website": None,
-                "instagram_handle": None,
-                "facebook_url": None,
-                "twitter_handle": None,
-                "twitter_url": None,
-                "specialties": [],
-                "portfolio_links": [],
-            },
-        },
-    )
+    # ---- Hard-delete user document ---------------------------------------
+    # FIX(UX cleanup #3): super admin "delete user" is now a HARD delete.
+    # The user's PII is preserved separately in `deleted_users` archive
+    # (created above) for compliance / forensics; the live `users`
+    # document is removed entirely so:
+    #   • directory, search, follower lists, and admin tables stop
+    #     surfacing ghost "Deleted user" entries
+    #   • author lookups for legacy posts/spots return None and the
+    #     frontend renders nothing rather than a placeholder card
+    #   • re-registration of the same email is unblocked immediately
+    # Soft-delete behavior is preserved for all non-super-admin code
+    # paths (account self-deactivation, suspensions, etc.).
+    await db.users.delete_one({"user_id": user_id})
 
     # ---- Revoke sessions & related personal data -------------------------
     cascade: Dict[str, int] = {}
@@ -303,7 +277,7 @@ async def super_delete_user(
 
     await audit_log(
         me,
-        "user.delete_soft",
+        "user.delete_hard",
         target_type="user",
         target_id=user_id,
         before={
@@ -318,7 +292,7 @@ async def super_delete_user(
             "cascade": cascade,
         },
         notes=(
-            f"[SUPER ADMIN] Soft-deleted user @{target.get('username')} "
+            f"[SUPER ADMIN] Hard-deleted user @{target.get('username')} "
             f"({target.get('email')}) — {reason}"
         ),
     )
@@ -328,7 +302,7 @@ async def super_delete_user(
         "user_id": user_id,
         "archive_id": archive_doc["archive_id"],
         "reason_code": code,
-        "strategy": "soft_delete_anonymize",
+        "strategy": "hard_delete_with_archive",
         "stripe_cancelled": stripe_cancelled,
         "cascade": cascade,
     }

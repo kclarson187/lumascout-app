@@ -84,6 +84,9 @@ class SpotCreateIn(BaseModel):
     shoot_types: List[str] = []
     style_tags: List[str] = []
     best_time_of_day: Optional[str] = None
+    # FIX(UX cleanup #2): free-text "Best light notes" replacing the old
+    # multi-option time-of-day chip. Optional, capped to 240 chars.
+    best_light_notes: Optional[str] = Field(default=None, max_length=240)
     sunrise_rating: int = 3
     sunset_rating: int = 3
     morning_golden_hour_rating: int = 3
