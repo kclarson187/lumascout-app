@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Dimensions, Refr
 import Svg, { Path, Circle, Line as SvgLine, Text as SvgText } from 'react-native-svg';
 import { api } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
+import UserBadge from '../../src/components/UserBadge';
 
 type Point = { date: string; label: string; signups: number; spots: number; approvals: number; rejections: number };
 
@@ -78,7 +79,10 @@ export default function AdminAnalytics() {
               <View key={u.user_id} style={styles.savedRow}>
                 <Text style={styles.rank}>#{i + 1}</Text>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.savedName} numberOfLines={1}>{u.name || u.username}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={styles.savedName} numberOfLines={1}>{u.name || u.username}</Text>
+                    <UserBadge user={u} variant="inline" />
+                  </View>
                   <Text style={styles.savedMeta}>
                     @{u.username || '—'}{u.city ? ` · ${u.city}${u.state ? ', ' + u.state : ''}` : ''}{u.plan && u.plan !== 'free' ? ` · ${u.plan.toUpperCase()}` : ''}
                   </Text>

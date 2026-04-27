@@ -34,6 +34,7 @@ import LatestConditionsSection from '../../src/components/LatestConditionsSectio
 import SeasonalTimelineSection from '../../src/components/SeasonalTimelineSection';
 import { ActivityBadge, timeAgo } from '../../src/components/FreshnessBits';
 import VerifiedBadge from '../../src/components/VerifiedBadge';
+import UserBadge from '../../src/components/UserBadge';
 import FreshnessBadge from '../../src/components/FreshnessBadge';
 import ReportSheet from '../../src/components/ReportSheet';
 import ShotListSheet from '../../src/components/ShotListSheet';
@@ -278,6 +279,7 @@ export default function SpotDetail() {
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                     <Text style={{ color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 }}>{spot.owner.name}</Text>
                     <VerifiedBadge status={spot.owner.verification_status} variant="inline" size={14} />
+                    <UserBadge user={spot.owner} variant="inline" />
                   </View>
                   <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 12 }}>
                     {spot.owner.verification_status === 'verified' ? 'Verified contributor' : 'Contributor'}
