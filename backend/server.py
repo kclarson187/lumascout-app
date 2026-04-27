@@ -810,6 +810,16 @@ async def me(user: dict = Depends(get_current_user)):
     user["plan"] = plan_of(user)
     user["limits"] = limits_for(user)
     uid = user["user_id"]
+    # FIX(membership conversion update): expose `uploads` and
+    # `outbound_threads_30d` so the frontend can show tasteful upgrade
+    # nudges before the user attempts an action that exceeds the new
+    # Free tier caps. Old fields (saves / private_spots / collections)
+    # remain unchanged for backwards compatibility.
+    month_ago = utcnow() - timedelta(days=30)
+    outbound_30d = await db.dm_threads.count_documents({
+        "creator_user_id": uid,
+        "created_at": {"$gte": month_ago},
+    })
     # live counts
     user["usage"] = {
         "saves": await db.spot_saves.count_documents({"user_id": uid}),
@@ -818,6 +828,8 @@ async def me(user: dict = Depends(get_current_user)):
             "privacy_mode": {"$in": ["private", "followers", "invite_only"]},
         }),
         "collections": await db.collections.count_documents({"owner_user_id": uid}),
+        "uploads": await db.spots.count_documents({"owner_user_id": uid}),
+        "outbound_threads_30d": outbound_30d,
     }
     # Social stats for creator profile (Phase B)
     user["stats"] = {
@@ -844,7 +856,7 @@ async def list_plans():
             {
                 "key": "free",
                 "name": "Free",
-                "tagline": "For casual scouting",
+                "tagline": "Browse, follow, and explore",
                 "monthly_price": _price(PLAN_PRICING["free"]["monthly_cents"]),
                 "annual_price": _price(PLAN_PRICING["free"]["annual_cents"]),
                 "monthly_cents": PLAN_PRICING["free"]["monthly_cents"],
@@ -852,27 +864,30 @@ async def list_plans():
                 "limits": PLAN_LIMITS["free"],
                 "features": [
                     "Browse all public spots",
-                    "Save up to 5 spots",
-                    "1 collection",
-                    "Basic community access",
+                    "Follow photographers + community feed",
+                    "Save up to 3 spots",
+                    "Up to 5 spots you can upload",
+                    "Plan 1 active route",
+                    "3 new message threads / month",
                 ],
             },
             {
                 "key": "pro",
                 "name": "Pro",
-                "tagline": "For working photographers",
+                "tagline": "For serious scouting & shooting",
                 "monthly_price": _price(PLAN_PRICING["pro"]["monthly_cents"]),
                 "annual_price": _price(PLAN_PRICING["pro"]["annual_cents"]),
                 "monthly_cents": PLAN_PRICING["pro"]["monthly_cents"],
                 "annual_cents": PLAN_PRICING["pro"]["annual_cents"],
                 "limits": PLAN_LIMITS["pro"],
                 "features": [
-                    "Unlimited saved spots",
-                    "Unlimited collections",
-                    "Advanced map filters",
-                    "Better discovery",
-                    "Advanced messaging",
-                    "Priority support",
+                    "Unlimited saved spots & uploads",
+                    "Unlimited custom collections",
+                    "Unlimited active routes",
+                    "Advanced map & search filters",
+                    "Unlimited photographer DMs",
+                    "See full Profile Viewers list",
+                    "Pro creator badge",
                 ],
                 "popular": True,
             },
@@ -887,11 +902,12 @@ async def list_plans():
                 "limits": PLAN_LIMITS["elite"],
                 "features": [
                     "Everything in Pro",
-                    "Creator analytics dashboard",
+                    "Animated Elite badge",
+                    "Advanced spot analytics (views, saves, reach)",
                     "Sell curated spot packs",
-                    "Verified creator badge",
-                    "Priority in discovery",
-                    "DM read receipts",
+                    "Featured spotlight rotation",
+                    "Early access to new features",
+                    "Priority support",
                 ],
             },
         ],
@@ -2055,8 +2071,15 @@ def _thread_key(u1: str, u2: str) -> str:
     return "::".join(sorted([u1, u2]))
 
 
-async def _dm_get_or_create_thread(a: str, b: str) -> dict:
-    """Idempotently return the 1:1 thread between two users."""
+async def _dm_get_or_create_thread(a: str, b: str, creator_user_id: Optional[str] = None) -> dict:
+    """Idempotently return the 1:1 thread between two users.
+
+    `creator_user_id` (optional) — when supplied on first creation, the
+    thread is stamped with the user who initiated the conversation so we
+    can later enforce the Free-tier 'monthly outbound thread' cap. For
+    backwards compat, callers that don't pass it (legacy code paths)
+    won't break.
+    """
     key = _thread_key(a, b)
     t = await db.dm_threads.find_one({"thread_key": key})
     if t:
@@ -2066,6 +2089,7 @@ async def _dm_get_or_create_thread(a: str, b: str) -> dict:
         "thread_id": f"dm_{uuid.uuid4().hex[:12]}",
         "thread_key": key,
         "participant_user_ids": sorted([a, b]),
+        "creator_user_id": creator_user_id or a,
         "created_at": now,
         "updated_at": now,
         "last_message_at": None,

@@ -35,6 +35,9 @@ export type GateReason =
   | 'ai_planner'
   | 'messaging'
   | 'analytics'
+  | 'uploads'
+  | 'routes'
+  | 'viewers'
   | 'generic';
 
 type ReasonConfig = {
@@ -47,17 +50,17 @@ type ReasonConfig = {
 const REASONS: Record<GateReason, ReasonConfig> = {
   saves: {
     title: 'You\'ve hit your save limit',
-    body: 'Free accounts can save 5 spots. Pro photographers build unlimited lists for every shoot style and location.',
+    body: 'Free accounts can save 3 spots. Pro photographers build unlimited lists for every shoot style and location.',
     perks: [
       'Unlimited saved spots',
-      'Unlimited collections for shoot days',
-      'Scout AI itinerary planning',
+      'Custom collections for every shoot day',
+      'Advanced filters to find the perfect spot',
     ],
     targetPlan: 'pro',
   },
   collections: {
-    title: 'Unlock unlimited collections',
-    body: 'Free includes 1 collection. Pro organises every themed list — bridal locations, urban golden hour, winter backdrops.',
+    title: 'Custom collections are a Pro feature',
+    body: 'Free accounts get one Saved list. Go Pro to organise spots into themed collections — bridal locations, urban golden hour, winter backdrops.',
     perks: [
       'Unlimited named collections',
       'Share collections with clients',
@@ -96,10 +99,10 @@ const REASONS: Record<GateReason, ReasonConfig> = {
     targetPlan: 'elite',
   },
   messaging: {
-    title: 'Open up photographer DMs',
-    body: 'Pro members can message any photographer on LumaScout — collaborate on second-shoots, ask for scouting tips, build referrals.',
+    title: 'You\'ve used your free message threads',
+    body: 'Free accounts can start 3 new photographer DMs per month. Replies on existing threads are always free. Go Pro to message anyone, anytime.',
     perks: [
-      'Unlimited DMs to any photographer',
+      'Unlimited new photographer DMs',
       'Read receipts and typing indicators',
       'Priority on the referral board',
     ],
@@ -115,13 +118,43 @@ const REASONS: Record<GateReason, ReasonConfig> = {
     ],
     targetPlan: 'pro',
   },
+  uploads: {
+    title: 'You\'ve hit your upload limit',
+    body: 'Free accounts can upload 5 spots total. Pro creators contribute as much as they want — and unlock spot analytics, featured rotation, and the Pro badge.',
+    perks: [
+      'Unlimited public + private uploads',
+      'Pro creator badge on every spot',
+      'See who saves and views your work',
+    ],
+    targetPlan: 'pro',
+  },
+  routes: {
+    title: 'Plan more than one route',
+    body: 'Free accounts can keep one active route. Pro photographers plan a full week of shoots — multi-city trips, client tours, golden-hour itineraries.',
+    perks: [
+      'Unlimited active routes',
+      'Multi-day shoot itineraries',
+      'Optimise driving + light timing',
+    ],
+    targetPlan: 'pro',
+  },
+  viewers: {
+    title: 'See who viewed your profile',
+    body: 'Free accounts see a teaser. Pro photographers see the full list of who\'s checking out their work — and use it to land referrals.',
+    perks: [
+      'Full unblurred Profile Viewers list',
+      'Filter by location and follower status',
+      '30-day view analytics',
+    ],
+    targetPlan: 'pro',
+  },
   generic: {
     title: 'Unlock the full LumaScout',
-    body: 'Pro photographers get the serious scouting tools — unlimited saves, AI planning, creator analytics, verified badge.',
+    body: 'Pro photographers get the serious scouting tools — unlimited saves, custom collections, advanced filters, and unlimited DMs.',
     perks: [
-      'Unlimited saves and collections',
-      'Advanced filters and AI shot lists',
-      'Verified creator badge',
+      'Unlimited saves, collections, uploads',
+      'Advanced filters and full Profile Viewers',
+      'Unlimited photographer DMs',
     ],
     targetPlan: 'pro',
   },

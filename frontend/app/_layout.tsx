@@ -143,12 +143,15 @@ function GlobalUpgradeGate() {
  */
 function detailToReason(detail: string): GateReason {
   const m = (detail || '').toLowerCase();
+  if (m.includes('upload')) return 'uploads';
+  if (m.includes('route')) return 'routes';
   if (m.includes('save')) return 'saves';
   if (m.includes('collection')) return 'collections';
   if (m.includes('private')) return 'private';
   if (m.includes('filter')) return 'filters';
   if (m.includes('scout ai') || m.includes('planner') || m.includes('ai plan')) return 'ai_planner';
-  if (m.includes('analytics') || m.includes('viewer')) return 'analytics';
-  if (m.includes('message') || m.includes('dm')) return 'messaging';
+  if (m.includes('viewer')) return 'viewers';
+  if (m.includes('analytics')) return 'analytics';
+  if (m.includes('message') || m.includes(' dm') || m.includes('thread')) return 'messaging';
   return 'generic';
 }

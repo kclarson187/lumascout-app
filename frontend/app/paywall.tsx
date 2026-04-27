@@ -99,15 +99,23 @@ export default function Paywall() {
   const reasonCopy = (() => {
     switch (params.reason) {
       case 'saves':
-        return "You've reached your free save limit.";
+        return "You've reached your 3-spot save limit on Free.";
       case 'collections':
-        return 'Free plan includes 1 collection. Go Pro for unlimited.';
+        return 'Custom collections are a Pro feature. Free includes the Saved list only.';
       case 'filters':
         return 'Advanced filters are a Pro feature.';
       case 'private':
         return 'Unlimited private spots are a Pro feature.';
+      case 'uploads':
+        return "You've used your 5 free uploads. Upgrade for unlimited.";
+      case 'routes':
+        return 'Free includes 1 active route. Go Pro for unlimited route plans.';
+      case 'viewers':
+        return 'See the full list of who viewed your profile with Pro.';
+      case 'messaging':
+        return 'You\'ve used your 3 new message threads this month.';
       default:
-        return 'Upgrade for unlimited saves, advanced filters, and creator tools.';
+        return 'Upgrade for unlimited saves, uploads, DMs, and advanced filters.';
     }
   })();
 
@@ -253,19 +261,20 @@ export default function Paywall() {
             <Text style={[styles.cmpCell, styles.cmpHeadTxt, { color: colors.primary }]}>Elite</Text>
           </View>
           {([
-            ['Saved spots',              '5',       'Unlimited',  'Unlimited'],
-            ['Private spots',            '1',       'Unlimited',  'Unlimited'],
-            ['Collections',              '1',       'Unlimited',  'Unlimited'],
+            ['Saved spots',              '3',       'Unlimited',  'Unlimited'],
+            ['Uploaded spots',           '5 total', 'Unlimited',  'Unlimited'],
+            ['New DM threads / month',   '3',       'Unlimited',  'Unlimited'],
+            ['Active routes',            '1',       'Unlimited',  'Unlimited'],
+            ['Custom collections',       '—',       'Unlimited',  'Unlimited'],
             ['Advanced filters',         '—',       '✓',          '✓'],
-            ['Creator analytics',        '—',       'Basic',      'Advanced'],
-            ['Sell spot packs',          '—',       '—',          '✓'],
-            ['Verified creator badge',   '—',       'Pro badge',  'Elite badge'],
+            ['Profile viewers list',     'Blurred', 'Full list',  'Full + analytics'],
+            ['Verified creator badge',   '—',       'Pro badge',  'Animated Elite'],
+            ['Spot analytics',           '—',       'Basic',      'Advanced'],
             ['DM read receipts',         '—',       '✓',          '✓'],
-            ['Who viewed profile',       'Teaser',  'Full list',  'Full + analytics'],
-            ['Referral priority',        '—',       'Standard',   'Priority'],
-            ['Featured placement',       '—',       '—',          '✓'],
-            ['AI shoot planner',         '—',       '—',          '✓'],
-            ['Branded client portal',    '—',       '—',          '✓'],
+            ['Sell spot packs',          '—',       '—',          '✓'],
+            ['Featured spotlight',       '—',       '—',          '✓'],
+            ['Early access to new features', '—',   '—',          '✓'],
+            ['Priority support',         '—',       '—',          '✓'],
           ] as Array<[string, string, string, string]>).map((row, i) => (
             <View
               key={i}

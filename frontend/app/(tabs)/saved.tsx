@@ -216,15 +216,16 @@ export default function Saved() {
                   <ScoutAICard placement="saved" variant="row" />
                 </View>
               )}
-              {/* PRD #9 — contextual upsell after user has invested some effort
-                  saving favourites (triggers at 5+) rather than pestering them
-                  the moment they open the tab. */}
-              {savedSpots.length >= 5 && (
+              {/* PRD #9 — contextual upsell after user has invested some
+                  effort saving favourites. With Free saves now capped at 3,
+                  we surface this once they've used 2/3 so they see the
+                  Pro pitch right at the moment they're feeling the cap. */}
+              {savedSpots.length >= 2 && (user?.plan === 'free' || !user?.plan) && (
                 <View style={{ paddingHorizontal: space.xl, marginBottom: 8 }}>
                   <UpgradeBanner
                     placement="saved-favorites"
                     title="You've saved a lot — go Pro to get more out of them"
-                    subtitle="Group saves into themed collections, export a shoot-day itinerary, and see weather on the map."
+                    subtitle="Group saves into custom collections, plan unlimited routes, and unlock advanced filters."
                   />
                 </View>
               )}
