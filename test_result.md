@@ -8767,14 +8767,47 @@ agent_communication:
 
   - task: "Membership Tier Conversion Update — backend (PLAN_LIMITS, /api/plans copy, /auth/me usage exposes uploads + outbound_threads_30d, monthly outbound DM cap, max_uploads cap)"
     implemented: true
-    working: "NA"
+    working: true
     file: "/app/backend/server.py (PLAN_LIMITS L54-118, /api/plans L837-898, /auth/me L808-832, _dm_get_or_create_thread L2058-2086), /app/backend/routes/network.py (dm_start_thread L452-555 — monthly_outbound_dms cap), /app/backend/routes/spots.py (create_spot L348-409 — max_uploads cap)"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
+        -comment: "Implemented backend caps for the membership conversion update — see commit notes."
+        -working: true
+        -agent: "testing"
+        -comment: |
+          BACKEND TIER UPDATE — 59/59 ASSERTIONS PASS via
+          /app/backend_test_membership.py.
+
+          T1 GET /api/plans: 3 plans, prices $0/$9.99/$19.99, Free
+             features include "Save up to 3 spots" + "Up to 5 spots you
+             can upload"; Free limits exact (saves=3, collections=0,
+             monthly_outbound_dms=3, active_routes=1, max_uploads=5);
+             Pro & Elite copy verified.
+          T2 GET /api/auth/me (elite): plan=elite, usage now exposes
+             5 keys including the 2 new ones (uploads,
+             outbound_threads_30d). Paid limits = 10000 across the
+             board (effectively unlimited).
+          T3 Free outbound DM cap: 1st/2nd/3rd net-new threads → 200,
+             4th → 402 with detail "Free plan allows 3 new message
+             threads per month. Upgrade to Pro for unlimited
+             photographer DMs." Reusing an existing thread → 200 (no
+             count). usage.outbound_threads_30d=3 exactly.
+          T4 Free max_uploads cap: 5 public POST /spots → 200 each;
+             6th → 402 "Free plan allows 5 uploaded spots." 7th with
+             save_as_draft=true → 200 (drafts excluded).
+          T5 Free save cap regression: 4th → 402 "Free plan allows 3
+             saves. Upgrade to Pro for unlimited saves."
+          T6 Pro/Elite (super_admin): 6 saves, 4 net-new DMs, 6
+             uploads — all 200. No 402s anywhere on paid tiers.
+          Cleanup: 6 admin-created QA spots DELETE'd cleanly.
+
+          Launch-ready.
+
+metadata:
         -comment: |
           NEW WORK — implements the user-requested membership conversion
           changes. Free tier tightened to drive Pro conversions while
