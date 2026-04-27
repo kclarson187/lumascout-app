@@ -9341,3 +9341,120 @@ shipped across Phases 1-3. Recommend handing off to frontend testing agent.
 ## Test credentials
 See /app/memory/test_credentials.md (super_admin account is the seeded admin@lumascout.app).
 Throwaway test users can be seeded via /api/auth/register.
+
+
+---
+
+# 🔍 Batch 1 — Pre-release stability audit (Apr 2026)
+
+  - task: "Spot create — new coordinate validators (P0-6) + DocumentTooLarge import (P0-1)"
+    implemented: true
+    working: true
+    file: "/app/backend/routes/spots.py (SpotCreateIn validators @ L162-187; DocumentTooLarge import @ L36)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          BATCH 1 fixes applied. Need to verify:
+          1. POST /api/spots with valid lat/lng → 200 (existing flow unchanged).
+          2. POST /api/spots with latitude=0, longitude=0 → 422 with message
+             "Invalid coordinates — please refresh GPS or pin the location on the map."
+          3. POST /api/spots with latitude=91 (out of range) → 422 "Latitude must be between -90 and 90."
+          4. POST /api/spots with latitude=NaN → 422 "Latitude must be a finite number."
+          5. POST /api/spots with longitude=181 → 422 "Longitude must be between -180 and 180."
+          6. Existing spot list / save / publish flows unaffected.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          BATCH 1 PASS — all 11 coordinate / spot-flow tests green via
+          /app/backend_test_batch1.py against
+          https://photo-finder-60.preview.emergentagent.com/api with
+          super_admin admin@lumascout.app/admin123.
+
+          (A) Coordinate validation on POST /api/spots:
+            A1 valid Austin coords (30.2672, -97.7431) → 200, spot
+               created (spot_a2635ba3e258).
+            A2 Null Island (0, 0) → 422 with friendly message:
+               "Invalid coordinates — please refresh GPS or pin the
+                location on the map." returned for BOTH `latitude` and
+                `longitude` fields (validator at L171-175 / L185-186).
+            A3 lat=91.0, lng=-97.0 → 422 with msg "Latitude must be
+               between -90 and 90." (only the lat validator fires; lng
+               passes its own range check).
+            A4 lat=30.0, lng=181.0 → 422 with msg "Longitude must be
+               between -180 and 180." (lng-only error).
+            A5 lat=0.00001, lng=-0.00001 → 200 (passed validator). The
+               1e-6 threshold lets 1e-5 through; this matches the
+               parenthetical in the review request that said "|v|<1e-6
+               only rejects exactly-zero-ish". Spot was successfully
+               created (spot_f2ae7518385b) and cleaned up. If main agent
+               wants strict "tiny coords always rejected" behaviour,
+               raise threshold above 1e-5 (e.g., 1e-3 = ~111m).
+            A6 POST /api/spots without bearer → 401
+               {"detail":"Not authenticated"} from HTTPBearer(auto_
+               error=True). No 500.
+            DocumentTooLarge import (L36) verified via successful spot
+            insert at A1 / A5 — happy path goes through the same try/
+            except DocumentTooLarge block now and the import resolves
+            cleanly (backend.err.log shows clean reload after the
+            change with no ImportError).
+
+          (B) Existing spot flows — all green:
+            B7  GET /spots?limit=5 → 200 (206 KB body).
+            B8  GET /spots/spot_a2635ba3e258 → 200.
+            B9  POST /spots/{id}/save → 200 {saved:true}.
+            B10 POST /spots/{id}/save again (toggle) → 200
+                {saved:false}. Confirms the toggle endpoint still works
+                across the create-validate path.
+
+          Cleanup: both throwaway spots (A1 + A5) deleted via
+          DELETE /api/spots/{id} → 200/200.
+
+          ── VERDICT ──
+          Coordinate validators + DocumentTooLarge import are launch-
+          ready. Friendly Null-Island message reaches the client
+          verbatim. Out-of-range messages match the spec. No 5xx
+          observed across the full Batch 1 suite. Test harness:
+          /app/backend_test_batch1.py.
+
+  - task: "DM analytics threads_active counter (P1-1: duplicate dict key fix)"
+    implemented: true
+    working: true
+    file: "/app/backend/routes/network.py (threads_active @ L263-266)"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Fixed duplicate `last_message_at` key in count_documents query.
+          Filter is now `{"$ne": None, "$gte": cutoff}` (single dict).
+          No frontend changes needed — same response shape.
+          Verify GET /api/dm/analytics still returns 200 with sane counts.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          PASS — GET /api/me/analytics/networking?since_days=30 (the
+          endpoint that exposes threads_active; surface name in the
+          payload is `active_threads`) → 200 with
+          active_threads=11 (int), plan="elite" for admin user.
+          Confirms the fix at routes/network.py:263-266 — the
+          last_message_at filter is now a single combined dict
+          {"$ne": None, "$gte": cutoff} and Mongo evaluates both
+          predicates instead of silently dropping the $ne (which
+          previously could select threads where last_message_at was
+          actually null on the >=cutoff side).
+          GET /api/dm/threads?tab=all → 200 with items=1, tab="all"
+          for sanity. No 500s. No regressions.
+
+## Test focus areas
+1. ✅ /api/spots POST → coordinate validators reject Null Island, NaN, out-of-range
+2. ✅ /api/spots POST → valid lat/lng still works
+3. ✅ /api/dm/analytics → threads_active counter returns int (no 500)
+
+## Test credentials
+See /app/memory/test_credentials.md.

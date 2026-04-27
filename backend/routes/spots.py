@@ -33,6 +33,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, Header
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
+from pymongo.errors import DocumentTooLarge
 
 from server import (
     db,
@@ -156,6 +157,34 @@ class SpotCreateIn(BaseModel):
         if v not in ("public", "private", "unsure"):
             raise ValueError("Land access must be 'public', 'private', or 'unsure'.")
         return v
+
+    # FIX(2026-04 / pre-release audit P0-6): reject invalid coordinates
+    # before they hit the DB. Catches stale GPS handles, NaN slips, and the
+    # Null-Island bug (lat=0, lng=0). Required range matches WGS-84.
+    @field_validator("latitude")
+    @classmethod
+    def _validate_latitude(cls, v: float) -> float:
+        if v is None or not isinstance(v, (int, float)) or v != v:  # NaN check
+            raise ValueError("Latitude must be a finite number.")
+        if not (-90.0 <= v <= 90.0):
+            raise ValueError("Latitude must be between -90 and 90.")
+        if abs(v) < 1e-6:
+            # Reject lat = 0 — almost certainly an uninitialised GPS handle
+            # (only ~50km off the equator counts; far enough that no real
+            # photo spot would be that close to 0,0).
+            raise ValueError("Invalid coordinates — please refresh GPS or pin the location on the map.")
+        return float(v)
+
+    @field_validator("longitude")
+    @classmethod
+    def _validate_longitude(cls, v: float) -> float:
+        if v is None or not isinstance(v, (int, float)) or v != v:
+            raise ValueError("Longitude must be a finite number.")
+        if not (-180.0 <= v <= 180.0):
+            raise ValueError("Longitude must be between -180 and 180.")
+        if abs(v) < 1e-6:
+            raise ValueError("Invalid coordinates — please refresh GPS or pin the location on the map.")
+        return float(v)
 
     @field_validator("access_notes")
     @classmethod
