@@ -1043,7 +1043,13 @@ async def network_discover(
             "specialties": 1, "is_bot": 1, "is_official": 1, "created_at": 1,
             "available_for_referrals": 1, "available_for_second_shooter": 1,
             "years_experience": 1, "bio": 1}
-    base = {"is_bot": {"$ne": True}, "is_official": {"$ne": True}}
+    base = {
+        "is_bot": {"$ne": True},
+        "is_official": {"$ne": True},
+        # FIX(pre-launch cleanup #5): hide soft-deleted users from
+        # discovery rails (Near You / Popular / Trending / new etc.).
+        "deleted_at": {"$exists": False},
+    }
     if viewer: base["user_id"] = {"$ne": viewer["user_id"]}
 
     near_rail: list = []
@@ -1124,7 +1130,14 @@ async def network_search(
     viewer: Optional[dict] = Depends(get_optional_user),
 ):
     limit = max(1, min(60, limit))
-    query: dict = {"is_bot": {"$ne": True}, "is_official": {"$ne": True}}
+    # FIX(pre-launch cleanup #5): exclude soft-deleted users from public
+    # search and discovery so they no longer appear in followers, search,
+    # admin lists, etc.
+    query: dict = {
+        "is_bot": {"$ne": True},
+        "is_official": {"$ne": True},
+        "deleted_at": {"$exists": False},
+    }
     if viewer: query["user_id"] = {"$ne": viewer["user_id"]}
     if q:
         query["$or"] = [

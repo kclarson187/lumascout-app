@@ -259,6 +259,18 @@ export default function Profile() {
   const planLabel =
     plan === 'free' ? 'Free' : plan.replace('comp_', 'Comp · ').replace('trial_', 'Trial · ').toUpperCase();
 
+  // FIX(pre-launch cleanup #4): Membership-tier helpers used to drive the
+  // upgrade card. Single source of truth instead of strict `plan === 'free'`
+  // string compare which mishandled comp_/trial_ tiers and never surfaced
+  // an "Upgrade to Elite" CTA for paying Pro users.
+  //   • FREE         → show 'Go Pro / Go Elite'
+  //   • PRO          → show 'Upgrade to Elite'
+  //   • ELITE        → hide all upgrade CTAs (already at top)
+  // Staff roles are decoupled — admins/super_admins on Free still see CTA.
+  const isElitePlan = plan === 'elite' || plan === 'comp_elite' || plan === 'trial_elite';
+  const isProPlan = (plan === 'pro' || plan === 'comp_pro' || plan === 'trial_pro') && !isElitePlan;
+  const isFreePlan = !isElitePlan && !isProPlan;
+
   // PRD priority #6: gate role-based tools by plan + staff flag so we don't
   // advertise features the user can't actually use.
   const hasCreatorTools = plan !== 'free'; // Pro / Elite / comp_* / trial_*
@@ -540,9 +552,11 @@ export default function Profile() {
             );
           })()}
 
-          {/* PRD #4: Premium Upgrade CTA — gold gradient card, only for Free
-              users, positioned above role-based tools so it has maximum air. */}
-          {plan === 'free' && (
+          {/* PRD #4 + pre-launch cleanup #4: Membership upgrade card.
+              FREE  → 'Go Pro' (entry-level CTA)
+              PRO   → 'Upgrade to Elite' (mid-funnel)
+              ELITE → hidden (already at top tier; staff role is separate). */}
+          {!isElitePlan && (
             <TouchableOpacity
               style={styles.upgradeCard}
               onPress={() => router.push('/paywall')}
@@ -559,13 +573,17 @@ export default function Profile() {
                 <Crown size={20} color={colors.primary} />
               </View>
               <View style={{ flex: 1, gap: 4 }}>
-                <Text style={styles.upgradeTitle}>Scout smarter. Shoot better.</Text>
+                <Text style={styles.upgradeTitle}>
+                  {isProPlan ? 'Unlock the Elite tier.' : 'Scout smarter. Shoot better.'}
+                </Text>
                 <Text style={styles.upgradeBody}>
-                  Unlimited saves, AI shot lists, creator analytics, verified badge — starting at $8/mo.
+                  {isProPlan
+                    ? 'Priority placement, advanced analytics, AI co-pilot, and the gold Elite badge.'
+                    : 'Unlimited saves, AI shot lists, creator analytics, verified badge — starting at $8/mo.'}
                 </Text>
               </View>
               <View style={styles.upgradeArrow}>
-                <Text style={styles.upgradeArrowTxt}>Go Pro →</Text>
+                <Text style={styles.upgradeArrowTxt}>{isProPlan ? 'Go Elite →' : 'Go Pro →'}</Text>
               </View>
             </TouchableOpacity>
           )}
