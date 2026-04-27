@@ -107,7 +107,10 @@ export default function FollowListScreen() {
       ) : (
         <FlatList
           data={items}
-          keyExtractor={(u) => u.user_id}
+          // Defensive: append index to key so any duplicate row from
+          // server-side pagination races can never trigger React's
+          // duplicate-key warning.
+          keyExtractor={(u, idx) => `${u.user_id}_${idx}`}
           contentContainerStyle={{ paddingHorizontal: space.xl, paddingBottom: 60, gap: 8 }}
           refreshControl={
             <RefreshControl

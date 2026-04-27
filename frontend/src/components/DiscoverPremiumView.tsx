@@ -358,26 +358,43 @@ export default function DiscoverPremiumView() {
     } catch {}
   };
 
-  // Render a horizontal rail
-  const Rail = ({ data, ctx }: { data: any[]; ctx?: any }) => (
-    <FlatList
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      data={data}
-      keyExtractor={(u) => u.user_id}
-      contentContainerStyle={{ paddingHorizontal: space.xl, gap: 10 }}
-      snapToInterval={262}
-      decelerationRate="fast"
-      renderItem={({ item }) => (
-        <UserCardPremium
-          u={item}
-          isFollowing={!!followingMap[item.user_id] || !!item.is_following}
-          onToggleFollow={() => toggleFollow(item.user_id)}
-          context={ctx}
-        />
-      )}
-    />
-  );
+  // Render a horizontal rail.
+  // FIX(iOS Expo Go console error): backend rails (Best Matches / Near You /
+  // Trending / New) can include the same user via multiple qualification
+  // paths (popular AND nearby AND trending). With the cleaned-up directory
+  // down to a handful of real users, duplicates surface within a single
+  // rail's array, which made FlatList throw the "two children with the
+  // same key" warning. We now dedupe by user_id at the rail boundary AND
+  // append the index to the key as a final safety net so the warning can
+  // never re-surface even if a rare backend bug introduces a true dup.
+  const Rail = ({ data, ctx }: { data: any[]; ctx?: any }) => {
+    const seen = new Set<string>();
+    const uniq = (data || []).filter((u) => {
+      if (!u || !u.user_id) return false;
+      if (seen.has(u.user_id)) return false;
+      seen.add(u.user_id);
+      return true;
+    });
+    return (
+      <FlatList
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        data={uniq}
+        keyExtractor={(u, idx) => `${u.user_id}_${idx}`}
+        contentContainerStyle={{ paddingHorizontal: space.xl, gap: 10 }}
+        snapToInterval={262}
+        decelerationRate="fast"
+        renderItem={({ item }) => (
+          <UserCardPremium
+            u={item}
+            isFollowing={!!followingMap[item.user_id] || !!item.is_following}
+            onToggleFollow={() => toggleFollow(item.user_id)}
+            context={ctx}
+          />
+        )}
+      />
+    );
+  };
 
   if (loading) {
     return (
