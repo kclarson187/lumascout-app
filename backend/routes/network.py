@@ -317,7 +317,7 @@ async def my_followers(user: dict = Depends(get_current_user), limit: int = 100)
         u["user_id"]: u async for u in db.users.find(
             {"user_id": {"$in": user_ids}},
             {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
-             "city": 1, "state": 1, "verification_status": 1, "plan": 1},
+             "city": 1, "state": 1, "verification_status": 1, "plan": 1, "role": 1},
         )
     }
     result = []
@@ -341,7 +341,7 @@ async def my_following(user: dict = Depends(get_current_user), limit: int = 100)
         u["user_id"]: u async for u in db.users.find(
             {"user_id": {"$in": user_ids}},
             {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
-             "city": 1, "state": 1, "verification_status": 1, "plan": 1},
+             "city": 1, "state": 1, "verification_status": 1, "plan": 1, "role": 1},
         )
     }
     result = []
@@ -595,7 +595,7 @@ async def dm_list_threads(
         sids = list({r["from_user_id"] for r in pending})
         users = await db.users.find({"user_id": {"$in": sids}},
             {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
-             "verification_status": 1, "plan": 1, "city": 1, "specialties": 1}).to_list(len(sids))
+             "verification_status": 1, "plan": 1, "role": 1, "city": 1, "specialties": 1}).to_list(len(sids))
         umap = {u["user_id"]: u for u in users}
         for r in pending:
             r["sender"] = umap.get(r["from_user_id"])
@@ -634,7 +634,7 @@ async def dm_list_threads(
     other_ids = list(set(other_ids))
     ulist = await db.users.find({"user_id": {"$in": other_ids}},
         {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
-         "verification_status": 1, "plan": 1, "city": 1, "specialties": 1}).to_list(len(other_ids))
+         "verification_status": 1, "plan": 1, "role": 1, "city": 1, "specialties": 1}).to_list(len(other_ids))
     umap = {u["user_id"]: u for u in ulist}
     my_map = {p["thread_id"]: p for p in myparts}
     out = []
@@ -709,7 +709,7 @@ async def dm_get_thread(
     # Hydrate other + last_read
     others = [u for u in thread["participant_user_ids"] if u != user["user_id"]]
     other_u = await db.users.find_one({"user_id": others[0]} if others else {"user_id": "__none__"},
-        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1, "plan": 1, "city": 1, "specialties": 1}) if others else None
+        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1, "plan": 1, "role": 1, "city": 1, "specialties": 1}) if others else None
     other_part = await db.dm_participants.find_one({"thread_id": thread_id, "user_id": others[0]}, {"_id": 0}) if others else None
     return {
         "thread": thread,
@@ -1030,7 +1030,7 @@ async def network_discover(
     """Return the 'Network' discovery rails in one call."""
     limit_per_rail = max(1, min(20, limit_per_rail))
     proj = {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
-            "verification_status": 1, "plan": 1, "city": 1, "state": 1,
+            "verification_status": 1, "plan": 1, "role": 1, "city": 1, "state": 1,
             "specialties": 1, "is_bot": 1, "is_official": 1, "created_at": 1,
             "available_for_referrals": 1, "available_for_second_shooter": 1,
             "years_experience": 1, "bio": 1}

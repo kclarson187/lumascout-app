@@ -967,7 +967,7 @@ async def admin_overview(user: dict = Depends(require_role("moderator"))):
     if top_ids:
         users = await db.users.find(
             {"user_id": {"$in": [u for u, _ in top_ids]}},
-            {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1},
+            {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1, "plan": 1, "role": 1},
         ).to_list(20)
         umap = {u["user_id"]: u for u in users}
         for uid, count in top_ids:

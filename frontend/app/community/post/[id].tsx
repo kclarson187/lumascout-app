@@ -7,6 +7,7 @@ import { api, formatApiError } from '../../../src/api';
 import { useAuth } from '../../../src/auth';
 import { colors, font, space, radii } from '../../../src/theme';
 import VerifiedBadge from '../../../src/components/VerifiedBadge';
+import UserBadge from '../../../src/components/UserBadge';
 
 export default function PostDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -77,6 +78,7 @@ export default function PostDetail() {
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                 <Text style={styles.author}>{post.author?.name || 'Someone'}</Text>
                 <VerifiedBadge status={post.author?.verification_status} variant="inline" size={13} />
+                <UserBadge user={post.author} variant="inline" />
               </View>
               <Text style={styles.meta}>{post.city ? `${post.city}, ${post.state} · ` : ''}{new Date(post.created_at).toLocaleString()}</Text>
             </View>
@@ -143,6 +145,7 @@ export default function PostDetail() {
                     : <View style={[styles.avatarSm, { backgroundColor: colors.surface2 }]} />}
                   <Text style={styles.commentAuthor}>{c.author?.name || '—'}</Text>
                   <VerifiedBadge status={c.author?.verification_status} variant="inline" size={11} />
+                  <UserBadge user={c.author} variant="inline" />
                   <Text style={styles.commentTime}>{new Date(c.created_at).toLocaleDateString()}</Text>
                 </View>
                 <Text style={styles.commentBody}>{c.body}</Text>

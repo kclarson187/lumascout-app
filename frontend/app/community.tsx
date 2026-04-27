@@ -7,6 +7,7 @@ import { api } from '../src/api';
 import { useAuth } from '../src/auth';
 import { colors, font, space, radii } from '../src/theme';
 import VerifiedBadge from '../src/components/VerifiedBadge';
+import UserBadge from '../src/components/UserBadge';
 import PollCard from '../src/components/PollCard';
 import ScoutAIAvatar from '../src/components/ScoutAIAvatar';
 
@@ -256,6 +257,7 @@ function PostCard({ post, onLike, meId }: { post: any; onLike: () => void; meId?
             ) : (
               <VerifiedBadge status={post.author?.verification_status} variant="inline" size={12} />
             )}
+            {!isBot ? <UserBadge user={post.author} variant="inline" /> : null}
             {!isBot && topSpecs.map((s) => (
               <View key={s} style={styles.specChip}>
                 <Text style={styles.specChipTxt}>{s}</Text>

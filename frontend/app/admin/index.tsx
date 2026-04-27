@@ -5,6 +5,7 @@ import { Users as UsersIcon, Crown, AlertTriangle, Map, TrendingUp, ChevronRight
 import { api } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
 import VerifiedBadge from '../../src/components/VerifiedBadge';
+import UserBadge from '../../src/components/UserBadge';
 
 export default function AdminOverview() {
   const [data, setData] = useState<any | null>(null);
@@ -116,6 +117,7 @@ export default function AdminOverview() {
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                     <Text style={styles.userName}>{u.name}</Text>
                     <VerifiedBadge status={u.verification_status} variant="inline" size={13} />
+                    <UserBadge user={u} variant="inline" />
                   </View>
                   <Text style={styles.userSub}>{u.spots_this_month} spot{u.spots_this_month === 1 ? '' : 's'} this month</Text>
                 </View>

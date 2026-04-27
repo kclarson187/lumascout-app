@@ -3469,7 +3469,7 @@ async def _hydrate_posts(posts: List[dict], viewer: Optional[dict]) -> List[dict
     users = await db.users.find(
         {"user_id": {"$in": uids}},
         {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
-         "verification_status": 1, "plan": 1, "city": 1, "state": 1,
+         "verification_status": 1, "plan": 1, "role": 1, "city": 1, "state": 1,
          "is_bot": 1, "is_official": 1, "avatar_kind": 1, "specialties": 1},
     ).to_list(200)
     umap = {u["user_id"]: u for u in users}
@@ -3792,7 +3792,7 @@ async def list_comments(post_id: str):
     uids = list({c["author_user_id"] for c in comments})
     users = await db.users.find(
         {"user_id": {"$in": uids}},
-        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1},
+        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1, "plan": 1, "role": 1},
     ).to_list(200)
     umap = {u["user_id"]: u for u in users}
     for c in comments:
@@ -4210,7 +4210,7 @@ async def list_group_members(group_id: str, user: dict = Depends(get_current_use
     uids = [m["user_id"] for m in members]
     users = await db.users.find(
         {"user_id": {"$in": uids}},
-        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "city": 1, "verification_status": 1, "plan": 1, "specialties": 1},
+        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "city": 1, "verification_status": 1, "plan": 1, "role": 1, "specialties": 1},
     ).to_list(500)
     umap = {u["user_id"]: u for u in users}
     for m in members:

@@ -50,6 +50,7 @@ import {
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { colors, font, space, radii } from '../theme';
+import UserBadge from './UserBadge';
 
 // Three primary filter "cards" only — per founder PRD.
 const FILTERS: Array<{ key: string; label: string; sub?: string; icon: 'pin' | 'check' | 'spark' }> = [
@@ -82,6 +83,7 @@ type DirItem = {
   specialties?: string[];
   verification_status?: string;
   plan?: string;
+  role?: string;
   follower_count?: number;
   bio?: string;
   is_following?: boolean;
@@ -169,7 +171,7 @@ function CreatorCard({
         <View style={s.nameRow}>
           <Text style={s.name} numberOfLines={1}>{u.name || `@${u.username || 'user'}`}</Text>
           {verified ? <ShieldCheck size={14} color="#3b82f6" fill="#3b82f6" strokeWidth={0} /> : null}
-          <PlanBadge u={u} size="sm" />
+          <UserBadge user={u} variant="inline" />
         </View>
         {u.username ? (
           <Text style={s.handle} numberOfLines={1}>@{u.username}</Text>

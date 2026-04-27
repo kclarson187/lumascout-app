@@ -40,6 +40,7 @@ import { Button } from '../../src/components/Button';
 import { EmptyState } from '../../src/components/ui';
 import SpotCard from '../../src/components/SpotCard';
 import FeaturedBadge from '../../src/components/FeaturedBadge';
+import UserBadge from '../../src/components/UserBadge';
 
 type TabKey = 'posts' | 'spots' | 'photos' | 'reviews' | 'about';
 const TABS: { key: TabKey; label: string }[] = [
@@ -240,6 +241,7 @@ export default function UserProfile() {
               </View>
             )}
             <FeaturedBadge plan={profile.plan} variant="compact" size={11} />
+            <UserBadge user={profile} variant="header" />
           </View>
           <Text style={styles.handle}>@{profile.username}</Text>
           {(profile.city || profile.state) && (
