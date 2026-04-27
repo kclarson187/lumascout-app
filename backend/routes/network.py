@@ -1249,6 +1249,18 @@ async def directory_browse(
         "is_bot": {"$ne": True},
         "is_official": {"$ne": True},
         "plan": {"$ne": "suspended"},
+        # FIX(directory ghost-user audit): hide users that should never
+        # appear publicly. Three legacy markers cover every ghost variant:
+        #   • deleted_at exists           → new hard-delete-with-archive flow
+        #   • status: "deleted"           → legacy soft-delete-anonymize
+        #   • deleted: true               → older legacy boolean flag
+        #   • is_test_account: true       → test accounts created by
+        #                                    automated test runs (never
+        #                                    intended for public display)
+        "deleted_at": {"$exists": False},
+        "status": {"$ne": "deleted"},
+        "deleted": {"$ne": True},
+        "is_test_account": {"$ne": True},
     }
     if viewer:
         base["user_id"] = {"$ne": viewer["user_id"]}
@@ -1432,6 +1444,13 @@ async def directory_suggested(limit: int = 10, user: dict = Depends(get_current_
             "is_official": {"$ne": True},
             "plan": {"$in": ["pro", "elite"]},
             "user_id": {"$nin": list(excluded)},
+            # FIX(directory ghost-user audit): apply the same ghost filter
+            # as /directory so suggested rails never surface deleted/test
+            # accounts even via the back-fill path.
+            "deleted_at": {"$exists": False},
+            "status": {"$ne": "deleted"},
+            "deleted": {"$ne": True},
+            "is_test_account": {"$ne": True},
         }
         if user.get("city"):
             backfill_q["city"] = user["city"]
@@ -1450,7 +1469,16 @@ async def directory_suggested(limit: int = 10, user: dict = Depends(get_current_
 
     ids = [s["user_id"] for s in suggestions[:limit]]
     rows = await db.users.find(
-        {"user_id": {"$in": ids}}, DIRECTORY_PROJECTION,
+        {
+            "user_id": {"$in": ids},
+            # Hard-filter ghosts that may have slipped in via 2nd-degree
+            # follows from before the cleanup pass.
+            "deleted_at": {"$exists": False},
+            "status": {"$ne": "deleted"},
+            "deleted": {"$ne": True},
+            "is_test_account": {"$ne": True},
+        },
+        DIRECTORY_PROJECTION,
     ).to_list(len(ids))
     return {"items": rows}
 
