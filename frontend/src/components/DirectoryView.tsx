@@ -30,7 +30,7 @@ import {
   FlatList,
   Modal,
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import {
   Search,
   X,
@@ -278,6 +278,20 @@ export default function DirectoryView() {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, sort, filter, specialty]);
+
+  // FIX(stale-directory bug): the directory used to render stale cached
+  // `items` after navigating away and back (e.g. Admin → delete user →
+  // back to Network → Directory). The list only re-fetched when the
+  // search query / sort / filter changed. Now we also force a fresh
+  // /directory call every time this screen regains focus, so any user
+  // that was hard-deleted while the user was elsewhere disappears
+  // immediately on the next focus event.
+  useFocusEffect(
+    useCallback(() => {
+      load(true);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []),
+  );
 
   // BUGFIX: backend POST /users/:id/follow is a TOGGLE — never DELETE.
   const handleFollow = useCallback(async (u: DirItem) => {
