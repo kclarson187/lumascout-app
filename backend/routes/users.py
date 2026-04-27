@@ -345,7 +345,7 @@ async def my_reviews_received(limit: int = 50, user: dict = Depends(get_current_
     rspids = list({r.get("spot_id") for r in reviews})
     users = await db.users.find(
         {"user_id": {"$in": ruids}},
-        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1, "plan": 1},
+        {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1, "plan": 1, "role": 1},
     ).to_list(200)
     umap = {u["user_id"]: u for u in users}
     spots = await db.spots.find(

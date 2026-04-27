@@ -809,7 +809,7 @@ async def dm_inbox_preview(
     ulist = await db.users.find(
         {"user_id": {"$in": other_ids}},
         {"_id": 0, "user_id": 1, "name": 1, "username": 1,
-         "avatar_url": 1, "verification_status": 1, "plan": 1},
+         "avatar_url": 1, "verification_status": 1, "plan": 1, "role": 1},
     ).to_list(len(other_ids))
     umap = {u["user_id"]: u for u in ulist}
     my_map = {p["thread_id"]: p for p in parts}
@@ -1132,7 +1132,7 @@ async def network_search(
     if verified_only: query["verification_status"] = "verified"
     if plan in ("pro", "elite"): query["plan"] = plan
     rows = await db.users.find(query, {"_id": 0, "user_id": 1, "name": 1, "username": 1,
-        "avatar_url": 1, "verification_status": 1, "plan": 1, "city": 1, "state": 1,
+        "avatar_url": 1, "verification_status": 1, "plan": 1, "role": 1, "city": 1, "state": 1,
         "specialties": 1, "years_experience": 1, "bio": 1, "available_for_referrals": 1,
         "available_for_second_shooter": 1}).limit(limit).to_list(limit)
     return {"items": rows, "total": len(rows)}
@@ -1147,7 +1147,7 @@ async def network_search(
 
 DIRECTORY_PROJECTION = {
     "_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1,
-    "verification_status": 1, "plan": 1, "city": 1, "state": 1,
+    "verification_status": 1, "plan": 1, "role": 1, "city": 1, "state": 1,
     "specialties": 1, "years_experience": 1, "bio": 1,
     "available_for_referrals": 1, "available_for_second_shooter": 1,
     "follower_count": 1, "following_count": 1, "created_at": 1,

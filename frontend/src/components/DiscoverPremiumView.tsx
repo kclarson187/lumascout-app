@@ -33,6 +33,7 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { api } from '../api';
 import { colors, font, space, radii } from '../theme';
+import UserBadge from './UserBadge';
 
 // ============================================================================
 // Filter pill row
@@ -148,17 +149,7 @@ function UserCardPremium({
                 <Text style={s.verifiedDotTxt}>✓</Text>
               </View>
             ) : null}
-            {isElite ? (
-              <View style={s.elitePill}>
-                <Gem size={9} color="#1a1300" />
-                <Text style={s.elitePillTxt}>ELITE</Text>
-              </View>
-            ) : isPro ? (
-              <View style={s.proPill}>
-                <Star size={9} color={colors.primary} fill={colors.primary} strokeWidth={0} />
-                <Text style={s.proPillTxt}>PRO</Text>
-              </View>
-            ) : null}
+            <UserBadge user={u} variant="inline" />
           </View>
           {u.username ? (
             <Text style={s.usernameLg} numberOfLines={1}>@{u.username}</Text>

@@ -4,20 +4,24 @@
  * Priority (highest first):
  *   1. role === 'super_admin'                → Founder.png (LumaScout founder)
  *   2. role === 'admin' || 'moderator'       → Moderator.png
- *   3. plan elite (incl. comp_elite/trial)   → Animated gold "ELITE" pill (pulse)
- *   4. plan pro (incl. comp_pro/trial_pro)   → Subtle "PRO" pill
+ *   3. plan elite (incl. comp_elite/trial)   → Elite gold compass PNG (animated pulse)
+ *   4. plan pro (incl. comp_pro/trial_pro)   → Pro silver compass PNG (static)
  *   5. otherwise                              → null (no badge)
  *
  * Variants:
  *   - 'inline'   : tightest size, inline next to a username (default 14)
  *   - 'compact'  : ~16, used on followers/inbox rows
- *   - 'header'   : ~20, used on profile headers
+ *   - 'header'   : ~22, used on profile headers
  *
- * The Founder & Moderator graphics are transparent PNGs; we render them
+ * All four membership badges (Founder / Moderator / Elite / Pro) are
+ * rendered as transparent PNGs at the same dimensions for visual rhythm,
  * with `resizeMode="contain"` and no background fill so transparency holds.
+ *
+ * Elite badge gets a subtle scale + glow pulse via reanimated; Pro stays
+ * crisp & static for a "premium but earned" feel.
  */
 import React, { useEffect } from 'react';
-import { View, Text, Image, StyleSheet, Platform, Pressable } from 'react-native';
+import { View, Text, Image, StyleSheet, Platform } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -37,11 +41,13 @@ type Variant = 'inline' | 'compact' | 'header';
 
 const FOUNDER_SRC = require('../../assets/brand/founder.png');
 const MOD_SRC = require('../../assets/brand/moderator.png');
+const ELITE_SRC = require('../../assets/badges/elite-badge.png');
+const PRO_SRC = require('../../assets/badges/pro-badge.png');
 
 const SIZE_MAP: Record<Variant, number> = {
-  inline: 14,
-  compact: 16,
-  header: 22,
+  inline: 18,
+  compact: 20,
+  header: 26,
 };
 
 function isElitePlan(plan?: string | null): boolean {
@@ -76,7 +82,7 @@ export default function UserBadge({
         accessibilityLabel="LumaScout Founder"
         testID={testID || 'badge-founder'}
         source={FOUNDER_SRC}
-        style={{ width: size + 4, height: size + 4 }}
+        style={{ width: size, height: size }}
         resizeMode="contain"
       />
     );
@@ -90,42 +96,46 @@ export default function UserBadge({
         accessibilityLabel="LumaScout Moderator"
         testID={testID || 'badge-moderator'}
         source={MOD_SRC}
-        style={{ width: size + 4, height: size + 4 }}
+        style={{ width: size, height: size }}
         resizeMode="contain"
       />
     );
   }
 
-  // Priority 3: Elite (pulsing gold)
+  // Priority 3: Elite (animated gold compass PNG)
   if (isElitePlan(plan)) {
-    return <ElitePulseBadge variant={variant} testID={testID || 'badge-elite'} />;
+    return <ElitePulseBadge size={size} testID={testID || 'badge-elite'} />;
   }
 
-  // Priority 4: Pro
+  // Priority 4: Pro (static silver compass PNG)
   if (isProPlan(plan)) {
     return (
-      <View
+      <Image
+        accessible
+        accessibilityLabel="LumaScout Pro"
         testID={testID || 'badge-pro'}
-        style={[styles.proPill, variant === 'header' && styles.proPillHeader]}
-      >
-        <Text style={[styles.proTxt, variant === 'header' && styles.proTxtHeader]}>PRO</Text>
-      </View>
+        source={PRO_SRC}
+        style={{ width: size, height: size }}
+        resizeMode="contain"
+      />
     );
   }
 
   return null;
 }
 
-/* ---------- Elite animated pill ---------- */
-function ElitePulseBadge({ variant, testID }: { variant: Variant; testID?: string }) {
+/* ---------- Elite animated badge ----------
+ * Subtle scale + golden glow halo. Uses reanimated for native perf;
+ * web additionally gets a softly pulsing CSS box-shadow for a glow.
+ */
+function ElitePulseBadge({ size, testID }: { size: number; testID?: string }) {
   const scale = useSharedValue(1);
   const glow = useSharedValue(0.25);
 
   useEffect(() => {
-    // Subtle, premium pulse — 1800ms loop.
     scale.value = withRepeat(
       withSequence(
-        withTiming(1.06, { duration: 900, easing: Easing.inOut(Easing.quad) }),
+        withTiming(1.07, { duration: 900, easing: Easing.inOut(Easing.quad) }),
         withTiming(1.0, { duration: 900, easing: Easing.inOut(Easing.quad) }),
       ),
       -1,
@@ -133,7 +143,7 @@ function ElitePulseBadge({ variant, testID }: { variant: Variant; testID?: strin
     );
     glow.value = withRepeat(
       withSequence(
-        withTiming(0.55, { duration: 900, easing: Easing.inOut(Easing.quad) }),
+        withTiming(0.65, { duration: 900, easing: Easing.inOut(Easing.quad) }),
         withTiming(0.25, { duration: 900, easing: Easing.inOut(Easing.quad) }),
       ),
       -1,
@@ -144,81 +154,44 @@ function ElitePulseBadge({ variant, testID }: { variant: Variant; testID?: strin
   const animStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
     shadowOpacity: glow.value,
-    // Web-only soft glow (RN reanimated allows arbitrary fields; native ignores)
     ...(Platform.OS === 'web'
-      ? { boxShadow: `0 0 ${8 + glow.value * 6}px rgba(245,166,35,${glow.value})` as any }
+      ? ({ boxShadow: `0 0 ${8 + glow.value * 8}px rgba(245,166,35,${glow.value})` } as any)
       : {}),
   }));
-
-  const isHeader = variant === 'header';
 
   return (
     <Animated.View
       testID={testID}
       style={[
-        styles.elitePill,
-        isHeader && styles.elitePillHeader,
-        styles.eliteGlow,
+        styles.eliteWrap,
+        { width: size, height: size, borderRadius: size / 2 },
         animStyle,
       ]}
     >
-      <Text style={[styles.eliteTxt, isHeader && styles.eliteTxtHeader]}>ELITE</Text>
+      <Image
+        source={ELITE_SRC}
+        style={{ width: size, height: size }}
+        resizeMode="contain"
+        accessible
+        accessibilityLabel="LumaScout Elite"
+      />
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  // Elite pill (animated)
-  elitePill: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    backgroundColor: 'rgba(245,166,35,0.16)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(245,166,35,0.6)',
-  },
-  elitePillHeader: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 5,
-  },
-  eliteGlow: {
+  eliteWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    // Native shadow (iOS) for the gold glow
     shadowColor: '#f5a623',
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 0 },
-  },
-  eliteTxt: {
-    color: '#f5a623',
-    fontFamily: font.bodyBold,
-    fontSize: 8,
-    letterSpacing: 0.9,
-  },
-  eliteTxtHeader: {
-    fontSize: 10,
-    letterSpacing: 1.1,
-  },
-  // Pro pill (static)
-  proPill: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.22)',
-  },
-  proPillHeader: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 5,
-  },
-  proTxt: {
-    color: colors.textSecondary,
-    fontFamily: font.bodyBold,
-    fontSize: 8,
-    letterSpacing: 0.9,
-  },
-  proTxtHeader: {
-    fontSize: 10,
-    letterSpacing: 1.1,
+    // Android glow approximation via elevation
+    ...Platform.select({ android: { elevation: 0 } }),
   },
 });
+
+// Re-export Text/font/colors so callers don't get tree-shaken regressions
+// during refactor (no-op at runtime).
+export const _badgeMeta = { font, colors, Text };
