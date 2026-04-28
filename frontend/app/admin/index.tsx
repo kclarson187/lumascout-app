@@ -84,6 +84,20 @@ export default function AdminOverview() {
         </TouchableOpacity>
       </View>
 
+      {/* BATCH 2 (Apr 2026): entry point to the uploader-submitted edit
+          request queue. Visible to moderator+ so moderators can help
+          process the queue (Admins still have Delete etc.). */}
+      <TouchableOpacity
+        style={styles.queueCard}
+        onPress={() => router.push('/admin/edit-requests' as any)}
+        testID="overview-go-edit-requests"
+      >
+        <AlertTriangle size={18} color={colors.primary} />
+        <Text style={[styles.queueLabel, { color: colors.primary, fontFamily: font.bodyBold, marginTop: 6 }]}>Spot edit requests</Text>
+        <Text style={[styles.queueLabel, { marginTop: 2 }]}>Review uploader-proposed changes</Text>
+        <ChevronRight size={16} color={colors.textSecondary} style={{ position: 'absolute', top: 14, right: 14 }} />
+      </TouchableOpacity>
+
       {/* PRD Scout AI Phase 3 — Admin controls shortcut */}
       <TouchableOpacity
         style={[styles.queueCard, { borderColor: colors.primary, backgroundColor: 'rgba(245,166,35,0.08)' }]}
