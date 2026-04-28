@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, Image, TextInput, ActivityIndicator, Alert, Platform } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, Text, StyleSheet, FlatList, Pressable, Image, TextInput, ActivityIndicator, Alert, Platform, Keyboard } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ChevronLeft, Send, ImagePlus, MapPin, User as UserIcon, ShieldCheck } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
@@ -32,6 +32,22 @@ export default function ThreadScreen() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const listRef = useRef<FlatList<any> | null>(null);
+
+  // FIX(Batch-1 messaging spacing): the composer previously stacked
+  // SafeAreaView bottom inset + space.xl hardcoded padding + KAV's
+  // padding behavior — visible as a ~80pt dead zone between input bar
+  // and the iOS keyboard. Track keyboard state so when it's up we drop
+  // the bottom inset entirely (KAV already lifts us past it), and when
+  // it's down we honour the home-indicator safe area.
+  const insets = useSafeAreaInsets();
+  const [kbShown, setKbShown] = useState(false);
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const s1 = Keyboard.addListener(showEvt, () => setKbShown(true));
+    const s2 = Keyboard.addListener(hideEvt, () => setKbShown(false));
+    return () => { s1.remove(); s2.remove(); };
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -79,7 +95,7 @@ export default function ThreadScreen() {
   };
 
   return (
-    <SafeAreaView style={s.root}>
+    <SafeAreaView style={s.root} edges={['top', 'left', 'right']}>
       <View style={s.header}>
         <Pressable onPress={() => router.back()} style={s.backBtn} testID="thread-back">
           <ChevronLeft size={22} color={colors.text}/>
@@ -96,7 +112,7 @@ export default function ThreadScreen() {
         </Pressable>
       </View>
 
-      <KeyboardSafeDocked style={{ flex: 1 }} keyboardVerticalOffset={Platform.OS === 'ios' ? 88 : 0}>
+      <KeyboardSafeDocked style={{ flex: 1 }} keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 52 : 0}>
         {loading ? (
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
             <ActivityIndicator color={colors.primary}/>
@@ -181,7 +197,7 @@ export default function ThreadScreen() {
                 );
               }}
             />
-            <View style={s.composer}>
+            <View style={[s.composer, { paddingBottom: kbShown ? 10 : Math.max(insets.bottom, 10) }]}>
               <Pressable onPress={sendImage} style={s.attachBtn} testID="thread-image"><ImagePlus size={20} color={colors.text}/></Pressable>
               <TextInput
                 value={text}
@@ -230,7 +246,7 @@ const s = StyleSheet.create({
   starters: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'center', marginTop: 12 },
   starter: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: 'rgba(245,166,35,0.10)', borderWidth: 1, borderColor: 'rgba(245,166,35,0.4)' },
   starterTxt: { color: colors.primary, fontFamily: font.bodyMedium, fontSize: 11 },
-  composer: { flexDirection: 'row', alignItems: 'center', gap: 6, padding: space.md, paddingBottom: Platform.OS === 'ios' ? space.xl : space.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, backgroundColor: colors.bg },
+  composer: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: space.md, paddingTop: space.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, backgroundColor: colors.bg },
   attachBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: radii.md, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
   composerInp: { flex: 1, minHeight: 40, maxHeight: 120, paddingHorizontal: 12, paddingVertical: 10, borderRadius: radii.md, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, color: colors.text, fontFamily: font.body, fontSize: 14 },
   sendBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: radii.md, backgroundColor: colors.primary },

@@ -8901,12 +8901,12 @@ metadata:
           path tests. Cleanup afterwards.
 
 metadata:
-  test_sequence: 13
+  test_sequence: 14
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Membership Tier Conversion Update — /api/plans copy, /auth/me usage exposes uploads + outbound_threads_30d, monthly outbound DM cap (3/mo for free), max_uploads cap (5 lifetime for free), updated 402 detail strings for global UpgradeGate routing"
+    - "Batch 1 Crash/UX Fixes — messaging keyboard spacing, deleted-spot graceful redirect, admin approval optimistic update + array defense"
   stuck_tasks: []
   test_all: false
   test_priority: "stuck_first"
