@@ -61,8 +61,29 @@ export default function SpotDetail() {
     try {
       const data = await api.get(`/spots/${id}`);
       setSpot(data);
-    } catch (e) {
-      Alert.alert('Unable to load spot', formatApiError(e));
+    } catch (e: any) {
+      // FIX(Batch-1 deleted-spot crash): gracefully redirect out when a
+      // user opens a deleted/hidden spot (either from a stale list cache,
+      // a push notification, or a shared link). Previously an unhandled
+      // render below threw because `spot` was null — now we alert and
+      // navigate back so the user never sees a blank/crashed screen.
+      const status = Number(e?.status || e?.response?.status || 0);
+      const isMissing = status === 404 || status === 410;
+      Alert.alert(
+        isMissing ? 'Spot no longer available' : 'Unable to load spot',
+        isMissing
+          ? 'This location has been removed or is no longer public.'
+          : formatApiError(e),
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              if (router.canGoBack()) router.back();
+              else router.replace('/(tabs)/explore');
+            },
+          },
+        ],
+      );
     } finally {
       setLoading(false);
     }

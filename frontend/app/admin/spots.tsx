@@ -47,7 +47,10 @@ export default function AdminSpots() {
         api.get('/admin/pending'),
         api.get('/admin/stats/recent-approvals', { days: 7 }).catch(() => null),
       ]);
-      setPending(p);
+      // FIX(Batch-1 approve crash): defend against unexpected payload
+      // shapes so a flaky network response or backend change can't crash
+      // the admin panel when the list refreshes after approval.
+      setPending(Array.isArray(p) ? p.filter(Boolean) : []);
       if (recent && typeof recent.count === 'number') setRecentlyReviewed(recent.count);
     } catch (e) { Alert.alert('Error', formatApiError(e)); }
   }, []);
@@ -57,7 +60,7 @@ export default function AdminSpots() {
       const params: any = { limit: 200, sort: 'quality' };
       if (query.trim()) params.q = query.trim();
       const r = await api.get('/spots', params);
-      setAllSpots(Array.isArray(r) ? r : []);
+      setAllSpots(Array.isArray(r) ? r.filter(Boolean) : []);
     } catch (e) { Alert.alert('Error', formatApiError(e)); }
   }, [query]);
 
@@ -75,8 +78,21 @@ export default function AdminSpots() {
 
   const decide = async (id: string, approve: boolean) => {
     try {
-      await api.post(`/admin/spots/${id}/${approve ? 'approve' : 'reject'}`);
-      await loadPending();
+      // FIX(Batch-1 approve crash): optimistically remove the spot from
+      // the pending list BEFORE we re-fetch, so there's no flicker where
+      // the approved spot lingers with stale state while the list is
+      // refreshing. Restores the spot on error.
+      const snapshot = pending;
+      setPending((prev) => prev.filter((s) => s?.spot_id !== id));
+      try {
+        await api.post(`/admin/spots/${id}/${approve ? 'approve' : 'reject'}`);
+      } catch (err) {
+        // restore on failure so the admin can retry
+        setPending(snapshot);
+        throw err;
+      }
+      // Refresh in background; if it fails we keep the optimistic state.
+      loadPending().catch(() => {});
     } catch (e) { Alert.alert('Error', formatApiError(e)); }
   };
 
