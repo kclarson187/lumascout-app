@@ -9081,7 +9081,7 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Batch 2 — Uploader Edit Request workflow (new /api/spots/{id}/edit-request + /api/admin/edit-requests queue with approve/reject + owner notification), True hard-delete promoted to admin role with extended cascade, DeleteConfirmSheet keyboard fix (absolute-positioned sheet made flex so KAV can lift), featured-photo approval writes admin_cover_override for instant Explore/Detail sync"
+    - "Batch 2 full bundle — uploader edit-request workflow (owner submit + admin queue + diff UI + approve/reject with owner notifications), Manage Photos admin CTA on spot detail, Spot Detail refresh-on-focus (fixes Muleshoe Bend Explore vs Detail cover mismatch), true hard-delete extended cascade, DeleteConfirmSheet keyboard-aware, share-link 404 fix (EXPO_PUBLIC_BACKEND_URL), Explore card dynamic metadata (trending / new posts / saves / new — no more 100% shoot score on every card)"
   stuck_tasks: []
   test_all: false
   test_priority: "stuck_first"
