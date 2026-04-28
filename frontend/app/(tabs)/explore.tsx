@@ -658,7 +658,15 @@ function PinPreview({
     (Array.isArray(spot.images)
       ? (spot.images.find((i: any) => i.is_cover)?.image_url || spot.images[0]?.image_url)
       : null);
-  const score = Math.round(spot.shoot_score ?? spot.score ?? 88);
+  // FIX (Apr 2026): no more fake "100 Score / Best at Sunset" on every
+  // preview. Both are now gated on real backend data — if the field is
+  // missing we hide the module entirely rather than fabricating. Score
+  // only renders when the backend actually returned a shoot_score AND
+  // it's not the defaulted 100 ceiling. Best-at chips only render when
+  // the specific golden-hour rating is explicitly set AND >= 4.
+  const hasRealScore =
+    typeof spot.shoot_score === 'number' && spot.shoot_score > 0 && spot.shoot_score < 100;
+  const score = hasRealScore ? Math.round(spot.shoot_score) : 0;
   const scoreColor =
     score >= 90 ? '#22c55e' : score >= 75 ? colors.primary : '#60A5FA';
 
@@ -681,17 +689,29 @@ function PinPreview({
       .catch(() => {});
   };
 
-  // Two prominent chips (gold + green) per mockup spec
-  const goldChip =
+  // Real-data priority chips shown when Best-at isn't available
+  // (mirrors the Explore-card priority cascade).
+  const savesCount = Number(spot.save_count || 0);
+  const newPostsCount = Number(spot.recent_upload_count_7d || 0);
+  const realGoldChip =
     (spot.evening_golden_hour_rating || 0) >= 4
       ? { key: 'sunset', label: 'Best at Sunset', icon: Sun }
       : (spot.morning_golden_hour_rating || 0) >= 4
         ? { key: 'sunrise', label: 'Best at Sunrise', icon: Sun }
         : null;
+  const goldChip = realGoldChip;  // keep variable name for downstream code
   const greenChip =
     (spot.crowd_level || 3) <= 2
       ? { key: 'crowd', label: 'Low Crowds', icon: UsersIcon }
-      : null;
+      : spot.is_trending
+        ? { key: 'trending', label: 'Trending now', icon: UsersIcon }
+        : newPostsCount > 0
+          ? { key: 'newposts', label: `${newPostsCount} new post${newPostsCount === 1 ? '' : 's'}`, icon: UsersIcon }
+          : savesCount >= 3
+            ? { key: 'saves', label: `${savesCount >= 100 ? '99+' : savesCount} saves`, icon: UsersIcon }
+            : spot.is_new
+              ? { key: 'new', label: 'New', icon: UsersIcon }
+              : null;
 
   // 3 subtle tag chips (Urban / Easy Access / Great for Portraits)
   const niches: string[] = Array.isArray(spot.niches)
@@ -770,35 +790,42 @@ function PinPreview({
             </Pressable>
           </View>
 
-          {/* Score + the 2 prominent chips */}
-          <View style={styles.sheetScoreRow}>
-            <View style={styles.sheetScoreCol}>
-              <View style={[styles.sheetScoreRing, { borderColor: scoreColor }]}>
-                <Text style={[styles.sheetScoreTxt, { color: scoreColor }]}>{score}</Text>
+          {/* Score + the 2 prominent chips — both fully hidden when
+              we don't actually have real data (no more fake 100 Score
+              or fake "Best at Sunset" on every spot). If NOTHING real
+              is available, we suppress this block entirely. */}
+          {(hasRealScore || goldChip || greenChip || premium) && (
+            <View style={styles.sheetScoreRow}>
+              {hasRealScore && (
+                <View style={styles.sheetScoreCol}>
+                  <View style={[styles.sheetScoreRing, { borderColor: scoreColor }]}>
+                    <Text style={[styles.sheetScoreTxt, { color: scoreColor }]}>{score}</Text>
+                  </View>
+                  <Text style={styles.sheetScoreLabel}>Score</Text>
+                </View>
+              )}
+              <View style={{ flex: 1, gap: 6 }}>
+                {goldChip ? (
+                  <View style={[styles.bigChip, styles.bigChipGold]}>
+                    <Sun size={11} color={colors.primary} />
+                    <Text style={[styles.bigChipTxt, { color: colors.primary }]}>{goldChip.label}</Text>
+                  </View>
+                ) : null}
+                {greenChip ? (
+                  <View style={[styles.bigChip, styles.bigChipGreen]}>
+                    <UsersIcon size={11} color="#22c55e" />
+                    <Text style={[styles.bigChipTxt, { color: '#22c55e' }]}>{greenChip.label}</Text>
+                  </View>
+                ) : null}
+                {premium ? (
+                  <View style={[styles.bigChip, styles.bigChipElite]}>
+                    <Gem size={11} color="#9D59FF" />
+                    <Text style={[styles.bigChipTxt, { color: '#9D59FF' }]}>Elite</Text>
+                  </View>
+                ) : null}
               </View>
-              <Text style={styles.sheetScoreLabel}>Score</Text>
             </View>
-            <View style={{ flex: 1, gap: 6 }}>
-              {goldChip ? (
-                <View style={[styles.bigChip, styles.bigChipGold]}>
-                  <Sun size={11} color={colors.primary} />
-                  <Text style={[styles.bigChipTxt, { color: colors.primary }]}>{goldChip.label}</Text>
-                </View>
-              ) : null}
-              {greenChip ? (
-                <View style={[styles.bigChip, styles.bigChipGreen]}>
-                  <UsersIcon size={11} color="#22c55e" />
-                  <Text style={[styles.bigChipTxt, { color: '#22c55e' }]}>{greenChip.label}</Text>
-                </View>
-              ) : null}
-              {premium ? (
-                <View style={[styles.bigChip, styles.bigChipElite]}>
-                  <Gem size={11} color="#9D59FF" />
-                  <Text style={[styles.bigChipTxt, { color: '#9D59FF' }]}>Elite</Text>
-                </View>
-              ) : null}
-            </View>
-          </View>
+          )}
         </View>
       </View>
 

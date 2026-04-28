@@ -22,7 +22,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, Pressable, Image,
-  ActivityIndicator, Share, FlatList,
+  ActivityIndicator, Share, FlatList, Alert,
 } from 'react-native';
 import { router } from 'expo-router';
 import {
@@ -215,9 +215,21 @@ function UserCardPremium({
           onPress={async (e) => {
             e.stopPropagation?.();
             try {
-              const r = await api.post('/dm/threads/start', { other_user_id: u.user_id });
-              if (r?.thread_id) router.push(`/dm/${r.thread_id}` as any);
-            } catch {}
+              // FIX (Apr 2026): both fields were wrong — the backend
+              // DMStartIn model expects `user_id` (not `other_user_id`)
+              // and the DM screen lives at `/inbox/[id]` (not `/dm/`).
+              // Result was a silent 422 → no navigation → user tapped
+              // Message and nothing happened.
+              const r = await api.post('/dm/threads/start', { user_id: u.user_id });
+              if (r?.thread_id) {
+                router.push(`/inbox/${r.thread_id}` as any);
+              } else {
+                Alert.alert('Unable to open message', 'Please try again.');
+              }
+            } catch (err: any) {
+              const msg = err?.response?.data?.detail || err?.message || 'Could not open conversation.';
+              Alert.alert('Message error', typeof msg === 'string' ? msg : 'Please try again.');
+            }
           }}
           style={[s.btn, s.btnSecondary]}
           testID={`message-${u.user_id}`}
