@@ -845,6 +845,20 @@ async def admin_spot_cover_editor(
         "admin_cover_override": spot.get("admin_cover_override"),
     }
 
+    # CRITICAL (Apr 2026): strip any legacy base64 blobs from the
+    # cover-editor payload before returning it. For a spot that still
+    # has raw `data:image/...` image_urls in Mongo (pre-migration), the
+    # editor would otherwise download 20+ full-size base64 strings and
+    # hang/crash the device. The helper operates in-place on the dict
+    # and is safe on already-clean payloads.
+    try:
+        from server import _slim_feed_payload
+        _slim_feed_payload({"spots": [{"images": payload["images"],
+                                       "admin_cover_override": payload["admin_cover_override"]}]})
+    except Exception:
+        pass
+    return payload
+
 # --- AdminSpotActionIn (server.py:5750-5752) ---
 class AdminSpotActionIn(BaseModel):
     action: str   # feature | unfeature | hide | unhide | approve | reject | delete

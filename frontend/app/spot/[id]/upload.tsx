@@ -5,6 +5,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { ChevronLeft, ImagePlus, X, Camera } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { api } from '../../../src/api';
+import { uploadImageAssets } from '../../../src/utils/upload-image';
 import { colors, font, space, radii } from '../../../src/theme';
 import { CONDITION_TAGS } from '../../../src/components/FreshnessBits';
 import KeyboardSafe from '../../../src/components/KeyboardSafe';
@@ -16,6 +17,7 @@ export default function UploadScreen() {
   const [caption, setCaption] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [visibility, setVisibility] = useState<'public' | 'followers'>('public');
+  const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const pickPhotos = async () => {
@@ -27,15 +29,27 @@ export default function UploadScreen() {
     const r = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsMultipleSelection: true,
-      base64: true,
-      quality: 0.7,
+      // CRITICAL (Apr 2026): base64=false — we now upload the picked
+      // file via multipart to /api/uploads/image and store only the
+      // short hosted URL in Mongo. This single change shrinks spot
+      // documents by ~3-5 MB per image and unblocks the cover editor
+      // which was timing out on base64-heavy payloads.
+      base64: false,
+      quality: 0.85,
       selectionLimit: Math.max(1, 12 - photos.length),
     });
-    if (!r.canceled && r.assets) {
-      const incoming = r.assets
-        .map((a) => a.base64 ? `data:image/jpeg;base64,${a.base64}` : null)
-        .filter(Boolean) as string[];
-      setPhotos((prev) => [...prev, ...incoming].slice(0, 12));
+    if (r.canceled || !r.assets?.length) return;
+    setUploading(true);
+    try {
+      const uploaded = await uploadImageAssets(
+        r.assets.map((a) => ({ uri: a.uri, mimeType: a.mimeType, fileName: a.fileName })),
+      );
+      const urls = uploaded.map((u) => u.image_url);
+      setPhotos((prev) => [...prev, ...urls].slice(0, 12));
+    } catch (e: any) {
+      Alert.alert('Upload failed', e?.message || 'Could not upload one or more photos. Please try again.');
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -102,9 +116,11 @@ export default function UploadScreen() {
                 </View>
               ))}
               {photos.length < 12 ? (
-                <TouchableOpacity onPress={pickPhotos} style={styles.tileAdd} testID="pick-photos">
-                  <ImagePlus size={22} color={colors.primary} />
-                  <Text style={styles.tileAddTxt}>{photos.length === 0 ? 'Select photos' : 'Add more'}</Text>
+                <TouchableOpacity onPress={pickPhotos} disabled={uploading} style={[styles.tileAdd, uploading && { opacity: 0.6 }]} testID="pick-photos">
+                  {uploading ? <ActivityIndicator color={colors.primary} /> : <ImagePlus size={22} color={colors.primary} />}
+                  <Text style={styles.tileAddTxt}>
+                    {uploading ? 'Uploading…' : (photos.length === 0 ? 'Select photos' : 'Add more')}
+                  </Text>
                 </TouchableOpacity>
               ) : null}
             </View>

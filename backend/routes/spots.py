@@ -577,6 +577,18 @@ async def get_spot(spot_id: str, viewer: Optional[dict] = Depends(get_optional_u
     view["seasonal_timeline"] = seasonal_timeline
     view["seasonal_timeline_total"] = sum(len(v) for v in seasonal_timeline.values())
 
+    # CRITICAL (Apr 2026): strip legacy base64 data URLs from the
+    # payload before shipping it. With 20+ images plus an owner avatar
+    # any one of which could be 3-6 MB, the unslimmed response could
+    # approach MongoDB's 16 MB document limit and definitely times out
+    # the cover editor's parse step. The same helper is already applied
+    # to list endpoints; centralising it here closes the last hole.
+    try:
+        from server import _slim_feed_payload
+        _slim_feed_payload({"spots": [view], "similar_spots": view.get("similar_spots") or []})
+    except Exception:
+        pass
+
     return view
 
 # --- list_spots (server.py:1405-1536) ---

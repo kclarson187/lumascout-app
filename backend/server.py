@@ -1567,44 +1567,68 @@ async def home_feed(
 def _slim_feed_payload(payload: dict) -> None:
     """Remove heavy base64 data URLs from a feed payload, in place.
 
-    Any string value on a spot that:
-      • lives in one of the high-bloat keys (hero_cover_image_url,
-        admin_cover_override, images[].image_url, owner.avatar_url), AND
-      • starts with a `data:` URL scheme, AND
-      • exceeds 50 KB in length
-    is replaced with None (or stripped-out for admin_cover_override, whose
-    image_url is nested inside an object). Client components already handle
-    None covers (they fall back to the SpotImageFallback gradient with title
-    + shoot type overlay), so no visible regression.
+    Any image-shaped field that holds a `data:` URL is replaced with None
+    (or stripped-out for objects whose image_url is nested inside). The
+    50 KB ceiling was too lenient — any compressed avatar-sized JPEG fits
+    under it yet still wastes bandwidth across 80 spot cards (80 × 15 KB
+    = 1.2 MB). Apr 2026: dropped the limit to 2 KB (below which the
+    string is likely a 1x1 placeholder), expanded the owner sweep to
+    cover banner_url, and added spot-level sweeps for fields that were
+    leaking through (community_uploads_preview, reviews[].author.avatar_url,
+    spot_updates[].image_url).
     """
-    LIMIT = 50 * 1024  # 50 KB — anything heavier is almost certainly base64
+    LIMIT = 2 * 1024  # 2 KB
 
     def _is_heavy_b64(v: Any) -> bool:
         return isinstance(v, str) and v.startswith("data:") and len(v) > LIMIT
 
+    def _strip_user_obj(u: Any) -> None:
+        if not isinstance(u, dict):
+            return
+        # Both the short (`avatar_url`) and the legacy long-form
+        # (`avatar_image_url`) field names live in the wild — a handful
+        # of endpoints emit the longer ones. Sweep both, plus banner
+        # variants.
+        for k in (
+            "avatar_url", "banner_url", "cover_photo_url",
+            "avatar_image_url", "banner_image_url", "header_image_url",
+        ):
+            if _is_heavy_b64(u.get(k)):
+                u[k] = None
+
+    def _strip_image_list(items: Any) -> None:
+        if not isinstance(items, list):
+            return
+        for im in items:
+            if isinstance(im, dict) and _is_heavy_b64(im.get("image_url")):
+                im["image_url"] = None
+            if isinstance(im, dict):
+                # Some items embed the uploader — sweep their avatar too
+                _strip_user_obj(im.get("user") or im.get("author") or im.get("owner"))
+
     def _slim_spot(s: Any) -> None:
         if not isinstance(s, dict):
             return
-        # Top-level hero_cover_image_url (string).
         if _is_heavy_b64(s.get("hero_cover_image_url")):
             s["hero_cover_image_url"] = None
-        # admin_cover_override is an OBJECT { image_url, focal_x, ... } —
-        # strip the nested image_url when it's a heavy base64 blob.
         aco = s.get("admin_cover_override")
         if isinstance(aco, dict) and _is_heavy_b64(aco.get("image_url")):
             aco["image_url"] = None
         elif _is_heavy_b64(aco):
             s["admin_cover_override"] = None
-        # Each image in images[]
-        imgs = s.get("images")
-        if isinstance(imgs, list):
-            for img in imgs:
-                if isinstance(img, dict) and _is_heavy_b64(img.get("image_url")):
-                    img["image_url"] = None
-        # owner.avatar_url can also be a base64 blob (~100 KB × 80 spots = 8 MB)
-        owner = s.get("owner")
-        if isinstance(owner, dict) and _is_heavy_b64(owner.get("avatar_url")):
-            owner["avatar_url"] = None
+        _strip_image_list(s.get("images"))
+        _strip_image_list(s.get("community_uploads"))
+        _strip_image_list(s.get("community_uploads_preview"))
+        _strip_image_list(s.get("recent_uploads"))
+        _strip_image_list(s.get("ugc_uploads"))
+        _strip_image_list(s.get("spot_updates"))
+        _strip_user_obj(s.get("owner"))
+        _strip_user_obj(s.get("created_by_user"))
+        reviews = s.get("reviews")
+        if isinstance(reviews, list):
+            for rv in reviews:
+                if isinstance(rv, dict):
+                    _strip_user_obj(rv.get("author") or rv.get("user"))
 
     for k, v in payload.items():
         if isinstance(v, list):
@@ -6846,6 +6870,7 @@ from routes import push as _push_routes  # noqa: E402
 from routes import spots as _spots_routes  # noqa: E402
 from routes import users as _users_routes  # noqa: E402
 from routes import edit_requests as _edit_requests_routes  # noqa: E402
+from routes import uploads as _uploads_routes  # noqa: E402
 
 app.include_router(_scout_ai_routes.router)
 app.include_router(_support_routes.router)
@@ -6859,3 +6884,4 @@ app.include_router(_push_routes.router)
 app.include_router(_spots_routes.router)
 app.include_router(_users_routes.router)
 app.include_router(_edit_requests_routes.router)
+app.include_router(_uploads_routes.router)
