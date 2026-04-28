@@ -19,6 +19,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import * as Location from 'expo-location';
 import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown, AlertTriangle, Search, Map as MapIcon, Edit3, FileText, Sun, Eye, EyeOff, Sparkles, Circle, Camera } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
+import { uploadImageAsset } from '../../src/utils/upload-image';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii, SHOOT_TYPES, BEST_TIMES, PRIVACY_MODES } from '../../src/theme';
 import { LandAccessSelector } from '../../src/components/LandAccessSelector';
@@ -305,35 +306,41 @@ export default function AddSpot() {
     });
     if (res.canceled) return;
 
-    // Resize & compress each picked image so the final BSON doc stays well under
-    // MongoDB's 16MB hard cap. We cap width at 1280px and JPEG quality at 0.6
-    // which typically keeps each base64 payload under ~600KB.
+    // CRITICAL (Apr 2026): switched from base64-in-Mongo to hosted-URL.
+    // We still pre-compress locally with ImageManipulator so we burn
+    // less mobile bandwidth, but we now upload the JPEG bytes via
+    // multipart and store only the returned public URL in draft.images.
+    // The backend endpoint re-encodes + downscales server-side as a
+    // second safety net so any passthrough happens uniformly.
     const processed: { image_url: string; is_cover: boolean }[] = [];
     for (let i = 0; i < res.assets.length; i++) {
       const a = res.assets[i];
       try {
         const manipulated = await ImageManipulator.manipulateAsync(
           a.uri,
-          [{ resize: { width: 1280 } }],
+          [{ resize: { width: 1600 } }],    // allow slightly larger — backend caps at 2048
           {
-            compress: 0.6,
+            compress: 0.85,
             format: ImageManipulator.SaveFormat.JPEG,
-            base64: true,
+            base64: false,
           },
         );
-        if (manipulated.base64) {
-          processed.push({
-            image_url: `data:image/jpeg;base64,${manipulated.base64}`,
-            is_cover: draft.images.length === 0 && processed.length === 0,
-          });
-        }
+        const uploaded = await uploadImageAsset({
+          uri: manipulated.uri,
+          mimeType: 'image/jpeg',
+          fileName: `spot_${Date.now()}_${i}.jpg`,
+        });
+        processed.push({
+          image_url: uploaded.image_url,
+          is_cover: draft.images.length === 0 && processed.length === 0,
+        });
       } catch (err) {
-        console.warn('Image compression failed, skipping photo', err);
+        console.warn('Image upload failed, skipping photo', err);
       }
     }
 
     if (processed.length === 0) {
-      Alert.alert('Could not process photos', 'Please try picking different images.');
+      Alert.alert('Could not upload photos', 'Please try picking different images or check your connection.');
       return;
     }
     setDraft({ ...draft, images: [...draft.images, ...processed].slice(0, 8) });
