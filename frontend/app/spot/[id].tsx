@@ -186,9 +186,30 @@ export default function SpotDetail() {
             showsHorizontalScrollIndicator={false}
             onMomentumScrollEnd={(e) => setGalleryIdx(Math.round(e.nativeEvent.contentOffset.x / W))}
           >
-            {(spot.images || []).map((img: any, i: number) => (
-              <Image key={i} source={{ uri: img.image_url }} style={styles.heroImg} resizeMode="cover" />
-            ))}
+            {/* CRITICAL FIX (Apr 2026): previously this carousel just
+                rendered spot.images in raw array order, completely
+                ignoring the admin_cover_override / hero_cover_image_url
+                that the backend had already stamped. That's why the
+                user saw "Set as Featured Photo" never actually change
+                the detail page cover — the PATCH succeeded server-side,
+                hero_cover_image_url updated, but this component kept
+                painting images[0]. Now we reorder the carousel so the
+                spot.hero_cover_image_url (backend's source-of-truth
+                cover field) is ALWAYS first — matching Explore cards,
+                map previews, and saved lists. */}
+            {(() => {
+              const all = spot.images || [];
+              const coverUrl = spot.hero_cover_image_url || null;
+              const ordered = coverUrl
+                ? [
+                    ...all.filter((im: any) => im.image_url === coverUrl),
+                    ...all.filter((im: any) => im.image_url !== coverUrl),
+                  ]
+                : all;
+              return ordered.map((img: any, i: number) => (
+                <Image key={img.image_url || i} source={{ uri: img.image_url }} style={styles.heroImg} resizeMode="cover" />
+              ));
+            })()}
           </ScrollView>
           <LinearGradient
             colors={['rgba(10,10,10,0.85)', 'transparent']}
