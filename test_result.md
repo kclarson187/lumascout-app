@@ -13,6 +13,124 @@
 #====================================================================================================
 
 
+  - task: "Admin cover-photo workflow — GET /api/admin/spots/{id}/cover-editor, PATCH /api/admin/spots/{id}/cover, DELETE /api/admin/spots/{id}/cover, hero_cover_image_url propagation to /api/spots/{id} and /api/spots list (Apr 2026 diagnostic)"
+    implemented: true
+    working: true
+    file: "/app/backend/routes/admin.py (admin_set_spot_cover @ L660-719, admin_clear_spot_cover @ L722-739, admin_spot_cover_editor @ L781-846), /app/backend/server.py (prepare_spot_for_view hero_cover passthrough @ L319-343), /app/backend/routes/spots.py (get_spot detail decorate @ L487-554)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          FULL DIAGNOSTIC PASS — 11/11 steps green via
+          /app/backend_test_cover.py against
+          https://photo-finder-60.preview.emergentagent.com/api.
+          Super_admin: admin@lumascout.app / admin123 (user_6daa7d0a3abc).
+          Target spot used: spot_9e0aeddb2804 ("Pedernales Falls State
+          Park"), 2 images on the spot.
+
+          Step 1 PASS — picked spot_9e0aeddb2804 from /api/spots, 2 images.
+          Step 2 PASS — GET /api/admin/spots/{id}/cover-editor → 200,
+            payload contains images[] (each item has image_url, source,
+            caption, is_cover) AND admin_cover_override field (initially
+            null). Editor exposes 2 candidate images for this spot.
+          Step 3 PASS — IMG_B selected as the second image
+            (https://images.unsplash.com/photo-1470770841072-...).
+          Step 4 PASS — PATCH /api/admin/spots/{id}/cover with
+            {image_url: IMG_B, focal_x:0.5, focal_y:0.5, scale:1.0,
+            rotation:0} → 200 with body {ok:true, admin_cover_override}.
+            Raw admin_cover_override after step 4:
+              {
+                "image_url": ".../photo-1470770841072-...",
+                "focal_x": 0.5,
+                "focal_y": 0.5,
+                "scale": 1.0,
+                "rotation": 0,
+                "caption": null,
+                "set_by_user_id": "user_6daa7d0a3abc",
+                "set_at": "2026-04-28T05:04:42.380482+00:00"
+              }
+          Step 5 PASS (3/3) — GET /api/spots/{id} after PATCH:
+            - admin_cover_override.image_url == IMG_B ✓
+            - hero_cover_image_url == IMG_B ✓ (prepare_spot_for_view
+              priority 0 → admin_override branch fires correctly at
+              server.py:326-327)
+            - images[] still contains IMG_B (gallery intact, count=2) ✓
+            Raw admin_cover_override on /spots/{id} step 5:
+              {
+                "image_url": ".../photo-1470770841072-...",
+                "focal_x": 0.5, "focal_y": 0.5,
+                "scale": 1.0, "rotation": 0,
+                "caption": null,
+                "set_by_user_id": "user_6daa7d0a3abc",
+                "set_at": "2026-04-28T05:04:42.380000"
+              }
+          Step 6 PASS — GET /api/spots?limit=50 (Explore feed):
+            - spot_9e0aeddb2804 found in feed
+            - hero_cover_image_url on the LIST item == IMG_B ✓
+            - List + Detail agree on the same cover (no _decorate bug).
+          Step 7 PASS — PATCH again with IMG_C (different URL) → 200,
+            then GET /spots/{id}: admin_cover_override.image_url == IMG_C
+            AND hero_cover_image_url == IMG_C. Both fields update.
+          Step 8 PASS — DELETE /api/admin/spots/{id}/cover → 200.
+            Subsequent GET /spots/{id}: admin_cover_override == null,
+            hero_cover_image_url falls back to first is_cover image
+            (the natural gallery cover). Override fully cleared.
+          Step 9 PASS — RE-PATCH with cropped values
+            {focal_x:0.3, focal_y:0.7, scale:1.5, rotation:90}.
+            GET confirms admin_cover_override holds EXACTLY those values:
+              image_url: IMG_B
+              focal_x:  0.3
+              focal_y:  0.7
+              scale:    1.5
+              rotation: 90
+            Crop persists through DB roundtrip with no clamping/rounding
+            on these in-range values. (Note: implementation enforces
+            scale clamp [1.0, 3.5] and rotation in {0,90,180,270} per
+            admin.py:698-700 — 1.5 and 90 both legal so values survive.)
+
+          Cleanup: final DELETE /api/admin/spots/spot_9e0aeddb2804/cover
+          → 200 to leave the spot in its original state.
+
+          ── VERDICT ──────────────────────────────────────────────
+          The admin cover-photo workflow is fully functional end-to-end:
+          • Cover-editor payload returns the expected shape including
+            admin_cover_override.
+          • PATCH persists the override (image_url + focal point + scale
+            + rotation + caption + set_by_user_id + set_at).
+          • Detail endpoint /api/spots/{id} surfaces both
+            admin_cover_override AND a freshly computed
+            hero_cover_image_url that matches the override.
+          • List endpoint /api/spots also surfaces the same
+            hero_cover_image_url via prepare_spot_for_view passthrough
+            (server.py:319-343), so Explore + Detail are consistent.
+          • DELETE removes the override and the system falls back to
+            the gallery cover with no ghost data.
+          • Crop parameters (focal_x, focal_y, scale, rotation) round-
+            trip exactly.
+
+          NO BUGS REPRODUCED. The user-reported "cannot change cover" /
+          "Set as Featured Photo doesn't persist" symptoms are NOT
+          backend-side. Backend test harness:
+          /app/backend_test_cover.py.
+
+          NOTE: there is a permissions discrepancy between the editor
+          and the clear endpoint:
+          - GET /admin/spots/{id}/cover-editor → spot owner OR
+            admin/super_admin/moderator (admin.py:794-797)
+          - PATCH /admin/spots/{id}/cover     → spot owner OR
+            admin/super_admin/moderator (admin.py:677-680)
+          - DELETE /admin/spots/{id}/cover    → require_role("admin"),
+            i.e. admin/super_admin only (admin.py:723)
+          That asymmetry is intentional/by design but worth flagging
+          if the front-end ever calls DELETE while logged in as an
+          owner-only account — it will get a 403.
+
+
+
+
   - task: "Membership Tier Conversion Update — Free-tier caps (3 saves / 5 uploads / 3 outbound DM threads per month), updated /api/plans copy, updated /api/auth/me usage fields"
     implemented: true
     working: true
