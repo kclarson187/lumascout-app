@@ -13,7 +13,7 @@ import {
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
   ChevronLeft, Bookmark, Share2, Flag, MapPin, Sun, Sunrise, Sunset, Cloud,
@@ -91,6 +91,21 @@ export default function SpotDetail() {
 
   useEffect(() => { load(); }, [load]);
 
+  // BATCH 2 polish (Apr 2026): re-fetch whenever the screen regains
+  // focus. This is the fix for "I changed the cover photo but the
+  // detail page still shows the old one" — previously the screen only
+  // loaded once on mount, so returning from the cover editor showed a
+  // stale hero. Same fix also helps when admins approve edit requests
+  // and then swipe back to see the change live.
+  useFocusEffect(
+    useCallback(() => {
+      if (id) {
+        load();
+      }
+      return undefined;
+    }, [id, load]),
+  );
+
   const toggleSave = async () => {
     if (!user) return router.push('/(auth)/login');
     try {
@@ -108,12 +123,22 @@ export default function SpotDetail() {
   };
 
   const onShare = async () => {
-    // Item #2 (2026-04): Share a real public webpage for the spot, not
-    // just a text blob. Falls back to opening the app via deep link if
-    // installed on the recipient's device.
+    // BATCH 2 (Apr 2026): fixed the "share link returns 404" issue.
+    // Previously we hardcoded https://lumascout.app/spot.html?id=... —
+    // that hostname isn't registered/served anywhere, so every shared
+    // link 404'd. The Expo Router web build actually serves the
+    // /spot/[id] route at the same origin that backs the API. We build
+    // the share URL from EXPO_PUBLIC_BACKEND_URL (kept in sync across
+    // preview and production) so links always resolve.
     try {
-      const publicUrl = `https://lumascout.app/spot.html?id=${id}`;
-      const message = `Check out this photo location on LumaScout:\n${spot.title} — ${spot.city}, ${spot.state}\n${publicUrl}`;
+      const baseUrl = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/+$/, '');
+      const publicUrl = baseUrl
+        ? `${baseUrl}/spot/${id}`
+        : `https://lumascout.app/spot/${id}`; // last-resort fallback
+      const location = [spot.city, spot.state].filter(Boolean).join(', ');
+      const message = location
+        ? `${spot.title} — ${location}\n${publicUrl}`
+        : `${spot.title}\n${publicUrl}`;
       await Share.share({
         message,
         url: publicUrl,           // iOS uses the dedicated url field
@@ -581,6 +606,32 @@ export default function SpotDetail() {
             </>
           )}
 
+          {/* BATCH 2 (Apr 2026): discoverable admin photo manager
+              CTA. Prior to this, the only entry point was a small
+              wand icon in the hero overlay that users were missing.
+              This wide card makes "change the cover / reorder photos"
+              obvious right below the spot body — visible to admins
+              AND super admins. */}
+          {isAdminUser && (
+            <TouchableOpacity
+              style={sadStyles.photoMgrCard}
+              onPress={() => router.push(`/admin/spots/${id}/cover`)}
+              testID="admin-manage-photos"
+              activeOpacity={0.85}
+            >
+              <View style={sadStyles.photoMgrIcon}>
+                <Wand2 size={16} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={sadStyles.photoMgrTitle}>Manage photos</Text>
+                <Text style={sadStyles.photoMgrSub} numberOfLines={2}>
+                  Change the cover, reorder the gallery, remove weak photos. Updates Explore + map + saved instantly.
+                </Text>
+              </View>
+              <ChevronRight size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+          )}
+
           {/* Super-admin destructive controls — not shown to regular admins/users. */}
           {user?.role === 'super_admin' && (
             <View style={sadStyles.dangerZone}>
@@ -869,4 +920,19 @@ const sadStyles = StyleSheet.create({
     alignSelf: 'flex-start', paddingHorizontal: 14,
   },
   dangerBtnTxt: { color: '#fff', fontFamily: font.bodyBold, fontSize: 13 },
+  photoMgrCard: {
+    marginTop: space.xl,
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: colors.surface1,
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.35)',
+    borderRadius: radii.lg,
+    padding: space.md,
+  },
+  photoMgrIcon: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: 'rgba(245,166,35,0.14)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  photoMgrTitle: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 14 },
+  photoMgrSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2, lineHeight: 16 },
 });
