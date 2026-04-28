@@ -8809,12 +8809,31 @@ agent_communication:
 
   - task: "Uploader Edit Request workflow — backend (new collection + 5 endpoints: owner-submit / owner-list-mine / admin-list / admin-approve / admin-reject)"
     implemented: true
-    working: false
+    working: true
     file: "/app/backend/routes/edit_requests.py (NEW 270 lines, registered in server.py L6848/6863)"
-    stuck_count: 1
+    stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          RE-VALIDATION PASS — 64/64 PASS, 0 FAIL (2026-04-28 follow-up).
+          Harness: /app/backend_test.py against
+          https://photo-finder-60.preview.emergentagent.com/api.
+          After the main agent replaced the invalid `data=...` kwarg
+          with `spot_id=...` + `deep_link=...` + `actor_user_id=...`
+          in routes/edit_requests.py, both previously-failing
+          notification checks now pass:
+            · T6: GET /api/notifications as U1 returns a row with
+              kind="spot_edit_approved" after admin approves.
+            · T8: GET /api/notifications as U1 returns a row with
+              kind="spot_edit_rejected" AND body contains the
+              rejection note "not a known hazard".
+          All other assertions (T1-T5, T7, T9-T12 + cleanup) remain
+          green. No regressions in the edit-request workflow. Task
+          is launch-ready.
+
         -working: false
         -agent: "testing"
         -comment: |
