@@ -71,7 +71,20 @@ function SpotCardImpl({
   const rawCover =
     spot.hero_cover_image_url
     || (spot.images && (spot.images.find((i: any) => i.is_cover) || spot.images[0]))?.image_url;
-  const cover = rawCover && typeof rawCover === 'string' && rawCover.trim() !== '' ? rawCover : null;
+  // Resolve relative `/api/uploads/...` paths to absolute URLs — on
+  // native iOS / Android React Native <Image> cannot resolve relative
+  // URLs and would render blank tiles for freshly-uploaded spots.
+  const resolvedCover = (() => {
+    if (!rawCover || typeof rawCover !== 'string' || !rawCover.trim()) return null;
+    if (/^https?:\/\//i.test(rawCover)) return rawCover;
+    if (rawCover.startsWith('data:')) return rawCover;
+    if (rawCover.startsWith('/')) {
+      const base = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/+$/, '');
+      return base ? `${base}${rawCover}` : rawCover;
+    }
+    return rawCover;
+  })();
+  const cover = resolvedCover;
   const isPremium = spot.privacy_mode === 'premium';
   const isHydrated = !!spot?.title;
 

@@ -6,6 +6,7 @@ import { ChevronLeft, ImagePlus, X, Camera } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { api } from '../../../src/api';
 import { uploadImageAssets } from '../../../src/utils/upload-image';
+import { resolveImageUrl } from '../../../src/utils/image-url';
 import { colors, font, space, radii } from '../../../src/theme';
 import { CONDITION_TAGS } from '../../../src/components/FreshnessBits';
 import KeyboardSafe from '../../../src/components/KeyboardSafe';
@@ -108,8 +109,8 @@ export default function UploadScreen() {
             <Text style={styles.sectionTitle}>Photos <Text style={styles.req}>·  up to 12</Text></Text>
             <View style={styles.gridWrap}>
               {photos.map((uri, i) => (
-                <View key={i} style={styles.tileWrap}>
-                  <Image source={{ uri }} style={styles.tileImg} />
+                <View key={uri + i} style={styles.tileWrap}>
+                  <Image source={{ uri: resolveImageUrl(uri) }} style={styles.tileImg} />
                   <TouchableOpacity onPress={() => removePhoto(i)} style={styles.tileClose} testID={`remove-photo-${i}`}>
                     <X size={14} color={colors.textInverse} />
                   </TouchableOpacity>
