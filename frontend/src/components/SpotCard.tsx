@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, memo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Pressable, Platform, Animated, Easing } from 'react-native';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { Bookmark, Star, Shield, Lock, EyeOff, MapPin, Sun, MoreVertical, TrendingUp, Sparkles, ShieldCheck } from 'lucide-react-native';
+import { Bookmark, Star, Shield, Lock, EyeOff, MapPin, MoreVertical, TrendingUp, Sparkles, ShieldCheck } from 'lucide-react-native';
 import { formatDistance } from '../utils/distance';
 import { colors, radii, space, font } from '../theme';
 import { api } from '../api';
@@ -11,7 +11,7 @@ import FreshnessBadge from './FreshnessBadge';
 import VerifiedBadge from './VerifiedBadge';
 import AdminSpotMenu from './AdminSpotMenu';
 import SpotImageFallback from './SpotImageFallback';
-import { goldenHourLabel } from '../utils/sun';
+import { goldenHourLabel as _unusedGoldenHourLabel } from '../utils/sun'; // kept for other consumers; eslint-disable-line
 
 export type Spot = any;
 
@@ -206,16 +206,61 @@ function SpotCardImpl({
 
         {isHydrated && (
           <View style={styles.overlayBottom}>
-            <ScoreBadge score={spot.shoot_score || 0} />
-            <FreshnessBadge freshness={spot.freshness} label={spot.freshness_label} variant="compact" />
-            {!!goldenHourLabel(spot.latitude, spot.longitude) && (
-              <View style={styles.goldenPill}>
-                <Sun size={10} color={colors.primary} />
-                <Text style={styles.goldenPillTxt} numberOfLines={1}>
-                  {goldenHourLabel(spot.latitude, spot.longitude)}
-                </Text>
-              </View>
+            {/* BATCH 2 (Apr 2026) — replaced the static 100%-ring +
+                "Best at [golden hour]" chips with dynamic metadata so
+                Explore cards feel alive and honest. The shoot score
+                only shows when it's actually meaningful (< 100). The
+                second chip cycles through trending → new check-ins →
+                saves count → new — picking the first real signal we
+                have. If there's genuinely nothing to say, we say
+                nothing (we never fake a value). */}
+            {typeof spot.shoot_score === 'number' && spot.shoot_score > 0 && spot.shoot_score < 100 && (
+              <ScoreBadge score={spot.shoot_score} />
             )}
+            <FreshnessBadge freshness={spot.freshness} label={spot.freshness_label} variant="compact" />
+            {(() => {
+              // Cascade real signals — first win displays, never multiple.
+              if (spot.is_trending) {
+                return (
+                  <View style={[styles.goldenPill, { backgroundColor: 'rgba(245,166,35,0.9)', borderColor: colors.primary }]}>
+                    <Text style={[styles.goldenPillTxt, { color: '#000', fontFamily: font.bodyBold }]} numberOfLines={1}>
+                      Trending now
+                    </Text>
+                  </View>
+                );
+              }
+              const newPosts = Number(spot.recent_upload_count_7d || 0);
+              if (newPosts > 0) {
+                return (
+                  <View style={[styles.goldenPill, { backgroundColor: 'rgba(16,185,129,0.9)', borderColor: colors.success }]}>
+                    <Text style={[styles.goldenPillTxt, { color: '#000', fontFamily: font.bodyBold }]} numberOfLines={1}>
+                      {newPosts} new {newPosts === 1 ? 'post' : 'posts'}
+                    </Text>
+                  </View>
+                );
+              }
+              const saves = Number(spot.save_count || 0);
+              if (saves >= 3) {
+                return (
+                  <View style={styles.goldenPill}>
+                    <Bookmark size={10} color={colors.primary} fill={colors.primary} />
+                    <Text style={styles.goldenPillTxt} numberOfLines={1}>
+                      {saves >= 100 ? '99+' : saves} {saves === 1 ? 'save' : 'saves'}
+                    </Text>
+                  </View>
+                );
+              }
+              if (spot.is_new) {
+                return (
+                  <View style={[styles.goldenPill, { backgroundColor: 'rgba(96,165,250,0.9)', borderColor: '#60a5fa' }]}>
+                    <Text style={[styles.goldenPillTxt, { color: '#000', fontFamily: font.bodyBold }]} numberOfLines={1}>
+                      New
+                    </Text>
+                  </View>
+                );
+              }
+              return null;
+            })()}
           </View>
         )}
       </View>
