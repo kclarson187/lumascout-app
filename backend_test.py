@@ -1,497 +1,434 @@
 """
-Backend tests for Photographer Directory:
-  GET /api/directory
-  GET /api/directory/suggested
+Validation harness for the NEW Uploader Edit Request workflow.
+
+Endpoints under test (all /api prefixed):
+  POST /spots/{spot_id}/edit-request                     - owner submit
+  GET  /spots/{spot_id}/edit-requests/mine               - owner list mine
+  GET  /admin/edit-requests?status=pending|approved|...  - admin queue
+  POST /admin/edit-requests/{request_id}/approve         - admin approve
+  POST /admin/edit-requests/{request_id}/reject          - admin reject (note required)
+
+Source: /app/backend/routes/edit_requests.py (registered in server.py L6863).
 """
-import json
+from __future__ import annotations
+
 import os
 import sys
-import time
 import uuid
-from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 import requests
 
-BASE = "http://localhost:8001/api"
+BASE_URL = os.environ.get(
+    "BACKEND_URL",
+    "https://photo-finder-60.preview.emergentagent.com",
+).rstrip("/")
+API = f"{BASE_URL}/api"
 
 ADMIN_EMAIL = "admin@lumascout.app"
-ADMIN_PASSWORD = "admin123"
+ADMIN_PASS = "admin123"
 
-results = []
-def rec(name, ok, detail=""):
-    status = "PASS" if ok else "FAIL"
-    print(f"[{status}] {name}{(' — ' + detail) if detail else ''}")
-    results.append((name, ok, detail))
+PASS = 0
+FAIL = 0
+FAILURES: list[str] = []
 
 
-def login(email, password):
-    r = requests.post(f"{BASE}/auth/login", json={"email": email, "password": password}, timeout=15)
+def _record(ok: bool, name: str, detail: str = "") -> None:
+    global PASS, FAIL
+    if ok:
+        PASS += 1
+        print(f"  PASS  {name}")
+    else:
+        FAIL += 1
+        FAILURES.append(f"{name} :: {detail}")
+        print(f"  FAIL  {name}  -- {detail}")
+
+
+def assert_eq(actual, expected, name: str) -> bool:
+    ok = actual == expected
+    _record(ok, name, f"expected={expected!r} got={actual!r}")
+    return ok
+
+
+def assert_true(cond: bool, name: str, detail: str = "") -> bool:
+    _record(bool(cond), name, detail)
+    return bool(cond)
+
+
+def _hdr(token: Optional[str]) -> dict:
+    h = {"Content-Type": "application/json"}
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    return h
+
+
+def post(path: str, body: dict, token: Optional[str] = None) -> requests.Response:
+    return requests.post(f"{API}{path}", headers=_hdr(token), json=body, timeout=30)
+
+
+def get(path: str, token: Optional[str] = None) -> requests.Response:
+    return requests.get(f"{API}{path}", headers=_hdr(token), timeout=30)
+
+
+def delete(path: str, body: Optional[dict] = None, token: Optional[str] = None) -> requests.Response:
+    return requests.delete(f"{API}{path}", headers=_hdr(token), json=body or {}, timeout=30)
+
+
+def login(email: str, password: str) -> str:
+    r = post("/auth/login", {"email": email, "password": password})
     if r.status_code != 200:
-        raise SystemExit(f"login failed {r.status_code}: {r.text}")
-    return r.json()
+        raise RuntimeError(f"login failed for {email}: {r.status_code} {r.text}")
+    return r.json()["token"]
 
 
-def register(email, password, name, username):
-    r = requests.post(f"{BASE}/auth/register", json={
-        "email": email, "password": password, "name": name,
-    }, timeout=15)
+def register_free_user(prefix: str = "owner") -> tuple[str, dict]:
+    sfx = uuid.uuid4().hex[:8]
+    email = f"{prefix}_{sfx}@lumascout-qa.com"
+    password = "QaPass!2026"
+    r = post("/auth/register", {
+        "email": email,
+        "password": password,
+        "name": f"QA {prefix.title()} {sfx[:4]}",
+    })
     if r.status_code != 200:
-        raise SystemExit(f"register failed {r.status_code}: {r.text}")
-    return r.json()
+        raise RuntimeError(f"register failed: {r.status_code} {r.text}")
+    user = r.json().get("user") or {}
+    token = login(email, password)
+    user["__token"] = token
+    user["__email"] = email
+    user["__password"] = password
+    return token, user
 
 
-def headers(token):
-    return {"Authorization": f"Bearer {token}"}
+def main() -> int:
+    print(f"[edit_requests] target API: {API}\n")
 
+    print("[setup] login admin")
+    admin_token = login(ADMIN_EMAIL, ADMIN_PASS)
+    _record(True, "Admin login", "")
 
-def pretty(d, max_len=400):
-    s = json.dumps(d, default=str)
-    return s if len(s) < max_len else s[:max_len] + "..."
+    # Resolve admin user_id for later asserts
+    r = get("/auth/me", admin_token)
+    admin_user_id = (r.json() or {}).get("user_id") if r.status_code == 200 else None
+    print(f"  admin user_id={admin_user_id}")
 
+    print("[setup] register free user U1 (owner)")
+    u1_token, u1 = register_free_user("u1")
+    print(f"  -> U1 user_id={u1.get('user_id')} email={u1['__email']}")
 
-def main():
-    admin = login(ADMIN_EMAIL, ADMIN_PASSWORD)
-    admin_token = admin["token"]
-    admin_user = admin["user"]
-    admin_id = admin_user["user_id"]
-    admin_city = admin_user.get("city") or ""
-    admin_state = admin_user.get("state") or ""
-    print(f"Admin: {admin_id} city={admin_city!r} state={admin_state!r}")
+    # T1
+    print("\n[T1] Owner creates public spot 'Test Spot QA' w/ 2 images")
+    img_a = (
+        "data:image/png;base64,"
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAAWgmWQ0AAAAASUVORK5CYII="
+        "#qa-img-a-" + uuid.uuid4().hex[:6]
+    )
+    img_b = (
+        "data:image/png;base64,"
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAAWgmWQ0AAAAASUVORK5CYII="
+        "#qa-img-b-" + uuid.uuid4().hex[:6]
+    )
+    spot_body = {
+        "title": "Test Spot QA",
+        "description": "Original description",
+        "latitude": 29.4241,
+        "longitude": -98.4936,
+        "city": "San Antonio",
+        "state": "TX",
+        "country": "USA",
+        "privacy_mode": "public",
+        "save_as_draft": False,
+        "shoot_types": ["Portrait"],
+        "images": [
+            {"image_url": img_a, "caption": "first", "is_cover": True},
+            {"image_url": img_b, "caption": "second", "is_cover": False},
+        ],
+        "tips": "Great at sunset",
+        "best_time_of_day": "Sunset",
+        "parking_notes": "Street parking",
+        "access_notes": "Walk-in",
+        "safety_notes": "Watch traffic",
+        "best_light_notes": "PM golden",
+    }
+    r = post("/spots", spot_body, u1_token)
+    assert_eq(r.status_code, 200, "T1 POST /spots returns 200")
+    if r.status_code != 200:
+        print("BODY:", r.text[:500])
+        return _emit_summary()
+    spot = r.json()
+    SPOT_A = spot["spot_id"]
+    print(f"  -> SPOT_A={SPOT_A}")
+    server_images = spot.get("images") or []
+    assert_true(len(server_images) >= 2, "T1 spot has >=2 images", f"got {len(server_images)}")
+    first_url = server_images[0]["image_url"]
+    second_url = server_images[1]["image_url"]
+    assert_true(first_url != second_url, "T1 image URLs are distinct", "")
 
-    # ===== (1) GET /api/directory basic =====
-    print("\n=== (1) Basic /api/directory ===")
-    r = requests.get(f"{BASE}/directory", params={"limit": 5}, timeout=20)
-    ok = r.status_code == 200
-    rec("1a unauth GET /directory?limit=5 → 200", ok, f"status={r.status_code}")
-    body = r.json() if ok else {}
-    expected_keys = {"items", "next_cursor", "has_more", "sort", "filter"}
-    rec("1b unauth response shape has {items,next_cursor,has_more,sort,filter}",
-        expected_keys.issubset(set(body.keys())),
-        f"keys={set(body.keys())}")
-    items_unauth = body.get("items", [])
-    rec("1c unauth items is a list", isinstance(items_unauth, list), f"len={len(items_unauth)}")
-    # is_following / is_blocked NOT set when unauthenticated
-    has_follow_field = any("is_following" in it for it in items_unauth)
-    has_block_field = any("is_blocked" in it for it in items_unauth)
-    rec("1d unauth items don't carry is_following/is_blocked",
-        (not has_follow_field) and (not has_block_field),
-        f"is_following_present={has_follow_field} is_blocked_present={has_block_field}")
+    # T2
+    print("\n[T2] Owner submits edit request {title, description}")
+    r = post(
+        f"/spots/{SPOT_A}/edit-request",
+        {
+            "changes": {"title": "Test Spot QA (new)", "description": "updated"},
+            "reason_note": "typo fix",
+        },
+        u1_token,
+    )
+    assert_eq(r.status_code, 200, "T2 owner submit returns 200")
+    body = r.json() if r.status_code == 200 else {}
+    REQ_A = body.get("request_id")
+    assert_true(bool(REQ_A) and REQ_A.startswith("edr_"), "T2 request_id present (edr_*)", str(body)[:200])
+    assert_eq(body.get("status"), "pending", "T2 status==pending")
+    changes = body.get("changes") or {}
+    assert_eq(changes.get("title"), "Test Spot QA (new)", "T2 changes.title echoed")
+    assert_eq(changes.get("description"), "updated", "T2 changes.description echoed")
+    before = body.get("before") or {}
+    assert_eq(before.get("title"), "Test Spot QA", "T2 before.title=='Test Spot QA'")
+    assert_true("description" in before, "T2 before contains description key", str(before)[:160])
 
-    # Sample shape
-    if items_unauth:
-        sample = items_unauth[0]
-        print(f"  sample unauth item keys: {sorted(sample.keys())}")
-
-    # Auth call
-    r = requests.get(f"{BASE}/directory", params={"limit": 5}, headers=headers(admin_token), timeout=20)
-    ok = r.status_code == 200
-    rec("1e auth GET /directory?limit=5 → 200", ok, f"status={r.status_code}")
-    body_auth = r.json() if ok else {}
-    items_auth = body_auth.get("items", [])
-    if items_auth:
-        rec("1f auth items have is_following field",
-            all("is_following" in it for it in items_auth),
-            f"missing on { [it.get('user_id') for it in items_auth if 'is_following' not in it] }")
-        rec("1g auth items have is_blocked field",
-            all("is_blocked" in it for it in items_auth),
-            f"")
-    else:
-        rec("1f auth items have is_following field", False, "no items returned to inspect")
-
-    # Payload sanity (under ~200KB total)
-    payload_size = len(r.content)
-    rec("1h auth response under 200KB for limit=5",
-        payload_size < 200 * 1024,
-        f"size={payload_size} bytes")
-
-    # Never returns viewer themselves
-    rec("1i auth never returns viewer (admin) in items",
-        all(it.get("user_id") != admin_id for it in items_auth),
-        f"")
-
-    # ===== (2) Sort variants =====
-    print("\n=== (2) Sort variants ===")
-
-    # sort=name
-    r = requests.get(f"{BASE}/directory", params={"sort": "name", "limit": 20},
-                     headers=headers(admin_token), timeout=20)
-    items = r.json().get("items", []) if r.status_code == 200 else []
-    names = [(it.get("name") or "").lower() for it in items]
-    rec("2a sort=name → 200", r.status_code == 200, f"status={r.status_code}")
-    rec("2b sort=name items sorted alphabetically (case-insensitive asc)",
-        names == sorted(names),
-        f"first5={names[:5]}")
-
-    # sort=new
-    r = requests.get(f"{BASE}/directory", params={"sort": "new", "limit": 20},
-                     headers=headers(admin_token), timeout=20)
-    items_new = r.json().get("items", []) if r.status_code == 200 else []
-    rec("2c sort=new → 200", r.status_code == 200, "")
-    # created_at DESC -- skip strict check on plan_rank; check overall non-increasing within same plan
-    cas = []
-    for it in items_new:
-        ca = it.get("created_at")
-        if isinstance(ca, str):
-            try:
-                ca = datetime.fromisoformat(ca.replace("Z", "+00:00"))
-            except Exception:
-                ca = None
-        cas.append(ca)
-    # Group by plan_rank (elite > pro > free); within each plan_rank, expect DESC
-    def plan_rank(it):
-        p = it.get("plan") or "free"
-        if p == "elite": return 2
-        if p == "pro": return 1
-        return 0
-    sorted_within = True
-    last_rank = None
-    last_ca = None
-    for it, ca in zip(items_new, cas):
-        pr = plan_rank(it)
-        if last_rank is None or pr != last_rank:
-            last_rank = pr
-            last_ca = ca
-            continue
-        # same plan rank
-        if last_ca and ca and ca > last_ca:
-            sorted_within = False
-            break
-        last_ca = ca
-    rec("2d sort=new items DESC by created_at within plan tiers", sorted_within,
-        f"count={len(items_new)}")
-
-    # sort=popular: follower_count DESC, plan_rank tiebreak elite>pro>free
-    r = requests.get(f"{BASE}/directory", params={"sort": "popular", "limit": 20},
-                     headers=headers(admin_token), timeout=20)
-    items_pop = r.json().get("items", []) if r.status_code == 200 else []
-    rec("2e sort=popular → 200", r.status_code == 200, "")
-    # The implementation sorts plan_rank DESC first, then follower_count DESC
-    # so check: plan_rank non-increasing globally, follower_count non-increasing within same plan_rank
-    plan_ranks = [plan_rank(it) for it in items_pop]
-    pr_desc = all(plan_ranks[i] >= plan_ranks[i + 1] for i in range(len(plan_ranks) - 1))
-    rec("2f sort=popular plan_rank non-increasing (Elite > Pro > Free)", pr_desc,
-        f"plan_ranks={plan_ranks}")
-    # within each plan_rank, follower_count DESC
-    fc_desc = True
-    for pr in (2, 1, 0):
-        chunk = [it.get("follower_count") or 0 for it in items_pop if plan_rank(it) == pr]
-        if any(chunk[i] < chunk[i + 1] for i in range(len(chunk) - 1)):
-            fc_desc = False
-            break
-    rec("2g sort=popular follower_count DESC within tier", fc_desc, "")
-
-    # sort=recent: last_active_at DESC, plan_rank tiebreak
-    r = requests.get(f"{BASE}/directory", params={"sort": "recent", "limit": 20},
-                     headers=headers(admin_token), timeout=20)
-    items_rec = r.json().get("items", []) if r.status_code == 200 else []
-    rec("2h sort=recent → 200", r.status_code == 200, "")
-    plan_ranks_rec = [plan_rank(it) for it in items_rec]
-    pr_desc_rec = all(plan_ranks_rec[i] >= plan_ranks_rec[i + 1] for i in range(len(plan_ranks_rec) - 1))
-    rec("2i sort=recent plan_rank non-increasing", pr_desc_rec, f"plan_ranks={plan_ranks_rec[:10]}")
-    # last_active_at DESC within tier
-    def parse_dt(v):
-        if isinstance(v, datetime): return v
-        if isinstance(v, str):
-            try:
-                return datetime.fromisoformat(v.replace("Z", "+00:00"))
-            except Exception:
-                return None
-        return None
-    la_desc = True
-    for pr in (2, 1, 0):
-        chunk = [parse_dt(it.get("last_active_at")) for it in items_rec if plan_rank(it) == pr]
-        non_null = [c for c in chunk if c]
-        # Just check non-null suffix is DESC
-        for i in range(len(non_null) - 1):
-            if non_null[i] < non_null[i + 1]:
-                la_desc = False
-                break
-        if not la_desc: break
-    rec("2j sort=recent last_active_at DESC within tier (where present)", la_desc, "")
-
-    # sort=nearby — admin city = San Antonio
-    r = requests.get(f"{BASE}/directory", params={"sort": "nearby", "limit": 20},
-                     headers=headers(admin_token), timeout=20)
-    items_nb = r.json().get("items", []) if r.status_code == 200 else []
-    rec("2k sort=nearby → 200", r.status_code == 200, "")
-    if admin_city:
-        cities = [(it.get("city") or "") for it in items_nb]
-        # Find first non-admin-city item; once a non-admin-city item appears, no admin-city item should follow
-        seen_other_city = False
-        order_ok = True
-        first_non_match_index = None
-        for idx, c in enumerate(cities):
-            if c == admin_city:
-                if seen_other_city:
-                    order_ok = False
-                    break
-            else:
-                if not seen_other_city:
-                    first_non_match_index = idx
-                seen_other_city = True
-        rec("2l sort=nearby admin-city users appear before others", order_ok,
-            f"admin_city={admin_city!r}, first_non_admin_idx={first_non_match_index}, cities[:10]={cities[:10]}")
-    else:
-        rec("2l sort=nearby admin-city ordering", True, "admin city empty — skip")
-
-    # ===== (3) Filter variants =====
-    print("\n=== (3) Filter variants ===")
-
-    # verified
-    r = requests.get(f"{BASE}/directory", params={"filter": "verified", "limit": 30},
-                     headers=headers(admin_token), timeout=20)
-    items_v = r.json().get("items", []) if r.status_code == 200 else []
-    all_verified = all((it.get("verification_status") == "verified") for it in items_v) if items_v else True
-    rec("3a filter=verified all items verified", all_verified,
-        f"count={len(items_v)}")
-
-    # elite
-    r = requests.get(f"{BASE}/directory", params={"filter": "elite", "limit": 30},
-                     headers=headers(admin_token), timeout=20)
-    items_e = r.json().get("items", []) if r.status_code == 200 else []
-    all_elite = all((it.get("plan") == "elite") for it in items_e) if items_e else True
-    rec("3b filter=elite all plan=elite", all_elite,
-        f"count={len(items_e)}, plans={set(it.get('plan') for it in items_e)}")
-
-    # pro
-    r = requests.get(f"{BASE}/directory", params={"filter": "pro", "limit": 30},
-                     headers=headers(admin_token), timeout=20)
-    items_p = r.json().get("items", []) if r.status_code == 200 else []
-    all_pro_or_elite = all((it.get("plan") in ("pro", "elite")) for it in items_p) if items_p else True
-    rec("3c filter=pro all plan in {pro,elite}", all_pro_or_elite,
-        f"count={len(items_p)}, plans={set(it.get('plan') for it in items_p)}")
-
-    # new (within 30d)
-    r = requests.get(f"{BASE}/directory", params={"filter": "new", "limit": 30},
-                     headers=headers(admin_token), timeout=20)
-    items_n = r.json().get("items", []) if r.status_code == 200 else []
-    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-    all_within = True
-    for it in items_n:
-        ca = parse_dt(it.get("created_at"))
-        if ca and ca.tzinfo is None:
-            ca = ca.replace(tzinfo=timezone.utc)
-        if not ca or ca < cutoff:
-            all_within = False
-            break
-    rec("3d filter=new all created_at within 30d", all_within,
-        f"count={len(items_n)}")
-
-    # popular (>=50 followers)
-    r = requests.get(f"{BASE}/directory", params={"filter": "popular", "limit": 30},
-                     headers=headers(admin_token), timeout=20)
-    items_pp = r.json().get("items", []) if r.status_code == 200 else []
-    all_50 = all((it.get("follower_count") or 0) >= 50 for it in items_pp) if items_pp else True
-    rec("3e filter=popular all follower_count>=50", all_50,
-        f"count={len(items_pp)}, follower_counts={[it.get('follower_count') for it in items_pp[:10]]}")
-
-    # available
-    r = requests.get(f"{BASE}/directory", params={"filter": "available", "limit": 30},
-                     headers=headers(admin_token), timeout=20)
-    items_av = r.json().get("items", []) if r.status_code == 200 else []
-    all_av = all(
-        bool(it.get("available_for_referrals")) or bool(it.get("available_for_second_shooter"))
-        for it in items_av
-    ) if items_av else True
-    rec("3f filter=available all have either available_for_referrals or available_for_second_shooter",
-        all_av, f"count={len(items_av)}")
-
-    # nearby (when admin has city set)
-    if admin_city:
-        r = requests.get(f"{BASE}/directory", params={"filter": "nearby", "limit": 30},
-                         headers=headers(admin_token), timeout=20)
-        items_nb2 = r.json().get("items", []) if r.status_code == 200 else []
-        all_city = all((it.get("city") == admin_city) for it in items_nb2) if items_nb2 else True
-        rec("3g filter=nearby all city == admin.city", all_city,
-            f"admin_city={admin_city}, count={len(items_nb2)}, cities={set(it.get('city') for it in items_nb2)}")
-    else:
-        rec("3g filter=nearby", True, "admin city empty — skip")
-
-    # ===== (4) Multi-token search =====
-    print("\n=== (4) Multi-token search ===")
-    r = requests.get(f"{BASE}/directory", params={"q": "test", "limit": 30},
-                     headers=headers(admin_token), timeout=20)
-    items_q = r.json().get("items", []) if r.status_code == 200 else []
-    matched = True
-    for it in items_q:
-        text = " ".join(str(v) for v in [
-            it.get("name"), it.get("username"), it.get("city"), it.get("state"),
-            " ".join(it.get("specialties") or []), it.get("bio"),
-        ] if v is not None).lower()
-        if "test" not in text:
-            matched = False
-            print(f"  miss: {it.get('user_id')} text={text[:200]}")
-            break
-    rec("4a q='test' all items contain 'test' across indexed fields", matched,
-        f"count={len(items_q)}")
-
-    # two tokens
-    r = requests.get(f"{BASE}/directory", params={"q": "fresh user", "limit": 30},
-                     headers=headers(admin_token), timeout=20)
-    items_q2 = r.json().get("items", []) if r.status_code == 200 else []
-    both = True
-    for it in items_q2:
-        text = " ".join(str(v) for v in [
-            it.get("name"), it.get("username"), it.get("city"), it.get("state"),
-            " ".join(it.get("specialties") or []), it.get("bio"),
-        ] if v is not None).lower()
-        if "fresh" not in text or "user" not in text:
-            both = False
-            break
-    rec("4b q='fresh user' all items match BOTH tokens", both,
-        f"count={len(items_q2)}")
-
-    # nonexistent
-    r = requests.get(f"{BASE}/directory", params={"q": "zzxxnonexistent123", "limit": 5},
-                     headers=headers(admin_token), timeout=20)
-    items_q3 = r.json().get("items", []) if r.status_code == 200 else []
-    rec("4c q='zzxxnonexistent123' returns empty items", len(items_q3) == 0,
-        f"count={len(items_q3)}")
-
-    # ===== (5) specialty / city / state =====
-    print("\n=== (5) specialty / city / state ===")
-    r = requests.get(f"{BASE}/directory", params={"specialty": "Wedding", "limit": 30},
-                     headers=headers(admin_token), timeout=20)
-    items_w = r.json().get("items", []) if r.status_code == 200 else []
-    all_w = all(any("wedding" in (s or "").lower() for s in (it.get("specialties") or []))
-                for it in items_w) if items_w else True
-    rec("5a specialty=Wedding items contain Wedding in specialties", all_w,
-        f"count={len(items_w)}")
-
-    r = requests.get(f"{BASE}/directory", params={"city": "Austin", "limit": 30},
-                     headers=headers(admin_token), timeout=20)
-    items_ac = r.json().get("items", []) if r.status_code == 200 else []
-    all_ac = all((it.get("city") or "").lower().startswith("austin") for it in items_ac) if items_ac else True
-    rec("5b city=Austin all items city starts with 'Austin'", all_ac,
-        f"count={len(items_ac)}, cities={set(it.get('city') for it in items_ac)}")
-
-    r = requests.get(f"{BASE}/directory", params={"state": "TX", "limit": 30},
-                     headers=headers(admin_token), timeout=20)
-    items_tx = r.json().get("items", []) if r.status_code == 200 else []
-    all_tx = all((it.get("state") or "").upper().startswith("TX") for it in items_tx) if items_tx else True
-    rec("5c state=TX all items state starts with 'TX'", all_tx,
-        f"count={len(items_tx)}, states={set(it.get('state') for it in items_tx)}")
-
-    # ===== (6) Pagination =====
-    print("\n=== (6) Pagination ===")
-    r = requests.get(f"{BASE}/directory", params={"cursor": 0, "limit": 5, "sort": "popular"},
-                     headers=headers(admin_token), timeout=20)
-    body0 = r.json() if r.status_code == 200 else {}
-    items_pg0 = body0.get("items", [])
-    rec("6a cursor=0 limit=5 → 200", r.status_code == 200, "")
-    rec("6b cursor=0 limit=5 next_cursor==5 when has_more",
-        (body0.get("next_cursor") == 5) if body0.get("has_more") else (body0.get("next_cursor") is None),
-        f"next_cursor={body0.get('next_cursor')}, has_more={body0.get('has_more')}")
-    rec("6c has_more is bool", isinstance(body0.get("has_more"), bool), "")
-
-    if body0.get("has_more"):
-        r = requests.get(f"{BASE}/directory", params={"cursor": 5, "limit": 5, "sort": "popular"},
-                         headers=headers(admin_token), timeout=20)
-        body1 = r.json() if r.status_code == 200 else {}
-        items_pg1 = body1.get("items", [])
-        ids0 = {it["user_id"] for it in items_pg0}
-        ids1 = {it["user_id"] for it in items_pg1}
-        rec("6d cursor=5 page returns different items", len(ids0 & ids1) == 0,
-            f"overlap={ids0 & ids1}")
-    else:
-        rec("6d cursor=5 page returns different items", True, "skipped: no second page")
-
-    # When fewer than limit remain → next_cursor null, has_more false
-    # Use a very large cursor
-    r = requests.get(f"{BASE}/directory", params={"cursor": 99999, "limit": 5},
-                     headers=headers(admin_token), timeout=20)
-    body_end = r.json() if r.status_code == 200 else {}
-    rec("6e cursor=99999 → has_more false, next_cursor null",
-        body_end.get("has_more") is False and body_end.get("next_cursor") is None,
-        f"has_more={body_end.get('has_more')}, next_cursor={body_end.get('next_cursor')}")
-
-    # Never returns viewer themselves — pull a wide sample
-    r = requests.get(f"{BASE}/directory", params={"limit": 50},
-                     headers=headers(admin_token), timeout=20)
-    items_wide = r.json().get("items", []) if r.status_code == 200 else []
-    rec("6f viewer never in items (across wide page)",
-        all(it.get("user_id") != admin_id for it in items_wide),
-        f"count={len(items_wide)}")
-
-    # ===== (7) GET /api/directory/suggested =====
-    print("\n=== (7) /api/directory/suggested ===")
-    r = requests.get(f"{BASE}/directory/suggested", params={"limit": 5},
-                     headers=headers(admin_token), timeout=20)
-    rec("7a auth GET /directory/suggested?limit=5 → 200", r.status_code == 200,
-        f"status={r.status_code}, body={pretty(r.json() if r.status_code==200 else r.text, 200)}")
-    s_body = r.json() if r.status_code == 200 else {}
-    s_items = s_body.get("items", [])
-    rec("7b items list length <= 5", len(s_items) <= 5, f"len={len(s_items)}")
-    rec("7c admin not included in items",
-        all(it.get("user_id") != admin_id for it in s_items),
-        "")
-
-    # Verify against db.follows: admin should not see anyone admin already follows
-    # We can't access mongo directly, so use the directory endpoint with a workaround:
-    # use the GET /api/users/{id} or query directly. Since endpoint shows is_following per user
-    # we can use the /api/network/following endpoint if it exists. Simpler: query directory
-    # with a known followed user via direct DB check from server.py side. Use mongo via env.
+    # T3
+    print("\n[T3] Duplicate open request -> 409")
+    r = post(f"/spots/{SPOT_A}/edit-request", {"changes": {"tips": "x"}}, u1_token)
+    assert_eq(r.status_code, 409, "T3 duplicate returns 409")
+    detail = ""
     try:
-        from motor.motor_asyncio import AsyncIOMotorClient  # noqa
-        import asyncio as _asyncio
-        from pathlib import Path as _Path
+        detail = (r.json() or {}).get("detail", "")
+    except Exception:
+        detail = r.text
+    assert_true(
+        "pending" in (detail or "").lower() and "edit request" in (detail or "").lower(),
+        "T3 detail mentions 'pending edit request'",
+        detail[:160],
+    )
 
-        # Read backend .env to get MONGO_URL + DB_NAME
-        env_path = _Path("/app/backend/.env")
-        env_vars = {}
-        for line in env_path.read_text().splitlines():
-            if "=" in line and not line.strip().startswith("#"):
-                k, v = line.split("=", 1)
-                env_vars[k.strip()] = v.strip().strip('"').strip("'")
-        mu = env_vars.get("MONGO_URL")
-        dbn = env_vars.get("DB_NAME")
-        if mu and dbn:
-            async def check_follows():
-                client = AsyncIOMotorClient(mu)
-                db = client[dbn]
-                followed = set()
-                async for f in db.follows.find(
-                    {"follower_user_id": admin_id},
-                    {"_id": 0, "followed_user_id": 1},
-                ):
-                    followed.add(f["followed_user_id"])
-                client.close()
-                return followed
-            followed_set = _asyncio.run(check_follows())
-            print(f"  admin follows {len(followed_set)} users")
-            sugg_ids = {it.get("user_id") for it in s_items}
-            overlap = followed_set & sugg_ids
-            rec("7d suggested excludes users admin already follows",
-                len(overlap) == 0,
-                f"overlap={overlap}")
+    # T4
+    print("\n[T4] Non-owner U2 submits -> 403")
+    u2_token, u2 = register_free_user("u2")
+    r = post(f"/spots/{SPOT_A}/edit-request", {"changes": {"title": "hack"}}, u2_token)
+    assert_eq(r.status_code, 403, "T4 non-owner returns 403")
+    try:
+        detail = (r.json() or {}).get("detail", "")
+    except Exception:
+        detail = r.text
+    assert_true("uploader" in (detail or "").lower(), "T4 detail mentions 'uploader'", detail[:160])
+
+    # T5
+    print("\n[T5] Admin lists pending edit requests")
+    r = get("/admin/edit-requests?status=pending", admin_token)
+    assert_eq(r.status_code, 200, "T5 admin GET pending returns 200")
+    payload = r.json() if r.status_code == 200 else {}
+    items = payload.get("items") or []
+    count = payload.get("count")
+    assert_true(isinstance(items, list), "T5 items is a list", "")
+    assert_true(isinstance(count, int) and count >= 1, "T5 count >= 1", f"count={count}")
+    matching = [it for it in items if it.get("request_id") == REQ_A]
+    assert_true(len(matching) == 1, "T5 REQ_A present in pending list", f"matching={len(matching)}")
+    if matching:
+        m = matching[0]
+        sp = m.get("spot") or {}
+        assert_true(
+            sp.get("title") in ("Test Spot QA", "Test Spot QA (new)"),
+            "T5 spot.title hydrated",
+            f"spot.title={sp.get('title')}",
+        )
+        assert_eq(sp.get("city"), "San Antonio", "T5 spot.city hydrated")
+        assert_eq(sp.get("state"), "TX", "T5 spot.state hydrated")
+        assert_true("cover_image_url" in sp, "T5 spot.cover_image_url key present", str(sp)[:200])
+        ow = m.get("owner") or {}
+        assert_eq(ow.get("user_id"), u1.get("user_id"), "T5 owner.user_id matches U1")
+        assert_true(
+            "name" in ow and "username" in ow and "role" in ow and "plan" in ow,
+            "T5 owner has name/username/role/plan",
+            str(ow)[:200],
+        )
+
+    # T6
+    print("\n[T6] Admin approves REQ_A {note:'lgtm'}")
+    r = post(f"/admin/edit-requests/{REQ_A}/approve", {"note": "lgtm"}, admin_token)
+    assert_eq(r.status_code, 200, "T6 approve returns 200")
+    body6 = r.json() if r.status_code == 200 else {}
+    assert_eq(body6.get("ok"), True, "T6 ok==true")
+    applied = body6.get("applied") or []
+    assert_true(
+        set(applied) == {"title", "description"},
+        "T6 applied == ['title','description']",
+        f"applied={applied}",
+    )
+
+    r = get(f"/spots/{SPOT_A}", u1_token)
+    assert_eq(r.status_code, 200, "T6 GET /spots/{SPOT_A} returns 200")
+    spot6 = r.json() if r.status_code == 200 else {}
+    assert_eq(spot6.get("title"), "Test Spot QA (new)", "T6 spot.title updated")
+    assert_eq(spot6.get("description"), "updated", "T6 spot.description updated")
+
+    # Owner notification check
+    r = get("/notifications?limit=10", u1_token)
+    assert_eq(r.status_code, 200, "T6 GET /notifications returns 200")
+    notifs = (r.json() or {}).get("items") or []
+    has_approved = any(n.get("kind") == "spot_edit_approved" for n in notifs)
+    assert_true(has_approved, "T6 notification kind=spot_edit_approved emitted",
+                f"kinds={[n.get('kind') for n in notifs[:6]]}")
+
+    # Confirm request transition
+    r = get(f"/spots/{SPOT_A}/edit-requests/mine", u1_token)
+    if r.status_code == 200:
+        mine = (r.json() or {}).get("items") or []
+        ra = next((it for it in mine if it.get("request_id") == REQ_A), None)
+        if ra:
+            assert_eq(ra.get("status"), "approved", "T6 REQ_A status=='approved'")
+            if admin_user_id:
+                assert_eq(ra.get("decided_by_user_id"), admin_user_id,
+                          "T6 decided_by_user_id == admin user_id")
+            assert_eq(ra.get("decision_note"), "lgtm", "T6 decision_note=='lgtm'")
         else:
-            rec("7d suggested excludes already-followed", True, "skipped: no mongo creds")
-    except Exception as e:
-        rec("7d suggested excludes already-followed", True, f"skipped: {e}")
+            _record(False, "T6 REQ_A retrievable in /mine", "not found")
 
-    # Unauth → 401
-    r = requests.get(f"{BASE}/directory/suggested", timeout=20)
-    rec("7e unauth /directory/suggested → 401",
-        r.status_code in (401, 403),
-        f"status={r.status_code}")
+    # T7
+    print("\n[T7] Owner submits second edit (REQ_B), admin rejects with EMPTY body -> 400")
+    r = post(f"/spots/{SPOT_A}/edit-request", {"changes": {"safety_notes": "watch for goats"}}, u1_token)
+    assert_eq(r.status_code, 200, "T7 owner submit REQ_B returns 200")
+    REQ_B = (r.json() or {}).get("request_id")
+    assert_true(bool(REQ_B) and REQ_B.startswith("edr_"), "T7 REQ_B id present", str(REQ_B))
 
-    # Sample a suggested item shape
-    if s_items:
-        print(f"  suggested[0] keys: {sorted(s_items[0].keys())}")
-        print(f"  suggested[0]: {pretty(s_items[0], 300)}")
+    r = post(f"/admin/edit-requests/{REQ_B}/reject", {}, admin_token)
+    assert_eq(r.status_code, 400, "T7 reject without note -> 400")
+    try:
+        detail = (r.json() or {}).get("detail", "")
+    except Exception:
+        detail = r.text
+    assert_true(
+        "rejection note" in (detail or "").lower() and "required" in (detail or "").lower(),
+        "T7 detail mentions 'rejection note is required'",
+        detail[:160],
+    )
 
-    # ===== Summary =====
+    # T8
+    print("\n[T8] Admin rejects REQ_B with note -> 200")
+    r = post(f"/admin/edit-requests/{REQ_B}/reject", {"note": "not a known hazard"}, admin_token)
+    assert_eq(r.status_code, 200, "T8 reject with note returns 200")
+    assert_eq((r.json() or {}).get("ok"), True, "T8 ok==true")
+
+    r = get(f"/spots/{SPOT_A}/edit-requests/mine", u1_token)
+    if r.status_code == 200:
+        mine = (r.json() or {}).get("items") or []
+        rb = next((it for it in mine if it.get("request_id") == REQ_B), None)
+        if rb:
+            assert_eq(rb.get("status"), "rejected", "T8 REQ_B status=='rejected'")
+            assert_eq(rb.get("decision_note"), "not a known hazard", "T8 decision_note set")
+        else:
+            _record(False, "T8 REQ_B retrievable in /mine", "not found")
+
+    r = get("/notifications?limit=20", u1_token)
+    assert_eq(r.status_code, 200, "T8 GET /notifications returns 200")
+    notifs = (r.json() or {}).get("items") or []
+    rejected = next((n for n in notifs if n.get("kind") == "spot_edit_rejected"), None)
+    assert_true(rejected is not None, "T8 spot_edit_rejected notification present",
+                f"kinds={[n.get('kind') for n in notifs[:6]]}")
+    if rejected:
+        body_text = (rejected.get("body") or "")
+        assert_true(
+            "not a known hazard" in body_text,
+            "T8 notification body contains rejection note",
+            f"body={body_text!r}",
+        )
+
+    # T9
+    print("\n[T9] Featured-photo edit -> admin_cover_override written")
+    r = post(f"/spots/{SPOT_A}/edit-request", {"changes": {"featured_image_url": second_url}}, u1_token)
+    assert_eq(r.status_code, 200, "T9 owner submit REQ_C returns 200")
+    REQ_C = (r.json() or {}).get("request_id")
+    assert_true(bool(REQ_C) and REQ_C.startswith("edr_"), "T9 REQ_C id present", str(REQ_C))
+
+    r = post(f"/admin/edit-requests/{REQ_C}/approve", {}, admin_token)
+    assert_eq(r.status_code, 200, "T9 approve REQ_C returns 200")
+
+    r = get(f"/spots/{SPOT_A}", u1_token)
+    assert_eq(r.status_code, 200, "T9 GET /spots/{SPOT_A} returns 200")
+    spot9 = r.json() if r.status_code == 200 else {}
+    over = spot9.get("admin_cover_override") or {}
+    assert_true(isinstance(over, dict) and bool(over), "T9 admin_cover_override exists", f"got={over}")
+    assert_eq(over.get("image_url"), second_url, "T9 admin_cover_override.image_url == second_url")
+    assert_eq(spot9.get("hero_cover_image_url"), second_url, "T9 hero_cover_image_url == second_url")
+
+    # T10
+    print("\n[T10] photo_order edit -> images reordered")
+    r = get(f"/spots/{SPOT_A}", u1_token)
+    spot_pre = r.json() if r.status_code == 200 else {}
+    imgs_pre = spot_pre.get("images") or []
+    if len(imgs_pre) < 2:
+        _record(False, "T10 prereq: spot has 2+ images", f"got {len(imgs_pre)}")
+    else:
+        new_order = [second_url, first_url]
+        r = post(f"/spots/{SPOT_A}/edit-request", {"changes": {"photo_order": new_order}}, u1_token)
+        assert_eq(r.status_code, 200, "T10 owner submit REQ_D returns 200")
+        REQ_D = (r.json() or {}).get("request_id")
+
+        r = post(f"/admin/edit-requests/{REQ_D}/approve", {}, admin_token)
+        assert_eq(r.status_code, 200, "T10 approve REQ_D returns 200")
+
+        r = get(f"/spots/{SPOT_A}", u1_token)
+        spot10 = r.json() if r.status_code == 200 else {}
+        imgs10 = spot10.get("images") or []
+        assert_true(len(imgs10) >= 2, "T10 spot still has 2+ images", f"got {len(imgs10)}")
+        if len(imgs10) >= 1:
+            assert_eq(imgs10[0]["image_url"], second_url,
+                      "T10 spot.images[0].image_url == second_url (reordered)")
+        if len(imgs10) >= 2:
+            assert_eq(imgs10[1]["image_url"], first_url,
+                      "T10 spot.images[1].image_url == first_url")
+
+    # T11
+    print("\n[T11] Re-approve already-decided REQ_A -> 409")
+    r = post(f"/admin/edit-requests/{REQ_A}/approve", {}, admin_token)
+    assert_eq(r.status_code, 409, "T11 re-approve returns 409")
+    try:
+        detail = (r.json() or {}).get("detail", "")
+    except Exception:
+        detail = r.text
+    assert_true("approved" in (detail or "").lower(),
+                "T11 detail contains 'approved'", detail[:160])
+
+    # T12
+    print("\n[T12] Owner GET /spots/{SPOT_A}/edit-requests/mine")
+    r = get(f"/spots/{SPOT_A}/edit-requests/mine", u1_token)
+    assert_eq(r.status_code, 200, "T12 owner /mine returns 200")
+    mine = (r.json() or {}).get("items") or []
+    assert_true(len(mine) >= 4, f"T12 items length >= 4 (got {len(mine)})", "")
+    if len(mine) >= 2:
+        ts0 = mine[0].get("created_at")
+        ts1 = mine[1].get("created_at")
+        assert_true(
+            (ts0 or "") >= (ts1 or ""),
+            "T12 sorted newest-first",
+            f"ts0={ts0} ts1={ts1}",
+        )
+
+    # cleanup
+    print("\n[cleanup] DELETE /admin/spots/{SPOT_A}")
+    r = delete(f"/admin/spots/{SPOT_A}",
+               {"reason_code": "other", "reason_note": "QA - edit_requests test cleanup"},
+               admin_token)
+    print(f"  cleanup status={r.status_code} body={r.text[:160]}")
+
+    return _emit_summary()
+
+
+def _emit_summary() -> int:
     print("\n" + "=" * 60)
-    passed = sum(1 for _, ok, _ in results if ok)
-    total = len(results)
-    print(f"RESULTS: {passed}/{total} passed")
-    fails = [(n, d) for n, ok, d in results if not ok]
-    if fails:
-        print("FAILURES:")
-        for n, d in fails:
-            print(f"  ❌ {n} :: {d}")
-    return 0 if not fails else 1
+    print(f"RESULTS  pass={PASS}  fail={FAIL}")
+    if FAILURES:
+        print("\nFailures:")
+        for f in FAILURES:
+            print(f"  - {f}")
+    print("=" * 60)
+    return 0 if FAIL == 0 else 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as e:
+        print(f"FATAL: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(2)

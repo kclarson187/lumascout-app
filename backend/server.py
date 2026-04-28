@@ -6845,6 +6845,7 @@ from routes import referrals as _referrals_routes  # noqa: E402
 from routes import push as _push_routes  # noqa: E402
 from routes import spots as _spots_routes  # noqa: E402
 from routes import users as _users_routes  # noqa: E402
+from routes import edit_requests as _edit_requests_routes  # noqa: E402
 
 app.include_router(_scout_ai_routes.router)
 app.include_router(_support_routes.router)
@@ -6857,3 +6858,4 @@ app.include_router(_referrals_routes.router)
 app.include_router(_push_routes.router)
 app.include_router(_spots_routes.router)
 app.include_router(_users_routes.router)
+app.include_router(_edit_requests_routes.router)

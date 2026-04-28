@@ -8807,6 +8807,162 @@ agent_communication:
 
           Launch-ready.
 
+  - task: "Uploader Edit Request workflow — backend (new collection + 5 endpoints: owner-submit / owner-list-mine / admin-list / admin-approve / admin-reject)"
+    implemented: true
+    working: false
+    file: "/app/backend/routes/edit_requests.py (NEW 270 lines, registered in server.py L6848/6863)"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: false
+        -agent: "testing"
+        -comment: |
+          BACKEND VALIDATION — 61/63 PASS, 2 critical FAIL (2026-04-28).
+          Harness: /app/backend_test.py against
+          https://photo-finder-60.preview.emergentagent.com/api.
+          Admin: admin@lumascout.app/admin123 (user_6daa7d0a3abc).
+          Owner U1 + non-owner U2: fresh @lumascout-qa.com registers.
+
+          ALL 12 TEST GROUPS RAN. CORE FLOW WORKS. Two notification
+          assertions failed because of a real bug in
+          /app/backend/routes/edit_requests.py.
+
+          ── ROOT CAUSE OF THE 2 FAILURES ─────────────────────────
+          edit_requests.py L294-300 (approve) and L340-346 (reject)
+          call:
+              await _emit_notification(
+                  user_id=...,
+                  kind="spot_edit_approved",
+                  title=...,
+                  body=...,
+                  data={"spot_id": ..., "request_id": ...},   # <- INVALID
+              )
+          but server.py:1781 _emit_notification signature is:
+              (user_id, kind, title, body, *,
+               actor_user_id=None, spot_id=None, upload_id=None,
+               update_id=None, deep_link=None, image_url=None)
+          There is NO `data` kwarg. The call therefore raises
+          `TypeError: _emit_notification() got an unexpected keyword
+          argument 'data'`, which is silently swallowed by
+          `except Exception: pass` at L301-302 / L347-348.
+
+          Net effect: NO notification row is ever inserted into
+          db.notifications for the owner on approve OR reject. The
+          "Owner notified on approval / rejection" requirement is
+          completely broken even though the endpoint returns 200.
+
+          FIX (suggested for main agent — DO NOT have me apply, per
+          testing-agent rules): replace `data={...}` with the named
+          kwargs that already exist, e.g.:
+              await _emit_notification(
+                  user_id=req["owner_user_id"],
+                  kind="spot_edit_approved",
+                  title="Your edits were approved",
+                  body=f'Changes to "{req.get("spot_title") or "your spot"}" are live.',
+                  spot_id=req["spot_id"],
+                  deep_link=f"/spot/{req['spot_id']}",
+              )
+          (Drop request_id from the payload, or extend _emit_notification
+          to accept a `data` dict — but the simpler local fix is the
+          named-kwarg approach which matches every other call site in
+          the codebase.)
+
+          ── WHAT PASSED (61/63) ──────────────────────────────────
+          T1  Owner POST /spots (public, 2 images, San Antonio TX) → 200,
+              SPOT_A=spot_9bad27144155, 2 distinct image URLs returned. ✓
+          T2  Owner POST /spots/{id}/edit-request {title, description,
+              reason_note} → 200 with request_id=edr_*, status=pending,
+              changes echoed, before={title:"Test Spot QA",description:"..."}. ✓
+          T3  Duplicate open request → 409 with detail mentioning
+              "pending edit request". ✓
+          T4  Non-owner U2 → 403 with detail mentioning "uploader". ✓
+          T5  Admin GET /admin/edit-requests?status=pending → 200,
+              count>=1, REQ_A present, items[i].spot fully hydrated
+              (title/city/state/cover_image_url), items[i].owner has
+              user_id/name/username/role/plan. ✓
+          T6  Admin POST .../approve {note:"lgtm"} → 200,
+              {ok:true, applied:["title","description"]}. Spot doc now
+              title="Test Spot QA (new)" + description="updated".
+              spot_edit_requests row → status=approved,
+              decided_by_user_id=admin user_id, decision_note="lgtm". ✓
+              ✗ FAIL: GET /api/notifications as U1 returned ZERO items
+              (expected one with kind="spot_edit_approved"). Cause:
+              `data=` kwarg TypeError swallowed at edit_requests.py:301.
+          T7  Reject with empty body → 400 "A rejection note is required". ✓
+          T8  Reject with note → 200, {ok:true}, request status=rejected,
+              decision_note="not a known hazard" persisted. ✓
+              ✗ FAIL: GET /api/notifications as U1 returned ZERO items
+              (expected one with kind="spot_edit_rejected" whose body
+              contains "not a known hazard"). Same TypeError root cause.
+          T9  Approve featured_image_url change → 200. GET /spots/{id}:
+              admin_cover_override.image_url == requested URL ✓ AND
+              hero_cover_image_url == requested URL ✓.
+              The fix to write BOTH the durable admin_cover_override
+              object AND the denormalised hero_cover_image_url at
+              edit_requests.py:248-260 is working as designed.
+          T10 Approve photo_order=[second_url, first_url] → 200. GET
+              /spots/{id}: spot.images[0].image_url == second_url and
+              spot.images[1].image_url == first_url. Images correctly
+              re-sorted by edit_requests.py:264-271. ✓
+          T11 Re-approve already-decided REQ_A → 409 with detail
+              containing "approved". ✓
+          T12 Owner GET /spots/{id}/edit-requests/mine → 200 with 4
+              items, sorted newest-first. ✓
+          CLEANUP: DELETE /api/admin/spots/{SPOT_A} → 200 with
+              archive_id=delspot_71222c112f6d, full cascade reported.
+
+          ── VERDICT ──────────────────────────────────────────────
+          The edit-request workflow itself (submit / list / approve /
+          reject / atomic spot-doc apply / featured-photo override /
+          photo_order resort / 409s on duplicate & re-decision / 400 on
+          missing rejection note / non-owner 403) is fully functional
+          and ready to ship. The audit_log writes also fire cleanly.
+
+          The owner-notification feature is BROKEN due to the
+          `data=` kwarg passed to `_emit_notification` that the
+          function signature doesn't accept. This is a 2-line fix in
+          edit_requests.py (lines 299 and 345). Until it's fixed,
+          owners will NOT see in-app notifications when admins
+          approve or reject their edit requests, even though every
+          other path of the workflow succeeds.
+
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          NEW BATCH 2 FEATURE — owners can propose field-level changes,
+          admins/moderators approve or reject, approved changes apply
+          atomically and notify the owner.
+
+          Endpoints (all prefixed /api):
+            · POST /spots/{spot_id}/edit-request        (owner)
+            · GET  /spots/{spot_id}/edit-requests/mine  (owner)
+            · GET  /admin/edit-requests?status=pending|approved|rejected|all (moderator+)
+            · POST /admin/edit-requests/{id}/approve    (moderator+)
+            · POST /admin/edit-requests/{id}/reject     (moderator+, note required)
+
+          Whitelisted fields (server-enforced): title, description,
+          shoot_types, best_light_notes, best_time_of_day, parking_notes,
+          access_notes, safety_notes, tips, photo_order,
+          featured_image_url.
+
+          Rules:
+            · Only the spot owner can submit (owner_user_id /
+              created_by / user_id match)
+            · Duplicate open request → 409
+            · Rejection requires a note → 400 if empty
+            · Approve of already-decided → 409
+            · Spot deleted between submit and approve → auto-reject
+            · featured_image_url change writes both
+              `admin_cover_override` (durable — read by
+              _decorate_spot_with_hero_cover) AND the denormalised
+              `hero_cover_image_url` for instant client visibility.
+              This is the fix for the Explore-vs-Detail mismatch.
+            · photo_order change actually re-sorts spot.images[].
+            · Every approve/reject emits _emit_notification + audit_log.
+
+          NEEDS BACKEND TEST via deep_testing_backend_v2.
+
 metadata:
         -comment: |
           NEW WORK — implements the user-requested membership conversion
@@ -8906,7 +9062,7 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Batch 1 v2 + Batch 2 P0: Messaging flush composer (KAV restructure), True Hard Delete for admins (extended cascade covering seasonal_entries/notifications/ugc_uploads/cover_overrides/dm_messages/scout_routes), AdminSpotMenu routes Delete to hard-delete endpoint"
+    - "Batch 2 — Uploader Edit Request workflow (new /api/spots/{id}/edit-request + /api/admin/edit-requests queue with approve/reject + owner notification), True hard-delete promoted to admin role with extended cascade, DeleteConfirmSheet keyboard fix (absolute-positioned sheet made flex so KAV can lift), featured-photo approval writes admin_cover_override for instant Explore/Detail sync"
   stuck_tasks: []
   test_all: false
   test_priority: "stuck_first"
@@ -9934,3 +10090,44 @@ agent_communication:
         backend correctly returns 422 with the friendly "drop a pin
         manually" message.)
       No further backend changes needed. Pre-release ship-ready.
+
+    -agent: "testing"
+    -message: |
+      Uploader Edit Request workflow — 61/63 PASS (2026-04-28).
+      Harness /app/backend_test.py against the public preview URL.
+
+      All 12 test groups (T1-T12) executed against
+      /app/backend/routes/edit_requests.py + cleanup via
+      DELETE /api/admin/spots/{id}.
+
+      CORE FLOW WORKING:
+      • Owner submit (T2), duplicate-409 (T3), non-owner-403 (T4),
+        admin queue with hydration (T5), admin approve writes through
+        title/description (T6 spot doc), reject-without-note 400 (T7),
+        reject-with-note 200 + persists status/decision_note (T8),
+        featured_image_url approval writes BOTH admin_cover_override
+        AND hero_cover_image_url (T9), photo_order approval re-sorts
+        spot.images correctly (T10), already-decided 409 (T11),
+        owner /mine listing newest-first (T12).
+      • spot_edit_requests row transitions correctly (status,
+        decided_by_user_id, decision_note all set).
+      • DELETE /api/admin/spots/{id} cleanup works.
+
+      CRITICAL BUG FOUND — owner notification on approve/reject is
+      BROKEN:
+        edit_requests.py L294-300 (approve) and L340-346 (reject)
+        call _emit_notification(..., data={...}) but the function
+        signature in server.py:1781 does NOT accept a `data` kwarg.
+        The TypeError raised is silently swallowed by the
+        `except Exception: pass` block in the route, so NO row is
+        ever inserted into db.notifications.
+        GET /api/notifications as the owner returns kinds=[] after
+        both approval and rejection.
+
+      MAIN AGENT FIX (DO NOT have me apply per testing-agent rules):
+      Replace `data={"spot_id": ..., "request_id": ...}` with the
+      named kwargs that already exist on _emit_notification —
+      `spot_id=req["spot_id"]` and (optionally) a
+      `deep_link=f"/spot/{req['spot_id']}"` for push routing.
+      Two lines, one file. Re-run /app/backend_test.py to confirm
+      63/63 green.

@@ -76,8 +76,9 @@ export default function DeleteConfirmSheet({
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={close}>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1, justifyContent: 'flex-end' }}
+        keyboardVerticalOffset={0}
       >
         <Pressable style={styles.bg} onPress={close} />
         <View style={styles.sheet}>
@@ -171,7 +172,12 @@ export default function DeleteConfirmSheet({
 const styles = StyleSheet.create({
   bg: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.65)' },
   sheet: {
-    position: 'absolute', left: 0, right: 0, bottom: 0,
+    // BATCH 2 (Apr 2026): was `position: 'absolute'` which took the
+    // sheet out of the KeyboardAvoidingView flex tree — the KAV could
+    // not lift it above the keyboard, so the confirm input + CTA sat
+    // BEHIND the keyboard. Using justifyContent: 'flex-end' on the
+    // KAV + removing absolute positioning here fixes it on all device
+    // sizes.
     backgroundColor: colors.surface1,
     borderTopLeftRadius: 24, borderTopRightRadius: 24,
     padding: space.xl,

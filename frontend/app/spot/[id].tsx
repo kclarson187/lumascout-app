@@ -231,6 +231,19 @@ export default function SpotDetail() {
               </View>
             </View>
           )}
+
+          {/* BATCH 2 (Apr 2026): owner-only "Request edits" entry point.
+              Admins / super_admins don't see this — they use direct
+              edit via the admin menu. Keeps the flow unambiguous. */}
+          {user?.user_id === spot.owner_user_id && user?.role !== 'admin' && user?.role !== 'super_admin' && (
+            <Pressable
+              onPress={() => router.push(`/spot/${String(id)}/request-edit` as any)}
+              style={styles.requestEditBtn}
+              testID="spot-request-edit"
+            >
+              <Text style={styles.requestEditTxt}>Request edits to this spot</Text>
+            </Pressable>
+          )}
           <Text style={styles.title}>{spot.title}</Text>
           <View style={styles.metaRow}>
             <MapPin size={14} color={colors.textSecondary} />
@@ -834,6 +847,8 @@ const styles = StyleSheet.create({
   },
   pendingTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
   pendingBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17, marginTop: 2 },
+  requestEditBtn: { alignSelf: 'flex-start', marginTop: 10, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radii.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface1 },
+  requestEditTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 13 },
 });
 
 const sadStyles = StyleSheet.create({
