@@ -42,6 +42,10 @@ import { colors, font, space, radii } from '../../../../src/theme';
 const { width: SCREEN_W } = Dimensions.get('window');
 const CANVAS_W = Math.min(SCREEN_W - 32, 360);
 const CANVAS_H = Math.round(CANVAS_W * 9 / 16);   // 16:9 preview frame
+// Location Detail Page hero = square 1:1 (see app/spot/[id].tsx heroImg).
+// Kept as a named constant so the preview tile stays accurate even if
+// the detail hero aspect is retuned later.
+const W_DETAIL_HERO_ASPECT = 1;
 
 type CoverImage = {
   image_url: string;
@@ -328,12 +332,18 @@ export default function CoverEditor() {
             </View>
           </View>
 
-          {/* Live preview cards */}
+          {/* Live preview cards — how the selected image will appear
+              in each placement. The fourth tile "Location Detail"
+              mirrors the exact aspect the hero carousel on the spot
+              detail page uses, so admins can frame confidently before
+              saving. All four update live as you pan / pinch / rotate
+              the editor canvas — no save required to preview. */}
           <Text style={styles.sectionLabel}>Live preview</Text>
           <View style={styles.previewRow}>
             <PreviewCard label="Feed (16:9)" aspect={16 / 9} url={selectedUrl} focalX={focalX} focalY={focalY} scale={scale} rotation={rotation} />
             <PreviewCard label="Hero (4:3)" aspect={4 / 3} url={selectedUrl} focalX={focalX} focalY={focalY} scale={scale} rotation={rotation} />
             <PreviewCard label="Map (1:1)" aspect={1} url={selectedUrl} focalX={focalX} focalY={focalY} scale={scale} rotation={rotation} />
+            <PreviewCard label="Location Detail" aspect={W_DETAIL_HERO_ASPECT} url={selectedUrl} focalX={focalX} focalY={focalY} scale={scale} rotation={rotation} />
           </View>
 
           {/* Quick admin actions */}
@@ -577,8 +587,17 @@ const styles = StyleSheet.create({
   sectionRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', paddingHorizontal: space.lg, marginTop: space.xl, marginBottom: 8 },
   sectionHint: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
 
-  previewRow: { flexDirection: 'row', gap: 10, paddingHorizontal: space.md },
-  previewCard: { alignItems: 'center', gap: 6, flex: 1 },
+  previewRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',              // 4 tiles now — wrap to 2x2 on small screens
+    gap: 10,
+    paddingHorizontal: space.md,
+  },
+  previewCard: {
+    alignItems: 'center',
+    gap: 6,
+    width: '47%',                  // 2 per row with a small gap
+  },
   previewLabel: { color: colors.textTertiary, fontFamily: font.body, fontSize: 10, letterSpacing: 0.3 },
 
   actionsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: space.md },

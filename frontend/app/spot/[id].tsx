@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -90,6 +90,38 @@ export default function SpotDetail() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  // CRITICAL FIX (Apr 2026 #2 — second pass): compute the *effective*
+  // ordered images EXACTLY ONCE and use it for the hero carousel, the
+  // dot indicators, and any other per-image logic. Previously the dots
+  // still pointed at the raw `spot.images` order while the carousel
+  // was reordered, which desynchronised the dot count / highlight. We
+  // also handle the edge case where `hero_cover_image_url` exists but
+  // the matching object isn't in `spot.images` (e.g. override points at
+  // a UGC upload not yet in the gallery array) — in that case we
+  // PREPEND a synthetic image object so the cover still renders first.
+  const orderedImages = useMemo(() => {
+    const all: any[] = Array.isArray(spot?.images) ? spot.images : [];
+    const coverUrl: string | null = spot?.hero_cover_image_url || null;
+    if (!coverUrl) return all;
+    const match = all.find((im: any) => im?.image_url === coverUrl);
+    if (match) {
+      // Move the matching image to position 0
+      return [match, ...all.filter((im: any) => im?.image_url !== coverUrl)];
+    }
+    // Cover URL isn't in spot.images — prepend a synthetic object so the
+    // hero carousel can still show the admin-selected cover as image #1.
+    return [{ image_url: coverUrl, source: 'cover_override' }, ...all];
+  }, [spot?.images, spot?.hero_cover_image_url]);
+
+  // Clamp the active gallery index whenever the ordered array changes
+  // so swiping never lands on a phantom slide after the cover is
+  // re-selected.
+  useEffect(() => {
+    if (galleryIdx >= orderedImages.length) {
+      setGalleryIdx(0);
+    }
+  }, [orderedImages.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // BATCH 2 polish (Apr 2026): re-fetch whenever the screen regains
   // focus. This is the fix for "I changed the cover photo but the
@@ -186,30 +218,13 @@ export default function SpotDetail() {
             showsHorizontalScrollIndicator={false}
             onMomentumScrollEnd={(e) => setGalleryIdx(Math.round(e.nativeEvent.contentOffset.x / W))}
           >
-            {/* CRITICAL FIX (Apr 2026): previously this carousel just
-                rendered spot.images in raw array order, completely
-                ignoring the admin_cover_override / hero_cover_image_url
-                that the backend had already stamped. That's why the
-                user saw "Set as Featured Photo" never actually change
-                the detail page cover — the PATCH succeeded server-side,
-                hero_cover_image_url updated, but this component kept
-                painting images[0]. Now we reorder the carousel so the
-                spot.hero_cover_image_url (backend's source-of-truth
-                cover field) is ALWAYS first — matching Explore cards,
-                map previews, and saved lists. */}
-            {(() => {
-              const all = spot.images || [];
-              const coverUrl = spot.hero_cover_image_url || null;
-              const ordered = coverUrl
-                ? [
-                    ...all.filter((im: any) => im.image_url === coverUrl),
-                    ...all.filter((im: any) => im.image_url !== coverUrl),
-                  ]
-                : all;
-              return ordered.map((img: any, i: number) => (
-                <Image key={img.image_url || i} source={{ uri: img.image_url }} style={styles.heroImg} resizeMode="cover" />
-              ));
-            })()}
+            {/* All image rendering driven by `orderedImages` memo — see
+                the CRITICAL FIX comment near the load() hook. Single
+                source of truth keeps the hero carousel, dot indicators,
+                and galleryIdx swipe state perfectly in sync. */}
+            {orderedImages.map((img: any, i: number) => (
+              <Image key={img.image_url || i} source={{ uri: img.image_url }} style={styles.heroImg} resizeMode="cover" />
+            ))}
           </ScrollView>
           <LinearGradient
             colors={['rgba(10,10,10,0.85)', 'transparent']}
@@ -248,8 +263,8 @@ export default function SpotDetail() {
             </TouchableOpacity>
           </SafeAreaView>
           <View style={styles.dots}>
-            {(spot.images || []).map((_: any, i: number) => (
-              <View key={i} style={[styles.dot, i === galleryIdx && styles.dotActive]} />
+            {orderedImages.map((img: any, i: number) => (
+              <View key={img.image_url || `d${i}`} style={[styles.dot, i === galleryIdx && styles.dotActive]} />
             ))}
           </View>
         </View>
