@@ -82,7 +82,17 @@ export async function uploadImageAsset(
     } catch {}
     throw new Error(detail);
   }
-  return (await res.json()) as UploadedImage;
+  const j = (await res.json()) as UploadedImage;
+  // CRITICAL (Apr 2026): the backend returns `/api/uploads/...` which
+  // is a relative URL. React Native's <Image> on iOS / Android cannot
+  // resolve relative URLs — the slot silently renders blank. We
+  // absolutise here so every caller gets a URL that's immediately
+  // usable in `<Image source={{ uri }} />`, and so MongoDB stores the
+  // fully-qualified URL (no render-time surprises).
+  const absolute = j.image_url && j.image_url.startsWith('/')
+    ? `${backendBaseUrl()}${j.image_url}`
+    : j.image_url;
+  return { ...j, image_url: absolute };
 }
 
 /** Upload many picked assets in parallel with a sane concurrency cap. */

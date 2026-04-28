@@ -20,6 +20,7 @@ import * as Location from 'expo-location';
 import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown, AlertTriangle, Search, Map as MapIcon, Edit3, FileText, Sun, Eye, EyeOff, Sparkles, Circle, Camera } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { uploadImageAsset } from '../../src/utils/upload-image';
+import { resolveImageUrl } from '../../src/utils/image-url';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii, SHOOT_TYPES, BEST_TIMES, PRIVACY_MODES } from '../../src/theme';
 import { LandAccessSelector } from '../../src/components/LandAccessSelector';
@@ -728,7 +729,7 @@ export default function AddSpot() {
                     onLongPress={() => removeImg(i)}
                     testID={`add-photo-thumb-${i}`}
                   >
-                    <Image source={{ uri: img.image_url }} style={styles.imgThumb} />
+                    <Image source={{ uri: resolveImageUrl(img.image_url) }} style={styles.imgThumb} />
                     {img.is_cover ? (
                       <View style={styles.coverBadge}>
                         <Text style={styles.coverTxt}>FEATURED</Text>

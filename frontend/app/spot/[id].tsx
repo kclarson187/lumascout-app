@@ -1,5 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
-import {
+import React, { useEffect, useState, useCallback, useMemo } from 'react';import {
   View,
   Text,
   StyleSheet,
@@ -24,6 +23,7 @@ import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 import { formatDistance } from '../../src/utils/distance';
+import { resolveImageUrl } from '../../src/utils/image-url';
 import ScoreRing from '../../src/components/ScoreRing';
 import SpotCard from '../../src/components/SpotCard';
 import { Button } from '../../src/components/Button';
@@ -223,7 +223,7 @@ export default function SpotDetail() {
                 source of truth keeps the hero carousel, dot indicators,
                 and galleryIdx swipe state perfectly in sync. */}
             {orderedImages.map((img: any, i: number) => (
-              <Image key={img.image_url || i} source={{ uri: img.image_url }} style={styles.heroImg} resizeMode="cover" />
+              <Image key={img.image_url || i} source={{ uri: resolveImageUrl(img.image_url) }} style={styles.heroImg} resizeMode="cover" />
             ))}
           </ScrollView>
           <LinearGradient
