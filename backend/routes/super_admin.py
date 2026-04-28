@@ -94,8 +94,17 @@ def _compose_reason(code: Optional[str], note: Optional[str]) -> str:
 async def super_delete_spot(
     spot_id: str,
     body: SpotDeleteIn,
-    me: dict = Depends(require_role("super_admin")),
+    me: dict = Depends(require_role("admin")),
 ):
+    # BATCH 2 (Apr 2026) — promoted from super_admin-only to admin-level
+    # so ordinary Admins can hard-delete locations too. Requires admin
+    # role (moderators cannot). Extended cascade now also nukes:
+    #   · seasonal_timeline entries
+    #   · notifications targeting this spot
+    #   · ugc_uploads on this spot
+    #   · spot_cover_overrides
+    #   · dm messages with spot_ref pointing at it (the message stays,
+    #     just the embedded spot_ref is cleared so the thread survives)
     spot = await db.spots.find_one({"spot_id": spot_id})
     if not spot:
         raise HTTPException(status_code=404, detail="Spot not found")
@@ -155,6 +164,41 @@ async def super_delete_spot(
         {"$pull": {"spot_ids": spot_id}, "$set": {"updated_at": utcnow()}},
     )
     cascade["packs_updated"] = r.modified_count
+
+    # Extended cascade (Batch 2): seasonal entries, notifications,
+    # UGC uploads, cover overrides, and any DM messages that embed the
+    # spot (the message itself stays — only the embedded snippet is
+    # cleared so a conversation about the spot doesn't break the thread).
+    r = await db.seasonal_entries.delete_many({"spot_id": spot_id})
+    cascade["seasonal_entries"] = r.deleted_count
+    r = await db.notifications.delete_many({
+        "$or": [
+            {"target_type": "spot", "target_id": spot_id},
+            {"data.spot_id": spot_id},
+        ]
+    })
+    cascade["notifications"] = r.deleted_count
+    r = await db.ugc_uploads.delete_many({"spot_id": spot_id})
+    cascade["ugc_uploads"] = r.deleted_count
+    r = await db.spot_cover_overrides.delete_many({"spot_id": spot_id})
+    cascade["cover_overrides"] = r.deleted_count
+    r = await db.dm_messages.update_many(
+        {"spot_ref.spot_id": spot_id},
+        {"$set": {"spot_ref": None, "type": "text"}},
+    )
+    cascade["dm_messages_unlinked"] = r.modified_count
+    # Also nuke from scout-ai saved routes / planner history if present
+    for coll_name in ("scout_routes", "scout_plans", "shot_lists"):
+        try:
+            rr = await db[coll_name].update_many(
+                {"spot_ids": spot_id},
+                {"$pull": {"spot_ids": spot_id}},
+            )
+            if rr.modified_count:
+                cascade[f"{coll_name}_updated"] = rr.modified_count
+        except Exception:
+            # Collection may not exist in this deployment — fine.
+            pass
 
     # ---- Delete the spot itself ------------------------------------------
     await db.spots.delete_one({"spot_id": spot_id})
