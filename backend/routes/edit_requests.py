@@ -296,7 +296,9 @@ async def admin_approve_edit_request(
             kind="spot_edit_approved",
             title="Your edits were approved",
             body=f'Changes to "{req.get("spot_title") or "your spot"}" are live.',
-            data={"spot_id": req["spot_id"], "request_id": request_id},
+            spot_id=req["spot_id"],
+            deep_link=f"/spot/{req['spot_id']}",
+            actor_user_id=me["user_id"],
         )
     except Exception:
         pass
@@ -342,7 +344,9 @@ async def admin_reject_edit_request(
             kind="spot_edit_rejected",
             title="Your edit request wasn't approved",
             body=note[:180],
-            data={"spot_id": req["spot_id"], "request_id": request_id},
+            spot_id=req["spot_id"],
+            deep_link=f"/spot/{req['spot_id']}",
+            actor_user_id=me["user_id"],
         )
     except Exception:
         pass
