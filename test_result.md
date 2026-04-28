@@ -8906,7 +8906,7 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Batch 1 Crash/UX Fixes — messaging keyboard spacing, deleted-spot graceful redirect, admin approval optimistic update + array defense"
+    - "Batch 1 v2 + Batch 2 P0: Messaging flush composer (KAV restructure), True Hard Delete for admins (extended cascade covering seasonal_entries/notifications/ugc_uploads/cover_overrides/dm_messages/scout_routes), AdminSpotMenu routes Delete to hard-delete endpoint"
   stuck_tasks: []
   test_all: false
   test_priority: "stuck_first"

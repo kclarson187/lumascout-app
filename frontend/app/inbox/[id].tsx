@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, Image, TextInput, ActivityIndicator, Alert, Platform, Keyboard } from 'react-native';
+import { View, Text, StyleSheet, FlatList, Pressable, Image, TextInput, ActivityIndicator, Alert, Platform, Keyboard, KeyboardAvoidingView } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ChevronLeft, Send, ImagePlus, MapPin, User as UserIcon, ShieldCheck } from 'lucide-react-native';
@@ -8,7 +8,6 @@ import { api } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 import { timeAgo } from '../../src/components/FreshnessBits';
-import { KeyboardSafeDocked } from '../../src/components/KeyboardSafe';
 import ReadReceipt from '../../src/components/ReadReceipt';
 import UserBadge from '../../src/components/UserBadge';
 
@@ -95,7 +94,12 @@ export default function ThreadScreen() {
   };
 
   return (
-    <SafeAreaView style={s.root} edges={['top', 'left', 'right']}>
+    <KeyboardAvoidingView
+      style={s.root}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={0}
+    >
+      <SafeAreaView style={{ flex: 1 }} edges={['top', 'left', 'right']}>
       <View style={s.header}>
         <Pressable onPress={() => router.back()} style={s.backBtn} testID="thread-back">
           <ChevronLeft size={22} color={colors.text}/>
@@ -112,7 +116,15 @@ export default function ThreadScreen() {
         </Pressable>
       </View>
 
-      <KeyboardSafeDocked style={{ flex: 1 }} keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 52 : 0}>
+      {/* FIX(Batch-1 v2 messaging flush): scrapped KeyboardSafeDocked
+          wrapper (it applied its own offset that fought ours). Moved
+          header + content + composer INSIDE a single KeyboardAvoidingView
+          with keyboardVerticalOffset=0 — the KAV now represents the full
+          screen so RN's internal layout can position the composer
+          flush against the keyboard top. This is the pattern Apple's
+          own Messages.app effectively uses and the one that eliminates
+          the last of the double-counted padding. */}
+      <View style={{ flex: 1 }}>
         {loading ? (
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
             <ActivityIndicator color={colors.primary}/>
@@ -214,8 +226,9 @@ export default function ThreadScreen() {
             </View>
           </>
         )}
-      </KeyboardSafeDocked>
-    </SafeAreaView>
+      </View>
+      </SafeAreaView>
+    </KeyboardAvoidingView>
   );
 }
 

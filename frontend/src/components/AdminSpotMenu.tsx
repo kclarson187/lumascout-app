@@ -32,14 +32,25 @@ type ActionRow = {
 
 export default function AdminSpotMenu({ visible, spot, role, onClose, onAfterChange }: AdminSpotMenuProps) {
   const [busyKey, setBusyKey] = useState<string | null>(null);
-  const isSuperAdmin = role === 'super_admin';
+  const isAdmin = role === 'super_admin' || role === 'admin';
   if (!spot) return null;
 
   const doAction = async (key: string, action: string, confirmLabel?: string, destructive?: boolean) => {
     const run = async () => {
       setBusyKey(key);
       try {
-        await api.post(`/admin/spots/${spot.spot_id}/action`, { action });
+        // BATCH 2 (Apr 2026): route the Delete action to the true
+        // hard-delete endpoint (was soft-marking the spot which left
+        // stale data in Explore / Saved / Profile / Map). Admins +
+        // Super Admins can both hard-delete now.
+        if (action === 'delete') {
+          await api.delete(`/admin/spots/${spot.spot_id}`, {
+            reason_code: 'admin_hard_delete',
+            reason_note: null,
+          });
+        } else {
+          await api.post(`/admin/spots/${spot.spot_id}/action`, { action });
+        }
         onAfterChange?.();
         onClose();
       } catch (e: any) {
@@ -106,7 +117,7 @@ export default function AdminSpotMenu({ visible, spot, role, onClose, onAfterCha
     key: 'edit', label: 'Edit spot info', hint: 'Title · description · category', icon: Edit3,
     run: goEditInfo,
   });
-  if (isSuperAdmin) {
+  if (isAdmin) {
     rows.push({
       key: 'delete', label: 'Delete spot', hint: 'Permanently remove · cannot be undone',
       icon: Trash2, color: colors.secondary, destructive: true,
