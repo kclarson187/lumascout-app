@@ -250,34 +250,60 @@ export default function SpotDetail() {
     }
   };
 
-  // May 2026 batch #4 item #2 — admin photo deletion handler. Guarded
-  // at render time by `isAdminUser`; this function is only bound to
-  // the trash icon that never renders for non-admins.
+  // May 2026 batch #4 item #2 — admin photo deletion handler.
+  //
+  // Two distinct cases the handler MUST deal with:
+  //
+  //   (a) REAL image — has an image_id, lives in spot.images[]. Calls
+  //       DELETE /api/admin/spots/{id}/images/{image_id}, which
+  //       auto-promotes the next photo to cover if this was the cover.
+  //
+  //   (b) SYNTHETIC cover_override — the orderedImages memo prepends
+  //       a fake row when `hero_cover_image_url` doesn't match any
+  //       entry in spot.images (admin set a cover from an external
+  //       URL). Deleting that row means CLEARING the admin cover
+  //       override, not deleting an actual image. We hit the existing
+  //       `POST /admin/spots/{id}/cover/clear` endpoint instead.
+  //
+  // Both paths share the same confirmation dialog + optimistic UI +
+  // revert-on-failure behaviour so the admin sees consistent UX.
   const onDeletePhoto = useCallback(async (img: any) => {
     if (!isAdminUser || !img) return;
+    const isCoverOverride = img.source === 'cover_override';
     const imageId = img.image_id || img.image_url;
     if (!imageId) {
       Alert.alert("Couldn't delete", 'This photo is missing an identifier.');
       return;
     }
+    const confirmCopy = isCoverOverride
+      ? `This will clear the custom cover photo on ${spot?.title || 'this spot'} and fall back to the next photo. Continue?`
+      : `This will remove the photo from ${spot?.title || 'this spot'}. This cannot be undone.`;
     const confirm = await new Promise<boolean>((resolve) => {
       Alert.alert(
-        'Delete this photo?',
-        `This will remove the photo from ${spot?.title || 'this spot'}. This cannot be undone.`,
+        isCoverOverride ? 'Clear cover photo?' : 'Delete this photo?',
+        confirmCopy,
         [
           { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-          { text: 'Delete', style: 'destructive', onPress: () => resolve(true) },
+          {
+            text: isCoverOverride ? 'Clear cover' : 'Delete',
+            style: 'destructive',
+            onPress: () => resolve(true),
+          },
         ],
         { cancelable: true, onDismiss: () => resolve(false) },
       );
     });
     if (!confirm) return;
-    // Optimistic UI — immediately drop the photo locally so the
-    // carousel doesn't feel laggy. Revert on failure.
+    // Optimistic UI — hide the photo locally. Revert on failure.
     const prevSpot = spot;
     const prevIdx = galleryIdx;
     setSpot((s: any) => {
       if (!s) return s;
+      if (isCoverOverride) {
+        // Clearing cover override: drop hero_cover_image_url locally so
+        // the orderedImages memo doesn't re-prepend the synthetic row.
+        return { ...s, hero_cover_image_url: null, admin_cover_override: null };
+      }
       const kept = (s.images || []).filter(
         (im: any) => (im.image_id || im.image_url) !== imageId,
       );
@@ -285,14 +311,21 @@ export default function SpotDetail() {
     });
     setGalleryIdx(0);
     try {
-      await api.delete(`/admin/spots/${id}/images/${encodeURIComponent(imageId)}`);
+      if (isCoverOverride) {
+        await api.delete(`/admin/spots/${id}/cover`);
+      } else {
+        await api.delete(`/admin/spots/${id}/images/${encodeURIComponent(imageId)}`);
+      }
       // Refresh authoritative state + cover promotion from server.
       await load();
     } catch (e: any) {
       // Revert optimistic update.
       setSpot(prevSpot);
       setGalleryIdx(prevIdx);
-      Alert.alert("Couldn't delete photo", formatApiError(e) || 'Please try again.');
+      Alert.alert(
+        isCoverOverride ? "Couldn't clear cover" : "Couldn't delete photo",
+        formatApiError(e) || 'Please try again.',
+      );
     }
   }, [isAdminUser, id, spot, galleryIdx, load]);
 
@@ -415,32 +448,42 @@ export default function SpotDetail() {
           {/* May 2026 batch #4 item #2 — ADMIN photo delete control.
               Positioned top-right per spec, pill-shaped with an
               explicit "DELETE" label so admins can find it at a
-              glance. Red background with hairline border for high
-              visibility over any photo. Render-time gated on role —
-              the pill is not emitted into the tree for non-admins
-              (no "disabled" ghost control). Only the CURRENTLY-
-              visible carousel photo shows its own delete pill; other
-              photos surface their pill as the user swipes to them.
+              glance rather than a tiny icon they miss. Red background
+              with hairline white border for high visibility over any
+              photo. Render-time gated on role — the pill is not
+              emitted into the tree for non-admins (no "disabled"
+              ghost control).
 
-              The `photo-counter` tag on the opposite side ("3 / 7")
-              gives admins a passive hint that each numbered photo can
-              be removed independently. */}
-          {isAdminUser && orderedImages[galleryIdx] && (orderedImages[galleryIdx].image_id || orderedImages[galleryIdx].image_url) && orderedImages[galleryIdx].source !== 'cover_override' ? (
+              Behaviour dual-purposes on the photo type:
+                · real image (has image_id in spot.images[]) → DELETE
+                  pill → hits DELETE /admin/spots/:id/images/:imageId
+                · synthetic cover_override (hero_cover_image_url not
+                  in spot.images) → "CLEAR COVER" pill → hits
+                  POST /admin/spots/:id/cover/clear
+              Both flows confirm before acting. See onDeletePhoto. */}
+          {isAdminUser && orderedImages[galleryIdx] && (orderedImages[galleryIdx].image_id || orderedImages[galleryIdx].image_url) ? (
             <>
               <TouchableOpacity
                 onPress={() => onDeletePhoto(orderedImages[galleryIdx])}
                 style={styles.photoDeletePill}
                 testID="spot-admin-delete-photo"
-                accessibilityLabel={`Delete photo ${galleryIdx + 1} of ${orderedImages.length} (admin)`}
+                accessibilityLabel={
+                  orderedImages[galleryIdx].source === 'cover_override'
+                    ? `Clear cover photo (admin)`
+                    : `Delete photo ${galleryIdx + 1} of ${orderedImages.length} (admin)`
+                }
                 hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
               >
                 <Trash2 color="#fff" size={14} strokeWidth={2.25} />
-                <Text style={styles.photoDeletePillTxt}>DELETE</Text>
+                <Text style={styles.photoDeletePillTxt}>
+                  {orderedImages[galleryIdx].source === 'cover_override'
+                    ? 'CLEAR COVER'
+                    : 'DELETE'}
+                </Text>
               </TouchableOpacity>
-              {/* Photo counter + admin hint tag — mirror-side of the
-                  delete pill. Serves a double purpose: (1) positional
-                  context ("I'm on 3 of 7"), (2) reminds admins that
-                  each photo can be deleted individually. */}
+              {/* Passive ADMIN context tag on the opposite side. Tells
+                  the admin they're in admin mode + which photo they're
+                  on so they understand each photo can be removed. */}
               <View style={styles.photoAdminTag} pointerEvents="none">
                 <Shield color={colors.primary} size={11} />
                 <Text style={styles.photoAdminTagTxt}>
