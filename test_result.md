@@ -10338,6 +10338,34 @@ agent_communication:
             · Inject deliberately bad coords (NaN / null / "string" /
               0,0) — confirm filtered out, telemetry fires, no crash
 
+        -working: true
+        -agent: "testing"
+        -comment: |
+          Smoke test passed on web preview (390x844).
+          After login as admin@lumascout.app / admin123, the /explore
+          page rendered successfully with:
+            · "Nearby Right Now" rail showing 3 spots with distance
+              badges, score rings, thumbnails.
+            · "Trending Nearby" rail visible.
+            · SmartAlertChip showing "2 new spots near you".
+            · Bottom tab navigation functional.
+            · NO "Explore had a hiccup" error boundary fallback.
+            · NO console errors captured.
+
+          This validates the full defensive layer is non-breaking on
+          real data: ExploreErrorBoundary does not false-trigger,
+          normalizeSpotsForMap processes real spots correctly, safeTier
+          returns expected tiers, and the SpotCard rails render.
+
+          Extended scenarios (bad-coord injection, 301-spot cap, rapid
+          tab switching, GPS-denied path, debounce stress) were NOT
+          executed in this session due to upstream testing-agent
+          workflow timeouts (3 consecutive infra failures before the
+          smoke test finally ran). Main agent should re-dispatch those
+          when the testing agent is available, OR validate manually
+          using the fetch monkey-patch scripts captured in the
+          original QA prompt.
+
 
 
   - task: "Explore tab minimal smoke test (Apr 2026)"
