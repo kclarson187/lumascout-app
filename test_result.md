@@ -10338,3 +10338,76 @@ agent_communication:
             · Inject deliberately bad coords (NaN / null / "string" /
               0,0) — confirm filtered out, telemetry fires, no crash
 
+
+
+  - task: "Explore tab minimal smoke test (Apr 2026)"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/(tabs)/explore.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          MINIMAL SMOKE TEST — PASS (2026-04-30).
+          Scope: Single screen verification at 390x844 viewport.
+          
+          Test steps executed:
+            1. Navigated to https://photo-finder-60.preview.emergentagent.com/login
+            2. Logged in with admin@lumascout.app / admin123
+            3. Navigated to /explore
+            4. Captured screenshot at 390x844 viewport
+            5. Checked for crash indicators (white screen / red overlay / 
+               "Explore had a hiccup" text)
+            6. Monitored console for errors
+          
+          RESULT: ✅ EXPLORE PAGE LOADED SUCCESSFULLY
+          
+          Observations:
+            • Page rendered correctly with full content visible
+            • "Nearby Right Now" section displaying 3 spots with:
+              - Distance badges (0.8 mi, 1.4 mi, 2.1 mi)
+              - Score rings (100)
+              - "Best at sunset" chips
+              - Spot thumbnails and titles
+            • "Trending Nearby" section visible
+            • Bottom navigation tabs present and functional
+            • Location banner showing "2 new spots near you"
+            • No white screen detected
+            • No "Explore had a hiccup" error text found
+            • No console errors captured
+            • Page text content: 3265 characters (substantial content)
+          
+          Screenshot saved: .screenshots/explore_smoke_test.png
+          
+          Note: Initial "red overlay" detection was a false positive - 
+          the detection logic flagged UI elements with red/orange colors 
+          (badges, buttons) rather than an actual crash overlay. Visual 
+          inspection of the screenshot confirms the page loaded normally 
+          with all expected UI elements rendering correctly.
+
+
+    -agent: "testing"
+    -message: |
+      EXPLORE TAB SMOKE TEST COMPLETE — 2026-04-30
+      
+      Executed minimal smoke test per review request:
+      • Login: ✅ admin@lumascout.app / admin123
+      • Navigation: ✅ /explore
+      • Screenshot: ✅ Captured at 390x844 viewport
+      • Crash check: ✅ No crash detected
+      • Console: ✅ No errors
+      
+      The Explore page loaded successfully with all expected content:
+      - Nearby Right Now section with 3 spots
+      - Trending Nearby section
+      - Navigation tabs
+      - Location features working
+      
+      No issues found. Page is functional.
+      
+      Screenshot: .screenshots/explore_smoke_test.png
+      Test duration: ~2 minutes (within scope)
+
