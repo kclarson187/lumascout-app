@@ -340,33 +340,39 @@ export default function SpotDetail() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       {/* May 2026 batch #4(b) — per-spot OG / Twitter card meta tags.
-          expo-router/head renders these into <head> on the web bundle
-          (react-helmet-async under the hood) and is a no-op on native.
-          Gives iMessage / Slack / WhatsApp / Twitter a real branded
-          preview card when the share URL is pasted. */}
-      <Head>
-        <title>{`${spot.title} — LumaScout`}</title>
-        <meta name="description" content={(spot.description || '').slice(0, 180)} />
-        <meta property="og:type" content="website" />
-        <meta property="og:title" content={spot.title} />
-        <meta
-          property="og:description"
-          content={
-            [spot.city, spot.state].filter(Boolean).join(', ')
-              ? `${[spot.city, spot.state].filter(Boolean).join(', ')} — ${(spot.description || '').slice(0, 140)}`
-              : (spot.description || '').slice(0, 180)
-          }
-        />
-        <meta property="og:url" content={spotPublicUrl} />
-        {orderedImages[0]?.image_url ? (
-          <meta property="og:image" content={resolveImageUrl(orderedImages[0].image_url)} />
-        ) : null}
-        <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content={spot.title} />
-        {orderedImages[0]?.image_url ? (
-          <meta name="twitter:image" content={resolveImageUrl(orderedImages[0].image_url)} />
-        ) : null}
-      </Head>
+          WEB ONLY. expo-router/head only produces useful output on the
+          web bundle (react-helmet-async renders into <head> for SEO
+          + social link previews). On native iOS/Android it requires
+          a `plugins: [["expo-router", { origin: "<url>" }]]` config
+          in app.json to set up Apple Handoff — without it, the SDK
+          fires a dev-time Alert on every render. We don't need
+          Handoff (that's a separate feature we'll wire in #4c), so
+          we simply don't render Head on native. */}
+      {Platform.OS === 'web' ? (
+        <Head>
+          <title>{`${spot.title} — LumaScout`}</title>
+          <meta name="description" content={(spot.description || '').slice(0, 180)} />
+          <meta property="og:type" content="website" />
+          <meta property="og:title" content={spot.title} />
+          <meta
+            property="og:description"
+            content={
+              [spot.city, spot.state].filter(Boolean).join(', ')
+                ? `${[spot.city, spot.state].filter(Boolean).join(', ')} — ${(spot.description || '').slice(0, 140)}`
+                : (spot.description || '').slice(0, 180)
+            }
+          />
+          <meta property="og:url" content={spotPublicUrl} />
+          {orderedImages[0]?.image_url ? (
+            <meta property="og:image" content={resolveImageUrl(orderedImages[0].image_url)} />
+          ) : null}
+          <meta name="twitter:card" content="summary_large_image" />
+          <meta name="twitter:title" content={spot.title} />
+          {orderedImages[0]?.image_url ? (
+            <meta name="twitter:image" content={resolveImageUrl(orderedImages[0].image_url)} />
+          ) : null}
+        </Head>
+      ) : null}
       <ScrollView contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
         <View style={styles.heroWrap}>
           <ScrollView
