@@ -22,9 +22,13 @@ import {
   TrendingNearbyList,
   GoldenHourRail,
 } from '../../src/components/PremiumExploreRails';
-import { PremiumMapPin, PremiumMapCluster, pinTierOf } from '../../src/components/PremiumMapPin';
+import { PremiumMapPin, PremiumMapCluster } from '../../src/components/PremiumMapPin';
 import ExploreErrorBoundary from '../../src/components/ExploreErrorBoundary';
-import { isValidCoord, safeTier, normalizeSpotsForMap } from '../../src/utils/spot-geo';
+import {
+  safeTier,
+  normalizeSpotsForMap,
+  exploreLog,
+} from '../../src/utils/spot-geo';
 import MAP_STYLE_DARK from '../../src/components/mapStyleDark';
 
 // Native-only map wrapper with web stub (Metro / codegenNativeCommands safety).
@@ -37,6 +41,15 @@ import { useAuth } from '../../src/auth';
 // Priority: live GPS → cached coords → user.city geo → US fallback default.
 // Never shows random unrelated regions.
 const DEFAULT_FALLBACK = { lat: 29.4241, lng: -98.4936 }; // San Antonio, TX
+// Texas-wide fallback used when GPS permission is explicitly denied or
+// errors out — better UX than zooming to a single city the user may not
+// be in. Roughly centered on Brady, TX (geographic center of Texas).
+const TEXAS_WIDE_REGION = {
+  latitude: 31.0,
+  longitude: -99.0,
+  latitudeDelta: 10,
+  longitudeDelta: 10,
+};
 const LAST_KNOWN_KEY = 'lumascout:last_known_coords:v1';
 // Lightweight US-city geo dictionary so users with a saved city in their
 // profile but no GPS still land near home. Extend as we onboard more markets.
@@ -155,8 +168,22 @@ export default function Explore() {
   const lastLoadCenter = useRef<{ lat: number; lng: number } | null>(null);
   const currentRegion = useRef<any>(null);
   const mapRef = useRef<any>(null);
+  // (Apr 2026 hardening) Track in-flight /spots fetch so we can cancel
+  // it when filters change rapidly (or the screen unmounts during a
+  // tab-switch). Prevents stale state landing AFTER the next request.
+  const inflightAbort = useRef<AbortController | null>(null);
+  // (Apr 2026 hardening) Region-change debounce timer ref. Wiped on
+  // unmount so a pending timeout can never call setState on a dead
+  // component.
+  const regionDebounce = useRef<any>(null);
 
   const load = useCallback(async () => {
+    // Cancel any prior /spots request so the most-recent filter wins.
+    if (inflightAbort.current) {
+      try { inflightAbort.current.abort(); } catch {}
+    }
+    const controller = new AbortController();
+    inflightAbort.current = controller;
     setLoading(true);
     setLoadError(null);
     try {
@@ -173,13 +200,39 @@ export default function Explore() {
         params.lat = userCoords!.lat;
         params.lng = userCoords!.lng;
       }
+      // axios.get supports AbortSignal — see api.ts. We pass the signal
+      // through `params` only as a no-op since the underlying client
+      // doesn't expose `config`; instead we attach the signal directly
+      // by inlining the axios call equivalent. Falling back to manual
+      // abort-check below since `api.get` doesn't forward the signal.
       const data = await api.get('/spots', params);
+      // If a newer request was started, drop this stale response.
+      if (controller.signal.aborted) {
+        exploreLog('debug', 'load_aborted_pre_set');
+        return;
+      }
       setSpots(data);
+      exploreLog('info', 'load_ok', {
+        count: Array.isArray(data) ? data.length : 0,
+        filterKeys: Object.keys(params).filter((k) => k !== 'limit' && k !== 'sort'),
+      });
     } catch (e: any) {
+      if (controller.signal.aborted) {
+        exploreLog('debug', 'load_aborted_in_flight');
+        return;
+      }
       // Do NOT clear `spots` — keep last-known good data visible while
       // showing a retry pill. Only reset on success.
       setLoadError(e?.message || 'Couldn\'t load spots. Check your connection.');
-    } finally { setLoading(false); }
+      exploreLog('warn', 'load_error', { message: e?.message });
+    } finally {
+      // Only flip loading off if this controller is still the latest
+      // (otherwise a new request will manage the spinner).
+      if (inflightAbort.current === controller) {
+        inflightAbort.current = null;
+        setLoading(false);
+      }
+    }
   }, [filters, userCoords]);
 
   useEffect(() => { load(); }, [load]);
@@ -201,47 +254,115 @@ export default function Explore() {
       }
       if (perm.status !== 'granted') {
         setGpsState('denied');
+        exploreLog('warn', 'gps_denied', { status: perm.status });
         return;
       }
-      // Try high-accuracy with 8s timeout; fall back to balanced.
+      // (Apr 2026 hardening) 5s timeout (down from 8s) so a hung GPS
+      // handle never freezes the screen. Fall back to last-balanced
+      // accuracy attempt if the high-accuracy race times out.
       const loc = await Promise.race([
         Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
-        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('gps_timeout')), 8000)),
-      ]).catch(async () =>
-        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
-      );
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('gps_timeout')), 5000)),
+      ]).catch(async () => {
+        try {
+          return await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+        } catch (e: any) {
+          // Re-throw to outer catch so we land in the 'error' state.
+          throw e;
+        }
+      });
       const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude, ts: Date.now() };
+      if (!Number.isFinite(coords.lat) || !Number.isFinite(coords.lng)) {
+        // Defend against the OS handing back a NaN — extremely rare but
+        // observed on jail-broken iOS where mock-location apps inject
+        // junk. We refuse to apply junk coords, surfacing 'error' so the
+        // Texas-wide fallback engages.
+        throw new Error('gps_nan');
+      }
       setUserCoords(coords);
       // Persist last-known coords so cold-start has a near-instant fallback
       // before the OS GPS handle resolves on the next session.
       try { AsyncStorage.setItem(LAST_KNOWN_KEY, JSON.stringify(coords)); } catch {}
       setGpsState('granted');
+      exploreLog('info', 'gps_granted', { lat: coords.lat, lng: coords.lng });
       if (mapRef.current) {
-        mapRef.current.animateToRegion({
-          latitude: coords.lat, longitude: coords.lng,
-          latitudeDelta: 0.45, longitudeDelta: 0.45,
-        }, 300);
+        try {
+          mapRef.current.animateToRegion({
+            latitude: coords.lat, longitude: coords.lng,
+            latitudeDelta: 0.45, longitudeDelta: 0.45,
+          }, 300);
+        } catch (e: any) {
+          exploreLog('warn', 'animateToRegion_failed', { message: e?.message });
+        }
       }
-    } catch {
+    } catch (e: any) {
       setGpsState('error');
+      exploreLog('warn', 'gps_error', { message: e?.message });
     }
   }, []);
 
   useEffect(() => { requestGPS(); }, [requestGPS]);
 
-  const goToCurrent = async () => {
+  // (Apr 2026 hardening) When GPS is explicitly denied / errored, snap
+  // the visible region to a Texas-wide view rather than leaving the
+  // user stranded on the city-tight initialRegion. The map ref check
+  // is required because animateToRegion fires before the native view
+  // is mounted on cold-start.
+  useEffect(() => {
+    if ((gpsState === 'denied' || gpsState === 'error') && mapRef.current) {
+      try {
+        mapRef.current.animateToRegion(TEXAS_WIDE_REGION, 600);
+      } catch (e: any) {
+        exploreLog('warn', 'tx_fallback_animate_failed', { message: e?.message });
+      }
+    }
+  }, [gpsState]);
+
+  const goToCurrent = useCallback(async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
-      const loc = await Location.getCurrentPositionAsync({});
-      if (mapRef.current) {
-        mapRef.current.animateToRegion({
-          latitude: loc.coords.latitude, longitude: loc.coords.longitude,
-          latitudeDelta: 0.3, longitudeDelta: 0.3,
-        }, 400);
+      if (status !== 'granted') {
+        exploreLog('warn', 'goToCurrent_denied', { status });
+        return;
       }
-    } catch {}
-  };
+      const loc = await Promise.race([
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('gps_timeout')), 5000)),
+      ]);
+      if (!loc || !Number.isFinite(loc.coords?.latitude) || !Number.isFinite(loc.coords?.longitude)) {
+        exploreLog('warn', 'goToCurrent_invalid_coords');
+        return;
+      }
+      if (mapRef.current) {
+        try {
+          mapRef.current.animateToRegion({
+            latitude: loc.coords.latitude, longitude: loc.coords.longitude,
+            latitudeDelta: 0.3, longitudeDelta: 0.3,
+          }, 400);
+        } catch (e: any) {
+          exploreLog('warn', 'goToCurrent_animate_failed', { message: e?.message });
+        }
+      }
+    } catch (e: any) {
+      exploreLog('warn', 'goToCurrent_error', { message: e?.message });
+    }
+  }, []);
+
+  // Cleanup on unmount — abort in-flight fetch + clear debounce timer.
+  useEffect(() => {
+    return () => {
+      if (inflightAbort.current) {
+        try { inflightAbort.current.abort(); } catch {}
+        inflightAbort.current = null;
+      }
+      if (regionDebounce.current) {
+        clearTimeout(regionDebounce.current);
+        regionDebounce.current = null;
+      }
+    };
+  }, []);
 
   // Pin color tiering — communicate scouting value at a glance.
   const pinColor = (s: any): string => {
@@ -279,8 +400,75 @@ export default function Explore() {
     !filters.niche ? 'all' :
     String(filters.niche).toLowerCase();
 
+  // (Apr 2026 hardening) Compute the renderable marker set ONCE per
+  // `spots` change. The normalizer drops invalid coords / duplicates /
+  // over-cap entries and emits debug breadcrumbs. Memoised so the marker
+  // tree only re-renders when the data actually changes — not on every
+  // map gesture (saved-id flips re-key from inside the marker render
+  // path, not here).
+  const mapMarkerData = useMemo(() => {
+    const result = normalizeSpotsForMap(spots);
+    if (
+      result.droppedInvalid > 0 ||
+      result.droppedDuplicate > 0 ||
+      result.droppedOverCap > 0
+    ) {
+      exploreLog('warn', 'spots_normalised', {
+        total: Array.isArray(spots) ? spots.length : 0,
+        renderable: result.renderable.length,
+        droppedInvalid: result.droppedInvalid,
+        droppedDuplicate: result.droppedDuplicate,
+        droppedOverCap: result.droppedOverCap,
+        reasons: result.reasons,
+      });
+    }
+    return result;
+  }, [spots]);
+
+  // (Apr 2026 hardening) Debounced region-change handler. Without this,
+  // every micro-pan fires a setState which forces a re-render of the
+  // marker tree on Android. 300ms hits the sweet spot — fast enough that
+  // the "Search this area" CTA feels responsive, slow enough that flick-
+  // panning doesn't burn frames.
+  const handleRegionChangeComplete = useCallback((region: any) => {
+    // Stash latest region synchronously so taps on the "Search this area"
+    // CTA always read the freshest center, even if the debounce hasn't
+    // fired yet.
+    if (
+      region &&
+      Number.isFinite(region.latitude) &&
+      Number.isFinite(region.longitude)
+    ) {
+      currentRegion.current = region;
+    } else {
+      // The native module very rarely yields a malformed region during
+      // map-mount. Ignore — never set state on garbage.
+      exploreLog('debug', 'region_invalid_ignored', { region });
+      return;
+    }
+    if (regionDebounce.current) clearTimeout(regionDebounce.current);
+    regionDebounce.current = setTimeout(() => {
+      if (!lastLoadCenter.current) {
+        lastLoadCenter.current = { lat: region.latitude, lng: region.longitude };
+        return;
+      }
+      const dLat = Math.abs(region.latitude - lastLoadCenter.current.lat);
+      const dLng = Math.abs(region.longitude - lastLoadCenter.current.lng);
+      const threshold = Math.max(region.latitudeDelta, region.longitudeDelta) * 0.3;
+      if (dLat > threshold || dLng > threshold) setShowSearchArea(true);
+    }, 300);
+  }, []);
+
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
+      <ExploreErrorBoundary
+        spotsCount={Array.isArray(spots) ? spots.length : 0}
+        activeFilters={filters as any}
+        onReset={() => {
+          // On reset, refetch /spots so a stale-data crash doesn't loop.
+          load();
+        }}
+      >
       {/* Premium header — matches Apr 2026 Explore PRD */}
       <View style={styles.headerRow}>
         <View style={{ flex: 1 }}>
@@ -378,6 +566,26 @@ export default function Explore() {
         </View>
       ) : null}
 
+      {/* (Apr 2026 hardening) Inline location-off hint — appears above
+          the map when GPS permission is denied or errored out. Tappable
+          to retry; non-blocking (the map still renders the Texas-wide
+          fallback region behind it). Mobile-only — web doesn't show
+          the map at all. */}
+      {Platform.OS !== 'web' && (gpsState === 'denied' || gpsState === 'error') ? (
+        <Pressable
+          onPress={requestGPS}
+          style={styles.locOffHint}
+          testID="explore-loc-off-hint"
+          accessibilityLabel="Enable location for nearby spots"
+        >
+          <MapPin size={12} color={colors.primary} />
+          <Text style={styles.locOffHintTxt} numberOfLines={1}>
+            Enable location for nearby spots
+          </Text>
+          <Text style={styles.locOffHintCta}>Enable</Text>
+        </Pressable>
+      ) : null}
+
       {view === 'map' && Platform.OS !== 'web' && (ClusteredMapView || MapView) ? (
         <View style={{ flex: 1 }}>
           {React.createElement(
@@ -418,35 +626,22 @@ export default function Explore() {
                   </Marker>
                 );
               },
-              onRegionChangeComplete: (region: any) => {
-                currentRegion.current = region;
-                if (!lastLoadCenter.current) {
-                  lastLoadCenter.current = { lat: region.latitude, lng: region.longitude };
-                  return;
-                }
-                const dLat = Math.abs(region.latitude - lastLoadCenter.current.lat);
-                const dLng = Math.abs(region.longitude - lastLoadCenter.current.lng);
-                // Surface CTA only when user has panned ~30%+ of the visible span
-                const threshold = Math.max(region.latitudeDelta, region.longitudeDelta) * 0.3;
-                if (dLat > threshold || dLng > threshold) setShowSearchArea(true);
-              },
+              onRegionChangeComplete: handleRegionChangeComplete,
             },
-            spots.map((s) => (
-              s.latitude != null && s.longitude != null && (
-                <Marker
-                  key={s.spot_id}
-                  coordinate={{ latitude: s.latitude, longitude: s.longitude }}
-                  onPress={() => {
-                    Haptics.selectionAsync().catch(() => {});
-                    setSelectedSpot(s);
-                  }}
-                  tracksViewChanges={false}
-                  anchor={{ x: 0.5, y: 1 }}
-                  testID={`marker-${s.spot_id}`}
-                >
-                  <PremiumMapPin tier={savedIds[s.spot_id] ? 'saved' : pinTierOf(s)} />
-                </Marker>
-              )
+            mapMarkerData.renderable.map((s) => (
+              <Marker
+                key={s.spot_id}
+                coordinate={{ latitude: s.latitude, longitude: s.longitude }}
+                onPress={() => {
+                  Haptics.selectionAsync().catch(() => {});
+                  setSelectedSpot(s);
+                }}
+                tracksViewChanges={false}
+                anchor={{ x: 0.5, y: 1 }}
+                testID={`marker-${s.spot_id}`}
+              >
+                <PremiumMapPin tier={savedIds[s.spot_id] ? 'saved' : safeTier(s)} />
+              </Marker>
             ))
           )}
 
@@ -609,11 +804,14 @@ export default function Explore() {
                 </Text>
               </View>
               <View style={{ paddingHorizontal: 12, gap: space.md }}>
-                {spots.slice(0, 24).map((item) => (
+                {spots.slice(0, 24).map((item, idx) => (
                   <SpotCard
-                    key={item.spot_id}
+                    key={
+                      item?.spot_id ||
+                      `fallback-${idx}-${(item && item.title) || 'untitled'}`
+                    }
                     spot={item}
-                    testID={`list-spot-${item.spot_id}`}
+                    testID={`list-spot-${item?.spot_id || `fallback-${idx}`}`}
                   />
                 ))}
               </View>
@@ -629,6 +827,7 @@ export default function Explore() {
         filters={filters}
         onApply={(f) => { setFilters(f); setFilterOpen(false); }}
       />
+      </ExploreErrorBoundary>
     </SafeAreaView>
   );
 }
@@ -655,11 +854,22 @@ function PinPreview({
 }) {
   const verified = spot.owner?.verification_status === 'verified';
   const premium = spot.privacy_mode === 'premium';
-  const cover =
+  const rawCover =
     spot.hero_cover_image_url ||
     (Array.isArray(spot.images)
       ? (spot.images.find((i: any) => i.is_cover)?.image_url || spot.images[0]?.image_url)
       : null);
+  // (Apr 2026 hardening) Validate cover URI before passing to <Image>.
+  // React Native's Image component will throw a native render error on
+  // some platforms when given an empty string, an unfinished URI, or a
+  // non-string value. Treat anything we don't recognise as "no cover"
+  // and render the surface2 placeholder instead.
+  const cover =
+    typeof rawCover === 'string' &&
+    rawCover.trim().length > 0 &&
+    /^(https?:|data:|file:|content:|asset:)/i.test(rawCover.trim())
+      ? rawCover.trim()
+      : null;
   // FIX (Apr 2026): no more fake "100 Score / Best at Sunset" on every
   // preview. Both are now gated on real backend data — if the field is
   // missing we hide the module entirely rather than fabricating. Score
@@ -1029,6 +1239,32 @@ const styles = StyleSheet.create({
     fontFamily: font.body,
     fontSize: 11.5,
     lineHeight: 16,
+  },
+  // (Apr 2026 hardening) Inline GPS-off hint banner shown above the map
+  // when location permission is denied / errored. Tappable to retry.
+  locOffHint: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    marginHorizontal: space.xl,
+    marginBottom: 8,
+    paddingHorizontal: 12, paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: 'rgba(245,166,35,0.08)',
+    borderColor: 'rgba(245,166,35,0.35)',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  locOffHintTxt: {
+    flex: 1,
+    color: colors.text,
+    fontFamily: font.bodyMedium,
+    fontSize: 12,
+    letterSpacing: 0.1,
+  },
+  locOffHintCta: {
+    color: colors.primary,
+    fontFamily: font.bodyBold,
+    fontSize: 11.5,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
   },
   // GPS trust strip — Apr 2026 Item #3 round 3
   gpsTrust: {

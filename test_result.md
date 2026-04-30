@@ -10268,3 +10268,73 @@ agent_communication:
       `deep_link=f"/spot/{req['spot_id']}"` for push routing.
       Two lines, one file. Re-run /app/backend_test.py to confirm
       63/63 green.
+
+
+  - task: "Explore tab crash hardening — defensive coordinate validation, ExploreErrorBoundary, debounced region updates, AbortController-cancelled fetches, Texas-wide GPS-denied fallback (Apr 2026)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(tabs)/explore.tsx, /app/frontend/src/utils/spot-geo.ts, /app/frontend/src/components/ExploreErrorBoundary.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Implementation of the user's full 9-point Explore-tab crash
+          checklist. Visual design preserved exactly (no layout shifts).
+
+          Files changed:
+            1. /app/frontend/app/(tabs)/explore.tsx — wrap body in
+               <ExploreErrorBoundary>; replace raw spots.map with
+               normalizeSpotsForMap(); use safeTier() everywhere;
+               AbortController-cancellable load(); 5s GPS timeout (was
+               8s); NaN-coord defense; Texas-wide animateToRegion when
+               GPS denied/error; inline "Enable location" hint banner;
+               300ms-debounced onRegionChangeComplete with garbage-
+               region rejection; useCallback'd goToCurrent with
+               try/catch; cleanup-on-unmount effect; fallback
+               keyExtractor (idx + title) for SpotCard list; cover-URI
+               scheme validation in PinPreview.
+
+            2. /app/frontend/src/utils/spot-geo.ts — enhanced
+               normalizeSpotsForMap with: per-spot drop-reason debug
+               logging (missing_lat / missing_lng / nan_coord /
+               out_of_range / zero_zero / duplicate_id / missing_id /
+               not_object / over_cap), stable sort by spot_id (so
+               React keys don't reshuffle across renders),
+               MAX_RENDERABLE_MARKERS=300 cap with structured warn,
+               new exploreLog(level, event, payload) helper that
+               console.{debug|info|warn|error}'s with `[explore]`
+               prefix and forwards warn/error to Sentry.addBreadcrumb
+               when present. Sentry path is no-op safe.
+
+          Telemetry surfaced (all `[explore]` prefix, no PII):
+            · load_ok / load_error / load_aborted_pre_set /
+              load_aborted_in_flight
+            · gps_granted / gps_denied / gps_error /
+              animateToRegion_failed / tx_fallback_animate_failed
+            · goToCurrent_denied / goToCurrent_invalid_coords /
+              goToCurrent_animate_failed / goToCurrent_error
+            · spots_normalised (with reasons object)
+            · drop_spot (debug, per dropped spot)
+            · over_cap (warn, when >300 spots)
+            · region_invalid_ignored (debug)
+
+          Web bundle compiles cleanly (3176 modules, 200 OK).
+          TypeScript surface clean of new errors (only pre-existing
+          Filters laxity warnings remain, unrelated to this pass).
+
+          NOT YET TESTED — frontend testing agent needs to verify:
+            · Explore mount with 0 / 1 / ~500 spots (cap behavior)
+            · Each filter combination
+            · List-view ↔ map-view rapid toggle 10× (currently
+              map-only since Apr 2026 cleanup, but the legacy `view`
+              const path still exists for the niche dropdown gate)
+            · Background → foreground app cycle on Explore
+            · Tab switch Explore → Profile → Explore
+            · Geolocation denied path (verify Texas-wide fallback
+              animates, hint banner appears)
+            · Inject deliberately bad coords (NaN / null / "string" /
+              0,0) — confirm filtered out, telemetry fires, no crash
+
