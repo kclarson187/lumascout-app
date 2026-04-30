@@ -854,6 +854,15 @@ async def _hard_delete_upload_file(image_url: Optional[str], ignore_spot_id: Opt
     if other_ref:
         result["reason"] = f"still_referenced_by_spot_{other_ref.get('spot_id')}"
         return result
+    # Also check the community-upload surface so a file referenced
+    # only by a community post isn't prematurely unlinked.
+    community_ref = await db.spot_community_uploads.find_one(
+        {"image_url": image_url},
+        {"_id": 1, "spot_id": 1},
+    )
+    if community_ref:
+        result["reason"] = f"still_referenced_by_community_upload"
+        return result
     # Nothing else points at this file — unlink.
     try:
         if fs_path.exists():
@@ -933,6 +942,8 @@ async def admin_delete_spot_photo(
     # Treat it as a cover-override delete: clear the override fields
     # and promote the next real image.
     is_cover_override_only = False
+    is_community_upload = False
+    community_doc: Optional[Dict[str, Any]] = None
     removed_url: Optional[str] = None
     if removed is None:
         override_url = (spot.get("admin_cover_override") or {}).get("image_url")
@@ -941,7 +952,27 @@ async def admin_delete_spot_photo(
             removed_url = image_id if (override_url == image_id) else cover_url
             removed = {"image_id": None, "image_url": removed_url, "caption": None, "is_cover": True}
         else:
-            raise HTTPException(status_code=404, detail="Image not found in spot")
+            # ---- community upload case ----
+            # The URL isn't tracked in spots.images[], hero_cover, or
+            # admin_cover_override — but community uploads feed the
+            # auto-cover logic (`hero_cover_source: recent_most_liked`).
+            # When an admin sees an auto-derived cover from a community
+            # upload, we look up and hard-delete that community post.
+            community_doc = await db.spot_community_uploads.find_one(
+                {"image_url": image_id, "spot_id": spot_id},
+                {"_id": 0},
+            )
+            if community_doc:
+                is_community_upload = True
+                removed_url = image_id
+                removed = {
+                    "image_id": community_doc.get("upload_id"),
+                    "image_url": removed_url,
+                    "caption": community_doc.get("caption"),
+                    "is_cover": True,  # auto-cover derived from this
+                }
+            else:
+                raise HTTPException(status_code=404, detail="Image not found in spot")
     else:
         removed_url = removed.get("image_url")
 
@@ -989,12 +1020,42 @@ async def admin_delete_spot_photo(
             else:
                 update_unset["hero_cover_image_url"] = ""
 
+    # For community-upload case, images[] is NOT touched (the URL
+    # isn't in spots.images[] — it lived only in spot_community_uploads).
+    # We STILL clear any lingering hero_cover_image_url that referenced
+    # this URL, so the next auto-cover refresh picks a different post.
+    if is_community_upload:
+        # Overwrite images[] preservation: use the original (untouched).
+        update_set.pop("images", None)
+        # Also make sure we're not rebuilding cover from stale fields.
+        if spot.get("hero_cover_image_url") == removed_url:
+            update_unset["hero_cover_image_url"] = ""
+
     update_ops: Dict[str, Any] = {"$set": update_set}
     if update_unset:
         update_ops["$unset"] = update_unset
     await db.spots.update_one({"spot_id": spot_id}, update_ops)
 
+    # ---- community-upload DB deletion (only for is_community_upload) ----
+    community_cleanup: Dict[str, Any] = {"attempted": False}
+    if is_community_upload and community_doc:
+        community_cleanup["attempted"] = True
+        upload_id = community_doc.get("upload_id")
+        try:
+            res = await db.spot_community_uploads.delete_one({
+                "upload_id": upload_id,
+                "spot_id": spot_id,
+            })
+            community_cleanup["deleted"] = res.deleted_count > 0
+            community_cleanup["upload_id"] = upload_id
+            community_cleanup["batch_id"] = community_doc.get("batch_id")
+        except Exception as _e:
+            community_cleanup["error"] = str(_e)
+
     # ---- hard-delete the underlying file (if local + unreferenced) ----
+    # (We call the file helper AFTER the community_uploads row is gone
+    # so the ref-count check correctly sees that no other record still
+    # points at the file.)
     file_cleanup = await _hard_delete_upload_file(removed_url, ignore_spot_id=spot_id)
 
     # ---- audit ----
@@ -1006,11 +1067,13 @@ async def admin_delete_spot_photo(
             "caption": removed.get("caption"),
             "was_cover": was_cover,
             "was_cover_override": is_cover_override_only,
+            "was_community_upload": is_community_upload,
         },
         after={
             "remaining_count": len(update_set.get("images", images)),
             "new_cover_image_url": new_cover_url,
             "file_cleanup": file_cleanup,
+            "community_cleanup": community_cleanup,
         },
         notes=f"Hard-deleted photo from spot '{spot.get('title', '')}' ({spot_id})",
     )
@@ -1020,10 +1083,12 @@ async def admin_delete_spot_photo(
             "image_id": removed.get("image_id"),
             "image_url": removed_url,
             "was_cover_override": is_cover_override_only,
+            "was_community_upload": is_community_upload,
         },
         "remaining_count": len(update_set.get("images", images)),
         "new_cover_image_url": new_cover_url,
         "file_cleanup": file_cleanup,
+        "community_cleanup": community_cleanup,
     }
 
 
