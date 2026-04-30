@@ -62,10 +62,15 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 200,
-          "resizeMode": "contain",
-          "backgroundColor": "#0A0A0A"
+          "_comment": "Apr 2026 — switched to the full-bleed LumaScout splash. resizeMode='cover' guarantees the image fills the entire screen on every aspect ratio (iPhone SE through iPhone 15 Pro Max, foldables, tablets) without letterboxing. Background matches the navy in the artwork so any sub-pixel edge band blends seamlessly.",
+          "image": "./assets/splash/Splash-LumaScout.png",
+          "resizeMode": "cover",
+          "backgroundColor": "#020816",
+          "dark": {
+            "image": "./assets/splash/Splash-LumaScout.png",
+            "resizeMode": "cover",
+            "backgroundColor": "#020816"
+          }
         }
       ],
       "expo-web-browser"
