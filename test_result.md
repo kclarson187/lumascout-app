@@ -13,6 +13,171 @@
 #====================================================================================================
 
 
+  - task: "DELETE /api/admin/spots/{spot_id}/images/{image_id} — admin photo deletion (batch #4 item #2, May 2026)"
+    implemented: true
+    working: true
+    file: "/app/backend/routes/admin.py (admin_delete_spot_photo @ L794-896)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          FULL VALIDATION PASS — 38/38 assertions green via
+          /app/backend_test.py against http://localhost:8001/api.
+          Super_admin: admin@lumascout.app / Grayson@1117!!
+          (user_6daa7d0a3abc, role=super_admin). Target spot:
+          spot_9e0aeddb2804 (Pedernales Falls State Park, 2 images).
+          Throwaway free user registered via POST /auth/register
+          (photo_qa_<sfx>@lumascout-qa.com → user_dbfa26bdaee2).
+
+          SCENARIO 1 — Authorization (2/2):
+            · 1a DELETE with NO Authorization header → 401
+              Unauthorized ✓ (via HTTPBearer(auto_error=False)
+              -> get_current_user HTTPException).
+            · 1b DELETE with regular user-role JWT → 403
+              Forbidden ("Forbidden") ✓ via
+              require_role("admin") at admin.py:797. Since the
+              super_admin case is exercised in scenarios 2-4
+              below, all three auth states are covered.
+
+          SCENARIO 2 — Happy path, non-cover delete (7/7):
+            · Fetched /api/spots/spot_9e0aeddb2804; 2 images:
+              [img_d920bddccb (cover), img_78fb393658 (non-cover)].
+            · DELETE /api/admin/spots/.../images/img_78fb393658
+              → 200 with body:
+                {ok:true,
+                 removed:{image_id:"img_78fb393658",
+                          image_url:".../1518837695005-..."},
+                 remaining_count:1,
+                 new_cover_image_url:null}
+            · 2b body.ok==true ✓
+            · 2c removed.image_url matches the deleted URL ✓
+            · 2d remaining_count==1 (2-1) ✓
+            · 2e new_cover_image_url is null (cover untouched) ✓
+            · 2f Re-fetch /spots/{id} → images.length==1 ✓
+            · 2g hero_cover_image_url unchanged (still the
+              first image URL) ✓
+
+          SCENARIO 3 — Cover deletion with auto-promote (4/4):
+            · Restored spot images from Mongo snapshot back to
+              2 photos (happy-path had left it at 1).
+            · Confirmed images[0] (img_d920bddccb) is the cover
+              and images[1] (img_78fb393658) is the expected
+              promotion target.
+            · DELETE /api/admin/spots/.../images/img_d920bddccb
+              → 200 with body:
+                {ok:true,
+                 removed:{image_id:"img_d920bddccb",
+                          image_url:".../1470770841072-..."},
+                 remaining_count:1,
+                 new_cover_image_url:".../1518837695005-..."}
+            · 3b new_cover_image_url NOT null ✓
+            · 3c new_cover_image_url == previous images[1].image_url
+              (the exact URL that was promoted) ✓
+            · 3d Re-fetch /spots/{id} → hero_cover_image_url now
+              equals the promoted URL ✓. Note the response at
+              admin.py:864 also $set's hero_cover_image_url so
+              prepare_spot_for_view doesn't need to re-derive on
+              next read.
+
+          SCENARIO 4 — Last-photo deletion (5/5):
+            · Starting from 1 image (after scenario 3), executed
+              the final DELETE.
+            · 4a DELETE final photo → 200 ✓
+            · 4b body = {ok:true, remaining_count:0} ✓
+            · 4c new_cover_image_url is null ✓
+            · 4d Re-fetch /spots/{id} → images is []
+              (length 0) ✓
+            · 4e hero_cover_image_url is null/absent ✓
+              (endpoint correctly $unsets it when remaining==0
+              at admin.py:866).
+
+          SCENARIO 5 — Error cases (2/2):
+            · 5a DELETE /admin/spots/spot_does_not_exist_xyz/
+              images/anything → 404 Not Found with
+              detail="Spot not found" ✓
+            · 5b DELETE on a real spot with a bogus image_id
+              (nonexistent_image_999) → 404 Not Found with
+              detail="Image not found in spot" ✓. The endpoint
+              matches either image_id OR image_url (legacy rows),
+              so a random string correctly fails both checks.
+
+          SCENARIO 6 — Audit log (10/10):
+            · GET /api/admin/audit-logs?action=spot.photo.delete
+              → 200 with 4 entries (one per successful DELETE
+              across scenarios 2, 3, and the two drains in
+              scenario 4). Confirms audit_log() at admin.py:874
+              fires exactly once per successful delete call.
+            · 6c action == "spot.photo.delete" ✓
+            · 6d admin_user_id == "user_6daa7d0a3abc" ✓
+            · 6e admin_email == "admin@lumascout.app" ✓
+            · 6f admin_role == "super_admin" ✓
+            · 6g before.image_url present and non-empty ✓
+            · 6h before.was_cover is a bool (True in the latest
+              entry because the last-photo delete qualified as
+              the cover of a 1-item gallery) ✓
+            · 6i after.remaining_count is int (0) ✓
+            · 6j after.new_cover_image_url key present (null in
+              last entry, URL in scenario-3 entry) ✓
+            · Sample audit payload captured:
+                before={
+                  image_id: "img_78fb393658",
+                  image_url: ".../1518837695005-...",
+                  caption: None,
+                  was_cover: True
+                }
+                after={
+                  remaining_count: 0,
+                  new_cover_image_url: None
+                }
+              All spec fields present; no extra PII.
+
+          CLEANUP: the target spot_9e0aeddb2804 was restored to
+          its ORIGINAL 2-image state via a direct Mongo $set
+          using the pre-test snapshot. Post-restore verification:
+            GET /api/spots/spot_9e0aeddb2804 →
+              images.length == 2,
+              images[0]=img_d920bddccb is_cover=True,
+              images[1]=img_78fb393658 is_cover=False,
+              hero_cover_image_url restored to the original
+              cover URL.
+          NO DATA LOSS. The throwaway free user
+          user_dbfa26bdaee2 remains in the DB (small footprint,
+          can be purged via /admin/users/bulk-delete if desired).
+
+          Minor nit: the test harness's final `await
+          mongo_client.close()` line raised a TypeError
+          (motor's close() is sync). It fired AFTER all
+          assertions + the restore completed successfully, so
+          it did not affect test outcome. Harmless to leave; a
+          1-line fix (remove the `await`) would silence it.
+
+          ── VERDICT ──────────────────────────────────────────
+          DELETE /api/admin/spots/{spot_id}/images/{image_id}
+          is launch-ready. Behavior matches spec on every
+          dimension tested:
+          • 401 / 403 / 200 auth matrix correct.
+          • Non-cover delete returns new_cover_image_url=null
+            and leaves hero untouched.
+          • Cover delete auto-promotes the next image, updates
+            hero_cover_image_url, and returns the promoted URL
+            in the response body.
+          • Last-photo delete zeroes remaining_count, empties
+            images[], and $unsets hero_cover_image_url.
+          • 404s fire for both missing spot and missing image.
+          • Audit log entry is per-call (not per-spot) with
+            action="spot.photo.delete", full admin metadata,
+            and the complete before/after payload specified.
+
+          No 500s observed. Backend logs clean during the
+          entire run (see /var/log/supervisor/backend.out.log).
+          Test harness preserved at /app/backend_test.py.
+
+
+
+
   - task: "Admin cover-photo workflow — GET /api/admin/spots/{id}/cover-editor, PATCH /api/admin/spots/{id}/cover, DELETE /api/admin/spots/{id}/cover, hero_cover_image_url propagation to /api/spots/{id} and /api/spots list (Apr 2026 diagnostic)"
     implemented: true
     working: true

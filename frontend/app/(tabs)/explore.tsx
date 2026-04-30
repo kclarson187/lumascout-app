@@ -33,6 +33,7 @@ import MAP_STYLE_DARK from '../../src/components/mapStyleDark';
 
 // Native-only map wrapper with web stub (Metro / codegenNativeCommands safety).
 import { MapView, ClusteredMapView, Marker } from '../../src/components/maps-module';
+import SafeClusteredMapView from '../../src/components/SafeClusteredMapView';
 import { Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../../src/auth';
@@ -589,7 +590,7 @@ export default function Explore() {
       {view === 'map' && Platform.OS !== 'web' && (ClusteredMapView || MapView) ? (
         <View style={{ flex: 1 }}>
           {React.createElement(
-            ClusteredMapView || MapView,
+            SafeClusteredMapView,
             {
               ref: mapRef,
               style: { flex: 1 },

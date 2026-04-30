@@ -777,6 +777,125 @@ async def admin_reorder_spot_gallery(
                     before={"count": len(images)}, after={"count": len(ordered)})
     return {"ok": True, "count": len(ordered)}
 
+
+# ---------------------------------------------------------------------------
+# admin_delete_spot_photo — batch #4 item #2 (May 2026)
+#
+# Allows admins / super_admins to remove a single photo from a spot directly
+# from the Location Detail screen. Preserves audit trail and handles the
+# edge case where the deleted photo was the cover — auto-promotes the next
+# available photo as the new cover fallback.
+#
+# IMPORTANT: this endpoint is ADMIN-ONLY. Spot owners cannot use it (they
+# can reorder via /admin/spots/{id}/gallery which is also owner-accessible,
+# but destructive photo removal is admin-gated to prevent owners from
+# deleting user-uploaded community photos on their own spots).
+# ---------------------------------------------------------------------------
+@router.delete("/admin/spots/{spot_id}/images/{image_id}")
+async def admin_delete_spot_photo(
+    spot_id: str, image_id: str,
+    user: dict = Depends(require_role("admin")),
+):
+    """Remove a single photo from spots.images[] by image_id.
+
+    Returns:
+      { ok: True, removed: {...}, remaining_count: N, new_cover_image_url: str|None }
+
+    Behavior:
+      · 404 if spot doesn't exist.
+      · 404 if image_id isn't found in the spot.
+      · If the removed photo was is_cover OR matched hero_cover_image_url,
+        auto-promotes the next photo in the array to cover and rebuilds
+        admin_cover_override accordingly.
+      · Audit log entry with action="spot.photo.delete" including the
+        removed photo's image_url + caption.
+    """
+    spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "spot_id": 1, "images": 1, "admin_cover_override": 1, "hero_cover_image_url": 1, "title": 1})
+    if spot is None:
+        raise HTTPException(status_code=404, detail="Spot not found")
+
+    images = list(spot.get("images") or [])
+    # Find the image either by image_id OR by image_url (legacy rows may
+    # not have image_id — be forgiving).
+    removed = None
+    remaining = []
+    for im in images:
+        if not isinstance(im, dict):
+            remaining.append(im)
+            continue
+        if (im.get("image_id") == image_id) or (im.get("image_url") == image_id):
+            if removed is None:
+                removed = im
+                continue
+        remaining.append(im)
+    if removed is None:
+        raise HTTPException(status_code=404, detail="Image not found in spot")
+
+    removed_url = removed.get("image_url")
+    was_cover = (
+        bool(removed.get("is_cover"))
+        or (spot.get("hero_cover_image_url") == removed_url and removed_url)
+        or ((spot.get("admin_cover_override") or {}).get("image_url") == removed_url and removed_url)
+    )
+
+    # If the removed photo was the cover, promote the next one in the
+    # remaining list. If no photos remain, clear the override so the
+    # placeholder cover path kicks in.
+    new_cover_url: Optional[str] = None
+    update_set: Dict[str, Any] = {"images": remaining, "updated_at": utcnow()}
+    update_unset: Dict[str, Any] = {}
+    if was_cover:
+        # Clear any stale override pointing at the deleted photo; it's
+        # harmless to clear even if it pointed elsewhere — the front end
+        # reads is_cover from images[] too.
+        update_unset["admin_cover_override"] = ""
+        if remaining:
+            # Promote the first remaining photo.
+            first = dict(remaining[0])
+            first["is_cover"] = True
+            new_cover_url = first.get("image_url")
+            # Rebuild the images array with is_cover=True only on the
+            # first (everything else False) so there is a single cover.
+            rebuilt = [first] + [
+                {**dict(im), "is_cover": False} if isinstance(im, dict) else im
+                for im in remaining[1:]
+            ]
+            update_set["images"] = rebuilt
+            update_set["hero_cover_image_url"] = new_cover_url
+        else:
+            update_unset["hero_cover_image_url"] = ""
+
+    update_ops: Dict[str, Any] = {"$set": update_set}
+    if update_unset:
+        update_ops["$unset"] = update_unset
+
+    await db.spots.update_one({"spot_id": spot_id}, update_ops)
+
+    await audit_log(
+        user, "spot.photo.delete", "spot", spot_id,
+        before={
+            "image_id": removed.get("image_id"),
+            "image_url": removed_url,
+            "caption": removed.get("caption"),
+            "was_cover": was_cover,
+        },
+        after={
+            "remaining_count": len(remaining),
+            "new_cover_image_url": new_cover_url,
+        },
+        notes=f"Deleted photo from spot '{spot.get('title', '')}' ({spot_id})",
+    )
+    return {
+        "ok": True,
+        "removed": {
+            "image_id": removed.get("image_id"),
+            "image_url": removed_url,
+        },
+        "remaining_count": len(remaining),
+        "new_cover_image_url": new_cover_url,
+    }
+
+
 # --- admin_spot_cover_editor (server.py:5690-5747) ---
 @router.get("/admin/spots/{spot_id}/cover-editor")
 async def admin_spot_cover_editor(
