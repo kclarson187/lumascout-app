@@ -10,9 +10,11 @@ import React, { useEffect, useState, useCallback, useMemo } from 'react';import 
   Share,
   Linking,
   Platform,
+  Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams, useFocusEffect } from 'expo-router';
+import * as ExpoLinking from 'expo-linking';
 import Head from 'expo-router/head';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
@@ -175,7 +177,7 @@ export default function SpotDetail() {
     // the app installed; useless to anyone else. NEVER emit the dead
     // lumascout.app host — it doesn't serve the web bundle yet.
     try {
-      return Linking.createURL(`/spot/${id}`);
+      return ExpoLinking.createURL(`/spot/${id}`);
     } catch {
       return `/spot/${id}`;
     }
@@ -410,22 +412,42 @@ export default function SpotDetail() {
               <View key={img.image_url || `d${i}`} style={[styles.dot, i === galleryIdx && styles.dotActive]} />
             ))}
           </View>
-          {/* May 2026 batch #4 item #2 — admin photo delete overlay.
-              Shown ONLY when the viewer is admin or super_admin and the
-              current gallery photo has a real id/url (not a synthetic
-              cover-override placeholder). Render-time gate on role —
-              the trash icon is not emitted into the tree for non-admins
-              so there's no "disabled button" surface. */}
+          {/* May 2026 batch #4 item #2 — ADMIN photo delete control.
+              Positioned top-right per spec, pill-shaped with an
+              explicit "DELETE" label so admins can find it at a
+              glance. Red background with hairline border for high
+              visibility over any photo. Render-time gated on role —
+              the pill is not emitted into the tree for non-admins
+              (no "disabled" ghost control). Only the CURRENTLY-
+              visible carousel photo shows its own delete pill; other
+              photos surface their pill as the user swipes to them.
+
+              The `photo-counter` tag on the opposite side ("3 / 7")
+              gives admins a passive hint that each numbered photo can
+              be removed independently. */}
           {isAdminUser && orderedImages[galleryIdx] && (orderedImages[galleryIdx].image_id || orderedImages[galleryIdx].image_url) && orderedImages[galleryIdx].source !== 'cover_override' ? (
-            <TouchableOpacity
-              onPress={() => onDeletePhoto(orderedImages[galleryIdx])}
-              style={styles.photoDeleteBtn}
-              testID="spot-admin-delete-photo"
-              accessibilityLabel="Delete this photo (admin)"
-              hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
-            >
-              <Trash2 color="#fff" size={16} />
-            </TouchableOpacity>
+            <>
+              <TouchableOpacity
+                onPress={() => onDeletePhoto(orderedImages[galleryIdx])}
+                style={styles.photoDeletePill}
+                testID="spot-admin-delete-photo"
+                accessibilityLabel={`Delete photo ${galleryIdx + 1} of ${orderedImages.length} (admin)`}
+                hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
+              >
+                <Trash2 color="#fff" size={14} strokeWidth={2.25} />
+                <Text style={styles.photoDeletePillTxt}>DELETE</Text>
+              </TouchableOpacity>
+              {/* Photo counter + admin hint tag — mirror-side of the
+                  delete pill. Serves a double purpose: (1) positional
+                  context ("I'm on 3 of 7"), (2) reminds admins that
+                  each photo can be deleted individually. */}
+              <View style={styles.photoAdminTag} pointerEvents="none">
+                <Shield color={colors.primary} size={11} />
+                <Text style={styles.photoAdminTagTxt}>
+                  ADMIN · {galleryIdx + 1} / {orderedImages.length}
+                </Text>
+              </View>
+            </>
           ) : null}
         </View>
 
@@ -958,22 +980,60 @@ const styles = StyleSheet.create({
   },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.4)' },
   dotActive: { width: 20, backgroundColor: colors.primary },
-  // May 2026 — admin photo delete overlay. Positioned bottom-left of
-  // the hero to stay clear of the top-right header button row and the
-  // centered dots indicator. Red-tinted semi-transparent pill with a
-  // thin hairline border for visibility over any photo.
-  photoDeleteBtn: {
+  // May 2026 — admin photo delete pill (top-right per spec).
+  // Prominent pill with DELETE label so admins find it at a glance
+  // rather than a tiny icon they miss. Red fill, white hairline
+  // border, bold uppercase label. Safe distance from the status bar
+  // so iOS notch-safe on any device.
+  photoDeletePill: {
     position: 'absolute',
-    bottom: space.md,
-    left: space.md,
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: 'rgba(220, 38, 38, 0.82)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.45)',
+    top: 58,            // below the floating header button row
+    right: space.md,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderRadius: 18,
+    backgroundColor: 'rgba(220, 38, 38, 0.94)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.55)',
+    // soft shadow to lift off any photo
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  photoDeletePillTxt: {
+    color: '#fff',
+    fontFamily: font.bodyBold,
+    fontSize: 11,
+    letterSpacing: 0.8,
+  },
+  // Passive tag on the opposite (top-left) side of the hero — gives
+  // admins positional context ("ADMIN · 3 / 7") and reminds them that
+  // each photo can be deleted independently. Subtle gold tint to
+  // match the brand palette, no backdrop button, purely informational.
+  photoAdminTag: {
+    position: 'absolute',
+    top: 58,
+    left: space.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(245,166,35,0.45)',
+  },
+  photoAdminTagTxt: {
+    color: colors.primary,
+    fontFamily: font.bodyBold,
+    fontSize: 10.5,
+    letterSpacing: 0.6,
   },
   content: { padding: space.xl, gap: 6 },
   title: { color: colors.text, fontFamily: font.display, fontSize: 32, letterSpacing: -0.5, lineHeight: 38 },
