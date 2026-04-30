@@ -1036,26 +1036,40 @@ async def admin_delete_spot_photo(
         update_ops["$unset"] = update_unset
     await db.spots.update_one({"spot_id": spot_id}, update_ops)
 
-    # ---- community-upload DB deletion (only for is_community_upload) ----
+    # ---- community-upload DB deletion ----
+    # ALWAYS sweep the spot_community_uploads collection for ANY row
+    # matching this URL, regardless of which branch we took. A single
+    # upload can simultaneously live in admin_cover_override AND in
+    # spot_community_uploads — deleting only the override leaves the
+    # row behind in "Recent community uploads" / "Through the seasons"
+    # rails. True hard delete has to purge all surfaces.
     community_cleanup: Dict[str, Any] = {"attempted": False}
-    if is_community_upload and community_doc:
+    if removed_url:
         community_cleanup["attempted"] = True
-        upload_id = community_doc.get("upload_id")
         try:
-            res = await db.spot_community_uploads.delete_one({
-                "upload_id": upload_id,
-                "spot_id": spot_id,
-            })
-            community_cleanup["deleted"] = res.deleted_count > 0
-            community_cleanup["upload_id"] = upload_id
-            community_cleanup["batch_id"] = community_doc.get("batch_id")
+            # Delete ALL rows with this URL at this spot (defensive —
+            # there should be exactly one, but a duplicate upload bug
+            # in the past could have created two).
+            matching = await db.spot_community_uploads.find(
+                {"image_url": removed_url, "spot_id": spot_id},
+                {"_id": 0, "upload_id": 1, "batch_id": 1},
+            ).to_list(None)
+            if matching:
+                res = await db.spot_community_uploads.delete_many({
+                    "image_url": removed_url,
+                    "spot_id": spot_id,
+                })
+                community_cleanup["deleted"] = res.deleted_count
+                community_cleanup["upload_ids"] = [m.get("upload_id") for m in matching]
+                community_cleanup["batch_ids"] = list({m.get("batch_id") for m in matching if m.get("batch_id")})
+            else:
+                community_cleanup["deleted"] = 0
         except Exception as _e:
             community_cleanup["error"] = str(_e)
 
     # ---- hard-delete the underlying file (if local + unreferenced) ----
-    # (We call the file helper AFTER the community_uploads row is gone
-    # so the ref-count check correctly sees that no other record still
-    # points at the file.)
+    # (Runs AFTER the community_uploads row is gone so the ref-count
+    # check sees no lingering references.)
     file_cleanup = await _hard_delete_upload_file(removed_url, ignore_spot_id=spot_id)
 
     # ---- audit ----
