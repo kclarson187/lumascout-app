@@ -23,6 +23,8 @@ import {
   GoldenHourRail,
 } from '../../src/components/PremiumExploreRails';
 import { PremiumMapPin, PremiumMapCluster, pinTierOf } from '../../src/components/PremiumMapPin';
+import ExploreErrorBoundary from '../../src/components/ExploreErrorBoundary';
+import { isValidCoord, safeTier, normalizeSpotsForMap } from '../../src/utils/spot-geo';
 import MAP_STYLE_DARK from '../../src/components/mapStyleDark';
 
 // Native-only map wrapper with web stub (Metro / codegenNativeCommands safety).
