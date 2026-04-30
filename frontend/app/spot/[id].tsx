@@ -250,82 +250,61 @@ export default function SpotDetail() {
     }
   };
 
-  // May 2026 batch #4 item #2 — admin photo deletion handler.
+  // May 2026 batch #4 update #2.1 — true HARD delete.
   //
-  // Two distinct cases the handler MUST deal with:
-  //
-  //   (a) REAL image — has an image_id, lives in spot.images[]. Calls
-  //       DELETE /api/admin/spots/{id}/images/{image_id}, which
-  //       auto-promotes the next photo to cover if this was the cover.
-  //
-  //   (b) SYNTHETIC cover_override — the orderedImages memo prepends
-  //       a fake row when `hero_cover_image_url` doesn't match any
-  //       entry in spot.images (admin set a cover from an external
-  //       URL). Deleting that row means CLEARING the admin cover
-  //       override, not deleting an actual image. We hit the existing
-  //       `POST /admin/spots/{id}/cover/clear` endpoint instead.
-  //
-  // Both paths share the same confirmation dialog + optimistic UI +
-  // revert-on-failure behaviour so the admin sees consistent UX.
+  // Unified flow for both real images and cover-override synthetics:
+  //   · Always call DELETE /admin/spots/:id/images/:identifier
+  //   · identifier = image_id OR image_url (backend accepts either)
+  //   · Backend detects cover-override case and clears hero_cover_image_url
+  //     + admin_cover_override AND hard-unlinks the file on disk (if local
+  //     and not referenced elsewhere).
+  //   · No ghost data: the photo is gone from DB, disk, and every UI path.
   const onDeletePhoto = useCallback(async (img: any) => {
     if (!isAdminUser || !img) return;
-    const isCoverOverride = img.source === 'cover_override';
-    const imageId = img.image_id || img.image_url;
-    if (!imageId) {
+    const identifier = img.image_id || img.image_url;
+    if (!identifier) {
       Alert.alert("Couldn't delete", 'This photo is missing an identifier.');
       return;
     }
-    const confirmCopy = isCoverOverride
-      ? `This will clear the custom cover photo on ${spot?.title || 'this spot'} and fall back to the next photo. Continue?`
-      : `This will remove the photo from ${spot?.title || 'this spot'}. This cannot be undone.`;
     const confirm = await new Promise<boolean>((resolve) => {
       Alert.alert(
-        isCoverOverride ? 'Clear cover photo?' : 'Delete this photo?',
-        confirmCopy,
+        'Delete this photo?',
+        `This will permanently remove the photo from ${spot?.title || 'this spot'} — including the file on the server. This cannot be undone.`,
         [
           { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-          {
-            text: isCoverOverride ? 'Clear cover' : 'Delete',
-            style: 'destructive',
-            onPress: () => resolve(true),
-          },
+          { text: 'Delete', style: 'destructive', onPress: () => resolve(true) },
         ],
         { cancelable: true, onDismiss: () => resolve(false) },
       );
     });
     if (!confirm) return;
-    // Optimistic UI — hide the photo locally. Revert on failure.
+
+    // Optimistic UI: hide locally, revert on failure.
     const prevSpot = spot;
     const prevIdx = galleryIdx;
+    const isCoverOverride = img.source === 'cover_override';
     setSpot((s: any) => {
       if (!s) return s;
       if (isCoverOverride) {
-        // Clearing cover override: drop hero_cover_image_url locally so
-        // the orderedImages memo doesn't re-prepend the synthetic row.
+        // Hide the synthetic cover row by clearing the fields that feed
+        // the orderedImages memo.
         return { ...s, hero_cover_image_url: null, admin_cover_override: null };
       }
       const kept = (s.images || []).filter(
-        (im: any) => (im.image_id || im.image_url) !== imageId,
+        (im: any) => (im.image_id || im.image_url) !== identifier,
       );
       return { ...s, images: kept };
     });
     setGalleryIdx(0);
     try {
-      if (isCoverOverride) {
-        await api.delete(`/admin/spots/${id}/cover`);
-      } else {
-        await api.delete(`/admin/spots/${id}/images/${encodeURIComponent(imageId)}`);
-      }
-      // Refresh authoritative state + cover promotion from server.
+      await api.delete(`/admin/spots/${id}/images/${encodeURIComponent(identifier)}`);
+      // Refresh authoritative state (picks up auto-cover-promotion +
+      // any file-cleanup metadata from the server).
       await load();
     } catch (e: any) {
-      // Revert optimistic update.
       setSpot(prevSpot);
       setGalleryIdx(prevIdx);
-      Alert.alert(
-        isCoverOverride ? "Couldn't clear cover" : "Couldn't delete photo",
-        formatApiError(e) || 'Please try again.',
-      );
+      Alert.alert("Couldn't delete photo", formatApiError(e) || 'Please try again.');
     }
   }, [isAdminUser, id, spot, galleryIdx, load]);
 
@@ -445,45 +424,29 @@ export default function SpotDetail() {
               <View key={img.image_url || `d${i}`} style={[styles.dot, i === galleryIdx && styles.dotActive]} />
             ))}
           </View>
-          {/* May 2026 batch #4 item #2 — ADMIN photo delete control.
-              Positioned top-right per spec, pill-shaped with an
-              explicit "DELETE" label so admins can find it at a
-              glance rather than a tiny icon they miss. Red background
-              with hairline white border for high visibility over any
-              photo. Render-time gated on role — the pill is not
-              emitted into the tree for non-admins (no "disabled"
-              ghost control).
-
-              Behaviour dual-purposes on the photo type:
-                · real image (has image_id in spot.images[]) → DELETE
-                  pill → hits DELETE /admin/spots/:id/images/:imageId
-                · synthetic cover_override (hero_cover_image_url not
-                  in spot.images) → "CLEAR COVER" pill → hits
-                  POST /admin/spots/:id/cover/clear
-              Both flows confirm before acting. See onDeletePhoto. */}
+          {/* May 2026 batch #4 item #2.1 — ADMIN photo delete pill.
+              Positioned BOTTOM-LEFT so it never covers the share /
+              bookmark / wand / report buttons in the header row.
+              Single "DELETE" label — unified flow for real images AND
+              cover overrides. Backend hard-deletes both the DB row and
+              the underlying upload file on disk (when local +
+              unreferenced by any other spot). Render-time gated on
+              role — zero admin surface for non-admins. */}
           {isAdminUser && orderedImages[galleryIdx] && (orderedImages[galleryIdx].image_id || orderedImages[galleryIdx].image_url) ? (
             <>
               <TouchableOpacity
                 onPress={() => onDeletePhoto(orderedImages[galleryIdx])}
                 style={styles.photoDeletePill}
                 testID="spot-admin-delete-photo"
-                accessibilityLabel={
-                  orderedImages[galleryIdx].source === 'cover_override'
-                    ? `Clear cover photo (admin)`
-                    : `Delete photo ${galleryIdx + 1} of ${orderedImages.length} (admin)`
-                }
+                accessibilityLabel={`Delete photo ${galleryIdx + 1} of ${orderedImages.length} (admin — hard delete)`}
                 hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
               >
                 <Trash2 color="#fff" size={14} strokeWidth={2.25} />
-                <Text style={styles.photoDeletePillTxt}>
-                  {orderedImages[galleryIdx].source === 'cover_override'
-                    ? 'CLEAR COVER'
-                    : 'DELETE'}
-                </Text>
+                <Text style={styles.photoDeletePillTxt}>DELETE</Text>
               </TouchableOpacity>
-              {/* Passive ADMIN context tag on the opposite side. Tells
-                  the admin they're in admin mode + which photo they're
-                  on so they understand each photo can be removed. */}
+              {/* ADMIN context tag — bottom-RIGHT so it mirrors the
+                  DELETE pill cleanly, with the photo position counter.
+                  Purely informational (non-tappable). */}
               <View style={styles.photoAdminTag} pointerEvents="none">
                 <Shield color={colors.primary} size={11} />
                 <Text style={styles.photoAdminTagTxt}>
@@ -1023,25 +986,29 @@ const styles = StyleSheet.create({
   },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.4)' },
   dotActive: { width: 20, backgroundColor: colors.primary },
-  // May 2026 — admin photo delete pill (top-right per spec).
-  // Prominent pill with DELETE label so admins find it at a glance
-  // rather than a tiny icon they miss. Red fill, white hairline
-  // border, bold uppercase label. Safe distance from the status bar
-  // so iOS notch-safe on any device.
+  // May 2026 batch #4 update #2.1 — admin photo DELETE pill.
+  //
+  // Moved from top-right to BOTTOM-LEFT (May 2026) so it never
+  // collides with the share / report / wand / bookmark buttons in
+  // the header row. Positioned above the dots indicator with an extra
+  // 12px margin so the two don't compete visually.
+  //
+  // Clean + professional: slightly smaller pill (32px high), softer
+  // red (#dc2626 at 92% alpha), tighter typography. Hairline white
+  // border + subtle drop shadow lift it off any photo.
   photoDeletePill: {
     position: 'absolute',
-    top: 58,            // below the floating header button row
-    right: space.md,
+    bottom: space.lg + 16,      // above the dots row
+    left: space.md,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 11,
+    gap: 7,
+    paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 18,
-    backgroundColor: 'rgba(220, 38, 38, 0.94)',
+    backgroundColor: 'rgba(220, 38, 38, 0.92)',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(255,255,255,0.55)',
-    // soft shadow to lift off any photo
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.35,
@@ -1052,21 +1019,20 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontFamily: font.bodyBold,
     fontSize: 11,
-    letterSpacing: 0.8,
+    letterSpacing: 0.9,
   },
-  // Passive tag on the opposite (top-left) side of the hero — gives
-  // admins positional context ("ADMIN · 3 / 7") and reminds them that
-  // each photo can be deleted independently. Subtle gold tint to
-  // match the brand palette, no backdrop button, purely informational.
+  // ADMIN context tag — mirrored on BOTTOM-RIGHT. Gold-tinted,
+  // informational only (non-tappable). Height matched to the pill
+  // so both sit cleanly on the same baseline above the dots row.
   photoAdminTag: {
     position: 'absolute',
-    top: 58,
-    left: space.md,
+    bottom: space.lg + 16,
+    right: space.md,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
     paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingVertical: 6,
     borderRadius: 14,
     backgroundColor: 'rgba(0,0,0,0.55)',
     borderWidth: StyleSheet.hairlineWidth,
