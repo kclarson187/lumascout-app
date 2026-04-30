@@ -3,6 +3,7 @@ import { useFocusEffect } from 'expo-router';
 import {
   View, Text, StyleSheet, TouchableOpacity, Platform,
   ActivityIndicator, ScrollView, Modal, Switch, Image, Pressable,
+  Share, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -895,11 +896,72 @@ function PinPreview({
     Linking.openURL(url).catch(() => {});
   };
 
-  const onShare = () => {
+  const onShare = async () => {
+    // May 2026 batch #4 extension — native share sheet on Explore map
+    // preview card. Same pattern as app/spot/[id].tsx: platform-native
+    // share sheet on iOS/Android (Messages, Mail, WhatsApp, AirDrop,
+    // Slack, etc.), Web Share API → clipboard fallback on web.
+    //
+    // Previously this function only opened a mailto: link which
+    // triggered the recipient's mail client and skipped every other
+    // sharing surface (iMessage, AirDrop, Slack). That was the root
+    // cause of the "share only does email" complaint.
     Haptics.selectionAsync().catch(() => {});
-    const url = `https://lumascout.app/spot/${spot.spot_id}`;
-    Linking.openURL(`mailto:?subject=${encodeURIComponent(spot.title)}&body=${encodeURIComponent(url)}`)
-      .catch(() => {});
+    try {
+      // Canonical URL resolution — same priority order as spot detail:
+      // WEB_BASE_URL > BACKEND_URL > scheme-based deep link.
+      const webBase = (process.env.EXPO_PUBLIC_WEB_BASE_URL || '').replace(/\/+$/, '');
+      const backendBase = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/+$/, '');
+      const base = webBase || backendBase;
+      const spotUrl = base
+        ? `${base}/spot/${spot.spot_id}`
+        : `lumascout://spot/${spot.spot_id}`;
+
+      const location = [spot.city, spot.state].filter(Boolean).join(', ');
+      const summary = (spot.description || '').trim().slice(0, 160);
+      const message = [
+        spot.title || 'LumaScout spot',
+        location ? `📍 ${location}` : null,
+        summary,
+        spotUrl,
+      ].filter(Boolean).join('\n');
+
+      if (Platform.OS === 'web') {
+        const nav: any = typeof navigator !== 'undefined' ? navigator : null;
+        if (nav?.share) {
+          try {
+            await nav.share({
+              title: spot.title || 'LumaScout spot',
+              text: location ? `${spot.title} — ${location}` : spot.title,
+              url: spotUrl,
+            });
+            return;
+          } catch (e: any) {
+            if (e?.name === 'AbortError') return;
+          }
+        }
+        if (nav?.clipboard?.writeText) {
+          await nav.clipboard.writeText(spotUrl);
+          Alert.alert('Link copied', `Paste it anywhere to share:\n${spotUrl}`);
+          return;
+        }
+        Alert.alert('Share this spot', `Copy the link below:\n\n${spotUrl}`, [{ text: 'OK' }]);
+        return;
+      }
+
+      // Native: system share sheet — surfaces Messages, Mail, AirDrop,
+      // WhatsApp, Slack, copy-to-clipboard, and every other installed
+      // share target in a single modal.
+      await Share.share({
+        message,
+        url: spotUrl,
+        title: spot.title || 'LumaScout spot',
+      });
+    } catch (e: any) {
+      if (e?.message && !/cancel/i.test(e.message)) {
+        Alert.alert("Couldn't share", e.message);
+      }
+    }
   };
 
   // Real-data priority chips shown when Best-at isn't available

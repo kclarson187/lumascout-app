@@ -10604,3 +10604,44 @@ agent_communication:
       Screenshot: .screenshots/explore_smoke_test.png
       Test duration: ~2 minutes (within scope)
 
+
+  - task: "Explore map PinPreview — native share sheet (May 2026 batch #4 extension)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(tabs)/explore.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Upgraded the onShare handler inside the PinPreview card
+          (bottom-sheet that appears when a map marker is tapped) to
+          use the native share sheet instead of the mailto-only
+          fallback. Previously the share icon opened the user's mail
+          client and skipped iMessage, AirDrop, WhatsApp, Slack,
+          copy-to-clipboard, and every other share target.
+
+          Implementation mirrors the spot-detail screen share rewrite:
+            · Native (iOS/Android): Share.share({ message, url, title })
+              — system share sheet with every installed share target.
+            · Web: navigator.share (Web Share API) preferred →
+              navigator.clipboard.writeText fallback → Alert with
+              copyable URL final fallback.
+            · Canonical URL priority: EXPO_PUBLIC_WEB_BASE_URL >
+              EXPO_PUBLIC_BACKEND_URL > lumascout:// scheme deep link.
+              Dead lumascout.app fallback removed.
+            · Message payload: title + "📍 city, state" + 160-char
+              description summary + canonical URL.
+            · Silent on AbortError (user cancel), Alert on real error.
+
+          Share icon at testID `pin-preview-share` (top-right of the
+          preview sheet header) remains visually identical — only the
+          handler changed. Zero layout shift.
+
+          NOT YET TESTED — native share sheet cannot be fully
+          exercised from web preview; requires Expo Go / TestFlight
+          for real iOS/Android validation. On web the fallback chain
+          (navigator.share → clipboard → Alert) is exercisable.
+
