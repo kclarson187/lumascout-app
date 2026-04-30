@@ -13,6 +13,7 @@ import React, { useEffect, useState, useCallback, useMemo } from 'react';import 
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams, useFocusEffect } from 'expo-router';
+import Head from 'expo-router/head';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
   ChevronLeft, Bookmark, Share2, Flag, MapPin, Sun, Sunrise, Sunset, Cloud,
@@ -154,30 +155,144 @@ export default function SpotDetail() {
     } catch {}
   };
 
-  const onShare = async () => {
-    // BATCH 2 (Apr 2026): fixed the "share link returns 404" issue.
-    // Previously we hardcoded https://lumascout.app/spot.html?id=... —
-    // that hostname isn't registered/served anywhere, so every shared
-    // link 404'd. The Expo Router web build actually serves the
-    // /spot/[id] route at the same origin that backs the API. We build
-    // the share URL from EXPO_PUBLIC_BACKEND_URL (kept in sync across
-    // preview and production) so links always resolve.
+  // May 2026 batch #4 — canonical spot URL helper (single source of truth
+  // for share links + OG meta). Priority order:
+  //   1. EXPO_PUBLIC_WEB_BASE_URL (production web host, once the web
+  //      bundle is deployed to its final domain — prefer this for
+  //      iMessage/Slack/WhatsApp preview cards).
+  //   2. EXPO_PUBLIC_BACKEND_URL (same-origin API + web bundle in
+  //      preview/dev environments — works today in staging).
+  //   3. Mobile Linking.createURL fallback (`lumascout://spot/:id`) for
+  //      when neither host is configured and we're on-device — never
+  //      trust this for OG/preview cards, but it lets QR-coded links
+  //      open in-app for testers.
+  const spotPublicUrl = useMemo(() => {
+    const webBase = (process.env.EXPO_PUBLIC_WEB_BASE_URL || '').replace(/\/+$/, '');
+    const backendBase = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/+$/, '');
+    const base = webBase || backendBase;
+    if (base) return `${base}/spot/${id}`;
+    // Last-resort: scheme-based deep link. Shareable to devices with
+    // the app installed; useless to anyone else. NEVER emit the dead
+    // lumascout.app host — it doesn't serve the web bundle yet.
     try {
-      const baseUrl = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/+$/, '');
-      const publicUrl = baseUrl
-        ? `${baseUrl}/spot/${id}`
-        : `https://lumascout.app/spot/${id}`; // last-resort fallback
+      return Linking.createURL(`/spot/${id}`);
+    } catch {
+      return `/spot/${id}`;
+    }
+  }, [id]);
+
+  const onShare = async () => {
+    // May 2026 batch #4 — native share sheet + web fallback.
+    //   Native: React Native's Share.share() surfaces the platform
+    //     share sheet (Messages, Mail, WhatsApp, Slack, AirDrop, etc.).
+    //   Web: react-native-web's Share polyfill is limited — we prefer
+    //     the Web Share API where available, falling back to copy-to-
+    //     clipboard with a toast.
+    try {
       const location = [spot.city, spot.state].filter(Boolean).join(', ');
-      const message = location
-        ? `${spot.title} — ${location}\n${publicUrl}`
-        : `${spot.title}\n${publicUrl}`;
+      const summary = (spot.description || '').trim().slice(0, 160);
+      const lines = [
+        spot.title,
+        location ? `📍 ${location}` : null,
+        summary,
+        spotPublicUrl,
+      ].filter(Boolean);
+      const message = lines.join('\n');
+
+      if (Platform.OS === 'web') {
+        const nav: any = typeof navigator !== 'undefined' ? navigator : null;
+        // Prefer Web Share API — shows the real system share sheet on
+        // iOS Safari, Android Chrome, Edge.
+        if (nav?.share) {
+          try {
+            await nav.share({
+              title: spot.title,
+              text: location ? `${spot.title} — ${location}` : spot.title,
+              url: spotPublicUrl,
+            });
+            return;
+          } catch (e: any) {
+            // User cancelled — silently no-op (navigator.share rejects
+            // with AbortError on cancel). Only bail if it's a real
+            // error.
+            if (e?.name === 'AbortError') return;
+          }
+        }
+        // Fallback: copy the link and show an Alert so the user has
+        // something actionable. Alert on web renders as a simple modal.
+        if (nav?.clipboard?.writeText) {
+          await nav.clipboard.writeText(spotPublicUrl);
+          Alert.alert('Link copied', `Paste it anywhere to share:\n${spotPublicUrl}`);
+          return;
+        }
+        // Final fallback: open mail + sms client selector
+        Alert.alert(
+          'Share this spot',
+          `Copy the link below:\n\n${spotPublicUrl}`,
+          [{ text: 'OK' }],
+        );
+        return;
+      }
+
+      // Native path — system share sheet.
       await Share.share({
         message,
-        url: publicUrl,           // iOS uses the dedicated url field
+        url: spotPublicUrl,           // iOS uses this dedicated field
         title: spot.title,
       });
-    } catch {}
+    } catch (e: any) {
+      // Swallow silent cancellations; surface real errors.
+      if (e?.message && !/cancel/i.test(e.message)) {
+        Alert.alert("Couldn't share", e.message);
+      }
+    }
   };
+
+  // May 2026 batch #4 item #2 — admin photo deletion handler. Guarded
+  // at render time by `isAdminUser`; this function is only bound to
+  // the trash icon that never renders for non-admins.
+  const onDeletePhoto = useCallback(async (img: any) => {
+    if (!isAdminUser || !img) return;
+    const imageId = img.image_id || img.image_url;
+    if (!imageId) {
+      Alert.alert("Couldn't delete", 'This photo is missing an identifier.');
+      return;
+    }
+    const confirm = await new Promise<boolean>((resolve) => {
+      Alert.alert(
+        'Delete this photo?',
+        `This will remove the photo from ${spot?.title || 'this spot'}. This cannot be undone.`,
+        [
+          { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Delete', style: 'destructive', onPress: () => resolve(true) },
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) },
+      );
+    });
+    if (!confirm) return;
+    // Optimistic UI — immediately drop the photo locally so the
+    // carousel doesn't feel laggy. Revert on failure.
+    const prevSpot = spot;
+    const prevIdx = galleryIdx;
+    setSpot((s: any) => {
+      if (!s) return s;
+      const kept = (s.images || []).filter(
+        (im: any) => (im.image_id || im.image_url) !== imageId,
+      );
+      return { ...s, images: kept };
+    });
+    setGalleryIdx(0);
+    try {
+      await api.delete(`/admin/spots/${id}/images/${encodeURIComponent(imageId)}`);
+      // Refresh authoritative state + cover promotion from server.
+      await load();
+    } catch (e: any) {
+      // Revert optimistic update.
+      setSpot(prevSpot);
+      setGalleryIdx(prevIdx);
+      Alert.alert("Couldn't delete photo", formatApiError(e) || 'Please try again.');
+    }
+  }, [isAdminUser, id, spot, galleryIdx, load]);
 
   const onReport = () => {
     if (!user) return router.push('/(auth)/login');
@@ -210,6 +325,34 @@ export default function SpotDetail() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
+      {/* May 2026 batch #4(b) — per-spot OG / Twitter card meta tags.
+          expo-router/head renders these into <head> on the web bundle
+          (react-helmet-async under the hood) and is a no-op on native.
+          Gives iMessage / Slack / WhatsApp / Twitter a real branded
+          preview card when the share URL is pasted. */}
+      <Head>
+        <title>{`${spot.title} — LumaScout`}</title>
+        <meta name="description" content={(spot.description || '').slice(0, 180)} />
+        <meta property="og:type" content="website" />
+        <meta property="og:title" content={spot.title} />
+        <meta
+          property="og:description"
+          content={
+            [spot.city, spot.state].filter(Boolean).join(', ')
+              ? `${[spot.city, spot.state].filter(Boolean).join(', ')} — ${(spot.description || '').slice(0, 140)}`
+              : (spot.description || '').slice(0, 180)
+          }
+        />
+        <meta property="og:url" content={spotPublicUrl} />
+        {orderedImages[0]?.image_url ? (
+          <meta property="og:image" content={resolveImageUrl(orderedImages[0].image_url)} />
+        ) : null}
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content={spot.title} />
+        {orderedImages[0]?.image_url ? (
+          <meta name="twitter:image" content={resolveImageUrl(orderedImages[0].image_url)} />
+        ) : null}
+      </Head>
       <ScrollView contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
         <View style={styles.heroWrap}>
           <ScrollView
@@ -267,6 +410,23 @@ export default function SpotDetail() {
               <View key={img.image_url || `d${i}`} style={[styles.dot, i === galleryIdx && styles.dotActive]} />
             ))}
           </View>
+          {/* May 2026 batch #4 item #2 — admin photo delete overlay.
+              Shown ONLY when the viewer is admin or super_admin and the
+              current gallery photo has a real id/url (not a synthetic
+              cover-override placeholder). Render-time gate on role —
+              the trash icon is not emitted into the tree for non-admins
+              so there's no "disabled button" surface. */}
+          {isAdminUser && orderedImages[galleryIdx] && (orderedImages[galleryIdx].image_id || orderedImages[galleryIdx].image_url) && orderedImages[galleryIdx].source !== 'cover_override' ? (
+            <TouchableOpacity
+              onPress={() => onDeletePhoto(orderedImages[galleryIdx])}
+              style={styles.photoDeleteBtn}
+              testID="spot-admin-delete-photo"
+              accessibilityLabel="Delete this photo (admin)"
+              hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
+            >
+              <Trash2 color="#fff" size={16} />
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         <View style={styles.content}>
@@ -798,6 +958,23 @@ const styles = StyleSheet.create({
   },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.4)' },
   dotActive: { width: 20, backgroundColor: colors.primary },
+  // May 2026 — admin photo delete overlay. Positioned bottom-left of
+  // the hero to stay clear of the top-right header button row and the
+  // centered dots indicator. Red-tinted semi-transparent pill with a
+  // thin hairline border for visibility over any photo.
+  photoDeleteBtn: {
+    position: 'absolute',
+    bottom: space.md,
+    left: space.md,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(220, 38, 38, 0.82)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   content: { padding: space.xl, gap: 6 },
   title: { color: colors.text, fontFamily: font.display, fontSize: 32, letterSpacing: -0.5, lineHeight: 38 },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
