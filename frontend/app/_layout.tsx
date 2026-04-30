@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator } from 'react-native';
+import * as SplashScreen from 'expo-splash-screen';
 import {
   useFonts,
   PlayfairDisplay_700Bold,
@@ -19,6 +20,16 @@ import { colors } from '../src/theme';
 import { onPaywallNeeded } from '../src/api';
 import UpgradeGateModal, { GateReason } from '../src/components/UpgradeGateModal';
 import RootErrorBoundary from '../src/components/RootErrorBoundary';
+
+// Apr 2026 — Full-bleed splash. Hold the native splash until fonts +
+// auth bootstrap finish, then dissolve over 700ms for a cinematic feel.
+// `setOptions` is a no-op on web / unsupported environments and wrapped
+// in try/catch so it never blocks startup.
+SplashScreen.preventAutoHideAsync().catch(() => {});
+try {
+  // @ts-ignore — `setOptions` is available on expo-splash-screen ≥0.27
+  SplashScreen.setOptions?.({ duration: 700, fade: true });
+} catch {}
 
 /**
  * Mount once at app root: wire push-notification tap handler so notifications
@@ -76,12 +87,22 @@ export default function RootLayout() {
     Manrope_700Bold,
   });
 
+  // Apr 2026 — hide native splash the instant fonts have loaded. Done
+  // in an effect so the call lands AFTER the first paint (otherwise on
+  // iOS the dissolve has nothing underneath to fade into and you flash
+  // a dark frame). The 700 ms fade configured by setOptions above runs
+  // on the native side; React just needs to release the gate.
+  useEffect(() => {
+    if (fontsLoaded) {
+      SplashScreen.hideAsync().catch(() => {});
+    }
+  }, [fontsLoaded]);
+
   if (!fontsLoaded) {
-    return (
-      <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' }}>
-        <ActivityIndicator color={colors.primary} />
-      </View>
-    );
+    // Render nothing while the native splash is still showing — the
+    // splash IS the loading state. Returning a black <View> with a
+    // spinner here would race the splash and produce a visible flicker.
+    return null;
   }
 
   return (
