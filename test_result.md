@@ -12,6 +12,89 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "TestFlight build prep — defensive wrapping for Spot Detail (May 2026). Created SectionErrorBoundary lightweight per-section boundary; wrapped 5 risky subsections (owner-row, community-uploads, latest-conditions, seasonal-timeline, similar-spots, reviews) so a single subsection crash hides only that section instead of bouncing the whole screen to ScreenErrorBoundary. SpotCard.handlePress already has spot_id || id || _id fallback (prior CR). All useRef/useEffect/useState imports verified across spot/[id].tsx + child components. App.json `updates.enabled: false` retained per user request to preserve OTA-disabled posture and avoid SDK-54 mismatch risk."
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/src/components/SectionErrorBoundary.tsx (NEW — getDerivedStateFromError → null fallback by default with hideOnError prop, custom fallback prop, console.error tagged with label + componentStack for production grep),
+      /app/frontend/app/spot/[id].tsx (added SectionErrorBoundary import + wrapped owner-row, community-uploads, latest-conditions, seasonal-timeline, similar-spots, reviews; spot_id fallback in similar_spots key)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Source state for the next EAS production build:
+
+          ── Crash fixes already in source (prior CR) ──
+          · spot/[id].tsx — `import React, { useEffect, useRef,
+            useState, useCallback, useMemo }` — useRef now imported.
+          · SkeletonSpotCard aspectRatio 4:5 (matches SpotCard, no
+            skeleton→real layout jump).
+          · SpotCard.handlePress — spot_id || id || _id fallback +
+            warn-and-bail when missing.
+          · spot/[id].tsx route param normalized for string|string[].
+          · Spot detail inline retry surface for timeout/network/
+            server categorized via api.ts categorizeApiError.
+          · Per-call timeout 18s on /spots/{id}; global axios 20s.
+
+          ── New defensive wrapping (this CR) ──
+          · NEW SectionErrorBoundary component — class boundary with
+            getDerivedStateFromError → null fallback by default. logs
+            [SectionErrorBoundary:{label}] + componentStack to
+            console.error for production grep. Optional hideOnError
+            (default true) and custom fallback props.
+          · Wrapped the 6 highest-risk subsections in spot/[id].tsx:
+              <SectionErrorBoundary label="owner-row">
+              <SectionErrorBoundary label="community-uploads">
+              <SectionErrorBoundary label="latest-conditions">
+              <SectionErrorBoundary label="seasonal-timeline">
+              <SectionErrorBoundary label="similar-spots">
+              <SectionErrorBoundary label="reviews">
+            If any throws during render, that section disappears
+            silently — the rest of the spot page (title, hero, save,
+            description, directions) keeps working. NO bounce to
+            "Spot hit a snag."
+          · Similar-spots SpotCard key uses spot_id||id||_id fallback
+            for the same defense.
+
+          ── Build-readiness check ──
+          · Bundle compiles clean: 3067 modules, 5.9s warm web rebuild.
+          · localhost:3000 → 200, tunnel connected.
+          · Backend healthy — /api/spots/{id}, /uploads, /dm,
+            /notifications all 200 in live logs.
+          · app.json updates.enabled: false preserved per CR8
+            requirement (keep OTA disabled to avoid SDK-54 mismatch).
+          · runtimeVersion "1.0.0" preserved.
+          · No orphaned imports, no unused vars.
+          · No newly-added dependencies (SectionErrorBoundary uses
+            only existing theme + RN primitives).
+
+          ── EAS build handoff ──
+          · EAS CLI installed in sandbox but NOT logged in (`eas
+            whoami → "Not logged in"`). Build/submit must run from
+            user's authenticated terminal:
+              eas login
+              eas build --platform ios --profile production
+              eas submit --platform ios
+            (Or via Emergent deployment pipeline if configured.)
+
+          QA after the new TestFlight build lands:
+          · Tap any spot from Explore List or rails — Spot Detail
+            opens normally, NO "Spot hit a snag."
+          · Scroll the spot detail — every subsection (owner,
+            community uploads, conditions, seasonal, reviews,
+            similar) renders or hides gracefully, never crashes the
+            whole screen.
+          · Cold-load Explore — no oversized image flash.
+          · Hero image cascade still respects hero_cover_image_url.
+          · Recent photos upload (HEIC) still works on iPhone.
+          · Slow network: spot detail shows inline retry surface
+            (no logout, no auto-redirect).
+
+
+
   - task: "Spot Detail crash + Explore layout-jump fix (May 2026). (1) Root cause for 'Spot hit a snag' ErrorBoundary on EVERY spot tap: `useRef` was used in /app/spot/[id].tsx without being imported (`React, { useEffect, useState, useCallback, useMemo }` — useRef missing). The `inflightRef = useRef(...)` line crashed at render time, caught by ScreenErrorBoundary. Fix: added useRef to the imports. (2) Layout-jump on Explore initial render: SkeletonSpotCard used 16:10 aspect while real SpotCard uses 4:5, causing visible 'oversized → compact' shift on skeleton→real swap. Fix: skeleton aspect now matches 4:5. (3) Defensive spot-id fallback in SpotCard.handlePress — `spot_id || id || _id` with warn-and-bail when missing. (4) Spot detail param read normalized for string | string[] | undefined (Expo Router edge cases)."
     implemented: true
     working: "NA"
