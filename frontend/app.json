@@ -12,6 +12,10 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.lumascout.app",
       "buildNumber": "1",
+      "_comment_associatedDomains": "Universal Links — iOS: the OS downloads https://lumascout.app/.well-known/apple-app-site-association (AASA) on install/update and maps matching paths into this app. REQUIRES a signed EAS build (does NOT work in Expo Go). AASA file must be hosted at the domain root, served as application/json with HTTPS and no redirects. Staged copy: /app/universal-links/apple-app-site-association.",
+      "associatedDomains": [
+        "applinks:lumascout.app"
+      ],
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Show nearby photoshoot spots and save locations.",
         "NSPhotoLibraryUsageDescription": "Upload photos for your photoshoot spots.",
@@ -37,6 +41,43 @@
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.CAMERA",
         "android.permission.POST_NOTIFICATIONS"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "lumascout.app",
+              "pathPrefix": "/spot"
+            },
+            {
+              "scheme": "https",
+              "host": "lumascout.app",
+              "pathPrefix": "/user"
+            },
+            {
+              "scheme": "https",
+              "host": "lumascout.app",
+              "pathPrefix": "/collection"
+            },
+            {
+              "scheme": "https",
+              "host": "lumascout.app",
+              "pathPrefix": "/community"
+            },
+            {
+              "scheme": "https",
+              "host": "lumascout.app",
+              "pathPrefix": "/marketplace"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
       ]
     },
     "web": {
@@ -45,7 +86,12 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      "expo-router",
+      [
+        "expo-router",
+        {
+          "origin": "https://lumascout.app"
+        }
+      ],
       "expo-secure-store",
       [
         "expo-location",
@@ -82,7 +128,9 @@
       "router": {},
       "eas": {
         "projectId": "9f304683-9099-4c6f-b1fc-96ab03125848"
-      }
+      },
+      "_comment_privacyPolicyUrl": "Public privacy policy URL. App Store Connect + Google Play Console also require this to be set in their listings. Stored here for reference by the settings/legal screens so the link stays in one place.",
+      "privacyPolicyUrl": "https://lumascout.app/privacy"
     },
     "owner": "lumascout"
   }

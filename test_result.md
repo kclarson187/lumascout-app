@@ -10645,3 +10645,87 @@ agent_communication:
           for real iOS/Android validation. On web the fallback chain
           (navigator.share → clipboard → Alert) is exercisable.
 
+
+
+  - task: "Universal Links / App Links + Spot Detail polish (May 2026 batch #5)"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app.json (associatedDomains + intentFilters + expo-router origin + extra.privacyPolicyUrl)
+      /app/frontend/.env (EXPO_PUBLIC_WEB_BASE_URL=https://lumascout.app)
+      /app/universal-links/apple-app-site-association (new — production-ready AASA with placeholders)
+      /app/universal-links/assetlinks.json (new — production-ready Android digital-asset link)
+      /app/universal-links/README.md (new — hosting + verification notes)
+      /app/frontend/app/spot/[id].tsx (best_light_notes card + legacy best_time_of_day chip fallback)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          BATCH #5 (May 2026) — Two-part delivery:
+
+          PART A · Universal Links / App Links config (P0):
+            · app.json expo.ios.associatedDomains = ['applinks:lumascout.app']
+            · app.json expo.android.intentFilters: https scheme, host
+              lumascout.app, autoVerify:true, pathPrefixes /spot, /user,
+              /collection, /community, /marketplace.
+            · app.json expo.plugins: ['expo-router', { origin:
+              'https://lumascout.app' }] — tells Expo Router that URLs
+              starting with https://lumascout.app should resolve to the
+              file-based routes (so https://lumascout.app/spot/123
+              opens app/spot/[id].tsx natively). Also satisfies the
+              Apple Handoff origin requirement that previously forced us
+              to gate expo-router/head behind Platform.OS === 'web'.
+            · app.json expo.extra.privacyPolicyUrl =
+              'https://lumascout.app/privacy' — added as `extra` metadata
+              (safe — Expo ignores unknown extras, won't break the build).
+              App Store Connect + Play Console listings still need this
+              set separately at submit time.
+            · /app/frontend/.env: EXPO_PUBLIC_WEB_BASE_URL=
+              https://lumascout.app — every Share.share() call in the
+              app (Spot Detail onShare + Explore PinPreview onShare)
+              already resolves its canonical URL as
+              `${EXPO_PUBLIC_WEB_BASE_URL}/spot/${id}`, so shared URLs
+              now emit https://lumascout.app/spot/<id> instead of the
+              preview hostname.
+            · Staged hosting files in /app/universal-links/:
+                - apple-app-site-association (no extension, applinks +
+                  webcredentials blocks; bundle ID com.lumascout.app
+                  baked in; APPLE_TEAM_ID_HERE placeholder — needs the
+                  10-char Apple Developer Team ID).
+                - assetlinks.json (android_app namespace, package_name
+                  com.lumascout.app baked in;
+                  ANDROID_SHA256_CERT_FINGERPRINT_HERE placeholder).
+                - README.md with full hosting instructions, Next.js
+                  public/.well-known wiring, Content-Type headers,
+                  curl/adb verification commands, and a clear note that
+                  full Universal-Link behaviour only activates on a
+                  signed EAS/TestFlight/Play Internal build — NOT in
+                  Expo Go.
+
+          PART B · Spot Detail quick wins (P1):
+            · best_light_notes rendered as a dedicated "Best light"
+              info card (neutral surface1 treatment, sun icon bubble,
+              uppercase label, body copy) directly after the golden-
+              hour window — testID `spot-best-light-notes`.
+            · When best_light_notes is empty/missing we fall back to
+              the legacy best_time_of_day field, rendered as a small
+              capitalized gold chip (e.g. "Best at sunset") with
+              testID `spot-best-time-chip`. Spots that have neither
+              render nothing — zero layout shift vs previous version.
+            · Chip strips underscores from best_time_of_day values so
+              'golden_hour_pm' reads as 'golden hour pm'.
+
+          Bundle compiles clean, Expo restarted, app.json validates
+          as JSON, app_json plugin form accepted by Metro.
+
+          NOT YET TESTED — Universal Links cannot be exercised inside
+          Expo Go or the web preview; requires a signed EAS build with
+          a TestFlight / Play Internal Testing install, AND the AASA +
+          assetlinks.json files must be hosted at
+          https://lumascout.app/.well-known/* by the (separate)
+          Next.js web project before the OS will verify the domain.
+          Best-light notes rendering is exercised whenever a spot has
+          the `best_light_notes` field populated (uploader step #3).

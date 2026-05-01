@@ -1,0 +1,15 @@
+[
+  {
+    "_comment": "LumaScout — Android App Links digital-asset verification. Replace ANDROID_SHA256_CERT_FINGERPRINT_HERE with the SHA-256 fingerprint of your production signing certificate (from Play Console > Release > App integrity, or `keytool -list -v -keystore <your.jks>`). Must be hosted at https://lumascout.app/.well-known/assetlinks.json, Content-Type: application/json, HTTPS only, no redirects. android:autoVerify=true in AndroidManifest (set by Expo intentFilters autoVerify:true) triggers the Play installer to fetch this on install. Use `adb shell pm get-app-links com.lumascout.app` to verify after a signed build.",
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.lumascout.app",
+      "sha256_cert_fingerprints": [
+        "ANDROID_SHA256_CERT_FINGERPRINT_HERE"
+      ]
+    }
+  }
+]
