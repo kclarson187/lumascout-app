@@ -83,7 +83,17 @@ const emptyForm = {
   specialties: [] as string[],
 };
 
+import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
+
 export default function Profile() {
+  return (
+    <ScreenErrorBoundary label="Profile">
+      <ProfileImpl />
+    </ScreenErrorBoundary>
+  );
+}
+
+function ProfileImpl() {
   const { user, logout, updateProfile } = useAuth();
   const [mySpots, setMySpots] = useState<any[]>([]);
   const [myPosts, setMyPosts] = useState<any[]>([]);

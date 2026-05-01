@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Image, RefreshControl, Pressable } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl, Pressable } from 'react-native';
+import SafeImage from '../src/components/SafeImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ChevronLeft, Plus, MessageCircle, Heart, Users, Sparkles, Coffee, Camera, HandHeart, Wrench, Eye, BookOpen, Briefcase, Star, GraduationCap, MapPin, Clock, Flame, PenLine, Lightbulb } from 'lucide-react-native';
@@ -146,7 +147,7 @@ function CommunityImpl() {
               testID="community-composer-prompt"
             >
               {user.avatar_image_url || user.avatar_url
-                ? <Image source={{ uri: user.avatar_image_url || user.avatar_url }} style={styles.composerAvatar} />
+                ? <SafeImage source={{ uri: user.avatar_image_url || user.avatar_url }} style={styles.composerAvatar} />
                 : <View style={[styles.composerAvatar, { backgroundColor: colors.surface2 }]} />}
               <View style={{ flex: 1 }}>
                 <Text style={styles.composerHint} numberOfLines={1}>
@@ -254,7 +255,7 @@ function PostCard({ post, onLike, meId }: { post: any; onLike: () => void; meId?
         {isBot ? (
           <View style={styles.avatar}><ScoutAIAvatar size={34} /></View>
         ) : post.author?.avatar_url
-          ? <Image source={{ uri: post.author.avatar_url }} style={styles.avatar} />
+          ? <SafeImage source={{ uri: post.author.avatar_url }} style={styles.avatar} />
           : <View style={[styles.avatar, { backgroundColor: colors.surface2 }]} />}
         <View style={{ flex: 1 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
@@ -317,7 +318,7 @@ function PostCard({ post, onLike, meId }: { post: any; onLike: () => void; meId?
           <PollCard postId={post.post_id} poll={poll} onChange={setPoll} />
         </View>
       ) : null}
-      {post.image_url ? <Image source={{ uri: post.image_url }} style={styles.postImg} /> : null}
+      {post.image_url ? <SafeImage source={{ uri: post.image_url }} style={styles.postImg} /> : null}
       {/* Spot attachment (Commit 8c / 2026-04): when a post references a
           spot, render the cover as an inline attachment so the community
           feed isn't a wall of text. Tap routes to the spot. */}
@@ -328,7 +329,7 @@ function PostCard({ post, onLike, meId }: { post: any; onLike: () => void; meId?
           testID={`post-spot-${post.post_id}`}
         >
           {post.spot_ref.cover_image_url ? (
-            <Image source={{ uri: post.spot_ref.cover_image_url }} style={styles.spotAttachCover} />
+            <SafeImage source={{ uri: post.spot_ref.cover_image_url }} style={styles.spotAttachCover} />
           ) : (
             <View style={[styles.spotAttachCover, { backgroundColor: colors.surface2, alignItems: 'center', justifyContent: 'center' }]}>
               <MapPin size={18} color={colors.textTertiary} />

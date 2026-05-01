@@ -140,8 +140,12 @@ export function PremiumMapCluster({ count }: { count: number }) {
     return () => loop.stop();
   }, [pulse]);
 
-  // Bigger clusters get fatter discs (24..48px)
-  const size = Math.min(52, 28 + Math.log2(Math.max(2, count)) * 5);
+  // Batch #9 — tighter size curve so a cluster of 10 doesn't read as big
+  // as one of 500, and a micro outdoor readability bump via textShadow.
+  // Range stays 28-52px; range of counts 2..500+ is mapped smoothly.
+  const size = Math.min(52, 26 + Math.log2(Math.max(2, count)) * 4.5);
+  // 99+ overflow so 3-digit counts stay legible inside the disc.
+  const label = count > 99 ? '99+' : String(count);
   const pulseScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.5] });
   const pulseOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0] });
 
@@ -173,10 +177,12 @@ export function PremiumMapCluster({ count }: { count: number }) {
         <Text
           style={[
             styles.clusterTxt,
-            { fontSize: size > 40 ? 14 : 12 },
+            // Shrink font just slightly when displaying "99+" so the glyphs
+            // don't crowd the disc edge.
+            { fontSize: label.length > 2 ? 11 : size > 40 ? 14 : 12 },
           ]}
         >
-          {count}
+          {label}
         </Text>
       </View>
     </View>
@@ -256,5 +262,11 @@ const styles = StyleSheet.create({
     color: '#1a1300',
     fontFamily: font.bodyBold,
     letterSpacing: 0.2,
+    // Batch #9 — subtle highlight stroke for outdoor sunlight readability.
+    // Gold-on-dark is already high-contrast; the warm cream highlight adds
+    // just enough glow to the digits so they stay crisp on bright sun.
+    textShadowColor: 'rgba(255,235,200,0.55)',
+    textShadowOffset: { width: 0, height: 0.5 },
+    textShadowRadius: 1,
   },
 });

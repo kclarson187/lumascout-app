@@ -3,7 +3,8 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   ActivityIndicator, RefreshControl, TextInput,
 } from 'react-native';
-import { Search, ChevronDown, ChevronRight, User as UserIcon, MapPin, FileText, Flag, Shield, Crown } from 'lucide-react-native';
+import { Search, ChevronDown, ChevronRight, User as UserIcon, MapPin, FileText, Flag, Shield, ShieldCheck, Crown } from 'lucide-react-native';
+import EmptyState from '../../src/components/EmptyState';
 import { api } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
 
@@ -194,7 +195,14 @@ export default function AdminAudit() {
           contentContainerStyle={{ padding: space.xl, gap: 8, paddingBottom: 80 }}
           refreshControl={<RefreshControl refreshing={false} onRefresh={load} tintColor={colors.primary} />}
         >
-          {items.length === 0 && <Text style={styles.empty}>No audit entries match.</Text>}
+          {items.length === 0 && (
+            <EmptyState
+              icon={<ShieldCheck size={22} color={colors.primary} strokeWidth={1.5} />}
+              title="No audit entries match"
+              body="When admins or super admins moderate content, onboard sellers, or tweak platform settings, a tamper-evident record shows up here."
+              testID="admin-audit-empty"
+            />
+          )}
           {items.map((a) => {
             const { title, summary, Icon, color } = humanize(a);
             const isOpen = !!expanded[a.audit_id];

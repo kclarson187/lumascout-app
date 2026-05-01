@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Image, Pressable, FlatList, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Pressable, FlatList, ActivityIndicator } from 'react-native';
+import SafeImage from '../src/components/SafeImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { ChevronLeft, Heart, Camera, CheckCircle, Flower, Sparkles, Image as ImgIcon } from 'lucide-react-native';
@@ -33,7 +34,7 @@ function NotifRow({ n, onTap }: { n: any; onTap: (n: any) => void }) {
       testID={`notif-${n.notification_id}`}
     >
       {n.image_url ? (
-        <Image source={{ uri: n.image_url }} style={styles.thumb} />
+        <SafeImage source={{ uri: n.image_url }} style={styles.thumb} />
       ) : (
         <View style={[styles.thumb, styles.thumbFallback]}>
           <Icon size={20} color={colors.primary} />

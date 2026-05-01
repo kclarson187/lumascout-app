@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Alert, ActivityIndicator, RefreshControl, Modal, Pressable, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, RefreshControl, Modal, Pressable, KeyboardAvoidingView, Platform } from 'react-native';
+import SafeImage from '../../../src/components/SafeImage';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ShieldCheck, Crown, UserX, Sparkles, MessageSquarePlus, X, AlertTriangle, History, Trash2 } from 'lucide-react-native';
 import { api, formatApiError } from '../../../src/api';
@@ -243,7 +244,7 @@ export default function AdminUserDetail() {
         {/* Identity card */}
         <View style={styles.identity}>
           {u.avatar_url
-            ? <Image source={{ uri: u.avatar_url }} style={styles.avatar} />
+            ? <SafeImage source={{ uri: u.avatar_url }} style={styles.avatar} />
             : <View style={[styles.avatar, { backgroundColor: colors.surface2 }]} />}
           <View style={{ flex: 1 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>

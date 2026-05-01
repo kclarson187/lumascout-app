@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, ActivityIndicator, Image, RefreshControl, Keyboard, Alert, Modal, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, ActivityIndicator, RefreshControl, Keyboard, Alert, Modal, Platform } from 'react-native';
+import SafeImage from '../../src/components/SafeImage';
 import { router } from 'expo-router';
 import { Search, ChevronRight, ShieldAlert, Flag, CheckCircle2, Circle, Trash2, X, AlertTriangle } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
@@ -204,7 +205,7 @@ export default function AdminUsers() {
                   </View>
                 ) : null}
                 {u.avatar_url
-                  ? <Image source={{ uri: u.avatar_url }} style={styles.avatar} />
+                  ? <SafeImage source={{ uri: u.avatar_url }} style={styles.avatar} />
                   : <View style={[styles.avatar, { backgroundColor: colors.surface2 }]} />}
                 <View style={{ flex: 1 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>

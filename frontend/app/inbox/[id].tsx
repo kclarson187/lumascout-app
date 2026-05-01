@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, Image, TextInput, ActivityIndicator, Alert, Platform, Keyboard, KeyboardAvoidingView } from 'react-native';
+import { View, Text, StyleSheet, FlatList, Pressable, TextInput, ActivityIndicator, Alert, Platform, Keyboard, KeyboardAvoidingView } from 'react-native';
+import SafeImage from '../../src/components/SafeImage';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ChevronLeft, Send, ImagePlus, MapPin, User as UserIcon, ShieldCheck } from 'lucide-react-native';
@@ -20,7 +21,17 @@ const QUICK_STARTERS = [
   'What lens did you use there?',
 ];
 
+import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
+
 export default function ThreadScreen() {
+  return (
+    <ScreenErrorBoundary label="Messages">
+      <ThreadScreenImpl />
+    </ScreenErrorBoundary>
+  );
+}
+
+function ThreadScreenImpl() {
   const { user } = useAuth();
   const { id } = useLocalSearchParams<{ id: string }>();
   const threadId = String(id || '');
@@ -105,7 +116,7 @@ export default function ThreadScreen() {
           <ChevronLeft size={22} color={colors.text}/>
         </Pressable>
         <Pressable onPress={() => other?.user_id && router.push(`/user/${other.user_id}` as any)} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
-          {other?.avatar_url ? <Image source={{ uri: other.avatar_url }} style={s.hAvatar}/> : <View style={[s.hAvatar,{backgroundColor:colors.surface2,alignItems:'center',justifyContent:'center'}]}><Text style={{color:colors.textSecondary,fontFamily:font.bodyBold,fontSize:12}}>{other?.name?.[0]?.toUpperCase() || '?'}</Text></View>}
+          {other?.avatar_url ? <SafeImage source={{ uri: other.avatar_url }} style={s.hAvatar}/> : <View style={[s.hAvatar,{backgroundColor:colors.surface2,alignItems:'center',justifyContent:'center'}]}><Text style={{color:colors.textSecondary,fontFamily:font.bodyBold,fontSize:12}}>{other?.name?.[0]?.toUpperCase() || '?'}</Text></View>}
           <View style={{ flex: 1 }}>
             <Text style={s.hName} numberOfLines={1}>{other?.name || '@'+(other?.username || '')} {other?.verification_status === 'verified' ? <ShieldCheck size={13} color="#3b82f6"/> : null}</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
@@ -172,11 +183,11 @@ export default function ThreadScreen() {
                         <Text style={[s.msgText, mine && { color: colors.textInverse }]}>{item.body}</Text>
                       ) : null}
                       {item.type === 'image' && item.attachment_url ? (
-                        <Image source={{ uri: item.attachment_url }} style={s.msgImg} />
+                        <SafeImage source={{ uri: item.attachment_url }} style={s.msgImg} />
                       ) : null}
                       {item.type === 'spot_share' && item.spot_ref ? (
                         <Pressable onPress={() => router.push(`/spot/${item.spot_ref.spot_id}` as any)} style={s.refCard}>
-                          {item.spot_ref.cover_image_url ? <Image source={{ uri: item.spot_ref.cover_image_url }} style={s.refCover}/> : <View style={[s.refCover,{backgroundColor:colors.surface2,alignItems:'center',justifyContent:'center'}]}><MapPin size={18} color={colors.textTertiary}/></View>}
+                          {item.spot_ref.cover_image_url ? <SafeImage source={{ uri: item.spot_ref.cover_image_url }} style={s.refCover}/> : <View style={[s.refCover,{backgroundColor:colors.surface2,alignItems:'center',justifyContent:'center'}]}><MapPin size={18} color={colors.textTertiary}/></View>}
                           <View style={{ padding: 8 }}>
                             <Text style={s.refKicker}>SPOT</Text>
                             <Text style={s.refTitle} numberOfLines={1}>{item.spot_ref.title}</Text>
@@ -187,7 +198,7 @@ export default function ThreadScreen() {
                       {item.type === 'profile_share' && item.user_ref ? (
                         <Pressable onPress={() => router.push(`/user/${item.user_ref.user_id}` as any)} style={s.refCard}>
                           <View style={[s.refCover,{backgroundColor:colors.surface2,alignItems:'center',justifyContent:'center',aspectRatio:1}]}>
-                            {item.user_ref.avatar_url ? <Image source={{ uri: item.user_ref.avatar_url }} style={{ width: 64, height: 64, borderRadius: 32 }}/> : <UserIcon size={28} color={colors.textTertiary}/>}
+                            {item.user_ref.avatar_url ? <SafeImage source={{ uri: item.user_ref.avatar_url }} style={{ width: 64, height: 64, borderRadius: 32 }}/> : <UserIcon size={28} color={colors.textTertiary}/>}
                           </View>
                           <View style={{ padding: 8 }}>
                             <Text style={s.refKicker}>PHOTOGRAPHER</Text>

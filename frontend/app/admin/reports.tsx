@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Image, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import SafeImage from '../../src/components/SafeImage';
 import { router } from 'expo-router';
 import { Check, X, AlertTriangle, ShieldCheck, Clock } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
@@ -133,7 +134,7 @@ export default function AdminReports() {
                   testID={`report-target-${r.target.spot_id}`}
                 >
                   {r.target.images?.[0]?.image_url && (
-                    <Image source={{ uri: r.target.images[0].image_url }} style={styles.targetImg} />
+                    <SafeImage source={{ uri: r.target.images[0].image_url }} style={styles.targetImg} />
                   )}
                   <View style={{ flex: 1 }}>
                     <Text style={styles.targetTitle}>{r.target.title}</Text>

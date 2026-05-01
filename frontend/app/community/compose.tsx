@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Alert, Image, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Alert, ActivityIndicator } from 'react-native';
+import SafeImage from '../../src/components/SafeImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { X, Check, Image as ImageIcon, Sparkles } from 'lucide-react-native';
@@ -205,7 +206,7 @@ export default function Compose() {
           <Text style={styles.label}>Photo (optional)</Text>
           {imageUri ? (
             <View>
-              <Image source={{ uri: imageUri }} style={styles.preview} />
+              <SafeImage source={{ uri: imageUri }} style={styles.preview} />
               <TouchableOpacity onPress={() => setImageUri(null)} style={styles.removeImgBtn}>
                 <X size={14} color={colors.textInverse} />
               </TouchableOpacity>
