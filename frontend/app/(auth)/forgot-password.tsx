@@ -12,6 +12,11 @@ import { Button } from '../../src/components/Button';
 import { Input } from '../../src/components/ui';
 
 type SentState = {
+  // SECURITY (Batch #6, May 2026): production API MUST NOT return
+  // reset_token / reset_link. These fields are retained here as optional
+  // so an older dev-mode backend (EXPOSE_DEV_RESET_TOKEN=1) can still
+  // surface them via the __DEV__-gated panel below — never in a release
+  // build. Do NOT consume these fields outside the __DEV__ branch.
   reset_token?: string;
   reset_link?: string;
   dev_mode?: boolean;
@@ -103,27 +108,37 @@ export default function ForgotPassword() {
                 {sent.message || "If an account with that email exists, we've sent a reset link."}
               </Text>
 
-              {/* DEV MODE helper — remove once real email provider is wired. */}
-              {sent.dev_mode && sent.reset_token && (
+              {/* DEV-ONLY helper (Batch #6, May 2026).
+                  Hidden in every release build via __DEV__ guard. Also
+                  guarded on `sent.dev_mode` so even in dev a production
+                  API that doesn't emit the token won't trigger this
+                  panel. NEVER rely on this shortcut in QA/TestFlight — the
+                  backend requires `EXPOSE_DEV_RESET_TOKEN=1` to include
+                  the token in the response, and that flag stays OFF on
+                  every deployed environment. The canonical flow is:
+                  submit email → check inbox → tap emailed link. */}
+              {__DEV__ && sent.dev_mode && sent.reset_token ? (
                 <View style={styles.devBox}>
-                  <Text style={styles.devBadge}>DEV MODE</Text>
-                  <Text style={styles.devTitle}>Your reset link is ready</Text>
+                  <Text style={styles.devBadge}>DEV BUILD ONLY</Text>
+                  <Text style={styles.devTitle}>Reset link preview</Text>
                   <Text style={styles.devBody}>
-                    Email delivery isn't wired up yet. Tap below to continue to the reset
-                    screen, or copy the token and paste it on the reset screen manually.
+                    Email delivery is not wired for this local environment.
+                    This panel only appears in development builds and is
+                    always hidden in TestFlight, Play Internal Testing, and
+                    App Store releases.
                   </Text>
                   {sent.expires_at && (
                     <Text style={styles.devMeta}>
-                      Link expires at {new Date(sent.expires_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.
+                      Token expires at {new Date(sent.expires_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.
                     </Text>
                   )}
                   <View style={{ flexDirection: 'row', gap: 8, marginTop: space.md }}>
                     <TouchableOpacity style={styles.devCta} onPress={goResetWithToken} testID="fp-continue-to-reset">
-                      <Text style={styles.devCtaTxt}>Continue to reset</Text>
+                      <Text style={styles.devCtaTxt}>Continue to reset (dev)</Text>
                     </TouchableOpacity>
                   </View>
                 </View>
-              )}
+              ) : null}
 
               <TouchableOpacity
                 onPress={() => router.replace('/(auth)/login')}

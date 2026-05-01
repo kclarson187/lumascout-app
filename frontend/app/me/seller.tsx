@@ -212,6 +212,34 @@ function ConnectPayoutCard({
   const onboarding = status === 'onboarding';
   const restricted = status === 'restricted';
 
+  // Batch #6 — seller onboarding can be gated off at the API layer via the
+  // MARKETPLACE_SELLER_ENABLED env flag. Until Stripe Connect is enabled on
+  // LumaScout's Stripe account, every tap on "Connect Stripe" hits a
+  // dead-end; this branch replaces that broken CTA with a tasteful
+  // "Coming soon" card so users see intentional product copy instead of
+  // a generic Stripe error.
+  if (connect && connect.seller_onboarding_enabled === false) {
+    return (
+      <View style={[styles.connectCard, { borderColor: 'rgba(245,166,35,0.35)' }]}>
+        <View style={styles.connectRow}>
+          <View style={styles.stripeIconWrap}>
+            <Zap size={18} color={colors.primary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.connectHead}>Creator payouts — coming soon</Text>
+            <Text style={styles.connectSub}>
+              {connect.seller_onboarding_disabled_reason ||
+                "We're finalizing our payouts infrastructure. As soon as sellers in your country can onboard, we'll email you directly."}
+            </Text>
+          </View>
+        </View>
+        <Text style={styles.connectFoot}>
+          Buyers can still browse and purchase packs from existing approved creators today.
+        </Text>
+      </View>
+    );
+  }
+
   if (!connect || status === 'disconnected') {
     return (
       <View style={styles.connectCard}>
