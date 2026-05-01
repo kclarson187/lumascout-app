@@ -24,6 +24,7 @@
     "@react-navigation/native-stack": "^7.3.10",
     "@types/suncalc": "^1.9.2",
     "axios": "^1.15.0",
+    "babel-plugin-transform-remove-console": "^6.9.4",
     "expo": "~54.0.34",
     "expo-application": "~7.0.8",
     "expo-blur": "~15.0.8",
@@ -66,7 +67,6 @@
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@types/react": "~19.1.0",
-    "babel-plugin-transform-remove-console": "^6.9.4",
     "babel-preset-expo": "~54.0.10",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
