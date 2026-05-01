@@ -1173,12 +1173,29 @@ async def network_search(
     }
     if viewer: query["user_id"] = {"$ne": viewer["user_id"]}
     if q:
-        query["$or"] = [
-            {"name": {"$regex": q, "$options": "i"}},
-            {"username": {"$regex": q, "$options": "i"}},
-            {"bio": {"$regex": q, "$options": "i"}},
-            {"specialties": {"$regex": q, "$options": "i"}},
-        ]
+        # Batch #9A — forgiving multi-token search.
+        # Old behavior: single regex against the full query string anchored
+        # across only 4 fields (name/username/bio/specialties). A query
+        # like "San Antonio Pet" returned ZERO rows because no single
+        # field contained that exact substring.
+        # New behavior: tokenize on whitespace+comma, require each token
+        # to match ANY of 6 fields (name, username, bio, specialties,
+        # city, state). Tokens compose with AND (multi-word narrows),
+        # fields compose with OR (any field counts). `q` itself is also
+        # kept as a single OR clause so exact phrase matches still rank.
+        tokens = [t for t in re.split(r"[\s,]+", q.strip()) if len(t) >= 2]
+        fields = ["name", "username", "bio", "specialties", "city", "state"]
+        and_clauses: list[dict] = []
+        for tok in tokens:
+            and_clauses.append({
+                "$or": [{f: {"$regex": re.escape(tok), "$options": "i"}} for f in fields],
+            })
+        # Always keep a whole-phrase OR so "San Antonio" that happens to
+        # appear verbatim in someone's bio ranks via exact match too.
+        and_clauses.append({
+            "$or": [{f: {"$regex": re.escape(q.strip()), "$options": "i"}} for f in fields],
+        })
+        query["$and"] = and_clauses
     if city: query["city"] = {"$regex": f"^{city}", "$options": "i"}
     if niche: query["specialties"] = {"$regex": niche, "$options": "i"}
     if min_years is not None: query["years_experience"] = {"$gte": min_years}

@@ -374,12 +374,27 @@ function AddSpotImpl() {
     }
     const locPerm = await Location.requestForegroundPermissionsAsync();
 
-    // 2. Launch camera + GPS fetch in parallel so the spot is ready by the
-    //    time the user finishes shooting.
-    const gpsPromise = locPerm.status === 'granted'
-      ? Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
-          .catch(() => null)
-      : Promise.resolve(null);
+    // Batch #9A (May 2026) — GPS accuracy fix.
+    //
+    // Problem reported by a photographer: "Take photo now" was
+    // snapping the pin to a neighbour's address ~30-60m away. Root
+    // causes:
+    //   · Accuracy was `Balanced` (~100m radius) — fine for a weather
+    //     app, too loose for a scouting pin.
+    //   · GPS fetch fired in PARALLEL with launchCamera, so the fix
+    //     we captured was often from the moment the camera opened,
+    //     not the moment the shutter fired. If the user walked a
+    //     few yards between tap and shutter, the pin drifts.
+    //   · Reverse-geocode's `p.name` was being used as the label
+    //     source of truth; on US residential streets that's the
+    //     NEAREST named POI, not the current coord.
+    //
+    // Fix: launch camera first, THEN take a best-accuracy fix at
+    // shutter time, compare to EXIF's GPS, and keep whichever has the
+    // tighter accuracy circle. The user still confirms the pin in
+    // step #3 (Location) before publishing — we never auto-save a
+    // guess. We also drop `p.name` from the label to avoid "Target
+    // Portrait Studio, San Antonio" when the user is in their backyard.
 
     const res = await ImagePicker.launchCameraAsync({
       mediaTypes: ['images'],
@@ -410,28 +425,65 @@ function AddSpotImpl() {
       return;
     }
 
-    // 4. Await GPS. Prefer live GPS; fall back to EXIF GPS if GPS denied.
-    const gps = await gpsPromise;
+    // 4. Fetch BEST-accuracy device GPS *after* capture — this is the
+    //    value closest to where the shutter fired. BestForNavigation =
+    //    ~5m radius on modern phones with clear sky. We wrap in a 7s
+    //    timeout so a weak GPS signal doesn't lock up the add flow;
+    //    if it times out we fall back to EXIF GPS, then to no-pin.
+    let deviceFix: Awaited<ReturnType<typeof Location.getCurrentPositionAsync>> | null = null;
+    if (locPerm.status === 'granted') {
+      try {
+        deviceFix = await Promise.race([
+          Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.BestForNavigation,
+          }),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 7000)),
+        ]);
+      } catch { deviceFix = null; }
+    }
+
+    // Parse EXIF GPS (iOS + Android both populate GPSLatitude /
+    // GPSLongitude as *decimal* numbers in SDK 54's image-picker).
+    let exifLat: number | undefined;
+    let exifLng: number | undefined;
+    let exifAcc: number | undefined;
+    if (asset.exif) {
+      const ex: any = asset.exif;
+      if (typeof ex.GPSLatitude === 'number' && typeof ex.GPSLongitude === 'number') {
+        exifLat = ex.GPSLatitude;
+        exifLng = ex.GPSLongitude;
+        // Some devices record horizontal accuracy in `GPSHPositioningError`.
+        exifAcc = typeof ex.GPSHPositioningError === 'number' ? ex.GPSHPositioningError : undefined;
+      }
+    }
+
+    // Pick the tighter fix. If BOTH exist and EXIF's accuracy is
+    // unknown, device wins (Balanced-better-than-unknown). If device
+    // is null, EXIF wins. If both are null, leave the pin empty so
+    // step #3 makes the user confirm manually.
     let lat: number | undefined;
     let lng: number | undefined;
     let accuracy: number | undefined;
     let heading: number | undefined;
     let altitude: number | undefined;
-    if (gps?.coords) {
-      lat = gps.coords.latitude;
-      lng = gps.coords.longitude;
-      accuracy = gps.coords.accuracy ?? undefined;
-      heading = gps.coords.heading ?? undefined;
-      altitude = gps.coords.altitude ?? undefined;
-    } else if (asset.exif) {
-      const ex: any = asset.exif;
-      if (typeof ex.GPSLatitude === 'number' && typeof ex.GPSLongitude === 'number') {
-        lat = ex.GPSLatitude;
-        lng = ex.GPSLongitude;
-      }
+    const deviceAcc = deviceFix?.coords?.accuracy ?? undefined;
+    if (deviceFix?.coords && (exifAcc == null || (deviceAcc != null && deviceAcc <= exifAcc))) {
+      lat = deviceFix.coords.latitude;
+      lng = deviceFix.coords.longitude;
+      accuracy = deviceAcc;
+      heading = deviceFix.coords.heading ?? undefined;
+      altitude = deviceFix.coords.altitude ?? undefined;
+    } else if (exifLat != null && exifLng != null) {
+      lat = exifLat;
+      lng = exifLng;
+      accuracy = exifAcc;
     }
 
-    // 5. Reverse-geocode to hint city/state (best effort, never blocks).
+    // 5. Reverse-geocode. Treat the result as a LABEL, not a source
+    //    of truth. We intentionally drop `p.name` (the nearest POI)
+    //    so we don't mislabel a shot in a public park with a nearby
+    //    business name. City+State only — the user can add detail in
+    //    the Location step.
     let city: string | undefined;
     let state: string | undefined;
     let locationLabel: string | undefined;
@@ -442,8 +494,22 @@ function AddSpotImpl() {
           const p = places[0];
           city = p.city || p.subregion || undefined;
           state = p.region || undefined;
-          locationLabel = [p.name, city, state].filter(Boolean).join(', ');
+          locationLabel = [city, state].filter(Boolean).join(', ') || undefined;
         }
+      } catch {}
+    }
+
+    // If the final accuracy is worse than 30m we surface it so the
+    // user knows to nudge the pin in step #3. Never auto-save a
+    // loose fix silently.
+    if (accuracy != null && accuracy > 30 && lat != null && lng != null) {
+      // Non-blocking toast-ish alert — the auto-advance to Location
+      // step below still happens; this is purely informational.
+      try {
+        Alert.alert(
+          'GPS fix is approximate',
+          `We got your position within about ${Math.round(accuracy)} meters. Please confirm or drag the pin on the next step.`,
+        );
       } catch {}
     }
 
