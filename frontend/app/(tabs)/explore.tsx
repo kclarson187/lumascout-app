@@ -10,7 +10,7 @@ import { router } from 'expo-router';
 import { Search, List, Map as MapIcon, SlidersHorizontal, Locate, X, Shield, Gem, Sun, Users as UsersIcon, MapPin, Navigation, RefreshCw, ArrowUpRight, Layers, Bookmark, Flame, Camera, Plane, Cloud, Heart, Share2 as ShareIcon, ChevronRight } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
-import { formatDistance } from '../../src/utils/distance';
+import { formatDistance, resolveMiles } from '../../src/utils/distance';
 import { api } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
 import SpotCard from '../../src/components/SpotCard';
@@ -203,6 +203,34 @@ export default function Explore() {
   // unmount so a pending timeout can never call setState on a dead
   // component.
   const regionDebounce = useRef<any>(null);
+
+  // ────────────────────────────────────────────────────────────────
+  // June 2025 CR — "Explore list sorted closest-first by real GPS".
+  // We derive `nearbySortedSpots` once per render from the raw /spots
+  // payload. When the user has granted GPS, we sort ascending by a
+  // resolved mileage (backend distance_mi preferred, Haversine fallback
+  // from user↔spot lat/lng). When GPS is denied / unavailable we keep
+  // the backend order (quality-ranked), so we never present a
+  // misleading "nearby" list tied to a random default coord. Map pins
+  // read the same `spots` array, so list + map stay synced.
+  // ────────────────────────────────────────────────────────────────
+  const nearbySortedSpots = useMemo(() => {
+    if (!Array.isArray(spots) || spots.length === 0) return spots;
+    if (gpsState !== 'granted' || !userCoords) return spots;
+    const withMi = spots.map((sp) => ({
+      sp,
+      mi: resolveMiles(sp as any, userCoords.lat, userCoords.lng),
+    }));
+    withMi.sort((a, b) => {
+      // null miles sorts to the bottom (preserves their relative order
+      // from the server rather than scrambling them to the top).
+      if (a.mi == null && b.mi == null) return 0;
+      if (a.mi == null) return 1;
+      if (b.mi == null) return -1;
+      return a.mi - b.mi;
+    });
+    return withMi.map((x) => x.sp);
+  }, [spots, gpsState, userCoords]);
 
   const load = useCallback(async () => {
     // Cancel any prior /spots request so the most-recent filter wins.
@@ -856,8 +884,10 @@ export default function Explore() {
                 ) : null}
               </View>
 
-              {/* Section 1 — Nearby Right Now (3 stacked premium cards) */}
-              <NearbyRightNowList items={spots} />
+              {/* Section 1 — Nearby Right Now (3 stacked premium cards).
+                  Fed from `nearbySortedSpots` (GPS closest-first) so the
+                  top 3 are literally the 3 nearest when location is on. */}
+              <NearbyRightNowList items={nearbySortedSpots} />
 
               {/* Section 2 — Trending Nearby (#1 / #2 / #3 medals) */}
               <TrendingNearbyList
@@ -899,7 +929,10 @@ export default function Explore() {
                 </Text>
               </View>
               <View style={{ paddingHorizontal: 12, gap: space.md }}>
-                {spots.slice(0, 24).map((item, idx) => (
+                {/* June 2025 CR — closest-first when GPS is granted. When
+                    GPS is denied / unavailable, we fall back to the
+                    backend quality sort (no misleading "nearby" label). */}
+                {nearbySortedSpots.slice(0, 24).map((item, idx) => (
                   <SpotCard
                     key={
                       item?.spot_id ||

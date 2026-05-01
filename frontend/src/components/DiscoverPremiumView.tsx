@@ -470,30 +470,14 @@ export default function DiscoverPremiumView() {
         ) : null}
       </View>
 
-      {/* Filter pills */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={s.filterStrip}
-        keyboardShouldPersistTaps="handled"
-      >
-        {FILTERS.map((f) => {
-          const active = filter === f.key;
-          return (
-            <Pressable
-              key={f.key}
-              onPress={() => {
-                Haptics.selectionAsync().catch(() => {});
-                setFilter(f.key);
-              }}
-              style={[s.filterPill, active && s.filterPillActive]}
-              testID={`discover-filter-${f.key}`}
-            >
-              <Text style={[s.filterPillTxt, active && s.filterPillTxtActive]}>{f.label}</Text>
-            </Pressable>
-          );
-        })}
-      </ScrollView>
+      {/* Network Discover CR (June 2025) — filter pill row under the
+          search bar removed per product spec. The discover feed now
+          always renders the curated "all" rail set; inline example
+          chips above still seed quick searches. We keep the `filter`
+          state variable so any downstream rail-specific logic that
+          still reads it (visible_rails gating) continues to work as
+          if 'all' were selected. Zero dead-space below the search
+          bar — the freshness banner sits directly under the input. */}
 
       {/* Search results take over the feed when active */}
       {searchResults !== null ? (
