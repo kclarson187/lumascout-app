@@ -17,6 +17,7 @@ was moved verbatim from server.py.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 import re
@@ -36,6 +37,9 @@ from server import (
     check_rate_limit, limits_for,
     DMSendIn, DMStartIn,
 )
+
+# Batch #7 — graceful fallback wrapper (see common/graceful.py).
+from common.graceful import graceful as _graceful
 
 router = APIRouter(prefix="/api", tags=["network"])
 
@@ -1433,6 +1437,8 @@ async def directory_browse(
 
 
 @router.get("/directory/suggested")
+@_graceful(fallback={"items": []}, label="/directory/suggested",
+           logger=logging.getLogger("directory.suggested"))
 async def directory_suggested(limit: int = 10, user: dict = Depends(get_current_user)):
     """People-you-may-know — followers of the people the viewer follows
     (mutual-follow expansion), capped at `limit`. Excludes already-followed

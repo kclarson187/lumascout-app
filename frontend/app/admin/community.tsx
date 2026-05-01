@@ -25,6 +25,9 @@ import {
   TextInput,
   Image,
   Pressable,
+  // Batch #7 — added for moderation-sheet keyboard handling on shorter iPhones.
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack, useFocusEffect } from 'expo-router';
@@ -448,6 +451,16 @@ function ActionSheet({
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.modalBackdrop} onPress={onClose}>
+        {/* Batch #7 — wrap the moderation sheet in KeyboardAvoidingView so
+            the reason-note TextInput isn't hidden by the on-screen keyboard
+            on shorter iPhone bodies (SE, mini). behavior:'padding' is the
+            Apple-recommended choice for modal sheets; Android uses 'height'
+            to nudge the whole sheet up instead of padding internally. */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1, justifyContent: 'flex-end' }}
+          pointerEvents="box-none"
+        >
         <Pressable style={styles.sheet}>
           <View style={styles.sheetHandle} />
           <Text style={styles.sheetTitle}>Moderate post</Text>
@@ -494,6 +507,7 @@ function ActionSheet({
             <Text style={styles.cancelTxt}>Cancel</Text>
           </TouchableOpacity>
         </Pressable>
+        </KeyboardAvoidingView>
       </Pressable>
     </Modal>
   );

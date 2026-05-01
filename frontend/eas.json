@@ -1,4 +1,5 @@
 {
+  "_comment": "Batch #7 (May 2026) — ascAppId is still a placeholder. See /app/app-store-assets/ASC_APP_ID_SETUP.md for the one-time, user-only steps to create the App Store Connect record and paste the 10-digit Apple ID below. Without this, `eas submit --platform ios --profile production` will fail with 'Could not find a matching app'. appleTeamId + bundleIdentifier are already correct.",
   "cli": {
     "version": ">= 18.0.0",
     "appVersionSource": "remote"
