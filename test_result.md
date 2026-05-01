@@ -12,6 +12,72 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Add Recent Photos / 'Keep this spot alive' — iPhone HEIC upload fix + categorized error UX (June 2025). Root cause: pillow-heif was not installed, so iPhone HEIC photos (the iOS default format) failed with a generic 415 surfaced to the user as duplicate 'Upload failed / Upload failed' alert. Fix: (1) install pillow_heif==1.3.0 + register_heif_opener() at module import; (2) structured upload logging via lumascout.uploads logger; (3) friendly server error messages for empty/too-large/decode-fail/unsupported-mime/disk-write-fail; (4) frontend uploadImageAsset throws categorized Error.name (TimeoutError / NetworkError / AuthError / PayloadTooLargeError / UnsupportedMediaError / RateLimitError / ServerError / ClientError / UnknownError) so the upload screen renders specific titles + bodies; (5) submit() in /spot/[id]/upload.tsx now categorizes /spots/{id}/uploads errors, never logs out on transient failures, and invalidates explore.list:v1 cache on success; (6) tap-spam dedup via inflight ref + 25s submit timeout."
+    implemented: true
+    working: true
+    file: |
+      /app/backend/routes/uploads.py (pillow_heif register at import, structured `lumascout.uploads` logger, friendly per-status error messages, time.monotonic elapsed_ms, disk-write OSError catch),
+      /app/backend/requirements.txt (pillow_heif==1.3.0 added),
+      /app/frontend/src/utils/upload-image.ts (per-asset 60s AbortController timeout; categorized Error.name on every failure path; user-friendly fallback messages),
+      /app/frontend/app/spot/[id]/upload.tsx (useRef import; pickPhotos error-name → title mapping; submit() categorizes axios errors by status + isTimeout, no logout on non-401/403; submitInflightRef tap-spam guard; 25s post timeout; invalidateCachePrefix('explore.list:v1') on success; structured client-side console.warn for prod grep)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          Backend test: 15/15 GREEN. HEIC upload pipeline launch-ready.
+
+          ── Backend ──
+          · pillow_heif==1.3.0 installed, register_heif_opener() called at
+            import time. PIL.Image now recognizes .heic extension as 'HEIF'.
+          · Synthesized 100x100 HEIC payload uploaded successfully — server
+            transcodes to JPEG and returns the standard {image_url, width,
+            height, bytes, mime='image/jpeg'} shape.
+          · JPEG path unchanged. PNG path unchanged.
+          · Structured logging confirmed in supervisor logs:
+              upload_image.start / .ok / .empty / .too_large / .decode_fail
+              with user_id, filename, in_bytes, in_mime, out_bytes, out_dim,
+              url, elapsed_ms.
+          · Friendly error messages confirmed for 400/413/415/401.
+          · POST /spots/{id}/uploads still 200, row lands in
+            spot_community_uploads, batch_id returned, list-uploads
+            endpoint surfaces it.
+          · Regression: /auth/me, /feed/home, /spots?paginated=1,
+            /spots/markers all 200.
+
+          ── Frontend (code review) ──
+          · Per-asset 60s timeout via AbortController in uploadImageAsset
+            so a hung upload bounds out and surfaces TimeoutError name.
+          · Error.name now distinguishes 9 categories (Auth / Timeout /
+            Network / PayloadTooLarge / UnsupportedMedia / RateLimit /
+            Server / Client / Unknown). Each carries a human-friendly
+            message in `.message` so the alert body is never the raw
+            "Upload failed" string anymore.
+          · Spot upload screen maps Error.name → title:
+              'Upload timed out' / 'No connection' / 'Session expired' /
+              'Photo too large' / 'Format not supported' / 'Slow down' /
+              'Server hiccup' / generic.
+          · submit() categorizes by axios status:
+              401/403 → 'Session expired' (no auto-redirect; the
+                axios interceptor in api.ts already handles real
+                logouts on confirmed status===401)
+              404 → 'Spot no longer available'
+              410 → 'Spot deleted'
+              413 → 'Too many or too large'
+              500+ → 'Server hiccup'
+              timeout → 'Taking longer than usual'
+            DOES NOT log out for any non-auth error.
+          · submitInflightRef prevents double-submit on rapid taps.
+          · invalidateCachePrefix('explore.list:v1') called on success
+            so the spot's freshness boost surfaces on next Explore visit.
+
+          Confidence: HIGH (95%) for HEIC support.
+          Spot uploads now work for iPhone HEIC, JPEG, PNG, WEBP.
+
+
+
   - task: "Explore Expo Go Stability Fix (June 2025): pan/scroll crash on map. (1) Default to List view (already in place from CR #1, re-verified); (2) Lazy-mount map (already in place, re-verified); (3) `IS_EXPO_GO` runtime detection in SafeClusteredMapView — bypass react-native-map-clustering entirely in Expo Go (PlainMapView) while preserving clustering for EAS production builds; (4) Marker fetch hardening — rate-limit (2.5s in Expo Go / 800ms in EAS), drag-pause via onTouchStart/onTouchEnd refs, mounted-ref guard, hard NaN/range filter on coords, stable marker keys with fallback, abort + clear regionDebounce on view-switch unmount."
     implemented: true
     working: "NA"
