@@ -462,11 +462,19 @@ function SpotDetailImpl() {
               <Bookmark color={spot.is_saved ? colors.textInverse : colors.text} size={18} fill={spot.is_saved ? colors.textInverse : 'transparent'} />
             </TouchableOpacity>
           </SafeAreaView>
-          <View style={styles.dots}>
-            {orderedImages.map((img: any, i: number) => (
-              <View key={img.image_url || `d${i}`} style={[styles.dot, i === galleryIdx && styles.dotActive]} />
-            ))}
-          </View>
+          {/* CR #1 Item 2 (June 2025): minimal "2 / 6" counter replaces the
+              pagination dot rail. Uses the same bottom overlay position
+              so photographers can see which photo they're on without
+              competing with the dots. Only surfaces when there are >1
+              photos — a single-image spot shouldn't advertise its
+              loneliness. */}
+          {orderedImages.length > 1 ? (
+            <View style={styles.heroCounter} pointerEvents="none">
+              <Text style={styles.heroCounterTxt}>
+                {Math.min(galleryIdx + 1, orderedImages.length)} / {orderedImages.length}
+              </Text>
+            </View>
+          ) : null}
           {/* May 2026 batch #4 item #2.1 — ADMIN photo delete pill.
               Positioned BOTTOM-LEFT so it never covers the share /
               bookmark / wand / report buttons in the header row.
@@ -1056,6 +1064,26 @@ const styles = StyleSheet.create({
   },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.4)' },
   dotActive: { width: 20, backgroundColor: colors.primary },
+  // CR #1 Item 2 (June 2025): minimal "2 / 6" hero counter. Replaces
+  // the dot rail so the gallery feels premium and glanceable at a
+  // glance — no cognitive load counting dots on 10-image galleries.
+  heroCounter: {
+    position: 'absolute',
+    bottom: space.md,
+    alignSelf: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.22)',
+  },
+  heroCounterTxt: {
+    color: '#fff',
+    fontFamily: font.bodySemibold,
+    fontSize: 11,
+    letterSpacing: 0.5,
+  },
   // May 2026 batch #4 update #2.1 — admin photo DELETE pill.
   //
   // Moved from top-right to BOTTOM-LEFT (May 2026) so it never

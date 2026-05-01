@@ -48,13 +48,15 @@ function distancePill(sp: any, fallbackIdx: number): string {
   return `${demo[fallbackIdx % demo.length]} mi`;
 }
 
-function bestTimeLabel(sp: any): { label: string; tone: 'gold' | 'cool' } {
-  const am = sp?.morning_golden_hour_rating || 0;
-  const pm = sp?.evening_golden_hour_rating || 0;
-  if (pm >= 4) return { label: 'Best at sunset', tone: 'gold' };
-  if (am >= 4) return { label: 'Best at sunrise', tone: 'gold' };
+function bestTimeLabel(sp: any): { label: string; tone: 'gold' | 'cool' } | null {
+  // CR #1 Item 5 (June 2025): removed generic "Best at sunset/sunrise/
+  // golden hour" labels from card surfaces. They appeared on every
+  // spot regardless of real golden-hour metadata and added visual
+  // noise. We now only surface a chip when there's a *real* signal
+  // that differentiates this spot (e.g. genuinely quiet midday) —
+  // otherwise we return null and the row collapses cleanly.
   if ((sp?.crowd_level || 3) <= 2) return { label: 'Quiet midday', tone: 'cool' };
-  return { label: 'Best in golden hour', tone: 'gold' };
+  return null;
 }
 
 function sunsetTimeFor(idx: number): string {
@@ -153,20 +155,22 @@ function NearbyCard({ sp, idx }: { sp: any; idx: number }) {
           {sp.city}{sp.state ? `, ${sp.state}` : ''}
         </Text>
         <View style={s.nearChipRow}>
-          <View style={[s.timeChip, bt.tone === 'gold' ? s.timeChipGold : s.timeChipCool]}>
-            <Sun
-              size={10}
-              color={bt.tone === 'gold' ? colors.primary : '#60A5FA'}
-            />
-            <Text
-              style={[
-                s.timeChipTxt,
-                { color: bt.tone === 'gold' ? colors.primary : '#60A5FA' },
-              ]}
-            >
-              {bt.label}
-            </Text>
-          </View>
+          {bt ? (
+            <View style={[s.timeChip, bt.tone === 'gold' ? s.timeChipGold : s.timeChipCool]}>
+              <Sun
+                size={10}
+                color={bt.tone === 'gold' ? colors.primary : '#60A5FA'}
+              />
+              <Text
+                style={[
+                  s.timeChipTxt,
+                  { color: bt.tone === 'gold' ? colors.primary : '#60A5FA' },
+                ]}
+              >
+                {bt.label}
+              </Text>
+            </View>
+          ) : null}
           <View style={{ flex: 1 }} />
           <Pressable
             hitSlop={8}

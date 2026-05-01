@@ -106,11 +106,36 @@ const SEASONS: string[] = []; // Apr 2026 cleanup: month/season filter removed; 
 export default function Explore() {
   const [spots, setSpots] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  // (Apr 2026) Map/List toggle removed — Explore is now a dedicated map
-  // experience. List discovery lives on the Home tab. We keep the legacy
-  // `view` const so call sites that reference it (legend / niche dropdown
-  // gating) keep working without a sweeping refactor.
-  const view: 'map' = 'map';
+  // CR #1 Item 1 (June 2025): Explore defaults to List view for faster
+  // first paint + better reliability. Users can toggle to Map; we
+  // persist the choice under `lumascout.explore.view`. Map is
+  // lazy-mounted only once the user requests it, so cold-start never
+  // pays the native-map bootstrap cost.
+  const VIEW_KEY = 'lumascout.explore.view';
+  const [view, setView] = useState<'list' | 'map'>('list');
+  const [viewHydrated, setViewHydrated] = useState(false);
+  const [mapEverMounted, setMapEverMounted] = useState(false);
+
+  // Hydrate view from AsyncStorage on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(VIEW_KEY);
+        if (raw === 'map' || raw === 'list') {
+          setView(raw);
+          if (raw === 'map') setMapEverMounted(true);
+        }
+      } catch {}
+      setViewHydrated(true);
+    })();
+  }, []);
+
+  const switchView = useCallback((next: 'list' | 'map') => {
+    Haptics.selectionAsync().catch(() => {});
+    setView(next);
+    if (next === 'map') setMapEverMounted(true);
+    AsyncStorage.setItem(VIEW_KEY, next).catch(() => {});
+  }, []);
   const [filters, setFilters] = useState<Filters>({});
   const [filterOpen, setFilterOpen] = useState(false);
   const [selectedSpot, setSelectedSpot] = useState<any | null>(null);
@@ -486,6 +511,33 @@ export default function Explore() {
         </TouchableOpacity>
       </View>
 
+      {/* CR #1 Item 1 (June 2025): List | Map segmented toggle.
+          Defaults to List for faster first paint. Map is lazy-mounted only
+          on first toggle (mapEverMounted) so cold-start never pays the
+          native-map bootstrap cost. */}
+      <View style={styles.segWrap}>
+        <View style={styles.seg}>
+          <TouchableOpacity
+            style={[styles.segBtn, view === 'list' && styles.segBtnActive]}
+            onPress={() => switchView('list')}
+            testID="explore-view-list"
+            activeOpacity={0.85}
+          >
+            <List size={14} color={view === 'list' ? colors.primary : colors.textSecondary} />
+            <Text style={[styles.segTxt, view === 'list' && styles.segTxtActive]}>List</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.segBtn, view === 'map' && styles.segBtnActive]}
+            onPress={() => switchView('map')}
+            testID="explore-view-map"
+            activeOpacity={0.85}
+          >
+            <MapIcon size={14} color={view === 'map' ? colors.primary : colors.textSecondary} />
+            <Text style={[styles.segTxt, view === 'map' && styles.segTxtActive]}>Map</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
       {/* (Apr 2026) Map/List segmented toggle removed — Explore is map-only.
           Keeping the location chip row immediately below the search header
           gives the map ~44px more vertical room and a cleaner, premium feel. */}
@@ -588,7 +640,7 @@ export default function Explore() {
         </Pressable>
       ) : null}
 
-      {view === 'map' && Platform.OS !== 'web' && (ClusteredMapView || MapView) ? (
+      {view === 'map' && mapEverMounted && Platform.OS !== 'web' && (ClusteredMapView || MapView) ? (
         <View style={{ flex: 1 }}>
           {React.createElement(
             SafeClusteredMapView,
@@ -1009,13 +1061,11 @@ function PinPreview({
   // (mirrors the Explore-card priority cascade).
   const savesCount = Number(spot.save_count || 0);
   const newPostsCount = Number(spot.recent_upload_count_7d || 0);
-  const realGoldChip =
-    (spot.evening_golden_hour_rating || 0) >= 4
-      ? { key: 'sunset', label: 'Best at Sunset', icon: Sun }
-      : (spot.morning_golden_hour_rating || 0) >= 4
-        ? { key: 'sunrise', label: 'Best at Sunrise', icon: Sun }
-        : null;
-  const goldChip = realGoldChip;  // keep variable name for downstream code
+  // CR #1 Item 5 (June 2025): removed the generic "Best at Sunset/Sunrise"
+  // chip from the map bottom-sheet preview surface. The underlying
+  // evening/morning_golden_hour_rating data is retained and still drives
+  // the Golden Hour Rail + Spot Detail page; we just no longer surface
+  // a generic label on card/preview surfaces.
   const greenChip =
     (spot.crowd_level || 3) <= 2
       ? { key: 'crowd', label: 'Low Crowds', icon: UsersIcon }
@@ -1106,11 +1156,10 @@ function PinPreview({
             </Pressable>
           </View>
 
-          {/* Score + the 2 prominent chips — both fully hidden when
-              we don't actually have real data (no more fake 100 Score
-              or fake "Best at Sunset" on every spot). If NOTHING real
-              is available, we suppress this block entirely. */}
-          {(hasRealScore || goldChip || greenChip || premium) && (
+          {/* Score + supporting chips — hidden entirely when we don't
+              actually have real data. CR #1 Item 5 (June 2025) removed
+              the generic "Best at Sunset" gold chip from this preview. */}
+          {(hasRealScore || greenChip || premium) && (
             <View style={styles.sheetScoreRow}>
               {hasRealScore && (
                 <View style={styles.sheetScoreCol}>
@@ -1121,12 +1170,6 @@ function PinPreview({
                 </View>
               )}
               <View style={{ flex: 1, gap: 6 }}>
-                {goldChip ? (
-                  <View style={[styles.bigChip, styles.bigChipGold]}>
-                    <Sun size={11} color={colors.primary} />
-                    <Text style={[styles.bigChipTxt, { color: colors.primary }]}>{goldChip.label}</Text>
-                  </View>
-                ) : null}
                 {greenChip ? (
                   <View style={[styles.bigChip, styles.bigChipGreen]}>
                     <UsersIcon size={11} color="#22c55e" />

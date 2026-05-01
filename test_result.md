@@ -12,6 +12,177 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "CR #1 (June 2025) — LumaScout targeted usability fixes: (Item 1) Explore default to List view with persisted List|Map toggle + lazy-mount map (AsyncStorage lumascout.explore.view); (Item 2) Spot Detail scrollable hero gallery with minimal `N / M` counter replacing dots; (Item 3) Network Directory single-axis facet pills (By city | By specialty) fed by new backend aggregation endpoint `GET /api/directory/facets` returning real top cities + top specialties (no hardcoded concat seed strings); (Item 5) Removed generic 'Best at Sunset/Sunrise' labels from card surfaces (PremiumExploreRails NearbyCard + Explore map PinPreview); (Item 6) Explore crash hardening — server-side hard-cap `limit` ≤200 on `GET /api/spots` + `POST /api/errors` telemetry + `ExploreErrorBoundary` wiring"
+    implemented: true
+    working: true
+    file: |
+      /app/backend/routes/spots.py (list_spots: server-side hard cap limit=min(200, limit)),
+      /app/backend/routes/network.py (NEW GET /api/directory/facets aggregation endpoint),
+      /app/frontend/app/(tabs)/explore.tsx (List|Map toggle w/ AsyncStorage lumascout.explore.view + lazy map mount + removed PinPreview goldChip),
+      /app/frontend/app/spot/[id].tsx (minimal N/M hero counter replacing dots),
+      /app/frontend/src/components/DirectoryView.tsx (axis toggle By city|By specialty + facet pill row + persisted lumascout.network.pillAxis + activeCity state wired to /directory `city` param),
+      /app/frontend/src/components/PremiumExploreRails.tsx (bestTimeLabel: removed 'Best at sunset/sunrise' branches + 'Best in golden hour' default → returns null when no real signal)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          CR #1 backend validation — 58/59 assertions green via
+          /app/backend_test.py against
+          https://photo-finder-60.preview.emergentagent.com/api.
+          Super_admin: admin@lumascout.app / Grayson@1117!!
+          (user_6daa7d0a3abc, plan=elite).
+
+          ── SECTION 1: GET /api/directory/facets (NEW) — 16/16 + 9/9 + 2/2 + 2/2 ──
+            1a (unauth, default limit=12):
+              · 200 with shape {"top_cities": [...], "top_specialties": [...]}.
+              · top_cities items = {city: str, count: int}
+                Sample: [('San Antonio', 2), ('Austin', 1), ('Dallas', 1),
+                         ('Fredericksburg', 1), ('Houston', 1)]
+              · top_specialties items = {specialty: str, count: int}
+                Sample: [('Portrait', 3), ('Branding', 2), ('Family', 2),
+                         ('Pet', 2), ('Seniors', 2)]
+              · BOTH arrays verified sorted by count DESC.
+              · Both arrays respect default limit <= 12.
+            1b (limit clamping [3..30]):
+              · limit=1  → clamped up to 3  (both arrays len<=3) ✓
+              · limit=9999 → clamped down to 30 (len<=30) ✓
+              · limit=5  → len<=5 (in-range honored) ✓
+            1c (admin auth): 200, same response shape.
+            1d (excluded-user filter):
+              · No suspicious tokens (test/deleted/bot/official) found in
+                any returned city or specialty, confirming the
+                is_bot/is_official/plan:suspended/deleted_at/
+                status:deleted/deleted:true/is_test_account filter
+                matches /api/directory exactly.
+            @_graceful wrapper present — fallback={"top_cities":[],"top_specialties":[]}.
+
+          ── SECTION 2: GET /api/spots hard-cap — 19/20 ──
+            2a limit=9999 → 200, list, len=35 (well under 200 cap) ✓
+            2b limit=50   → 200, len=35 (not capped) ✓
+            2c limit=0    → 200, BUT returned 35 items (not 1) ❌
+                MINOR DEVIATION FROM SPEC: code at routes/spots.py:642
+                reads `limit = max(1, min(200, int(limit or 40)))`.
+                The `limit or 40` expression treats 0 as falsy and
+                substitutes 40 (the default) INSTEAD of clamping to 1.
+                Net effect: limit=0 behaves like limit=40. The 200-cap
+                (the actual safety goal) is still enforced, so there is
+                NO crash/memory risk. No real client sends limit=0 — the
+                frontend passes limit=200 for Explore. This is a 1-line
+                semantic tweak: `int(limit) if limit is not None else 40`.
+                Flagging as non-blocking.
+            2d verified_recently=true filter → 200 ✓
+            2e sort modes (recent, trending, quality, golden_hour,
+               score) all return 200 ✓
+            2f lat=30.2672&lng=-97.7431 (Austin): 200, all 10 items
+               carry distance_source="device_gps" with numeric
+               distance_km (sample 0.43) ✓
+            2g no lat/lng: all items distance_source="unavailable"
+               + distance_km=None (stale distance fields scrubbed) ✓
+            2h min_rating=4 filter → 200 ✓
+
+          ── SECTION 3: POST /api/errors — 6/6 ──
+            3a full payload (unauthenticated, surface/message/stack/
+               component_stack/context/route/platform) → 200 with
+               {"ok": true, "error_id": "<uuid>"} ✓
+            3b minimal payload {"message": "..."} → 200 {ok:true} ✓
+            3c authenticated POST → 200 {ok:true} ✓
+            3d shape probe {context, message, stack} → 200 {ok:true} ✓
+            @graceful(fallback={"ok":True}) wrapper present so even a
+            DB hiccup returns 200.
+
+          ── SECTION 4: regression smoke — 5/5 ──
+            4a /auth/me (admin) → 200 with user_id + plan ✓
+            4b /spots?limit=10 → 200 ✓
+            4c /directory?limit=5 → 200 with items list ✓
+
+          ── VERDICT ──────────────────────────────────────────────
+          CR #1 backend changes are launch-ready.
+          • /api/directory/facets returns real aggregated data with
+            the correct shape, sort, limit clamping, and ghost-user
+            exclusion. Works both authenticated and unauthenticated.
+            @_graceful wrapper confirmed present.
+          • /api/spots 200-item hard cap is enforced (root-cause fix
+            for Explore crash is in place). All filters, sort modes,
+            and distance computation still work correctly.
+          • /api/errors continues to accept telemetry payloads
+            unauthenticated and returns 200 {ok:true} for every
+            variant tested.
+
+          Only deviation from spec: limit=0 on /api/spots falls
+          through to default (40) instead of clamping to 1. Minor,
+          non-blocking — the safety-critical 200 cap is unaffected
+          and no client relies on limit=0 behavior.
+
+          No 500s observed. Backend logs clean during the entire run.
+          Test harness preserved at /app/backend_test.py.
+
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          CR #1 complete (5 of 6 items; Item 4 removing in-app splash
+          was a confirmed NO-OP — no in-app splash component exists).
+
+          Backend changes:
+            · routes/spots.py — list_spots now hard-caps `limit` at 200
+              server-side: `limit = max(1, min(200, int(limit or 40)))`.
+              Previously any client could request limit=1000+ and the
+              backend honored it, blowing RN-Maps memory on Android
+              mid-range devices. Root-cause mitigation for Explore crash.
+            · routes/network.py — new endpoint
+              `GET /api/directory/facets?limit=12` that aggregates real
+              top cities + top specialties from directory-eligible users
+              (excludes bots, officials, suspended, deleted, test
+              accounts). Returns {top_cities: [{city, count}],
+              top_specialties: [{specialty, count}]}. Uses @_graceful so
+              a DB hiccup never breaks the Network tab.
+
+          Frontend changes (5 files):
+            · explore.tsx — Replaced hardcoded `const view: 'map' = 'map'`
+              with useState<'list'|'map'>('list'), default LIST per CR.
+              Hydrates from AsyncStorage `lumascout.explore.view` on
+              mount. Map is lazy-mounted only on first toggle
+              (mapEverMounted ref) so cold-start never pays the
+              native-map bootstrap cost. Segmented control (List | Map)
+              rendered below header with haptic switchView callback.
+              Also removed the PinPreview "Best at Sunset/Sunrise"
+              goldChip (CR #1 Item 5).
+            · spot/[id].tsx — Hero already had horizontal pagingEnabled
+              ScrollView over orderedImages. Replaced the pagination
+              dots with a minimal "N / M" counter (only rendered when
+              orderedImages.length > 1). Premium glassmorphism pill
+              positioned bottom-center, matched hairline border for
+              legibility on any photo.
+            · DirectoryView.tsx — Added pillAxis state 'city'|'specialty'
+              (default 'city') persisted under lumascout.network.pillAxis.
+              Fetches /api/directory/facets on mount, renders horizontal
+              ScrollView of single-select pills for the active axis.
+              Wired `activeCity` through the /directory query params
+              (city=), `specialty` state pre-existed. Axis switch clears
+              the inactive-axis filter so queries never mix axes.
+              hasActiveFilters + resetFilters + onRefresh all reconciled.
+              AsyncStorage import added.
+            · PremiumExploreRails.tsx — bestTimeLabel(): removed the
+              pm>=4 → "Best at sunset", am>=4 → "Best at sunrise", and
+              default "Best in golden hour" branches. Now returns
+              {Quiet midday} only when crowd_level<=2, else null. Card
+              rendering updated to conditionally render the chip.
+
+          Item 6 telemetry work (already completed in prior handoff):
+            · POST /api/errors endpoint wired.
+            · ExploreErrorBoundary logs caught errors to the backend.
+
+          Testing protocol:
+            · Test backend first (backend_v2 agent): verify /api/directory/
+              facets returns real aggregated data + /api/spots respects
+              the 200-limit cap + /api/errors still receives client
+              payloads correctly.
+            · Then request user permission before frontend testing.
+
+
+
   - task: "Batch #9A — Field Usability + Messaging Polish (pull-to-refresh, tier-gated message timestamps, Elite-only read receipts, performance audit)"
     implemented: true
     working: true
