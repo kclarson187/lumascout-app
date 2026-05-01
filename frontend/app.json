@@ -12,7 +12,6 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.lumascout.app",
       "buildNumber": "1",
-      "_comment_associatedDomains": "Universal Links — iOS: the OS downloads https://lumascout.app/.well-known/apple-app-site-association (AASA) on install/update and maps matching paths into this app. REQUIRES a signed EAS build (does NOT work in Expo Go). AASA file must be hosted at the domain root, served as application/json with HTTPS and no redirects. Staged copy: /app/universal-links/apple-app-site-association.",
       "associatedDomains": [
         "applinks:lumascout.app"
       ],
@@ -108,7 +107,6 @@
       [
         "expo-splash-screen",
         {
-          "_comment": "Apr 2026 — switched to the full-bleed LumaScout splash. resizeMode='cover' guarantees the image fills the entire screen on every aspect ratio (iPhone SE through iPhone 15 Pro Max, foldables, tablets) without letterboxing. Background matches the navy in the artwork so any sub-pixel edge band blends seamlessly.",
           "image": "./assets/splash/Splash-LumaScout.png",
           "resizeMode": "cover",
           "backgroundColor": "#020816",
@@ -129,7 +127,6 @@
       "eas": {
         "projectId": "9f304683-9099-4c6f-b1fc-96ab03125848"
       },
-      "_comment_privacyPolicyUrl": "Public privacy policy URL. App Store Connect + Google Play Console also require this to be set in their listings. Stored here for reference by the settings/legal screens so the link stays in one place.",
       "privacyPolicyUrl": "https://lumascout.app/privacy"
     },
     "owner": "lumascout"
