@@ -658,7 +658,11 @@ async def login(body: LoginIn):
 # hook is a stub; swap `send_password_reset_email` to Resend/SendGrid later.
 # ============================================================================
 class ForgotPasswordIn(BaseModel):
-    email: str
+    # Optional so a missing / null email returns the canonical generic 200
+    # response instead of a pydantic 422. We still want the response shape
+    # to be IDENTICAL across valid / unknown / malformed / missing email so
+    # attackers can't enumerate accounts by probing the error surface.
+    email: Optional[str] = None
 
 
 class ResetPasswordIn(BaseModel):
