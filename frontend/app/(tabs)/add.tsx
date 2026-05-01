@@ -711,6 +711,13 @@ function AddSpotImpl() {
     setSubmitting(true);
     try {
       await api.post('/spots', buildPayload(false));
+      // Explore Speed CR — Batch 4 (June 2025): clear the Explore list
+      // SWR cache so the user sees their newly-submitted spot on the
+      // next Explore visit instead of the previous cached set.
+      try {
+        const { invalidateCachePrefix } = await import('../../src/utils/swrCache');
+        await invalidateCachePrefix('explore.list:v1');
+      } catch {}
       Alert.alert('Spot submitted', draft.privacy_mode === 'public' ? 'Your public spot is in review.' : 'Saved!', [
         { text: 'OK', onPress: () => { setDraft(initialDraft); setStep(0); router.replace('/(tabs)'); } },
       ]);

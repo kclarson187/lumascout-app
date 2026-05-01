@@ -39,6 +39,31 @@ export async function writeCache<T = any>(key: string, value: T): Promise<void> 
   }
 }
 
+/**
+ * Invalidate a single cache entry (Explore Speed CR — Batch 4, June 2025).
+ * Used when user saves/deletes/uploads a spot so the next tab visit
+ * fetches fresh data instead of showing stale cards.
+ */
+export async function invalidateCache(key: string): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(PREFIX + key);
+  } catch {}
+}
+
+/**
+ * Invalidate every cache entry whose key STARTS WITH the given prefix.
+ * E.g. `invalidateCachePrefix('explore.list:v1')` clears all
+ * filter+GPS-bucket variants of the Explore list cache after an upload
+ * so the user sees their newly added spot on the next Explore visit.
+ */
+export async function invalidateCachePrefix(keyPrefix: string): Promise<void> {
+  try {
+    const allKeys = await AsyncStorage.getAllKeys();
+    const targets = allKeys.filter((k) => k.startsWith(PREFIX + keyPrefix));
+    if (targets.length > 0) await AsyncStorage.multiRemove(targets);
+  } catch {}
+}
+
 export function useSWRAsync<T>(
   key: string,
   fetcher: () => Promise<T>,
