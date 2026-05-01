@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, Image, Alert, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, RefreshControl } from 'react-native';
+import SafeImage from '../../../src/components/SafeImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ChevronLeft, Heart, Send, MessageCircle, MapPin } from 'lucide-react-native';
@@ -9,7 +10,17 @@ import { colors, font, space, radii } from '../../../src/theme';
 import VerifiedBadge from '../../../src/components/VerifiedBadge';
 import UserBadge from '../../../src/components/UserBadge';
 
+import ScreenErrorBoundary from '../../../src/components/ScreenErrorBoundary';
+
 export default function PostDetail() {
+  return (
+    <ScreenErrorBoundary label="Post">
+      <PostDetailImpl />
+    </ScreenErrorBoundary>
+  );
+}
+
+function PostDetailImpl() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const [post, setPost] = useState<any | null>(null);
@@ -72,7 +83,7 @@ export default function PostDetail() {
             onPress={() => post.author?.user_id && router.push(`/user/${post.author.user_id}` as any)}
           >
             {post.author?.avatar_url
-              ? <Image source={{ uri: post.author.avatar_url }} style={styles.avatar} />
+              ? <SafeImage source={{ uri: post.author.avatar_url }} style={styles.avatar} />
               : <View style={[styles.avatar, { backgroundColor: colors.surface2 }]} />}
             <View style={{ flex: 1 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -95,7 +106,7 @@ export default function PostDetail() {
           <View style={styles.catBadgeWrap}><Text style={styles.catBadge}>{post.category.toUpperCase()}</Text></View>
           <Text style={styles.postTitle}>{post.title}</Text>
           {post.body ? <Text style={styles.body}>{post.body}</Text> : null}
-          {post.image_url ? <Image source={{ uri: post.image_url }} style={styles.img} /> : null}
+          {post.image_url ? <SafeImage source={{ uri: post.image_url }} style={styles.img} /> : null}
           {/* Spot attachment (Commit 8c / 2026-04) */}
           {post.spot_ref ? (
             <TouchableOpacity
@@ -104,7 +115,7 @@ export default function PostDetail() {
               testID={`post-detail-spot-${post.post_id}`}
             >
               {post.spot_ref.cover_image_url ? (
-                <Image source={{ uri: post.spot_ref.cover_image_url }} style={styles.spotAttachCover} />
+                <SafeImage source={{ uri: post.spot_ref.cover_image_url }} style={styles.spotAttachCover} />
               ) : (
                 <View style={[styles.spotAttachCover, { backgroundColor: colors.surface2, alignItems: 'center', justifyContent: 'center' }]}>
                   <MapPin size={22} color={colors.textTertiary} />
@@ -141,7 +152,7 @@ export default function PostDetail() {
               <View key={c.comment_id} style={styles.comment}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                   {c.author?.avatar_url
-                    ? <Image source={{ uri: c.author.avatar_url }} style={styles.avatarSm} />
+                    ? <SafeImage source={{ uri: c.author.avatar_url }} style={styles.avatarSm} />
                     : <View style={[styles.avatarSm, { backgroundColor: colors.surface2 }]} />}
                   <Text style={styles.commentAuthor}>{c.author?.name || '—'}</Text>
                   <VerifiedBadge status={c.author?.verification_status} variant="inline" size={11} />

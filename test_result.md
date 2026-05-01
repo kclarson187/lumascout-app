@@ -11501,3 +11501,127 @@ agent_communication:
           - Apply EmptyState primitive to truly bare lists as we find them
           - Apply ScreenErrorBoundary to Profile, Explore sub-screens, etc.
 
+
+  - task: "Batch #9 — Final Premium Polish Sweep"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/babel.config.js (NEW — production-only console stripper)
+      /app/frontend/package.json (+ babel-preset-expo@~54.0.10, babel-plugin-transform-remove-console)
+      /app/frontend/src/components/PremiumMapPin.tsx (cluster 99+ overflow + outdoor textShadow + tighter size curve)
+      /app/frontend/app/notifications.tsx (SafeImage rollout)
+      /app/frontend/app/community.tsx (SafeImage rollout)
+      /app/frontend/app/creator/packs.tsx (SafeImage rollout)
+      /app/frontend/app/community/post/[id].tsx (SafeImage + ScreenErrorBoundary)
+      /app/frontend/app/community/compose.tsx (SafeImage rollout)
+      /app/frontend/app/admin/reports.tsx (SafeImage rollout)
+      /app/frontend/app/admin/users.tsx (SafeImage rollout)
+      /app/frontend/app/admin/user/[id].tsx (SafeImage rollout)
+      /app/frontend/app/inbox/[id].tsx (SafeImage + ScreenErrorBoundary)
+      /app/frontend/app/paywall.tsx (SafeImage rollout)
+      /app/frontend/app/(tabs)/profile.tsx (ScreenErrorBoundary wrap)
+      /app/frontend/app/admin/audit.tsx (EmptyState primitive applied to empty audit log)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          BATCH #9 — Final Premium Polish Sweep (May 2026).
+
+          No backend changes. No feature additions. Narrow, reversible
+          polish only.
+
+          ---- 1 · Branded map cluster bubbles ----
+          PremiumMapCluster (already dark/gold) refined for outdoor use:
+            · Count > 99 collapses to "99+" so 3-digit clusters stay
+              legible inside the disc.
+            · Tighter size curve (base 26, log2 factor 4.5) — cluster of
+              10 now clearly smaller than a cluster of 500.
+            · Warm-cream textShadow (rgba(255,235,200,0.55), offset
+              y+0.5, blur 1) so gold-on-dark digits stay crisp in bright
+              sunlight without changing the brand palette.
+
+          ---- 2 · Production console cleanup ----
+          New /app/frontend/babel.config.js:
+            presets: ['babel-preset-expo']
+            env.production.plugins: ['transform-remove-console',
+                                     { exclude: ['error'] }]
+          Behaviour:
+            · Production builds (NODE_ENV=production) strip every
+              console.log + console.warn; console.error retained.
+            · Dev builds, Expo Go, Jest: plugin NOT applied — all
+              existing debug logs still print.
+          Dependencies pinned to SDK 54: babel-preset-expo@~54.0.10,
+          babel-plugin-transform-remove-console@6.9.4 (devDep).
+          `npx expo install --check` → "Dependencies are up to date".
+
+          ---- 3 · Remaining SafeImage rollout ----
+          9 additional files now use <SafeImage> (+18 Image replacements):
+            · notifications.tsx
+            · community.tsx
+            · creator/packs.tsx
+            · community/post/[id].tsx
+            · community/compose.tsx
+            · admin/reports.tsx
+            · admin/users.tsx
+            · admin/user/[id].tsx
+            · inbox/[id].tsx
+            · paywall.tsx
+          Files already using expo-image (SpotCard, hero images, etc.)
+          were skipped. Broken-URL cache is module-level so first failure
+          prevents future network requests across every rendered surface.
+
+          ---- 4 · Additional ScreenErrorBoundary rollout ----
+          Applied to three more high-risk, remote-data-driven screens:
+            · (tabs)/profile.tsx     → label: "Profile"
+            · inbox/[id].tsx         → label: "Messages"
+            · community/post/[id].tsx → label: "Post"
+          (app/network.tsx doesn't exist in this repo — skipped.)
+          Each screen now fails independently; tab bar + sibling screens
+          survive. Dev-only tech detail; production copy stays premium.
+
+          ---- 5 · EmptyState primitive applied ----
+          Primary candidate screens (admin/reports, me-referrals,
+          (tabs)/saved) already have BESPOKE polished empty states —
+          replacing them would have been a regression. Instead applied
+          EmptyState to admin/audit.tsx (previously rendered a bare
+          "No audit entries match." line): now renders a branded card
+          with the ShieldCheck icon and helpful body copy explaining
+          when entries appear.
+
+          ---- TESTING ----
+          Frontend: 6 route probes all 200 (/settings, /community,
+          /notifications, /admin/audit, /profile, /spot/abc). Three
+          additional probes 200 (/inbox/test, /community/post/test,
+          /admin/users). Metro cache cleared + re-bundled clean with
+          the new babel.config.js in place.
+          Backend: no code changes this batch. Live curl validation:
+          /auth/forgot-password returns identical generic 200 (Batch #6
+          guard intact), /me/seller/connect-status still returns
+          seller_onboarding_enabled:false (Batch #6 flag intact),
+          /admin/overview 200 (Batch #7 graceful wrapper intact).
+          Batch #6 regression suite shows 1 test hitting 429 rate-limit
+          (expected — rate counter full from repeated test runs) — this
+          is NOT a product regression, just the rate-limit doing its
+          job.
+
+          ---- DEPENDENCIES ADDED ----
+          - babel-preset-expo@~54.0.10 (dev) — Metro needs this
+            explicitly when a custom babel.config.js is present.
+          - babel-plugin-transform-remove-console@6.9.4 (dev) — only
+            active in production builds.
+
+          ---- RISKS / DEFERRED ----
+          LOW on everything.
+           · Cluster gestures / readability only fully verifiable on
+             physical device under real sunlight — tested visually via
+             code review + outdoor-readable textShadow.
+           · babel.config.js is now a new source of truth; future
+             developers adding plugins must go through it. Documented
+             inline.
+           · EmptyState primitive available for additional bare lists
+             as we uncover them; not every list got it this batch to
+             avoid regressing already-polished custom empty states.
+

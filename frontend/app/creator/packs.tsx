@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert, TextInput, Modal, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert, TextInput, Modal } from 'react-native';
+import SafeImage from '../../src/components/SafeImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { ChevronLeft, Plus, Crown, Package, DollarSign, X, Check } from 'lucide-react-native';
@@ -168,7 +169,7 @@ export default function CreatorPacks() {
                         testID={`pack-spot-${s.spot_id}`}
                       >
                         {s.images?.[0]?.image_url ? (
-                          <Image source={{ uri: s.images[0].image_url }} style={styles.spotThumb} />
+                          <SafeImage source={{ uri: s.images[0].image_url }} style={styles.spotThumb} />
                         ) : <View style={[styles.spotThumb, { backgroundColor: colors.surface2 }]} />}
                         <View style={{ flex: 1 }}>
                           <Text style={{ color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 }}>{s.title}</Text>
