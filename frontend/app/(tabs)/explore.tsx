@@ -610,9 +610,19 @@ export default function Explore() {
               radius: 50,
               spiderLineColor: colors.primary,
               animationEnabled: true,
-              // Custom cluster — gold glowing disc with pulse ring
+              // Custom cluster — gold glowing disc with pulse ring.
+              //
+              // Batch #9A (May 2026) — FIX: the library-provided `onPress`
+              // closure was delegating to `fitToCoordinates` under the
+              // hood, which in our SafeClusteredMapView + RN-Maps SDK
+              // combination ended up reading stale children coords and
+              // widening the region (zoom OUT) on every tap instead of
+              // zooming IN. We now bypass that entirely and do a
+              // deterministic "halve the viewport centered on cluster"
+              // animation — every tap predictably zooms in ~2.4x until
+              // individual pins spread and become tappable.
               renderCluster: (cluster: any) => {
-                const { id, geometry, properties, onPress } = cluster;
+                const { id, geometry, properties } = cluster;
                 return (
                   <Marker
                     key={`cluster-${id}`}
@@ -620,9 +630,40 @@ export default function Explore() {
                       latitude: geometry.coordinates[1],
                       longitude: geometry.coordinates[0],
                     }}
-                    onPress={onPress}
+                    onPress={() => {
+                      try {
+                        Haptics.selectionAsync().catch(() => {});
+                      } catch { /* noop */ }
+                      // Prefer current region deltas if we have them; fall
+                      // back to a sensible default when the map hasn't
+                      // emitted a region yet. Clamp to a reasonable
+                      // minimum so repeated taps don't zoom to microscopic
+                      // fractions of a degree (that creates blank tiles).
+                      const cur = currentRegion.current;
+                      const latD = cur && Number.isFinite(cur.latitudeDelta)
+                        ? cur.latitudeDelta
+                        : 0.5;
+                      const lngD = cur && Number.isFinite(cur.longitudeDelta)
+                        ? cur.longitudeDelta
+                        : 0.5;
+                      const MIN = 0.004; // ≈ 400m — city-block detail.
+                      const target = {
+                        latitude: geometry.coordinates[1],
+                        longitude: geometry.coordinates[0],
+                        latitudeDelta: Math.max(MIN, latD / 2.4),
+                        longitudeDelta: Math.max(MIN, lngD / 2.4),
+                      };
+                      if (mapRef.current?.animateToRegion) {
+                        mapRef.current.animateToRegion(target, 420);
+                      }
+                      exploreLog('info', 'cluster_tap_zoom_in', {
+                        count: properties.point_count,
+                        newLatDelta: target.latitudeDelta,
+                      });
+                    }}
                     tracksViewChanges={false}
                     anchor={{ x: 0.5, y: 0.5 }}
+                    testID={`cluster-${id}`}
                   >
                     <PremiumMapCluster count={properties.point_count} />
                   </Marker>
