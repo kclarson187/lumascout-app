@@ -12,6 +12,94 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Explore Speed CR — Batch 2 (June 2025): frontend list optimizations. (1) Infinite scroll on Explore List view via cursor pagination — initial 24 + 12-per-page; (2) SkeletonSpotCard / SkeletonSpotList component for premium dark-mode loading state; (3) SWR cache via existing swrCache.ts keyed by filter signature + GPS bucket — instant hydration on tab return + background refresh; (4) SpotCard cover image now cascades thumb_url → card_url → image_url (smaller variant when backend has shipped one)."
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/src/components/SkeletonSpotCard.tsx (NEW — animated shimmer, SkeletonSpotList wrapper with default 6 cards),
+      /app/frontend/src/components/SpotCard.tsx (cover variant cascade thumb_url → card_url → image_url),
+      /app/frontend/app/(tabs)/explore.tsx (paginated listSpots state + SWR cache hydrate + onScroll near-bottom paging trigger + skeleton stack on initial load + skeleton footer while paging + 'That's everything for now' end-of-list strip)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Batch 2 frontend ships. Bundle compiles clean (3168 modules,
+          6.8s warm web rebuild, localhost:3000 returns 200).
+
+          ── List pagination ──
+            · Initial page: limit=24, paginated=1, sort=distance when
+              GPS granted else sort=quality. lat/lng forwarded.
+            · Subsequent pages: limit=12, cursor=next_cursor from prior
+              response. AbortController on initial fetch so rapid
+              filter changes cancel a stale request.
+            · onScroll trigger fires when distanceFromBottom<600px,
+              guarded by listOnEndReachedFiring ref so a scroll burst
+              never double-fires the same page. scrollEventThrottle=150.
+            · Footer: 2-card SkeletonSpotList while paging,
+              'That's everything for now' once next_cursor=null.
+
+          ── SWR cache (swrCache.ts) ──
+            · Cache key encodes: filters + GPS bucket (rounded to 0.02°
+              ≈ 1.4mi) + 'g=none' when GPS denied. So city-block walks
+              don't blow the cache, but cross-state moves do invalidate.
+            · readCache hydrates `listSpots` synchronously on mount /
+              tab return. setListLoadingInitial(false) flips off so
+              skeleton doesn't flash. Background refresh runs
+              immediately and writes the fresh page back via writeCache.
+            · Pagination loadListNextPage also persists the merged
+              array + new cursor + hasMore — so a tab away after
+              scrolling 4 pages comes back with all 4 pages restored.
+
+          ── Skeleton state ──
+            · 6 cards on initial load (matches one phone-screen worth).
+            · Animated.loop opacity shimmer 0.35→0.9→0.35, 1.1s cycle,
+              useNativeDriver=true. Cheaper than the spinner it
+              replaces — no gradients, no nested layers.
+
+          ── Image variant cascade ──
+            · SpotCard.rawCover now: hero_cover_image_url → cover-img
+              (thumb_url || card_url || image_url) → first-img
+              (thumb_url || card_url || image_url). Backwards compatible
+              with all existing spots whose image objects only have
+              image_url; opportunistically pulls smaller variants when
+              backend ships them.
+
+          ── Coexistence with map view (Batch 3 prep) ──
+            · Map view continues to consume legacy `spots` array (200
+              limit). loadListInitial only fires when view==='list' to
+              avoid double-fetching.
+            · Filter changes still go through the existing legacy
+              load() AND trigger a list-cache-key recompute, so both
+              paths refresh in lockstep. Batch 3 will swap the map to
+              /api/spots/markers and unify the flows.
+
+          ── Backwards compat ──
+            · Legacy `nearbySortedSpots.slice(0,24)` is still used as a
+              fallback when listSpots is empty (e.g. legacy code path
+              loaded but list endpoint hasn't responded yet). Cards
+              never disappear during the swap.
+
+          QA notes for next pass:
+            · Confirm initial Explore load shows 6 skeleton cards
+              (no spinner). After 1-2s, real cards stream in.
+            · Scroll to bottom — confirm 2-skeleton footer appears
+              briefly while page 2 (12 spots) loads, then real cards
+              append.
+            · Switch to a different tab and back — confirm cards
+              appear instantly from cache, no skeleton flash.
+            · GPS granted — confirm closest-first ordering preserved
+              (server sort=distance + lat/lng).
+            · GPS denied — fallback to sort=quality, no fake
+              distance labels.
+            · Filters applied (e.g. niche dropdown) — confirm new
+              filter set triggers skeleton + fresh fetch.
+            · Spot detail still opens correctly from list cards.
+
+
+
   - task: "Explore Speed CR — Batch 1 (June 2025): backend foundation. (1) MongoDB indexes + 2dsphere on `location` + one-shot $exists:False back-fill migration; (2) cursor pagination on `GET /api/spots` (`cursor`, `paginated=1` → `{items, next_cursor, total_estimate, limit}`); (3) explicit `sort=distance` mode for closest-first server sort; (4) NEW `GET /api/spots/markers` lightweight endpoint with bbox + shoot_type filters; (5) FIX route-order — markers declared BEFORE `/spots/{spot_id}` to avoid 404."
     implemented: true
     working: true

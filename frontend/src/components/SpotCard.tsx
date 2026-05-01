@@ -61,16 +61,30 @@ function SpotCardImpl({
   }, [shimmer]);
   const shimmerOpacity = shimmer.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.9] });
 
-  // Cover priority:
-  //   1. hero_cover_image_url (when admin_override OR rotation stack decided it)
-  //   2. spot.images[].is_cover=true
-  //   3. spot.images[0]
+  // Cover priority (Explore Speed CR — Batch 2, June 2025):
+  //   1. hero_cover_image_url (admin-pinned cover wins)
+  //   2. images[].is_cover === true → smallest available variant
+  //   3. images[0]                  → smallest available variant
   //
-  // PRIORITY FIX: hero_cover_image_url must win when present — otherwise
-  // an admin-pinned cover never shows on Explore because images[0] beats it.
+  // For variants we cascade thumb_url → card_url → image_url so the
+  // list pulls a small thumbnail when the backend has shipped one,
+  // and falls back safely to the original URL otherwise. We do NOT
+  // build a new image-processing pipeline yet — that's a separate CR
+  // — so for spots that lack pre-rendered variants the original URL
+  // is still served and the network/CDN bears the cost.
+  const _pickVariant = (img: any): string | null => {
+    if (!img || typeof img !== 'object') return null;
+    return (
+      img.thumb_url
+      || img.card_url
+      || img.image_url
+      || null
+    );
+  };
+  const _coverImg = (spot.images || []).find((i: any) => i?.is_cover) || (spot.images || [])[0];
   const rawCover =
     spot.hero_cover_image_url
-    || (spot.images && (spot.images.find((i: any) => i.is_cover) || spot.images[0]))?.image_url;
+    || _pickVariant(_coverImg);
   // Resolve relative `/api/uploads/...` paths to absolute URLs — on
   // native iOS / Android React Native <Image> cannot resolve relative
   // URLs and would render blank tiles for freshly-uploaded spots.
