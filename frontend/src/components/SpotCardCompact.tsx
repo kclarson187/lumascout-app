@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Image, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
+import SafeImage from './SafeImage';
 import { router } from 'expo-router';
 import { Star, Sun, Clock, MapPin } from 'lucide-react-native';
 import { colors, radii, space, font } from '../theme';
@@ -41,7 +42,7 @@ export default function SpotCardCompact({
   return (
     <Pressable onPress={go} style={styles.row} testID={testID}>
       {cover && !imgError ? (
-        <Image
+        <SafeImage
           source={{ uri: cover }}
           style={styles.thumb}
           onError={() => setImgError(true)}

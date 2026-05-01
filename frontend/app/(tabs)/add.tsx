@@ -138,7 +138,17 @@ const initialDraft: Draft = {
   access_notes: '',
 };
 
+import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
+
 export default function AddSpot() {
+  return (
+    <ScreenErrorBoundary label="Add spot">
+      <AddSpotImpl />
+    </ScreenErrorBoundary>
+  );
+}
+
+function AddSpotImpl() {
   const { user } = useAuth();
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState<Draft>(initialDraft);

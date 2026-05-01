@@ -176,6 +176,50 @@ RATE_LIMITS = {
 _rate_buckets: dict = defaultdict(deque)
 
 
+# ----------------------------------------------------------------------------
+# Paywall helper (Batch #8, May 2026)
+#
+# Emits a STRUCTURED 402 detail so the mobile app can switch on a canonical
+# `reason_code` rather than fragile substring regex on the message. The
+# frontend UpgradeGateModal switches on reason_code to pick copy + target
+# plan; the legacy substring fallback is kept for backwards compatibility.
+#
+# Canonical reason codes (MUST mirror /app/frontend/src/components/UpgradeGateModal.tsx):
+#   saves, collections, filters, private, ai_planner, messaging,
+#   analytics, uploads, routes, viewers, spot_packs, referrals, generic
+#
+# Shape returned in `detail`:
+#   {
+#     "reason_code": "saves",
+#     "message":     "Free plan allows 3 saves. Upgrade for unlimited.",
+#     "target_plan": "pro" | "elite",   # optional, UI hint
+#   }
+#
+# Callers MUST pass a reason_code. `message` is what pre-Batch-#8 clients
+# show (kept so nothing breaks during the rollout).
+# ----------------------------------------------------------------------------
+PAYWALL_REASON_CODES = {
+    "saves", "collections", "filters", "private",
+    "ai_planner", "messaging", "analytics",
+    "uploads", "routes", "viewers",
+    "spot_packs", "referrals", "generic",
+}
+
+
+def raise_paywall(reason_code: str, message: str, target_plan: Optional[str] = None):
+    """Raise a structured 402 the frontend can switch on by `reason_code`."""
+    code = reason_code if reason_code in PAYWALL_REASON_CODES else "generic"
+    raise HTTPException(
+        status_code=402,
+        detail={
+            "reason_code": code,
+            "message": message,
+            "target_plan": target_plan,
+        },
+    )
+
+
+
 def check_rate_limit(bucket_key: str, user_id: str):
     """Raise HTTPException(429) if user has exceeded the rate limit for this bucket."""
     if bucket_key not in RATE_LIMITS:
@@ -3530,7 +3574,7 @@ class SpotPackIn(BaseModel):
 @api.post("/packs")
 async def create_pack(body: SpotPackIn, user: dict = Depends(get_current_user)):
     if not limits_for(user)["sell_packs"]:
-        raise HTTPException(status_code=402, detail="Creating spot packs requires the Elite plan.")
+        raise_paywall("spot_packs", "Creating spot packs requires the Elite plan.", target_plan="elite")
     pid = f"pack_{uuid.uuid4().hex[:12]}"
     doc = {
         "pack_id": pid,

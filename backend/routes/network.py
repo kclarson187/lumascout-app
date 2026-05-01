@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel, field_validator
 
 from server import (
+    raise_paywall,
     db,
     get_current_user, get_optional_user,
     utcnow, plan_of, _effective_plan,
@@ -494,12 +495,10 @@ async def dm_start_thread(
             "created_at": {"$gte": month_ago},
         })
         if outbound_30d >= free_limit:
-            raise HTTPException(
-                status_code=402,
-                detail=(
-                    f"Free plan allows {free_limit} new message threads per month. "
-                    "Upgrade to Pro for unlimited photographer DMs."
-                ),
+            raise_paywall(
+                "messaging",
+                f"Free plan allows {free_limit} new message threads per month. Upgrade to Pro for unlimited photographer DMs.",
+                target_plan="pro",
             )
 
     thread = await _dm_get_or_create_thread(
@@ -529,9 +528,10 @@ async def dm_start_thread(
                 "created_at": {"$gte": window_start},
             })
             if pending_total >= 5:
-                raise HTTPException(
-                    status_code=402,
-                    detail="Free plan limit: 5 pending message requests in 30 days. Upgrade to Pro for unlimited.",
+                raise_paywall(
+                    "messaging",
+                    "Free plan limit: 5 pending message requests in 30 days. Upgrade to Pro for unlimited.",
+                    target_plan="pro",
                 )
         # Rate limit: max 5 pending requests per hour from free-tier senders.
         # Pro / Elite are not rate-limited (feature they pay for).

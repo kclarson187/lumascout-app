@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, Image, Pressable, FlatList } from 'react-native';
+import { View, Text, StyleSheet, Pressable, FlatList } from 'react-native';
+import SafeImage from '../../src/components/SafeImage';
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, font, space } from '../theme';
@@ -39,7 +40,7 @@ export default function FreshlyUpdatedRail({ spots }: { spots: any[] }) {
             testID={`fresh-spot-${item.spot_id}`}
           >
             {cover?.image_url ? (
-              <Image source={{ uri: cover.image_url }} style={styles.img} />
+              <SafeImage source={{ uri: cover.image_url }} style={styles.img} />
             ) : (
               <View style={[styles.img, { backgroundColor: colors.surface2 }]} />
             )}
