@@ -20,9 +20,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 import {
   ChevronLeft, Bookmark, Share2, Flag, MapPin, Sun, Sunrise, Sunset, Cloud,
   Camera, Car, Accessibility, Users, Shield, DogIcon, BabyIcon, TicketIcon, ClockIcon, CheckCircle,
-  FolderPlus, MessageSquarePlus, Navigation, Wand2, ChevronRight, Trash2, PenLine,
+  FolderPlus, MessageSquarePlus, Navigation, Wand2, ChevronRight, Trash2, PenLine, X,
 } from 'lucide-react-native';
-import { api, formatApiError } from '../../src/api';
+import { api, formatApiError, categorizeApiError, type ApiErrorCategory } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 import { formatDistance } from '../../src/utils/distance';
@@ -73,35 +73,84 @@ function SpotDetailImpl() {
   const [reportOpen, setReportOpen] = useState(false);
   const [shotListOpen, setShotListOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // Spot Detail timeout / retry hardening — June 2025.
+  // We track a recoverable error category so the UI can render an
+  // inline retry state instead of bouncing the user back to Explore
+  // (which felt like being "kicked out / logged out"). A 404/410
+  // still redirects (the spot is genuinely gone), but timeouts /
+  // network errors / 5xx now show a Retry button.
+  const [errorCategory, setErrorCategory] = useState<ApiErrorCategory | null>(null);
+  // Request dedup — tap-spam guard. Multiple rapid taps on the same
+  // spot ID share a single in-flight fetch promise.
+  const inflightRef = useRef<Promise<any> | null>(null);
 
   const load = useCallback(async () => {
+    if (!id) return;
+    // Dedup: if a load is already in-flight for this id, attach to it
+    // instead of firing a duplicate request.
+    if (inflightRef.current) {
+      try { await inflightRef.current; } catch {}
+      return;
+    }
+    setLoading(true);
+    setErrorCategory(null);
+    // Allow up to 18s for the spot detail call — generous enough for
+    // slow cellular while still bounding an infinite hang.
+    const promise = api.get(`/spots/${id}`, undefined, { timeout: 18000 });
+    inflightRef.current = promise;
     try {
-      const data = await api.get(`/spots/${id}`);
+      const data = await promise;
       setSpot(data);
+      setErrorCategory(null);
     } catch (e: any) {
-      // FIX(Batch-1 deleted-spot crash): gracefully redirect out when a
-      // user opens a deleted/hidden spot (either from a stale list cache,
-      // a push notification, or a shared link). Previously an unhandled
-      // render below threw because `spot` was null — now we alert and
-      // navigate back so the user never sees a blank/crashed screen.
-      const status = Number(e?.status || e?.response?.status || 0);
-      const isMissing = status === 404 || status === 410;
-      Alert.alert(
-        isMissing ? 'Spot no longer available' : 'Unable to load spot',
-        isMissing
-          ? 'This location has been removed or is no longer public.'
-          : formatApiError(e),
-        [
-          {
+      const cat = categorizeApiError(e);
+      // Categorized log so we can grep production reports later.
+      try {
+        // eslint-disable-next-line no-console
+        console.warn('[spot-detail]', cat, {
+          id,
+          status: e?.response?.status,
+          code: e?.code,
+          message: e?.message,
+        });
+      } catch {}
+      // 404 / 410 — genuinely missing. Show a one-time alert and
+      // navigate the user back so they don't sit on a blank screen
+      // forever. Do NOT clear auth state.
+      if (cat === 'missing') {
+        Alert.alert(
+          'Spot no longer available',
+          'This location has been removed or is no longer public.',
+          [{
             text: 'OK',
             onPress: () => {
               if (router.canGoBack()) router.back();
               else router.replace('/(tabs)/explore');
             },
-          },
-        ],
-      );
+          }],
+        );
+        return;
+      }
+      // 401 / 403 — the api.ts axios interceptor already handles
+      // 401-driven logout. We do NOT redirect here; we let the
+      // interceptor's onUnauthorized handler do its job. Surface a
+      // gentle message so the user knows something happened.
+      if (cat === 'auth') {
+        setErrorCategory('auth');
+        return;
+      }
+      // 402 — paywall is dispatched globally; just clear loading.
+      if (cat === 'paywall') {
+        setErrorCategory('paywall');
+        return;
+      }
+      // timeout / network / server / client / unknown — recoverable.
+      // Render an inline retry state. The user STAYS on this screen
+      // (no auto-back, no auto-replace) and can tap Retry. They can
+      // also tap the X button in the header to leave intentionally.
+      setErrorCategory(cat);
     } finally {
+      inflightRef.current = null;
       setLoading(false);
     }
   }, [id]);
@@ -340,6 +389,100 @@ function SpotDetailImpl() {
       throw new Error(formatApiError(e));
     }
   };
+
+  // June 2025 stability fix — inline retry state for recoverable errors
+  // (timeout / network / server / client). The user STAYS on this screen
+  // and can retry, instead of being kicked back to Explore on a slow
+  // network. Auth-required errors render a similar gentle message — the
+  // axios interceptor already triggers the global logout flow when
+  // genuinely warranted (status===401), so no extra redirect needed here.
+  if (!loading && !spot && errorCategory) {
+    const isTimeout = errorCategory === 'timeout';
+    const isNet = errorCategory === 'network';
+    const isAuth = errorCategory === 'auth';
+    const isServer = errorCategory === 'server';
+    const headline = isAuth
+      ? 'Session needed'
+      : isTimeout
+        ? 'Taking longer than usual'
+        : isNet
+          ? 'No connection'
+          : isServer
+            ? 'Server hiccup'
+            : 'Unable to load spot';
+    const sub = isAuth
+      ? 'Please sign in again to view this spot.'
+      : isTimeout
+        ? 'The server took too long to respond. This sometimes happens on slow networks — give it another go.'
+        : isNet
+          ? 'Check your internet connection and try again.'
+          : isServer
+            ? 'Something on our end is being slow. Tap retry — it usually works.'
+            : 'Please try again in a moment.';
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.bg, paddingHorizontal: 24, paddingTop: 80 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 24 }}>
+          <Pressable
+            onPress={() => {
+              if (router.canGoBack()) router.back();
+              else router.replace('/(tabs)/explore');
+            }}
+            style={{
+              width: 36, height: 36, borderRadius: 18,
+              alignItems: 'center', justifyContent: 'center',
+              backgroundColor: colors.surface1,
+              borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
+            }}
+            testID="spot-detail-close"
+          >
+            <X size={18} color={colors.text} />
+          </Pressable>
+        </View>
+        <Text style={{
+          color: colors.text, fontFamily: font.serif, fontSize: 24,
+          marginBottom: 10, lineHeight: 30,
+        }}>
+          {headline}
+        </Text>
+        <Text style={{
+          color: colors.textSecondary, fontFamily: font.body, fontSize: 14,
+          lineHeight: 21, marginBottom: 28,
+        }}>
+          {sub}
+        </Text>
+        <Pressable
+          onPress={() => load()}
+          style={{
+            backgroundColor: colors.primary,
+            paddingVertical: 14,
+            borderRadius: 12,
+            alignItems: 'center',
+            marginBottom: 12,
+          }}
+          testID="spot-detail-retry"
+        >
+          <Text style={{ color: '#1a1300', fontFamily: font.bodyBold, fontSize: 14 }}>
+            {isAuth ? 'Sign in' : 'Retry'}
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => {
+            if (router.canGoBack()) router.back();
+            else router.replace('/(tabs)/explore');
+          }}
+          style={{
+            paddingVertical: 14,
+            alignItems: 'center',
+          }}
+          testID="spot-detail-back-to-explore"
+        >
+          <Text style={{ color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13 }}>
+            Back to Explore
+          </Text>
+        </Pressable>
+      </View>
+    );
+  }
 
   if (loading || !spot) {
     return <DetailSkeleton />;
