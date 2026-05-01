@@ -555,6 +555,33 @@ export default function SpotDetail() {
             );
           })()}
 
+          {/* May 2026 — Best light notes (free-form uploader guidance).
+              Shown whenever the uploader has filled in `best_light_notes`
+              (see add.tsx step #3). When that field is empty we fall back
+              to the legacy structured `best_time_of_day` chip so older
+              spots submitted before the free-form field existed still
+              surface something actionable. */}
+          {spot.best_light_notes && String(spot.best_light_notes).trim() ? (
+            <View style={styles.bestLightCard} testID="spot-best-light-notes">
+              <View style={styles.bestLightIcon}>
+                <Sun size={14} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.bestLightLabel}>Best light</Text>
+                <Text style={styles.bestLightBody}>{String(spot.best_light_notes).trim()}</Text>
+              </View>
+            </View>
+          ) : spot.best_time_of_day && spot.best_time_of_day !== 'any' ? (
+            <View style={styles.bestTimeChipRow} testID="spot-best-time-chip">
+              <View style={styles.bestTimeChip}>
+                <Sun size={11} color={colors.primary} />
+                <Text style={styles.bestTimeChipTxt}>
+                  Best at {String(spot.best_time_of_day).replace(/_/g, ' ')}
+                </Text>
+              </View>
+            </View>
+          ) : null}
+
           {/* Owner row */}
           {spot.owner && (
             <View style={styles.ownerRow}>
@@ -1081,6 +1108,49 @@ const styles = StyleSheet.create({
   },
   goldenTitle: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 15, letterSpacing: 0.2 },
   goldenSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, marginTop: 2 },
+  // May 2026 — Best light notes card (primary: shown when `best_light_notes`
+  // exists). Intentionally softer than the golden-hour window: this is
+  // uploader-authored prose about *how the light behaves at this spot*
+  // (e.g. "Sidelight from 8-10am hits the east cliff face; shadow falls
+  // after noon"), so we use a neutral info-card treatment rather than the
+  // high-contrast amber of the daily golden-hour computation.
+  bestLightCard: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+    marginTop: space.md,
+    paddingHorizontal: space.md, paddingVertical: 12,
+    backgroundColor: colors.surface1,
+    borderColor: colors.border, borderWidth: 1,
+    borderRadius: radii.md,
+  },
+  bestLightIcon: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: 'rgba(245,166,35,0.14)',
+    alignItems: 'center', justifyContent: 'center',
+    marginTop: 1,
+  },
+  bestLightLabel: {
+    color: colors.textSecondary, fontFamily: font.bodyMedium,
+    fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.6,
+  },
+  bestLightBody: {
+    color: colors.text, fontFamily: font.body,
+    fontSize: 14, lineHeight: 20, marginTop: 3,
+  },
+  // Legacy fallback chip — shown only when `best_light_notes` is absent.
+  bestTimeChipRow: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.md,
+  },
+  bestTimeChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, paddingVertical: 5,
+    borderRadius: radii.pill,
+    backgroundColor: 'rgba(245,166,35,0.12)',
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.35)',
+  },
+  bestTimeChipTxt: {
+    color: colors.primary, fontFamily: font.bodyMedium,
+    fontSize: 11, letterSpacing: 0.3, textTransform: 'capitalize',
+  },
   ownerRow: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     marginTop: space.xl, padding: space.md,

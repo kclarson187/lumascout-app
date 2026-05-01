@@ -1,0 +1,25 @@
+{
+  "_comment": "LumaScout — iOS Universal Links AASA. Replace APPLE_TEAM_ID_HERE with your Apple Developer Team ID (10-char alphanumeric, e.g. ABCD123456) before hosting. Bundle ID com.lumascout.app is stable. This file MUST be served from https://lumascout.app/.well-known/apple-app-site-association with NO extension, Content-Type: application/json, HTTPS only, and no redirects (3xx will cause iOS to reject it silently). iOS 14+ caches this aggressively; re-check behavior after uninstall/reinstall during QA.",
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "APPLE_TEAM_ID_HERE.com.lumascout.app",
+        "paths": [
+          "/spot/*",
+          "/user/*",
+          "/collection/*",
+          "/community/post/*",
+          "/marketplace/*",
+          "NOT /api/*",
+          "NOT /uploads/*",
+          "NOT /admin/*",
+          "NOT /.well-known/*"
+        ]
+      }
+    ]
+  },
+  "webcredentials": {
+    "apps": ["APPLE_TEAM_ID_HERE.com.lumascout.app"]
+  }
+}
