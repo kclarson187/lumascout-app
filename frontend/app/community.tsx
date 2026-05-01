@@ -61,7 +61,17 @@ const CATEGORY_ICONS: Record<string, any> = {
   meetup: Coffee, intro: MessageCircle,
 };
 
+import ScreenErrorBoundary from '../src/components/ScreenErrorBoundary';
+
 export default function Community() {
+  return (
+    <ScreenErrorBoundary label="Community">
+      <CommunityImpl />
+    </ScreenErrorBoundary>
+  );
+}
+
+function CommunityImpl() {
   const { cat } = useLocalSearchParams<{ cat?: string }>();
   const { user } = useAuth();
   const [active, setActive] = useState(cat || 'all');

@@ -148,8 +148,20 @@ function GlobalUpgradeGate() {
   const [reason, setReason] = useState<GateReason>('generic');
 
   useEffect(() => {
-    onPaywallNeeded((msg: string) => {
-      setReason(detailToReason(msg));
+    // Batch #8 — now receives a structured PaywallDetail. Prefer the
+    // backend-emitted `reason_code` (canonical); fall back to the legacy
+    // substring regex on `message` for any old/alternate backend that
+    // still returns a plain string.
+    onPaywallNeeded((detail) => {
+      const preferred = (detail.reason_code || '').toLowerCase() as GateReason;
+      const valid: GateReason[] = [
+        'saves','collections','filters','private','ai_planner','messaging',
+        'analytics','uploads','routes','viewers','spot_packs','referrals','generic',
+      ];
+      const next: GateReason = valid.includes(preferred)
+        ? preferred
+        : detailToReason(detail.message || '');
+      setReason(next);
       setVisible(true);
     });
   }, []);

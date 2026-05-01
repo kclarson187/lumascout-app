@@ -32,6 +32,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
 from server import (
+    raise_paywall,
     db,
     get_current_user, get_optional_user,
     utcnow, plan_of, _effective_plan,
@@ -461,9 +462,10 @@ async def apply_to_referral(
             "created_at": {"$gte": month_start},
         })
         if used >= REFERRAL_APPLY_CAP_FREE_MONTH:
-            raise HTTPException(
-                status_code=402,
-                detail=f"Free plan limit: {REFERRAL_APPLY_CAP_FREE_MONTH} applications per month. Upgrade to Pro for unlimited.",
+            raise_paywall(
+                "referrals",
+                f"Free plan limit: {REFERRAL_APPLY_CAP_FREE_MONTH} applications per month. Upgrade to Pro for unlimited.",
+                target_plan="pro",
             )
     # Auto-create DM thread so poster + applicant can chat
     thread = await _dm_get_or_create_thread(user["user_id"], need["poster_user_id"])

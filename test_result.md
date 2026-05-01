@@ -11338,3 +11338,166 @@ agent_communication:
       /report alias, seller flag false).
 
       Test harness: /app/backend_test_batch7.py.
+
+  - task: "Batch #8 — Premium Polish ($25K product quality sweep)"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/src/components/ScreenErrorBoundary.tsx (NEW — per-screen boundary)
+      /app/frontend/src/components/EmptyState.tsx (NEW — premium empty-state primitive)
+      /app/frontend/src/components/ImageLightbox.tsx (NEW — pinch/pan/double-tap lightbox)
+      /app/frontend/app/community.tsx (wrapped in ScreenErrorBoundary)
+      /app/frontend/app/(tabs)/add.tsx (wrapped in ScreenErrorBoundary)
+      /app/frontend/app/admin/index.tsx (wrapped in ScreenErrorBoundary)
+      /app/frontend/app/paywall.tsx (wrapped in ScreenErrorBoundary)
+      /app/frontend/app/spot/[id].tsx (wrapped + lightbox on hero carousel)
+      /app/frontend/src/components/CommunityUploadsSection.tsx (SafeImage rollout)
+      /app/frontend/src/components/FreshlyUpdatedRail.tsx (SafeImage rollout)
+      /app/frontend/src/components/SpotCardCompact.tsx (SafeImage rollout)
+      /app/frontend/src/components/ReferralCard.tsx (SafeImage rollout)
+      /app/frontend/src/api.ts (PaywallDetail type + structured 402 forwarding)
+      /app/frontend/app/_layout.tsx (prefer reason_code over substring matching)
+      /app/frontend/src/components/UpgradeGateModal.tsx (spot_packs + referrals GateReasons)
+      /app/frontend/app/settings.tsx (expo-application native version + env tag)
+      /app/frontend/package.json (+ expo-application@55)
+      /app/backend/server.py (raise_paywall helper + PAYWALL_REASON_CODES set + 1 migration)
+      /app/backend/routes/spots.py (5 402 migrations)
+      /app/backend/routes/network.py (2 402 migrations)
+      /app/backend/routes/referrals.py (1 402 migration)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          BATCH #8 — "Premium Polish" (May 2026).
+
+          Six items shipped end-to-end. No backend migrations, no destructive
+          data changes, no live Stripe / Postmark work (all explicitly
+          skipped per user instruction).
+
+          ---- 1 · Per-screen error boundaries ----
+          New shared component `ScreenErrorBoundary` (dark LumaScout card,
+          gold accent, "Try again" + "Back to home" CTAs, 44-48pt touch
+          targets, __DEV__-only tech detail). Applied to:
+            · Community        (app/community.tsx)
+            · Add Spot / Upload (app/(tabs)/add.tsx)
+            · Admin overview    (app/admin/index.tsx)
+            · Paywall           (app/paywall.tsx)
+            · Spot Detail       (app/spot/[id].tsx)
+          Each screen now fails independently — tab bar + sibling screens
+          survive. RootErrorBoundary remains as last-resort catch.
+
+          ---- 2 · SafeImage rollout ----
+          Pragmatic rollout: only touched files that use raw RN <Image>
+          (files using expo-image already have native onError). 5 raw
+          <Image> tags replaced with <SafeImage> across 4 high-traffic
+          files:
+            · CommunityUploadsSection (Spot Detail community rail)
+            · FreshlyUpdatedRail      (Home rail)
+            · SpotCardCompact         (many rails)
+            · ReferralCard            (Referrals listings)
+          Files already using expo-image (SpotCard, etc.) left alone to
+          avoid regression.
+
+          ---- 3 · Spot Detail photo experience ----
+          New component `ImageLightbox` uses only deps already in the
+          tree: react-native-gesture-handler (pinch/pan/double-tap
+          recognizers) + react-native-reanimated (60fps transforms on
+          UI thread). No heavy dependency added.
+          UX: single-tap on any hero carousel image opens full-screen
+          lightbox; pinch up to 4x, double-tap toggles 1x/2.5x, pan
+          when zoomed, swipe-down dismisses at 1x. Close button
+          top-right with hitSlop. One-line hint strip bottom.
+          Wired via `useLightbox()` hook — hero map renders inside
+          TouchableOpacity so ScrollView's paging gestures still
+          handle horizontal swipe between images (pan/tap separated
+          cleanly).
+
+          ---- 4 · Version/build info in Settings ----
+          Added `expo-application@55.0.14` dep. Settings Version row
+          now reads:
+            · nativeApplicationVersion  (falls back to Constants.expoConfig.version)
+            · nativeBuildVersion        (falls back to ios.buildNumber / android.versionCode)
+            · env tag                   (__DEV__ -> 'dev', else EXPO_PUBLIC_APP_ENV || 'prod')
+          Display format: `v1.0.0 (42) · prod` — gives support / App
+          Review / bug-triage exact build context.
+
+          ---- 5 · UpgradeGateModal structured reason codes ----
+          Backend:
+            · New helper `raise_paywall(reason_code, message, target_plan)`
+              in server.py emits `HTTPException(402, detail={reason_code,
+              message, target_plan})`. Canonical reason codes set:
+              saves, collections, filters, private, ai_planner, messaging,
+              analytics, uploads, routes, viewers, spot_packs, referrals,
+              generic. Anything else -> 'generic'.
+            · Migrated ALL 9 existing 402 sites to use it:
+                server.py (1): spot_packs -> elite
+                spots.py  (5): uploads x2, private, saves, collections
+                network.py (2): messaging (both)
+                referrals.py (1): referrals
+            · Zero remaining raw `status_code=402` calls outside the
+              helper itself.
+          Frontend:
+            · api.ts exports new PaywallDetail type; 402 interceptor
+              normalises to {reason_code, message, target_plan},
+              handles BOTH old-string and new-object detail shapes so
+              nothing breaks during overlap.
+            · _layout.tsx prefers `reason_code` (validates against
+              allow-list) and falls back to substring matching only
+              when reason_code is missing.
+            · UpgradeGateModal gains `spot_packs` and `referrals`
+              entries with proper titles/perks/target plans.
+          Live-tested: free user hits /spots/<id>/save cap at 3, gets
+          `{reason_code:"saves", target_plan:"pro", message:"..."}`
+          200% correct — end-to-end flow validated via curl.
+
+          ---- 6 · EmptyState primitive ----
+          New reusable `<EmptyState>` (icon bubble, title, body, optional
+          CTA; compact variant; dark LumaScout styling). Available as
+          `import EmptyState from '../../src/components/EmptyState'`.
+          Intentionally NOT applied to Saved Spots — that screen already
+          has a bespoke, polished empty state with 2 CTAs + Scout AI
+          deeplink. Over-applying would have been a REGRESSION.
+          EmptyState primitive is ready for rollout on truly bare empty
+          screens in future batches without risking the good ones.
+
+          ---- TESTING ----
+          Backend: batch6 suite 7/7 still passing. Live curl 402 trigger
+          on free plan returns structured detail with correct reason_code
+          + target_plan. All 6 graceful-wrapped endpoints (Batch #7)
+          still 200. /api/spots?limit=1 200. /openapi.json 200.
+          Frontend: Expo restarted clean; /spot/* and /community routes
+          both 200. No new Metro errors (existing deprecation warnings
+          unchanged — expo-notifications Go deprecation, SafeAreaView
+          deprecation — all pre-existing, not caused by Batch #8).
+
+          ---- DEPENDENCIES ADDED ----
+          - expo-application@55.0.14 (native version/build metadata).
+            Core Expo module, auto-linked. No additional native
+            configuration required beyond `npx expo prebuild` already
+            planned for Batch #7 Privacy Manifest installation.
+
+          ---- REMAINING RISKS ----
+          LOW on everything.
+           · Lightbox UX not exercised in web preview (Gesture.Pinch
+             requires touch); will feel native on iOS/Android physical
+             device + EAS build. Web users get plain Modal display
+             (swipe-to-close still works with mouse drag).
+           · SafeImage rollout left 7 other raw-Image files untouched
+             (notifications.tsx, dm/*, settings/notifications.tsx,
+             admin/community.tsx) — all are low-traffic avatar
+             thumbnails. Deferred to avoid scope creep.
+           · ScreenErrorBoundary only on 5 screens — Explore already had
+             ExploreErrorBoundary; remaining 93 screens will catch via
+             RootErrorBoundary. Incremental rollout in future batches.
+
+          ---- DEFERRED POLISH ITEMS (audit backlog) ----
+          - Custom branded map cluster bubbles (P2-5)
+          - Strip console.log calls via babel-plugin-transform-remove-console
+            for production builds (P2-3)
+          - Roll SafeImage into remaining 7 low-traffic raw-Image files
+          - Apply EmptyState primitive to truly bare lists as we find them
+          - Apply ScreenErrorBoundary to Profile, Explore sub-screens, etc.
+

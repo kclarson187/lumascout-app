@@ -6,7 +6,19 @@ const BASE_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || '') + '/api';
 const TOKEN_KEY = 'photoscout_token';
 
 // Global listeners for paywall triggers (402 responses)
-type PaywallHandler = (message: string) => void;
+//
+// Batch #8 (May 2026) — the backend now returns a STRUCTURED detail for
+// 402s: { reason_code, message, target_plan }. The handler receives the
+// full payload so UpgradeGateModal can switch on reason_code directly
+// (no more fragile substring matching on the message). Legacy backends
+// that still return a plain string are still supported — the handler
+// gets `{ reason_code: null, message }` in that case.
+export type PaywallDetail = {
+  reason_code?: string | null;
+  message: string;
+  target_plan?: 'pro' | 'elite' | null;
+};
+type PaywallHandler = (detail: PaywallDetail) => void;
 let paywallHandler: PaywallHandler | null = null;
 export function onPaywallNeeded(fn: PaywallHandler) { paywallHandler = fn; }
 
@@ -68,8 +80,26 @@ class Api {
         // skip auto-logout for the auth endpoints themselves so failed
         // login attempts still surface their own error.
         if (status === 402 && paywallHandler) {
-          const detail = err.response.data?.detail || 'Upgrade to continue.';
-          paywallHandler(typeof detail === 'string' ? detail : 'Upgrade to continue.');
+          // Batch #8 — support BOTH old (string) and new (structured)
+          // detail shapes. New backend returns
+          // { reason_code, message, target_plan }; old backend returns
+          // a plain string. Normalise to a PaywallDetail before dispatching.
+          const raw = err.response.data?.detail;
+          let normalised: PaywallDetail;
+          if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+            normalised = {
+              reason_code: (raw as any).reason_code ?? null,
+              message: (raw as any).message || 'Upgrade to continue.',
+              target_plan: (raw as any).target_plan ?? null,
+            };
+          } else {
+            normalised = {
+              reason_code: null,
+              message: typeof raw === 'string' && raw ? raw : 'Upgrade to continue.',
+              target_plan: null,
+            };
+          }
+          paywallHandler(normalised);
         } else if (status === 401) {
           const url: string = err?.config?.url || '';
           const isAuthEndpoint = /^\/?auth\/(login|register|google|forgot|reset)/.test(url);

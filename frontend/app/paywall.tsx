@@ -27,7 +27,17 @@ interface Plan {
   popular?: boolean;
 }
 
+import ScreenErrorBoundary from '../src/components/ScreenErrorBoundary';
+
 export default function Paywall() {
+  return (
+    <ScreenErrorBoundary label="Upgrade">
+      <PaywallImpl />
+    </ScreenErrorBoundary>
+  );
+}
+
+function PaywallImpl() {
   const { user, refresh } = useAuth();
   const params = useLocalSearchParams<{ reason?: string }>();
   const [busy, setBusy] = useState<string | null>(null);

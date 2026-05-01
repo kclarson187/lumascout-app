@@ -4,7 +4,8 @@
  * posted-time, applicant count, poster avatar.
  */
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import SafeImage from './SafeImage';
 import { MapPin, Clock, Users, Zap, DollarSign } from 'lucide-react-native';
 import { colors, font, space, radii } from '../theme';
 
@@ -158,7 +159,7 @@ export default function ReferralCard({
       {/* Footer row */}
       <View style={styles.footerRow}>
         {need.poster?.avatar_url ? (
-          <Image source={{ uri: need.poster.avatar_url }} style={styles.posterAvatar} />
+          <SafeImage source={{ uri: need.poster.avatar_url }} style={styles.posterAvatar} />
         ) : (
           <View style={[styles.posterAvatar, styles.posterAvatarFallback]} />
         )}

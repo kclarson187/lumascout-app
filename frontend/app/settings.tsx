@@ -11,6 +11,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import Constants from 'expo-constants';
+// Batch #8 — native version / build metadata for the Settings "Version"
+// row. `expo-application` reads the OS-level values (what the App Store /
+// Play Store know about the install); `Constants.expoConfig` is the
+// JS-bundle-time source (what was in app.json when the JS was built). The
+// two should match in a signed build but can drift during OTA updates, so
+// we show native first.
+import * as Application from 'expo-application';
 import {
   ChevronLeft, ChevronRight, Crown, User, Bell, CreditCard, Bookmark,
   PackageOpen, Store, Briefcase, Users, Eye, MessageSquareText,
@@ -109,10 +116,21 @@ export default function SettingsHub() {
   };
 
   if (!user) return null;
-  const appVersion = (Constants.expoConfig as any)?.version || '1.0.0';
-  const buildNumber = Platform.OS === 'ios'
-    ? (Constants.expoConfig as any)?.ios?.buildNumber
-    : (Constants.expoConfig as any)?.android?.versionCode;
+  // Batch #8 — prefer native version/build (from expo-application) for
+  // app-store-accurate values; fall back to Constants.expoConfig when
+  // running in the web preview or Expo Go where the native module may
+  // not be available. Shown in the "Version" row so support / review /
+  // bug-triage can see exactly which build the user is on.
+  const appVersion =
+    Application.nativeApplicationVersion ||
+    (Constants.expoConfig as any)?.version ||
+    '1.0.0';
+  const buildNumber =
+    Application.nativeBuildVersion ||
+    (Platform.OS === 'ios'
+      ? (Constants.expoConfig as any)?.ios?.buildNumber
+      : (Constants.expoConfig as any)?.android?.versionCode);
+  const envTag = __DEV__ ? 'dev' : (process.env.EXPO_PUBLIC_APP_ENV || 'prod');
 
   // ────────────────────────────────────────────────────────────────────────
   // SECTIONS
@@ -278,7 +296,7 @@ export default function SettingsHub() {
     {
       key: 'version', icon: Sparkles,
       title: 'Version',
-      subtitle: `v${appVersion}${buildNumber ? ` (${buildNumber})` : ''}`,
+      subtitle: `v${appVersion}${buildNumber ? ` (${buildNumber})` : ''} · ${envTag}`,
       onPress: () => {},
     },
     {

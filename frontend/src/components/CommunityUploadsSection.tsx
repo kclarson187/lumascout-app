@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Image, Pressable, ActivityIndicator, FlatList } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ActivityIndicator, FlatList } from 'react-native';
+import SafeImage from '../../src/components/SafeImage';
 import { Heart, ThumbsUp, Camera } from 'lucide-react-native';
 import { api } from '../api';
 import { useAuth } from '../auth';
@@ -84,14 +85,14 @@ export default function CommunityUploadsSection({
         const pending = item.moderation_status === 'pending';
         return (
           <View style={[styles.card, pending && { opacity: 0.7 }]} testID={`upload-${item.upload_id}`}>
-            <Image source={{ uri: item.image_url }} style={styles.cover} />
+            <SafeImage source={{ uri: item.image_url }} style={styles.cover} />
             {pending ? (
               <View style={styles.pendingBadge}><Text style={styles.pendingBadgeTxt}>Pending review</Text></View>
             ) : null}
             <View style={styles.meta}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                 {item.contributor?.avatar_url ? (
-                  <Image source={{ uri: item.contributor.avatar_url }} style={styles.avatar} />
+                  <SafeImage source={{ uri: item.contributor.avatar_url }} style={styles.avatar} />
                 ) : (
                   <View style={[styles.avatar, { backgroundColor: colors.surface2, alignItems: 'center', justifyContent: 'center' }]}>
                     <Text style={{ color: colors.textSecondary, fontSize: 10, fontFamily: font.bodyBold }}>

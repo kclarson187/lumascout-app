@@ -7,7 +7,17 @@ import { colors, font, space, radii } from '../../src/theme';
 import VerifiedBadge from '../../src/components/VerifiedBadge';
 import UserBadge from '../../src/components/UserBadge';
 
+import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
+
 export default function AdminOverview() {
+  return (
+    <ScreenErrorBoundary label="Admin">
+      <AdminOverviewImpl />
+    </ScreenErrorBoundary>
+  );
+}
+
+function AdminOverviewImpl() {
   const [data, setData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);

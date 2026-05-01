@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator, ConfigD
 from pymongo.errors import DocumentTooLarge
 
 from server import (
+    raise_paywall,
     db,
     get_current_user, get_optional_user,
     utcnow,
@@ -363,12 +364,10 @@ async def create_spot(body: SpotCreateIn, user: dict = Depends(get_current_user)
                 "visibility_status": {"$ne": "draft"},
             })
             if existing_uploads >= max_uploads:
-                raise HTTPException(
-                    status_code=402,
-                    detail=(
-                        f"Free plan allows {max_uploads} uploaded spots. "
-                        "Upgrade to Pro for unlimited uploads."
-                    ),
+                raise_paywall(
+                    "uploads",
+                    f"Free plan allows {max_uploads} uploaded spots. Upgrade to Pro for unlimited uploads.",
+                    target_plan="pro",
                 )
     # Feature gating: free plan can only create 3 private/followers/invite_only spots
     if body.privacy_mode in ("private", "followers", "invite_only"):
@@ -378,15 +377,17 @@ async def create_spot(body: SpotCreateIn, user: dict = Depends(get_current_user)
             "privacy_mode": {"$in": ["private", "followers", "invite_only"]},
         })
         if current >= limits["private_spots"]:
-            raise HTTPException(
-                status_code=402,
-                detail=f"Free plan limit reached ({limits['private_spots']} private spots). Upgrade to Pro for unlimited.",
+            raise_paywall(
+                "private",
+                f"Free plan limit reached ({limits['private_spots']} private spots). Upgrade to Pro for unlimited.",
+                target_plan="pro",
             )
     # Elite-only: premium (sellable) spots
     if body.privacy_mode == "premium" and not limits_for(user)["sell_packs"]:
-        raise HTTPException(
-            status_code=402,
-            detail="Premium spots require the Elite plan. Upgrade to publish sellable locations.",
+        raise_paywall(
+            "uploads",
+            "Premium spots require the Elite plan. Upgrade to publish sellable locations.",
+            target_plan="elite",
         )
     spot_id = f"spot_{uuid.uuid4().hex[:12]}"
     images = []
@@ -1106,9 +1107,10 @@ async def toggle_save(spot_id: str, user: dict = Depends(get_current_user)):
     limits = limits_for(user)
     current = await db.spot_saves.count_documents({"user_id": user["user_id"]})
     if current >= limits["saves"]:
-        raise HTTPException(
-            status_code=402,
-            detail=f"Free plan allows {limits['saves']} saves. Upgrade to Pro for unlimited saves.",
+        raise_paywall(
+            "saves",
+            f"Free plan allows {limits['saves']} saves. Upgrade to Pro for unlimited saves.",
+            target_plan="pro",
         )
     await db.spot_saves.insert_one({
         "save_id": f"save_{uuid.uuid4().hex[:12]}",
@@ -1249,9 +1251,10 @@ async def create_collection(body: CollectionIn, user: dict = Depends(get_current
     limits = limits_for(user)
     current = await db.collections.count_documents({"owner_user_id": user["user_id"]})
     if current >= limits["collections"]:
-        raise HTTPException(
-            status_code=402,
-            detail=f"Free plan allows {limits['collections']} collections. Upgrade to Pro for unlimited.",
+        raise_paywall(
+            "collections",
+            f"Free plan allows {limits['collections']} collections. Upgrade to Pro for unlimited.",
+            target_plan="pro",
         )
     cid = f"col_{uuid.uuid4().hex[:12]}"
     doc = {

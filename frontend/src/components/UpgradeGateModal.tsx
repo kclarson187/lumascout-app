@@ -38,6 +38,8 @@ export type GateReason =
   | 'uploads'
   | 'routes'
   | 'viewers'
+  | 'spot_packs'
+  | 'referrals'
   | 'generic';
 
 type ReasonConfig = {
@@ -145,6 +147,26 @@ const REASONS: Record<GateReason, ReasonConfig> = {
       'Full unblurred Profile Viewers list',
       'Filter by location and follower status',
       '30-day view analytics',
+    ],
+    targetPlan: 'pro',
+  },
+  spot_packs: {
+    title: 'Spot Packs are an Elite feature',
+    body: 'Package your best locations into premium, sellable Spot Packs. Elite creators turn local knowledge into recurring revenue.',
+    perks: [
+      'Publish curated sellable Spot Packs',
+      'Elite creator badge + featured rotation',
+      'Monthly payouts via Stripe Connect',
+    ],
+    targetPlan: 'elite',
+  },
+  referrals: {
+    title: 'Apply to more referrals',
+    body: 'Free accounts get a limited number of applications per month. Pro photographers apply to every opportunity that fits their schedule.',
+    perks: [
+      'Unlimited referral applications',
+      'Direct DM with the poster',
+      'Priority visibility in the applicant list',
     ],
     targetPlan: 'pro',
   },

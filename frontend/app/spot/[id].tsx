@@ -28,6 +28,7 @@ import { colors, font, space, radii } from '../../src/theme';
 import { formatDistance } from '../../src/utils/distance';
 import { resolveImageUrl } from '../../src/utils/image-url';
 import SafeImage from '../../src/components/SafeImage';
+import { useLightbox } from '../../src/components/ImageLightbox';
 import ScoreRing from '../../src/components/ScoreRing';
 import SpotCard from '../../src/components/SpotCard';
 import { Button } from '../../src/components/Button';
@@ -48,8 +49,20 @@ import { goldenHourLabel } from '../../src/utils/sun';
 
 const { width: W } = Dimensions.get('window');
 
+import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
+
 export default function SpotDetail() {
+  return (
+    <ScreenErrorBoundary label="Spot">
+      <SpotDetailImpl />
+    </ScreenErrorBoundary>
+  );
+}
+
+function SpotDetailImpl() {
   const params = useLocalSearchParams<{ id: string }>();
+  // Batch #8 — hero carousel opens a pinch-zoom lightbox on tap.
+  const { open: openLightbox, Lightbox } = useLightbox();
   const id = String(params.id || '');
   const { user } = useAuth();
   const isAdminUser = user?.role === 'admin' || user?.role === 'super_admin';
@@ -340,6 +353,10 @@ export default function SpotDetail() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
+      {/* Batch #8 — full-screen lightbox (pinch + pan + double-tap zoom).
+          Mounted once at the top of the tree; hero carousel taps call
+          openLightbox(uri) to pop it open. Hidden by default. */}
+      <Lightbox />
       {/* May 2026 batch #4(b) — per-spot OG / Twitter card meta tags.
           WEB ONLY. expo-router/head only produces useful output on the
           web bundle (react-helmet-async renders into <head> for SEO
@@ -385,14 +402,28 @@ export default function SpotDetail() {
             {/* All image rendering driven by `orderedImages` memo — see
                 the CRITICAL FIX comment near the load() hook. Single
                 source of truth keeps the hero carousel, dot indicators,
-                and galleryIdx swipe state perfectly in sync. */}
+                and galleryIdx swipe state perfectly in sync.
+                
+                Batch #8 — hero images are now tap-to-open in a
+                full-screen lightbox (pinch-zoom, double-tap, swipe-down
+                to dismiss) so photographers can actually inspect the
+                scene. Swipe navigation between hero images still works
+                because the TouchableOpacity is inside the paging
+                ScrollView — RN routes pan gestures to the parent and
+                taps to the child. */}
             {orderedImages.map((img: any, i: number) => (
-              <SafeImage
+              <TouchableOpacity
                 key={img.image_url || i}
-                source={{ uri: resolveImageUrl(img.image_url) }}
-                style={styles.heroImg}
-                resizeMode="cover"
-              />
+                activeOpacity={0.95}
+                onPress={() => openLightbox(resolveImageUrl(img.image_url))}
+                testID={`spot-hero-image-${i}`}
+              >
+                <SafeImage
+                  source={{ uri: resolveImageUrl(img.image_url) }}
+                  style={styles.heroImg}
+                  resizeMode="cover"
+                />
+              </TouchableOpacity>
             ))}
           </ScrollView>
           <LinearGradient
