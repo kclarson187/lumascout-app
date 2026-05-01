@@ -59,7 +59,11 @@ class Api {
   constructor() {
     this.client = axios.create({
       baseURL: BASE_URL,
-      timeout: 15000,
+      // Bumped from 15s to 20s (June 2025) — slow-cellular real-world
+      // requests were tripping the 15s budget on Spot Detail (~22 KB
+      // payload incl. images array on dense spots). Per-call overrides
+      // (e.g. spot/[id].tsx passes 18000) still win where appropriate.
+      timeout: 20000,
     });
     this.client.interceptors.request.use(async (config) => {
       if (!this.token) {
@@ -132,18 +136,71 @@ class Api {
     return this.token;
   }
 
-  get(path: string, params?: any) {
-    return this.client.get(path, { params }).then((r) => r.data);
+  get(path: string, params?: any, opts?: { timeout?: number }) {
+    return this.client.get(path, {
+      params,
+      ...(opts?.timeout ? { timeout: opts.timeout } : {}),
+    }).then((r) => r.data);
   }
-  post(path: string, body?: any) {
-    return this.client.post(path, body).then((r) => r.data);
+  post(path: string, body?: any, opts?: { timeout?: number }) {
+    return this.client.post(path, body, {
+      ...(opts?.timeout ? { timeout: opts.timeout } : {}),
+    }).then((r) => r.data);
   }
-  patch(path: string, body?: any) {
-    return this.client.patch(path, body).then((r) => r.data);
+  patch(path: string, body?: any, opts?: { timeout?: number }) {
+    return this.client.patch(path, body, {
+      ...(opts?.timeout ? { timeout: opts.timeout } : {}),
+    }).then((r) => r.data);
   }
-  delete(path: string, body?: any) {
-    return this.client.delete(path, body !== undefined ? { data: body } : undefined).then((r) => r.data);
+  delete(path: string, body?: any, opts?: { timeout?: number }) {
+    return this.client.delete(path, {
+      ...(body !== undefined ? { data: body } : {}),
+      ...(opts?.timeout ? { timeout: opts.timeout } : {}),
+    }).then((r) => r.data);
   }
+}
+
+/**
+ * categorizeApiError — June 2025 stability fix.
+ *
+ * Translates an axios error into a stable category string so screens
+ * can choose the right UX without sniffing axios internals everywhere.
+ *
+ * Categories:
+ *   - 'missing'    → 404 / 410. Resource doesn't exist (or no longer).
+ *   - 'auth'       → 401 / 403. Token expired or insufficient permission.
+ *                    The axios interceptor already handles 401 logout;
+ *                    this category is for the caller to ALSO render a
+ *                    helpful message if it cares.
+ *   - 'paywall'    → 402. Upgrade gate already opens via paywallHandler.
+ *   - 'timeout'    → Request exceeded the configured timeout.
+ *                    THIS MUST NOT be treated as a logout. Show retry.
+ *   - 'network'    → No HTTP response at all (offline, DNS, TLS, etc).
+ *                    Show retry.
+ *   - 'server'     → 5xx. Backend hiccup. Show retry.
+ *   - 'client'     → Other 4xx. Show error message.
+ *   - 'unknown'    → Anything else.
+ */
+export type ApiErrorCategory =
+  | 'missing' | 'auth' | 'paywall' | 'timeout' | 'network'
+  | 'server' | 'client' | 'unknown';
+
+export function categorizeApiError(err: any): ApiErrorCategory {
+  if (!err) return 'unknown';
+  // axios marks timeouts with code === 'ECONNABORTED' (or 'ETIMEDOUT')
+  // and a message that includes 'timeout of'.
+  if (err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT'
+      || /timeout/i.test(err?.message || '')) {
+    return 'timeout';
+  }
+  const status = Number(err?.response?.status || err?.status || 0);
+  if (status === 0 && !err?.response) return 'network';
+  if (status === 404 || status === 410) return 'missing';
+  if (status === 401 || status === 403) return 'auth';
+  if (status === 402) return 'paywall';
+  if (status >= 500 && status < 600) return 'server';
+  if (status >= 400 && status < 500) return 'client';
+  return 'unknown';
 }
 
 export const api = new Api();
