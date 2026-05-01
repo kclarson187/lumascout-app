@@ -50,6 +50,7 @@ import { goldenHourLabel } from '../../src/utils/sun';
 const { width: W } = Dimensions.get('window');
 
 import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
+import SectionErrorBoundary from '../../src/components/SectionErrorBoundary';
 
 export default function SpotDetail() {
   return (
@@ -777,6 +778,7 @@ function SpotDetailImpl() {
           ) : null}
 
           {/* Owner row */}
+          <SectionErrorBoundary label="owner-row">
           {spot.owner && (
             <View style={styles.ownerRow}>
               <TouchableOpacity onPress={() => router.push(`/user/${spot.owner.user_id}`)} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
@@ -801,6 +803,7 @@ function SpotDetailImpl() {
               )}
             </View>
           )}
+          </SectionErrorBoundary>
 
           {spot.description ? <Text style={styles.desc}>{spot.description}</Text> : null}
 
@@ -986,6 +989,7 @@ function SpotDetailImpl() {
           )}
 
           {/* Reviews */}
+          <SectionErrorBoundary label="reviews">
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: space.xl }}>
             <Text style={styles.sectionH}>Field notes · {spot.review_count || 0}</Text>
             <TouchableOpacity onPress={() => router.push(`/review/${id}`)} testID="spot-new-review">
@@ -1009,6 +1013,7 @@ function SpotDetailImpl() {
               <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 13 }}>No reviews yet — be the first!</Text>
             )}
           </View>
+          </SectionErrorBoundary>
 
           {/* Community uploads (Feature 9 — retention) */}
           {!!spot.spot_id && (
@@ -1020,7 +1025,9 @@ function SpotDetailImpl() {
                 ) : null}
               </View>
               <View style={{ marginTop: space.md, marginHorizontal: -space.xl }}>
-                <CommunityUploadsSection spotId={spot.spot_id} />
+                <SectionErrorBoundary label="community-uploads">
+                  <CommunityUploadsSection spotId={spot.spot_id} />
+                </SectionErrorBoundary>
               </View>
             </>
           )}
@@ -1030,7 +1037,9 @@ function SpotDetailImpl() {
             <>
               <Text style={[styles.sectionH, { marginTop: space.xl }]}>Latest conditions</Text>
               <View style={{ marginTop: space.md, marginHorizontal: -space.xl }}>
-                <LatestConditionsSection spotId={spot.spot_id} />
+                <SectionErrorBoundary label="latest-conditions">
+                  <LatestConditionsSection spotId={spot.spot_id} />
+                </SectionErrorBoundary>
               </View>
             </>
           )}
@@ -1040,22 +1049,26 @@ function SpotDetailImpl() {
             <>
               <Text style={[styles.sectionH, { marginTop: space.xl }]}>Through the seasons</Text>
               <View style={{ marginTop: space.md, marginHorizontal: -space.xl }}>
-                <SeasonalTimelineSection spotId={spot.spot_id} initial={spot.seasonal_timeline} />
+                <SectionErrorBoundary label="seasonal-timeline">
+                  <SeasonalTimelineSection spotId={spot.spot_id} initial={spot.seasonal_timeline} />
+                </SectionErrorBoundary>
               </View>
             </>
           ) : null}
 
           {/* Similar */}
+          <SectionErrorBoundary label="similar-spots">
           {spot.similar_spots && spot.similar_spots.length > 0 && (
             <>
               <Text style={[styles.sectionH, { marginTop: space.xl }]}>Similar nearby</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: space.md, marginHorizontal: -space.xl }} contentContainerStyle={{ paddingHorizontal: space.xl, gap: 12 }}>
                 {spot.similar_spots.map((s: any) => (
-                  <SpotCard key={s.spot_id} spot={s} width={240} />
+                  <SpotCard key={s.spot_id || s.id || s._id} spot={s} width={240} />
                 ))}
               </ScrollView>
             </>
           )}
+          </SectionErrorBoundary>
 
           {/* BATCH 2 (Apr 2026): discoverable admin photo manager
               CTA. Prior to this, the only entry point was a small
