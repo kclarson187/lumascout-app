@@ -1,7 +1,7 @@
 {
   "cli": {
     "version": ">= 18.0.0",
-    "appVersionSource": "remote"
+    "appVersionSource": "local"
   },
   "build": {
     "development": {
@@ -15,7 +15,6 @@
       }
     },
     "production": {
-      "autoIncrement": true,
       "ios": {
         "credentialsSource": "remote",
         "resourceClass": "m-medium"
@@ -27,7 +26,10 @@
       "ios": {
         "appleId": "kclarson187@gmail.com",
         "ascAppId": "6762586637",
-        "appleTeamId": "23H3KJ9VVC"
+        "appleTeamId": "23H3KJ9VVC",
+        "ascApiKeyPath": "/app/secrets/AuthKey_73A3K9Z48T.p8",
+        "ascApiKeyId": "73A3K9Z48T",
+        "ascApiKeyIssuerId": "c0ede999-5ba4-41a4-9503-e1bbf6780c86"
       }
     }
   }

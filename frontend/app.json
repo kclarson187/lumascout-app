@@ -2,7 +2,7 @@
   "expo": {
     "name": "LumaScout",
     "slug": "lumascout",
-    "version": "1.0.0",
+    "version": "2.0.15",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "lumascout",
@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.lumascout.app",
-      "buildNumber": "1",
+      "buildNumber": "2.0.15",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Show nearby photoshoot spots and save locations.",
         "NSPhotoLibraryUsageDescription": "Upload photos for your photoshoot spots.",
