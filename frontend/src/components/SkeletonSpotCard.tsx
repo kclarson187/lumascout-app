@@ -77,7 +77,12 @@ const s = StyleSheet.create({
   },
   image: {
     width: '100%',
-    aspectRatio: 16 / 10,
+    // Layout-jump fix (May 2026): match SpotCard's 4:5 aspect EXACTLY so
+    // the skeleton → real-card swap is dimension-stable. Previously the
+    // skeleton used 16:10 which was wider/shorter, causing visible
+    // "oversized image" flash when the first real 4:5 SpotCard streamed
+    // in and pushed the layout taller.
+    aspectRatio: 4 / 5,
     backgroundColor: 'rgba(255,255,255,0.06)',
   },
   meta: {
