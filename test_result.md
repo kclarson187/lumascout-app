@@ -12,6 +12,157 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Explore Speed CR — Batch 1 (June 2025): (1) New spot indexes + 2dsphere location backfill on startup; (2) GET /api/spots cursor pagination (paginated=1/cursor/limit wrapped response) + sort=distance with lat/lng; (3) NEW GET /api/spots/markers lightweight map-markers endpoint"
+    implemented: true
+    working: false
+    file: |
+      /app/backend/server.py (L5949-6002 — new indexes + 2dsphere backfill migration in startup_event),
+      /app/backend/routes/spots.py (L596-819 list_spots cursor/paginated/sort=distance, L830-914 NEW list_spot_markers endpoint)
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: false
+        -agent: "testing"
+        -comment: |
+          Explore Speed CR Batch 1 focused validation — 41/45 assertions
+          green via /app/backend_test.py against
+          https://photo-finder-60.preview.emergentagent.com/api.
+          Super_admin: admin@lumascout.app / Grayson@1117!!
+          (user_6daa7d0a3abc, plan=elite).
+
+          ── SECTION 1: Startup + indexes — ALL PASS ─────────────────
+          Backend supervisor logs (backend.err.log / backend.out.log)
+          show clean "Application startup complete." after the last
+          WatchFiles reload at 18:03:39. No exceptions, no migration
+          errors, no 500s. The 19 new create_index() calls on
+          db.spots (compound lat/lng + single-key indexes for
+          created_at, category, visibility_status, privacy_mode,
+          is_test_data, is_premium, is_hidden_gem, city, shoot_score,
+          quality_score) and the 2dsphere index on `location` with
+          the $exists:False backfill migration all run without
+          throwing. Confirmed via:
+            · GET /api/auth/me → 200
+            · GET /api/feed/home → 200
+            · GET /api/spots?limit=10 → 200 (legacy array shape)
+          The 2dsphere + backfill is defensively wrapped in try/except
+          (server.py:5974 & 5997) so even a malformed legacy doc can't
+          break startup. Good.
+
+          ── SECTION 2: /api/spots cursor pagination + sort=distance ─
+          20/20 PASS. Full coverage:
+
+          2a. Legacy list shape preserved:
+              GET /api/spots?limit=10 → 200 with raw JSON ARRAY
+              (not wrapped object). len=10. items carry spot_id.
+              Legacy clients unaffected.
+          2b. Wrapped shape (paginated=1):
+              GET /api/spots?paginated=1&limit=10 → 200 with
+              {items:[...], next_cursor, total_estimate, limit}.
+              Exact keys match spec — no extras. items len=10.
+              total_estimate=36 (so next_cursor=10, matches >10
+              expectation). limit echoed as 10.
+          2c. Cursor flow:
+              · paginated=1&cursor=0&limit=5 → len=5, next_cursor=5
+              · paginated=1&cursor=5&limit=5 → len=5, page overlap
+                with page1 is EMPTY set (ids1 & ids2 == {}). Pages
+                are distinct. ✓
+              · paginated=1&cursor=999&limit=5 → items=[], next_cursor=null ✓
+          2d. sort=distance with lat/lng:
+              GET /api/spots?sort=distance&lat=30.2672&lng=-97.7431&limit=10
+              → 200, 10 items. distance_mi MONOTONICALLY non-decreasing
+              across all 10 items. distance_source=="device_gps" on
+              every item. ✓
+          2e. sort=distance WITHOUT lat/lng:
+              GET /api/spots?sort=distance&limit=5 → 200, items have
+              distance_mi=None on all rows (graceful; no fake values). ✓
+          2f. Other sort modes (recent, quality, score, trending,
+              golden_hour) → all 200. ✓
+          2g. Existing filters (shoot_type=wedding, verified_recently=true,
+              min_rating=4) → all 200. ✓
+
+          ── SECTION 3: /api/spots/markers — ALL 4 TESTS FAIL ──────
+          ❌ CRITICAL ROUTE-ORDER BUG — endpoint is UNREACHABLE.
+
+          Every request to /api/spots/markers returns:
+              HTTP 404 {"detail":"Spot not found"}
+
+          ROOT CAUSE:
+          FastAPI matches routes in declaration order. In
+          /app/backend/routes/spots.py the routes are declared as:
+            · line 310 @router.get("/spots/check-duplicates")  ✓
+            · line 435 @router.get("/spots/{spot_id}")          ← catches "markers"
+            · line 596 @router.get("/spots")
+            · line 830 @router.get("/spots/markers")            ← NEVER REACHED
+            · line 917 @router.get("/spots/nearby/search")      (works: 2 segments past /spots)
+
+          Because `/spots/{spot_id}` (single-segment catch-all) is
+          registered at line 435 BEFORE `/spots/markers` at line 830,
+          every call to `/api/spots/markers` is interpreted as
+          `GET /api/spots/{spot_id="markers"}` and falls through to
+          get_spot's 404. The endpoint's body (the actual marker
+          logic at lines 830-914) is dead code.
+
+          VERIFICATION:
+              curl -s -w "HTTP %{http_code}\n" \
+                "https://photo-finder-60.preview.emergentagent.com/api/spots/markers?limit=5"
+              → HTTP 404 {"detail":"Spot not found"}
+
+          Same 404 reproduced with:
+            · bbox filter (sw_lat=29&sw_lng=-99&ne_lat=31&ne_lng=-97)
+            · shoot_type=wedding
+            · authed Bearer token AND unauth
+
+          IMPACT:
+          3a basic shape test ❌ FAIL (404 not 200)
+          3b bbox filter ❌ FAIL (404)
+          3c shoot_type filter ❌ FAIL (404)
+          3e authed request ❌ FAIL (404)
+          3d payload-size comparison skipped (markers endpoint is
+             non-functional, nothing to compare).
+
+          RESULT: The new markers endpoint is 100% non-functional in
+          production. Map view clients that hit /spots/markers will
+          receive 404s. This is a launch blocker for Batch 1.
+
+          FIX (MAIN AGENT MUST DO):
+          Move the `@router.get("/spots/markers")` declaration (and
+          its function body, lines 830-914 in routes/spots.py) to
+          BEFORE `@router.get("/spots/{spot_id}")` at line 435.
+          Alternatively, declare the markers route with an explicit
+          constraint path like "/spots/markers" BEFORE any parameterized
+          `{spot_id}` route in the same router, OR move the markers
+          route up next to the existing special-case routes at line 310
+          (`/spots/check-duplicates`). No other code changes required —
+          the handler logic itself is correct and will work as soon as
+          FastAPI sees it before the catch-all.
+
+          Same bug pattern does NOT affect /spots/nearby/search (line
+          917) because that path has TWO segments after /spots, so
+          `/spots/{spot_id}` cannot match it. Only single-segment
+          paths declared AFTER `/spots/{spot_id}` are affected.
+
+          ── SECTION 4: Regression smoke — ALL PASS ──────────────────
+          · GET /api/auth/me → 200
+          · GET /api/feed/home → 200
+          · GET /api/directory?limit=5 → 200
+          · GET /api/directory/facets → 200
+          · GET /api/notifications?limit=1 → 200
+          Backend logs clean; no 500s observed during the run.
+
+          ── VERDICT ────────────────────────────────────────────────
+          • Indexes + 2dsphere backfill: SHIP-READY. Startup clean.
+          • Cursor pagination + sort=distance: SHIP-READY. 20/20 pass.
+          • NEW /spots/markers endpoint: BLOCKED. Unreachable due to
+            route registration order. One-block reorder in
+            /app/backend/routes/spots.py will fix it.
+
+          Test harness at /app/backend_test.py. Re-run after the
+          reorder fix to re-validate markers basic shape, bbox,
+          shoot_type filter, and payload-size comparison.
+
+
+
   - task: "Network Discover + Live GPS CR (June 2025) — (1) Remove pills under Discover search bar; (2) Centralize live GPS via `useCurrentLocation` hook + live watchPositionAsync (30s / 250m throttle) + retry(); (3) Centralize distance math in `calculateDistanceMiles` (Haversine) + `resolveMiles` (server preferred, Haversine fallback); (4) Sort Explore list closest-first when GPS granted, fall back to server quality sort otherwise"
     implemented: true
     working: "NA"

@@ -622,8 +622,16 @@ async def list_spots(
     min_variety: Optional[int] = None,            # 1..5 (background_variety / variety_rating)
     # -----------------------------------------------------------------------
     q: Optional[str] = None,
-    sort: str = "recent",  # recent, trending, golden_hour, score
+    sort: str = "recent",  # recent, trending, golden_hour, score, quality, distance
     limit: int = 40,
+    # Explore Speed CR — Batch 1 (June 2025): cursor pagination.
+    # Frontend now pages: initial 24, then 12 per scroll. Server caps
+    # `limit` at 30 by default (200 hard-cap retained for legacy map
+    # callers passing `limit=200`). When `cursor` is provided OR
+    # `paginated=1` is sent, the response wraps as
+    # `{items: [...], next_cursor: int|null, total_estimate: int}`.
+    cursor: Optional[int] = 0,
+    paginated: Optional[int] = 0,
     # CR #1 Item 6 (June 2025): enforce hard cap of 200 spots per /spots
     # request. Previously the frontend was free to pass limit=1000+, which
     # blew RN-Maps memory on Android and was the root cause of Explore
@@ -733,10 +741,39 @@ async def list_spots(
             key=lambda s: (s.get("morning_golden_hour_rating", 0) + s.get("evening_golden_hour_rating", 0)),
             reverse=True,
         )
+    elif sort == "distance":
+        # Explore Speed CR — Batch 1 (June 2025): explicit distance sort.
+        # Frontend passes sort=distance + lat/lng so the server returns
+        # results pre-sorted closest-first. We push spots without
+        # computable distance to the bottom and tie-break ascending by
+        # spot_id so paging stays stable.
+        def _d(s):
+            try:
+                if (lat is not None and lng is not None
+                        and s.get("latitude") is not None
+                        and s.get("longitude") is not None):
+                    return (
+                        haversine_km(float(lat), float(lng),
+                                     float(s["latitude"]), float(s["longitude"])),
+                        str(s.get("spot_id") or ""),
+                    )
+            except Exception:
+                pass
+            # Push spots without coords or without user GPS to the bottom.
+            return (1e9, str(s.get("spot_id") or ""))
+        out.sort(key=_d)
     else:  # recent
         out.sort(key=lambda s: s.get("created_at") or utcnow(), reverse=True)
 
-    out = out[:limit]
+    # ─── Cursor pagination (Explore Speed CR — Batch 1) ──────────────
+    # Total before slicing — used for the wrapped response shape so the
+    # client can compute `has_more` cheaply without a second round-trip.
+    total_estimate = len(out)
+    start = max(0, int(cursor or 0))
+    end = start + limit
+    page = out[start:end]
+    next_cursor = end if end < total_estimate else None
+    out = page
     # FIX(2026-04 Item #3 round 3): compute distance from device GPS.
     # Strict policy: device GPS or null+distance_source='unavailable'.
     # Never fabricate. If no lat/lng was provided we still scrub any
@@ -767,7 +804,114 @@ async def list_spots(
             (s.get("distance_km") if s.get("distance_km") is not None else 99999),
         ))
     await attach_owners(out)
+    # ─── Wrapped pagination response (Explore Speed CR — Batch 1) ────
+    # When the client passes `paginated=1` OR `cursor>0`, return the
+    # wrapped object the new infinite-scroll list expects. Legacy
+    # callers (existing map fetches, internal scripts) keep getting
+    # the raw list shape so nothing breaks.
+    if int(paginated or 0) == 1 or int(cursor or 0) > 0:
+        return {
+            "items": out,
+            "next_cursor": next_cursor,
+            "total_estimate": total_estimate,
+            "limit": limit,
+        }
     return out
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Explore Speed CR — Batch 1 (June 2025): lightweight markers endpoint.
+# Map view consumes this instead of /spots so cold-start payload drops
+# from ~80 KB → ~6 KB per 200 spots. Only the fields a marker needs
+# are returned: spot_id, title, lat, lng, category, thumb_url,
+# is_premium, is_hidden_gem, score. NO descriptions, NO image arrays,
+# NO comments, NO analytics blobs.
+# ─────────────────────────────────────────────────────────────────────
+@router.get("/spots/markers")
+async def list_spot_markers(
+    # Geo bbox filter — when supplied, only return markers within the
+    # rectangular viewport. This is the single biggest perf win for
+    # zoomed-in map views.
+    sw_lat: Optional[float] = None,
+    sw_lng: Optional[float] = None,
+    ne_lat: Optional[float] = None,
+    ne_lng: Optional[float] = None,
+    # Optional category / type filter for the same family of niche
+    # filters Explore supports (passes through to query).
+    category: Optional[str] = None,
+    shoot_type: Optional[str] = None,
+    # Hard cap kept at 500 since these payloads are tiny.
+    limit: int = 500,
+    viewer: Optional[dict] = Depends(get_optional_user),
+):
+    limit = max(1, min(500, int(limit or 500)))
+    query: dict = {
+        "privacy_mode": {"$in": ["public", "premium"]},
+        "visibility_status": "approved",
+        "is_test_data": {"$ne": True},
+    }
+    if category:
+        query["category"] = category
+    if shoot_type:
+        query["shoot_types"] = shoot_type
+    # Geo bbox using the compound (latitude, longitude) index.
+    if (sw_lat is not None and sw_lng is not None
+            and ne_lat is not None and ne_lng is not None):
+        try:
+            lat_lo, lat_hi = sorted([float(sw_lat), float(ne_lat)])
+            lng_lo, lng_hi = sorted([float(sw_lng), float(ne_lng)])
+            query["latitude"] = {"$gte": lat_lo, "$lte": lat_hi}
+            query["longitude"] = {"$gte": lng_lo, "$lte": lng_hi}
+        except Exception:
+            pass
+
+    # Project ONLY the fields a marker needs. Excludes description,
+    # images[], comments, analytics, owner blob, etc.
+    projection = {
+        "_id": 0,
+        "spot_id": 1,
+        "title": 1,
+        "latitude": 1,
+        "longitude": 1,
+        "category": 1,
+        "shoot_types": 1,
+        "is_premium": 1,
+        "is_hidden_gem": 1,
+        "shoot_score": 1,
+        "quality_score": 1,
+        "privacy_mode": 1,
+        # Surface the FIRST image URL only as `thumb_url` so the marker
+        # callout can preview a tiny thumbnail without us shipping the
+        # full images[] payload.
+        "images": {"$slice": 1},
+        "owner_user_id": 1,
+    }
+    rows = await db.spots.find(query, projection).limit(limit).to_list(limit)
+    out = []
+    for s in rows:
+        # Premium gating — non-premium viewers can still see premium
+        # spot pins on the map (they just don't get full data later).
+        # We still respect the Premium plan gate when computing the
+        # `is_premium` flag so the UI can render a lock icon.
+        first_img = (s.get("images") or [{}])[0] if s.get("images") else {}
+        thumb_url = None
+        if isinstance(first_img, dict):
+            thumb_url = (first_img.get("thumb_url")
+                         or first_img.get("card_url")
+                         or first_img.get("image_url"))
+        out.append({
+            "spot_id": s.get("spot_id"),
+            "title": s.get("title"),
+            "lat": s.get("latitude"),
+            "lng": s.get("longitude"),
+            "category": s.get("category"),
+            "shoot_types": s.get("shoot_types") or [],
+            "is_premium": bool(s.get("is_premium")) or s.get("privacy_mode") == "premium",
+            "is_hidden_gem": bool(s.get("is_hidden_gem")),
+            "score": s.get("shoot_score") or s.get("quality_score") or 0,
+            "thumb_url": thumb_url,
+        })
+    return {"items": out, "count": len(out)}
 
 # --- nearby (server.py:1539-1560) ---
 @router.get("/spots/nearby/search")
