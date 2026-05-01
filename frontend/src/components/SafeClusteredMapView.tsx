@@ -41,6 +41,7 @@
  */
 import React, { forwardRef, useCallback, useRef } from 'react';
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 import { MapView as PlainMapView, ClusteredMapView } from './maps-module';
 import { exploreLog } from '../utils/spot-geo';
 
@@ -49,6 +50,31 @@ const CLUSTERING_DISABLED_ABOVE_DELTA = 40;
 /** Minimum delta guard — negative or zero deltas from iOS gesture
  *  interruptions can crash the cluster engine. */
 const MIN_DELTA = 0.0005;
+
+/**
+ * Expo Go detection — June 2025 stability fix.
+ *
+ * `react-native-map-clustering` re-implements MarkerCluster on top of
+ * react-native-maps. In Expo Go (sandboxed `expo-modules` runtime) the
+ * native bridge for that secondary layer is fragile under rapid pan/
+ * zoom — pinch-to-zoom-out on Expo Go for Android crashes the app
+ * with no recoverable error. Production builds (EAS dev/release)
+ * ship a fully linked `react-native-maps` and don't have this issue.
+ *
+ * Strategy: when running inside Expo Go, completely bypass the
+ * clustering library and render with PlainMapView. This costs us the
+ * cluster bubbles in the dev sandbox but PRESERVES clustering for
+ * production builds. Performance on Expo Go is also better (no JS
+ * supercluster reduce on every region change).
+ *
+ * Detection priority:
+ *   1. `Constants.appOwnership === 'expo'` → Expo Go on SDK ≤ 49
+ *   2. `Constants.executionEnvironment === 'storeClient'` → Expo Go on SDK ≥ 50
+ *   3. Falls back to "production" if neither flag matches.
+ */
+const IS_EXPO_GO =
+  (Constants as any)?.appOwnership === 'expo'
+  || (Constants as any)?.executionEnvironment === 'storeClient';
 
 type AnyRegion = {
   latitude: number;
@@ -179,8 +205,14 @@ const SafeClusteredMapView = forwardRef<any, SafeClusteredMapViewProps>(
     // Pick the component. On web the cluster import is a stub (null).
     // When clustering is disabled at extreme zoom, skip the cluster
     // layer entirely to avoid even the initial supercluster build.
+    //
+    // Expo Go (June 2025): bypass `react-native-map-clustering` entirely.
+    // The clustering library's native bridge over react-native-maps
+    // crashes on rapid pan/zoom in the Expo Go sandbox. PlainMapView
+    // works reliably in Expo Go. Production builds (EAS) keep
+    // clustering — the detection is per-runtime, not per-platform.
     const Inner =
-      Platform.OS === 'web' || !ClusteredMapView
+      Platform.OS === 'web' || !ClusteredMapView || IS_EXPO_GO
         ? PlainMapView
         : ClusteredMapView;
 
