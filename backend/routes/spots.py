@@ -306,6 +306,102 @@ def _upload_to_public_view(doc: dict) -> dict:
     doc.pop("_id", None)
     return doc
 
+# ─────────────────────────────────────────────────────────────────────
+# Explore Speed CR — Batch 1 (June 2025): lightweight markers endpoint.
+# Map view consumes this instead of /spots so cold-start payload drops
+# from ~80 KB → ~6 KB per 200 spots. Only the fields a marker needs
+# are returned: spot_id, title, lat, lng, category, thumb_url,
+# is_premium, is_hidden_gem, score. NO descriptions, NO image arrays,
+# NO comments, NO analytics blobs.
+#
+# IMPORTANT: This handler MUST be declared BEFORE @router.get("/spots/
+# {spot_id}") because FastAPI matches routes in declaration order — if
+# /{spot_id} were declared first, GET /spots/markers would match
+# spot_id="markers" and return 404 from get_spot.
+# ─────────────────────────────────────────────────────────────────────
+@router.get("/spots/markers")
+async def list_spot_markers(
+    # Geo bbox filter — when supplied, only return markers within the
+    # rectangular viewport. This is the single biggest perf win for
+    # zoomed-in map views.
+    sw_lat: Optional[float] = None,
+    sw_lng: Optional[float] = None,
+    ne_lat: Optional[float] = None,
+    ne_lng: Optional[float] = None,
+    # Optional category / type filter for the same family of niche
+    # filters Explore supports (passes through to query).
+    category: Optional[str] = None,
+    shoot_type: Optional[str] = None,
+    # Hard cap kept at 500 since these payloads are tiny.
+    limit: int = 500,
+    viewer: Optional[dict] = Depends(get_optional_user),
+):
+    limit = max(1, min(500, int(limit or 500)))
+    query: dict = {
+        "privacy_mode": {"$in": ["public", "premium"]},
+        "visibility_status": "approved",
+        "is_test_data": {"$ne": True},
+    }
+    if category:
+        query["category"] = category
+    if shoot_type:
+        query["shoot_types"] = shoot_type
+    # Geo bbox using the compound (latitude, longitude) index.
+    if (sw_lat is not None and sw_lng is not None
+            and ne_lat is not None and ne_lng is not None):
+        try:
+            lat_lo, lat_hi = sorted([float(sw_lat), float(ne_lat)])
+            lng_lo, lng_hi = sorted([float(sw_lng), float(ne_lng)])
+            query["latitude"] = {"$gte": lat_lo, "$lte": lat_hi}
+            query["longitude"] = {"$gte": lng_lo, "$lte": lng_hi}
+        except Exception:
+            pass
+
+    # Project ONLY the fields a marker needs. Excludes description,
+    # images[] beyond the first, comments, analytics, owner blob.
+    projection = {
+        "_id": 0,
+        "spot_id": 1,
+        "title": 1,
+        "latitude": 1,
+        "longitude": 1,
+        "category": 1,
+        "shoot_types": 1,
+        "is_premium": 1,
+        "is_hidden_gem": 1,
+        "shoot_score": 1,
+        "quality_score": 1,
+        "privacy_mode": 1,
+        # Surface the FIRST image URL only as `thumb_url` so the marker
+        # callout can preview a tiny thumbnail without us shipping the
+        # full images[] payload.
+        "images": {"$slice": 1},
+        "owner_user_id": 1,
+    }
+    rows = await db.spots.find(query, projection).limit(limit).to_list(limit)
+    out = []
+    for s in rows:
+        first_img = (s.get("images") or [{}])[0] if s.get("images") else {}
+        thumb_url = None
+        if isinstance(first_img, dict):
+            thumb_url = (first_img.get("thumb_url")
+                         or first_img.get("card_url")
+                         or first_img.get("image_url"))
+        out.append({
+            "spot_id": s.get("spot_id"),
+            "title": s.get("title"),
+            "lat": s.get("latitude"),
+            "lng": s.get("longitude"),
+            "category": s.get("category"),
+            "shoot_types": s.get("shoot_types") or [],
+            "is_premium": bool(s.get("is_premium")) or s.get("privacy_mode") == "premium",
+            "is_hidden_gem": bool(s.get("is_hidden_gem")),
+            "score": s.get("shoot_score") or s.get("quality_score") or 0,
+            "thumb_url": thumb_url,
+        })
+    return {"items": out, "count": len(out)}
+
+
 # --- check_duplicates (server.py:1153-1189) ---
 @router.get("/spots/check-duplicates")
 async def check_duplicates(
@@ -818,100 +914,6 @@ async def list_spots(
         }
     return out
 
-
-# ─────────────────────────────────────────────────────────────────────
-# Explore Speed CR — Batch 1 (June 2025): lightweight markers endpoint.
-# Map view consumes this instead of /spots so cold-start payload drops
-# from ~80 KB → ~6 KB per 200 spots. Only the fields a marker needs
-# are returned: spot_id, title, lat, lng, category, thumb_url,
-# is_premium, is_hidden_gem, score. NO descriptions, NO image arrays,
-# NO comments, NO analytics blobs.
-# ─────────────────────────────────────────────────────────────────────
-@router.get("/spots/markers")
-async def list_spot_markers(
-    # Geo bbox filter — when supplied, only return markers within the
-    # rectangular viewport. This is the single biggest perf win for
-    # zoomed-in map views.
-    sw_lat: Optional[float] = None,
-    sw_lng: Optional[float] = None,
-    ne_lat: Optional[float] = None,
-    ne_lng: Optional[float] = None,
-    # Optional category / type filter for the same family of niche
-    # filters Explore supports (passes through to query).
-    category: Optional[str] = None,
-    shoot_type: Optional[str] = None,
-    # Hard cap kept at 500 since these payloads are tiny.
-    limit: int = 500,
-    viewer: Optional[dict] = Depends(get_optional_user),
-):
-    limit = max(1, min(500, int(limit or 500)))
-    query: dict = {
-        "privacy_mode": {"$in": ["public", "premium"]},
-        "visibility_status": "approved",
-        "is_test_data": {"$ne": True},
-    }
-    if category:
-        query["category"] = category
-    if shoot_type:
-        query["shoot_types"] = shoot_type
-    # Geo bbox using the compound (latitude, longitude) index.
-    if (sw_lat is not None and sw_lng is not None
-            and ne_lat is not None and ne_lng is not None):
-        try:
-            lat_lo, lat_hi = sorted([float(sw_lat), float(ne_lat)])
-            lng_lo, lng_hi = sorted([float(sw_lng), float(ne_lng)])
-            query["latitude"] = {"$gte": lat_lo, "$lte": lat_hi}
-            query["longitude"] = {"$gte": lng_lo, "$lte": lng_hi}
-        except Exception:
-            pass
-
-    # Project ONLY the fields a marker needs. Excludes description,
-    # images[], comments, analytics, owner blob, etc.
-    projection = {
-        "_id": 0,
-        "spot_id": 1,
-        "title": 1,
-        "latitude": 1,
-        "longitude": 1,
-        "category": 1,
-        "shoot_types": 1,
-        "is_premium": 1,
-        "is_hidden_gem": 1,
-        "shoot_score": 1,
-        "quality_score": 1,
-        "privacy_mode": 1,
-        # Surface the FIRST image URL only as `thumb_url` so the marker
-        # callout can preview a tiny thumbnail without us shipping the
-        # full images[] payload.
-        "images": {"$slice": 1},
-        "owner_user_id": 1,
-    }
-    rows = await db.spots.find(query, projection).limit(limit).to_list(limit)
-    out = []
-    for s in rows:
-        # Premium gating — non-premium viewers can still see premium
-        # spot pins on the map (they just don't get full data later).
-        # We still respect the Premium plan gate when computing the
-        # `is_premium` flag so the UI can render a lock icon.
-        first_img = (s.get("images") or [{}])[0] if s.get("images") else {}
-        thumb_url = None
-        if isinstance(first_img, dict):
-            thumb_url = (first_img.get("thumb_url")
-                         or first_img.get("card_url")
-                         or first_img.get("image_url"))
-        out.append({
-            "spot_id": s.get("spot_id"),
-            "title": s.get("title"),
-            "lat": s.get("latitude"),
-            "lng": s.get("longitude"),
-            "category": s.get("category"),
-            "shoot_types": s.get("shoot_types") or [],
-            "is_premium": bool(s.get("is_premium")) or s.get("privacy_mode") == "premium",
-            "is_hidden_gem": bool(s.get("is_hidden_gem")),
-            "score": s.get("shoot_score") or s.get("quality_score") or 0,
-            "thumb_url": thumb_url,
-        })
-    return {"items": out, "count": len(out)}
 
 # --- nearby (server.py:1539-1560) ---
 @router.get("/spots/nearby/search")
