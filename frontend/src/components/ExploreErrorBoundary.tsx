@@ -30,9 +30,10 @@
  * shipping a full breadcrumb library yet.
  */
 import React from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Platform } from 'react-native';
 import { AlertTriangle, RotateCcw } from 'lucide-react-native';
 import { colors, font, space, radii } from '../theme';
+import { api } from '../api';
 
 type Telemetry = {
   spotsCount?: number;
@@ -76,6 +77,24 @@ export default class ExploreErrorBoundary extends React.Component<Props, State> 
       spotsCount: typeof spotsCount === 'number' ? spotsCount : -1,
       activeFilterKeys: filterKeys,
     });
+    // CR #1 · Ticket #6 — fire-and-forget POST to our own backend so
+    // we have server-side visibility of /explore crashes during the
+    // 48-hour staging soak. Never await, never throw: telemetry must
+    // not affect the fallback UI's ability to render.
+    try {
+      api.post('/errors', {
+        surface: 'explore',
+        message: error?.message || 'Unknown error',
+        stack: (error?.stack || '').split('\n').slice(0, 20).join('\n'),
+        component_stack: (info?.componentStack || '').split('\n').slice(0, 20).join('\n'),
+        context: {
+          spotsCount: typeof spotsCount === 'number' ? spotsCount : -1,
+          activeFilterKeys: filterKeys,
+        },
+        route: '/explore',
+        platform: Platform.OS,
+      }).catch(() => {});
+    } catch {}
     // If a Sentry SDK is mounted globally (set up in _layout.tsx in the
     // future), forward the breadcrumb so we get web-side reports too.
     try {
