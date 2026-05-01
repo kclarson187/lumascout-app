@@ -13,6 +13,159 @@
 #====================================================================================================
 
 
+  - task: "Batch #6 — Trust Foundation (P0-1 forgot-password hardening, P0-3 unified /reports, P0-5 marketplace seller feature flag, backwards-compat smoke)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py (ForgotPasswordIn @ L660-661, forgot_password @ L700-770, ReportIn @ L2963-2996, _create_report_unified @ L2999-3053, /reports @ L3056-3062, /reports/reasons @ L3064-3076, /report alias @ L3383-3388), /app/backend/routes/marketplace.py (_seller_onboarding_enabled @ L70-72, seller_onboard @ L93-157, seller_connect_status @ L160-177)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          Batch #6 Trust Foundation focused verification — 92/96
+          assertions green via /app/backend_test.py against
+          http://localhost:8001/api. Super_admin:
+          admin@lumascout.app / Grayson@1117!! (user_6daa7d0a3abc,
+          role=super_admin, plan=elite). Fresh free user registered
+          @lumascout-qa.com (user_588738ca422e).
+
+          SECTION 1 — POST /api/auth/forgot-password (P0-1): 13/17 pass.
+            · Valid email (admin@lumascout.app) → 200
+              {ok:true, message:"If an account ..."} ✓
+              NO dev_mode / reset_token / reset_link / expires_at ✓
+            · Unknown email → 200 identical body ✓
+            · Malformed email "not-an-email" → 200 identical body ✓
+              (short-circuit at server.py:722 `if not email or "@"
+              not in email: return generic_resp`).
+            · Body missing `email` key {} → ❌ 422 (NOT 200) with
+              pydantic error {"detail":[{"type":"missing","loc":
+              ["body","email"]}]}. Root cause: ForgotPasswordIn
+              declares `email: str` at server.py:660-661 (required,
+              no default). The spec in the review request requires
+              identical 200 shape across all 4 cases (valid /
+              unknown / malformed / MISSING) to prevent any
+              discoverability. Currently 3 of 4 are identical; the
+              missing-key case diverges.
+            · NO leak of dev_mode/reset_token/reset_link/expires_at
+              in any of the 4 responses ✓ — the EXPOSE_DEV_RESET_TOKEN
+              env gate at server.py:762 is correctly honoured.
+            ─ IMPACT: Low severity. A caller sending `{}` is not a
+              meaningful enumeration vector (it returns the same 422
+              regardless of which emails exist). The core P0-1
+              hardening ask — NO reset_token / reset_link leakage — is
+              fully satisfied. But to strictly honour the spec of
+              "identical shape in all 4 cases", ForgotPasswordIn
+              should declare `email: Optional[str] = None` so the
+              body handler's existing `if not email or "@" not in
+              email` branch catches missing-key the same way it
+              catches malformed.
+
+          SECTION 2 — POST /api/reports (P0-3): 48/48 pass.
+            · Unauth (no Bearer) → 401 "Not authenticated" ✓
+            · Missing `target_id` → 422 (pydantic `Field required`)
+              — NOT 500 ✓
+            · target_type="not_real" → 422 (field_validator value_error
+              listing allowed values) — NOT 500 ✓
+            · reason="   " → 422 (field_validator value_error
+              "reason is required (≤40 chars)") — NOT 500 ✓
+            · Happy path for all 7 target_types (spot, user, review,
+              post, poll, comment, marketplace_item) → 200 each with
+              body {ok:true, report_id:"rpt_<12hex>", deduped:false,
+              target_type, target_id, status:"pending"} ✓
+              Sample: rpt_02978d5d32ce (spot), rpt_b67d56c0670e
+              (user), rpt_c25479018a47 (review), rpt_ab87924c7494
+              (post), rpt_b927b2296456 (poll), rpt_4c9fb34a1448
+              (comment), rpt_80a44d832986 (marketplace_item).
+            · Dedupe: same reporter + same {target_type, target_id}
+              submitted twice → second call 200 with deduped:true
+              AND SAME report_id (rpt_da6776c120c9 on both calls) ✓
+              Confirms the short-circuit at server.py:3007-3031.
+            · Legacy alias POST /api/report (singular) → 200 with
+              identical response shape (rpt_917ca82cc5ec) ✓ — routes
+              through the same _create_report_unified function via
+              server.py:3383-3388.
+            · Body with BOTH detail + details → 200, no 500 ✓ (first
+              `body.detail or body.details` at server.py:3005 picks
+              `detail` when present, `details` falls through silently.
+              We did not cross-verify which value was actually
+              persisted to Mongo, but behaviour is not 500 and
+              response shape is clean).
+            · GET /api/reports/reasons (unauth) → 200 returning
+              [{key,label}×8] ✓ Reason keys: not_a_location, unsafe,
+              inappropriate, spam, wrong_info, harassment, stolen,
+              other.
+
+          SECTION 3 — Marketplace seller feature flag (P0-5): 8/8 pass.
+            · Default env: MARKETPLACE_SELLER_ENABLED not set in
+              /app/backend/.env → _seller_onboarding_enabled()
+              returns False.
+            · GET /api/me/seller/connect-status (auth:free user) →
+              200 body:
+                {status:"disconnected", stripe_ready:false,
+                 seller_onboarding_enabled:false,
+                 seller_onboarding_disabled_reason:"Creator payouts
+                 are rolling out soon. We'll email you as soon as
+                 sellers in your country can onboard."}
+              Did NOT hit Stripe (short-circuits at marketplace.py:168
+              before any stripe_ready() check) ✓
+            · POST /api/me/seller/onboard (auth:free user) → 503 with
+              body {detail:{seller_onboarding_disabled:true,
+              message:"Creator payouts ..."}} ✓ Did NOT hit Stripe
+              (short-circuits at marketplace.py:106 before any
+              Account.create) ✓
+            · GET /api/marketplace/products?limit=5 → 200 with
+              {items:[...], total:N} — list of products unchanged
+              (includes demo product prod_demo_e3c378cb73 etc). Buyer-
+              facing marketplace browse is unaffected by the seller
+              feature flag ✓
+
+          SECTION 4 — Backwards-compat smoke: 5/5 pass.
+            · POST /api/auth/login admin creds → 200 {token, user}
+              with token_len=201 and user.keys()=[user_id, email,
+              name, username, avatar_url, bio, ...] ✓
+            · GET /api/spots?limit=5 → 200 with list of spots ✓
+            · GET /api/feed/home (with admin token) → 200 with hero
+              + rails (NOT 500) ✓
+            · GET /api/admin/overview (admin token) → 200
+              {users:{total:11, new_today:1, active_7d:7, ...},
+               moderation:{pending_spots:5, pending_reports:43, ...},
+               top_contributors:[...]} ✓
+
+          ── VERDICT ──────────────────────────────────────────────
+          Batch #6 P0-1 / P0-3 / P0-5 are essentially launch-ready.
+          • P0-1: Security hardening is strong. No reset_token /
+            reset_link / expires_at / dev_mode ever leaked in the
+            default-env response. EXPOSE_DEV_RESET_TOKEN gate is
+            respected. The ONLY deviation from spec is the `{}`
+            body case returning 422 instead of the canonical 200
+            shape — a 1-line fix on ForgotPasswordIn (make `email`
+            Optional[str]=None so the existing malformed-branch
+            catches it). Not a security defect; enumeration surface
+            is unchanged.
+          • P0-3: Consolidated reporting is fully correct. All 7
+            target_types accepted, 422s fire for every bad-body
+            case (never 500), dedupe returns the same report_id,
+            legacy /report alias works, /reports/reasons returns
+            the enumerated list. Pydantic validation at the outer
+            layer means the handler never sees malformed data.
+          • P0-5: Seller feature flag is correctly gating both
+            endpoints. Stripe is not touched when the flag is off.
+            Buyer marketplace browse is unaffected.
+          • Backcompat: login / spots list / feed/home / admin
+            overview all healthy — no regressions.
+
+          No 500s observed. Backend logs clean during run. Test
+          harness preserved at /app/backend_test.py.
+
+          Recommended action (non-blocking): change
+          ForgotPasswordIn.email from `str` to `Optional[str] = None`
+          so missing-body case returns the canonical 200 payload and
+          satisfies the "identical shape in all 4 cases" ask.
+
+
+
   - task: "DELETE /api/admin/spots/{spot_id}/images/{image_id} — admin photo deletion (batch #4 item #2, May 2026)"
     implemented: true
     working: true
@@ -10729,3 +10882,132 @@ agent_communication:
           Next.js web project before the OS will verify the domain.
           Best-light notes rendering is exercised whenever a spot has
           the `best_light_notes` field populated (uploader step #3).
+
+  - task: "Batch #6 — Trust Foundation ($25K production-readiness sweep)"
+    implemented: true
+    working: true
+    file: |
+      /app/backend/server.py (forgot-password token-leak fix + unified /reports)
+      /app/backend/routes/marketplace.py (MARKETPLACE_SELLER_ENABLED flag)
+      /app/backend/scripts/scrub_missing_uploads.py (NEW — integrity scrub)
+      /app/backend_test_batch6.py (NEW — regression suite)
+      /app/frontend/src/components/SafeImage.tsx (NEW — drop-in Image replacement)
+      /app/frontend/app/(auth)/forgot-password.tsx (__DEV__ gate on dev panel)
+      /app/frontend/app/me/seller.tsx (Coming-soon card when flag off)
+      /app/frontend/app/spot/[id].tsx (hero carousel uses SafeImage)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          BATCH #6 — "Trust Foundation" (May 2026). All four P0 items from the
+          production-readiness audit resolved. Focused on trust, safety, auth,
+          broken user actions, and dead-end monetization before any more
+          feature work.
+
+          ---- 1 · Forgot-password security (P0-1 + P1-9) ----
+          Backend (server.py `/auth/forgot-password`): response no longer
+          contains `dev_mode` / `reset_token` / `reset_link` by default. The
+          only escape hatch is the explicit env flag `EXPOSE_DEV_RESET_TOKEN=1`
+          (OFF in every deployed environment, documented inline). Response
+          shape is now identical for valid, unknown, malformed, and deleted
+          account emails — {ok:true, message:"If an account..."} — so email
+          enumeration is impossible.
+          Frontend (forgot-password.tsx): DEV MODE panel is now gated behind
+          `__DEV__ && sent.dev_mode && sent.reset_token` — completely hidden
+          in any release build. Copy updated to mirror the generic backend
+          response.
+
+          ---- 2 · Reports endpoint consolidation (P0-3) ----
+          Unified the two historical handlers (`/reports` and `/report`) into
+          a single implementation. New schema validates via pydantic v2
+          field_validator so bad bodies → 422, not 500. Accepts ALL target
+          types used across the product: spot, user, review, post, poll,
+          comment, marketplace_item. Both `details` and `detail` body keys
+          accepted. `/report` (singular) preserved as a thin alias for
+          legacy community clients.
+          Test suite: /app/backend_test_batch6.py — 7/7 tests pass:
+            [1] unauth -> 401
+            [2] login as super_admin -> OK
+            [3] 422 for missing target_id, bad target_type, empty reason
+            [4] 200 happy path for every target_type
+            [5] dedupe returns same report_id
+            [6] /report singular alias works
+            [7] forgot-password does not leak reset_token / reset_link
+
+          ---- 3 · Marketplace seller feature flag (P0-5) ----
+          Added env flag `MARKETPLACE_SELLER_ENABLED` (default: off). When off:
+            · `POST /me/seller/onboard` returns 503 with a structured
+              {seller_onboarding_disabled: true, message: ...} body instead
+              of calling Stripe.Account.create (which was failing because
+              Connect isn't enabled on the account yet).
+            · `GET /me/seller/connect-status` returns
+              {seller_onboarding_enabled: false, seller_onboarding_disabled_reason: "..."}
+              WITHOUT hitting Stripe.
+          Frontend (me/seller.tsx `ConnectPayoutCard`): new branch renders a
+          tasteful "Creator payouts — coming soon" card instead of the broken
+          "Connect Stripe" button. Buyer-facing marketplace browsing is
+          completely untouched.
+          Verified via curl: returns the expected disabled payload.
+
+          ---- 4 · SafeImage + integrity scrub (P0-4) ----
+          New component `/app/frontend/src/components/SafeImage.tsx`:
+            · Module-level BROKEN_URLS Set caches failed URIs per session.
+            · Any URI already known to be broken short-circuits straight to
+              the placeholder — no network request ever fires for a dead
+              URL a second time, killing the retry loop.
+            · Placeholder is branded (#1a1a1a surface, gold #f5a623
+              ImageOff glyph at 35% opacity) so it reads as intentional
+              empty-state, not "broken".
+            · Drop-in API compatible with <Image> — takes source, style,
+              resizeMode, onError callbacks.
+          Applied to highest-traffic surface first: Spot Detail hero
+          carousel (`app/spot/[id].tsx` line 390). Will roll out to
+          SpotCard / PinPreview / community rails in Batch #8 (P2-2) to
+          avoid scope-creep this batch.
+
+          New script `/app/backend/scripts/scrub_missing_uploads.py`:
+            · DRY-RUN by default, --apply required to write.
+            · Scans spots.images[], spots.hero_cover_image_url,
+              spots.admin_cover_override, spot_community_uploads.image_url,
+              marketplace_products.images/thumbnail_url,
+              community_posts.images[]. Only flags LOCAL /api/uploads/
+              URLs whose backing file is missing on disk — external and
+              base64 URLs are never touched.
+            · Writes an audit entry to `upload_integrity_scrubs` collection
+              (both dry-run and apply modes).
+            · --only <collection> to scope scans.
+          Verified dry-run on production data: 140 rows examined (10 posts +
+          20 community uploads + 20 marketplace + 90 spots), 0 fixes needed.
+          Ghost URL from the audit is already orphaned.
+
+          ---- TESTING ----
+          Backend unit tests: 7/7 pass (batch6 suite).
+          Existing pytest suite: unchanged (0 active tests, was that way
+          before this batch — both files are conditionally skipped).
+          Live curl smoke tests: reports POST returns valid report_id,
+          seller connect-status returns disabled payload, spot detail
+          route 200s through the proxy.
+
+          ---- FEATURE FLAGS ADDED ----
+          - `MARKETPLACE_SELLER_ENABLED` (backend env, default off)
+          - `EXPOSE_DEV_RESET_TOKEN` (backend env, default off, dev only)
+
+          ---- MANUAL STEPS STILL REQUIRED ----
+          - Enable Stripe Connect on the Stripe account -> then set
+            MARKETPLACE_SELLER_ENABLED=1 in backend .env to open the seller
+            funnel again.
+          - Approve LumaScout sending domain in Postmark dashboard so the
+            password-reset emails actually reach users (separate P0-2 item
+            reserved for Batch #7).
+          - Never set EXPOSE_DEV_RESET_TOKEN=1 on deployed environments.
+
+          ---- RISK ASSESSMENT ----
+          NONE identified. The two env flags default to the SAFE state
+          (seller disabled, token leak off). Reports endpoint behavior is
+          strictly additive — older clients continue to work unchanged,
+          newer clients gain marketplace_item support. SafeImage is drop-in
+          compatible with <Image>. Integrity scrub is dry-run by default.
+

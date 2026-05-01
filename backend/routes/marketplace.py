@@ -28,6 +28,7 @@ DO NOT MOVE:
 """
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
@@ -53,6 +54,41 @@ from server import (
 router = APIRouter(prefix="/api", tags=["marketplace"])
 
 
+# -----------------------------------------------------------------------------
+# Feature flag: MARKETPLACE_SELLER_ENABLED (Batch #6, May 2026)
+#
+# Seller onboarding funnel has been temporarily gated behind this env flag
+# because LumaScout's Stripe account doesn't have Connect enabled yet —
+# without Connect, `stripe.Account.create` fails with "You can only create
+# new accounts if you've signed up for Connect". That error was surfacing as
+# a dead-end to every user who tapped "Become a seller".
+#
+# Flip to "1" in backend .env ONLY after Stripe Connect is approved on the
+# account. Until then, buyer-facing marketplace browsing/purchasing stays
+# fully live (this flag ONLY affects the seller onboarding path).
+# -----------------------------------------------------------------------------
+def _seller_onboarding_enabled() -> bool:
+    flag = (os.environ.get("MARKETPLACE_SELLER_ENABLED", "") or "").strip().lower()
+    return flag in ("1", "true", "yes", "on")
+
+
+def _seller_disabled_response(connected_status: str = CONNECT_STATUS_DISCONNECTED) -> Dict[str, Any]:
+    """Uniform payload returned when seller onboarding is feature-flagged off.
+
+    The mobile app checks `seller_onboarding_enabled` and renders a tasteful
+    "Coming soon" card instead of the broken Stripe CTA.
+    """
+    return {
+        "status": connected_status,
+        "stripe_ready": False,
+        "seller_onboarding_enabled": False,
+        "seller_onboarding_disabled_reason": (
+            "Creator payouts are rolling out soon. We'll email you as soon as "
+            "sellers in your country can onboard."
+        ),
+    }
+
+
 # --- seller_endpoints (server.py:9205-9319) ---
 @router.post("/me/seller/onboard")
 async def seller_onboard(request: Request, user: dict = Depends(get_current_user)):
@@ -61,7 +97,23 @@ async def seller_onboard(request: Request, user: dict = Depends(get_current_user
     Idempotent: if the user already has a connected account, we return a
     fresh Account Link pointing back to the existing account so onboarding
     can be resumed or completed. Returns {url, acct_id, status}.
+
+    Batch #6: gated behind MARKETPLACE_SELLER_ENABLED env flag. When off,
+    the API returns 503 with a descriptive `seller_onboarding_disabled`
+    payload instead of calling Stripe (which would fail with a "Connect not
+    enabled" error on accounts without Connect approved).
     """
+    if not _seller_onboarding_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "seller_onboarding_disabled": True,
+                "message": (
+                    "Creator payouts are rolling out soon. We'll email you as "
+                    "soon as sellers in your country can onboard."
+                ),
+            },
+        )
     if not _stripe_ready():
         raise HTTPException(status_code=503, detail="Billing is not configured")
     # Reuse existing account if present
@@ -107,11 +159,22 @@ async def seller_onboard(request: Request, user: dict = Depends(get_current_user
 
 @router.get("/me/seller/connect-status")
 async def seller_connect_status(user: dict = Depends(get_current_user)):
-    """Returns live Stripe Connect status for the caller (cached + refreshed)."""
+    """Returns live Stripe Connect status for the caller (cached + refreshed).
+
+    Batch #6: when MARKETPLACE_SELLER_ENABLED is off, skips the Stripe
+    round-trip and returns a disabled payload so the mobile app can render
+    a "Coming soon" card instead of the broken onboarding CTA.
+    """
+    if not _seller_onboarding_enabled():
+        return _seller_disabled_response()
     if not _stripe_ready():
-        return {"status": CONNECT_STATUS_DISCONNECTED, "stripe_ready": False}
+        return {
+            "status": CONNECT_STATUS_DISCONNECTED,
+            "stripe_ready": False,
+            "seller_onboarding_enabled": True,
+        }
     info = await _refresh_connect_status(user["user_id"])
-    return {**info, "stripe_ready": True}
+    return {**info, "stripe_ready": True, "seller_onboarding_enabled": True}
 
 
 @router.post("/me/seller/dashboard-link")

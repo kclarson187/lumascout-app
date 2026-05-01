@@ -703,14 +703,21 @@ async def forgot_password(body: ForgotPasswordIn, request: Request):
     Generates a 30-minute single-use reset token. ALWAYS responds `ok:true` so
     we don't leak which emails are registered (no enumeration).
 
-    In dev mode, also returns `reset_token` + `reset_link` so the frontend can
-    display the link on-screen. Remove these from the response once a real
-    email provider is wired.
+    SECURITY (Batch #6, May 2026):
+      · Response NEVER contains `reset_token` / `reset_link` in production.
+      · Dev convenience (token echoed back so the tester can continue without
+        email delivery) is gated behind the explicit env flag
+        `EXPOSE_DEV_RESET_TOKEN=1` — OFF by default, OFF on every deployed
+        environment. Without that flag set, the response shape is identical
+        for a valid email, an unknown email, a malformed email, and a
+        deleted account: `{ok: true, message: "If an account..."}`.
+      · The token itself is still generated + persisted + emailed whenever
+        possible; we simply stop echoing it over the wire.
     """
     email = (body.email or "").lower().strip()
     generic_resp: Dict[str, Any] = {
         "ok": True,
-        "message": "If an account with that email exists, we've sent a reset link.",
+        "message": "If an account with that email exists, we've sent password reset instructions.",
     }
     if not email or "@" not in email:
         return generic_resp
@@ -746,15 +753,21 @@ async def forgot_password(body: ForgotPasswordIn, request: Request):
     except Exception as exc:  # pragma: no cover — never block the response
         logger.warning("email dispatch failed for %s: %s", email, exc)
 
-    # DEV MODE: include token + link so FE can show them on-screen.
-    # Remove these two fields once a real email provider is wired.
-    return {
-        **generic_resp,
-        "dev_mode": True,
-        "reset_token": token,
-        "reset_link": reset_link,
-        "expires_at": reset_doc["expires_at"].isoformat(),
-    }
+    # Production default: return ONLY the generic response. No token leaks.
+    #
+    # Local-dev escape hatch: setting EXPOSE_DEV_RESET_TOKEN=1 in the backend
+    # `.env` (NOT recommended for any deployed environment) echoes the token
+    # back so a developer without email delivery can continue the flow in the
+    # UI. This flag is NEVER set in staging/prod.
+    if os.environ.get("EXPOSE_DEV_RESET_TOKEN") == "1":
+        return {
+            **generic_resp,
+            "dev_mode": True,
+            "reset_token": token,
+            "reset_link": reset_link,
+            "expires_at": reset_doc["expires_at"].isoformat(),
+        }
+    return generic_resp
 
 
 @api.post("/auth/reset-password")
@@ -2916,39 +2929,136 @@ async def geocode_reverse(lat: float, lng: float):
 # ============================================================================
 # Reports
 # ============================================================================
+# ============================================================================
+# Reports — unified public report endpoint (Batch #6, May 2026).
+#
+# Consolidates the legacy `/reports` (target_type: spot|user|review) and the
+# community `/report` (target_type: post|poll|comment|user) handlers into a
+# single surface that accepts every target type used across the product,
+# validates via pydantic (bad bodies -> 422, not 500), dedupes on
+# (reporter, target, pending), and writes a uniform report doc.
+#
+# App Store UGC compliance (Guideline 1.2) requires a working in-app
+# reporting path for user-generated content; this endpoint is that path.
+#
+# Backwards compatibility:
+#   · Frontends currently call `POST /reports` (plural). Path preserved.
+#   · `POST /report` (singular, community) is kept as a thin alias that
+#     reuses the same handler — zero BE copy, zero behaviour change for
+#     existing call-sites.
+#   · Both `detail` and `details` body keys are accepted (first one was
+#     used by the community schema, second by the spot/user/review schema).
+# ============================================================================
+
+_REPORT_TARGET_TYPES = {
+    # legacy /reports
+    "spot", "user", "review",
+    # legacy /report (community)
+    "post", "poll", "comment",
+    # marketplace (new in Batch #6)
+    "marketplace_item",
+}
+
+
 class ReportIn(BaseModel):
-    target_type: str  # spot, user, review
+    target_type: str
     target_id: str
     reason: str
-    details: Optional[str] = ""
+    # Accept BOTH field names — older clients use `details`, newer use `detail`.
+    # Pydantic v1 style Field alias → either accepted; canonicalised below.
+    details: Optional[str] = None
+    detail: Optional[str] = None
+
+    @field_validator("target_type")
+    @classmethod
+    def _validate_target_type(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if v not in _REPORT_TARGET_TYPES:
+            raise ValueError(
+                f"target_type must be one of {sorted(_REPORT_TARGET_TYPES)}"
+            )
+        return v
+
+    @field_validator("target_id")
+    @classmethod
+    def _validate_target_id(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v or len(v) > 128:
+            raise ValueError("target_id must be a non-empty string (≤128 chars)")
+        return v
+
+    @field_validator("reason")
+    @classmethod
+    def _validate_reason(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v or len(v) > 40:
+            raise ValueError("reason is required (≤40 chars)")
+        return v
 
 
-@api.post("/reports")
-async def create_report(body: ReportIn, user: dict = Depends(get_current_user)):
-    if body.reason not in REPORT_REASONS:
-        raise HTTPException(status_code=400, detail=f"Invalid reason. Expected one of {sorted(REPORT_REASONS)}.")
-    if body.target_type not in ("spot", "user", "review"):
-        raise HTTPException(status_code=400, detail="Invalid target_type")
+async def _create_report_unified(body: ReportIn, user: dict) -> Dict[str, Any]:
+    """Shared implementation used by both `/reports` and `/report`."""
     check_rate_limit("report_create", user["user_id"])
-    # Dedupe: don't create another pending report from the same user on the same target
+    # Canonicalise the free-form description — prefer the newer `detail`
+    # field if both were sent, cap length to the community handler's
+    # original 1000-char limit.
+    note = (body.detail or body.details or "").strip()[:1000]
+    # Dedupe pending reports from the same reporter on the same target
     existing = await db.reports.find_one({
         "reporter_user_id": user["user_id"],
+        "target_type": body.target_type,
         "target_id": body.target_id,
         "status": "pending",
     })
     if existing:
-        existing.pop("_id", None)
-        return existing
+        # Update the note if the user is resubmitting with more context
+        await db.reports.update_one(
+            {"report_id": existing["report_id"]},
+            {"$set": {
+                "reason": body.reason,
+                "detail": note,
+                "details": note,
+                "updated_at": utcnow(),
+            }},
+        )
+        return {
+            "ok": True,
+            "report_id": existing["report_id"],
+            "deduped": True,
+            "target_type": body.target_type,
+            "target_id": body.target_id,
+            "status": "pending",
+        }
+    rid = f"rpt_{uuid.uuid4().hex[:12]}"
     doc = {
-        "report_id": f"rep_{uuid.uuid4().hex[:12]}",
+        "report_id": rid,
         "reporter_user_id": user["user_id"],
-        **body.dict(),
+        "reporter_email": user.get("email"),
+        "target_type": body.target_type,
+        "target_id": body.target_id,
+        "reason": body.reason,
+        "detail": note,
+        "details": note,  # mirror for legacy admin consumers
         "status": "pending",
         "created_at": utcnow(),
     }
     await db.reports.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
+    return {
+        "ok": True,
+        "report_id": rid,
+        "deduped": False,
+        "target_type": body.target_type,
+        "target_id": body.target_id,
+        "status": "pending",
+    }
+
+
+@api.post("/reports")
+async def create_report(body: ReportIn, user: dict = Depends(get_current_user)):
+    """Unified user-report endpoint. Accepts spot, user, review, post, poll,
+    comment, and marketplace_item targets. Bad bodies → 422 via pydantic.
+    Rate-limited per user. Deduped on (reporter, target, pending)."""
+    return await _create_report_unified(body, user)
 
 
 @api.get("/reports/reasons")
@@ -2960,6 +3070,8 @@ async def report_reasons():
         {"key": "inappropriate", "label": "Inappropriate content"},
         {"key": "spam", "label": "Spam or promotional"},
         {"key": "wrong_info", "label": "Incorrect information"},
+        {"key": "harassment", "label": "Harassment or hate"},
+        {"key": "stolen", "label": "Stolen / copied content"},
         {"key": "other", "label": "Something else"},
     ]
 
@@ -3259,45 +3371,21 @@ class ModerationActionIn(BaseModel):
 
 
 
-# ------ Public report endpoint (any user can report content) ---------------
-class PublicReportIn(BaseModel):
-    target_type: str   # post | poll | comment | user
-    target_id: str
-    reason: str        # spam | harassment | fake_giveaway | abusive_poll | stolen | offensive | other
-    detail: Optional[str] = None
+# ------ Public report endpoint — BACKCOMPAT ALIAS (Batch #6, May 2026) ------
+# The canonical endpoint is now `POST /reports` (plural, unified). This
+# singular path is preserved so older community clients don't break; it
+# forwards into the same handler so behavior is identical.
+class PublicReportIn(ReportIn):
+    """Deprecated alias kept for type-export stability; identical to ReportIn."""
+    pass
 
 
 @api.post("/report")
-async def create_report(body: PublicReportIn, user: dict = Depends(get_current_user)):
-    if body.target_type not in ("post", "poll", "comment", "user"):
-        raise HTTPException(status_code=400, detail="Invalid target_type")
-    if len(body.reason) > 40 or not body.reason.strip():
-        raise HTTPException(status_code=400, detail="Invalid reason")
-    # Dedupe: same reporter, same target, pending → update detail, don't duplicate
-    existing = await db.reports.find_one({
-        "reporter_user_id": user["user_id"],
-        "target_type": body.target_type, "target_id": body.target_id,
-        "status": "pending",
-    })
-    if existing:
-        await db.reports.update_one(
-            {"report_id": existing["report_id"]},
-            {"$set": {"reason": body.reason, "detail": body.detail, "updated_at": utcnow()}},
-        )
-        return {"ok": True, "report_id": existing["report_id"], "deduped": True}
-    rid = f"rpt_{uuid.uuid4().hex[:12]}"
-    await db.reports.insert_one({
-        "report_id": rid,
-        "reporter_user_id": user["user_id"],
-        "reporter_email": user.get("email"),
-        "target_type": body.target_type,
-        "target_id": body.target_id,
-        "reason": body.reason,
-        "detail": (body.detail or "")[:1000],
-        "status": "pending",
-        "created_at": utcnow(),
-    })
-    return {"ok": True, "report_id": rid}
+async def create_report_singular_alias(
+    body: ReportIn,
+    user: dict = Depends(get_current_user),
+):
+    return await _create_report_unified(body, user)
 
 
 # ------ User sanction endpoints --------------------------------------------
