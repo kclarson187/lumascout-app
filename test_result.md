@@ -12,6 +12,83 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Explore Speed CR — Batch 1 (June 2025): backend foundation. (1) MongoDB indexes + 2dsphere on `location` + one-shot $exists:False back-fill migration; (2) cursor pagination on `GET /api/spots` (`cursor`, `paginated=1` → `{items, next_cursor, total_estimate, limit}`); (3) explicit `sort=distance` mode for closest-first server sort; (4) NEW `GET /api/spots/markers` lightweight endpoint with bbox + shoot_type filters; (5) FIX route-order — markers declared BEFORE `/spots/{spot_id}` to avoid 404."
+    implemented: true
+    working: true
+    file: |
+      /app/backend/server.py (on_startup: 19 new spots indexes + 2dsphere + back-fill migration around line 5949-6002),
+      /app/backend/routes/spots.py (list_spots: added `cursor`, `paginated`, `sort=distance` + wrapped pagination response when paginated/cursor; NEW list_spot_markers handler at line ~310 BEFORE /spots/{spot_id}; documented route-order constraint in comments)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          Explore Speed CR Batch 1 backend validation — 25/25 assertions
+          green via /app/backend_test.py against
+          https://photo-finder-60.preview.emergentagent.com/api.
+
+          ── A. Indexes + 2dsphere migration ──
+            · supervisor logs show clean Application startup complete after
+              two reload cycles (server.py edit + routes/spots.py edit).
+            · /auth/me, /feed/home, /spots?limit=10 all 200 → migration
+              didn't break the existing data path.
+            · 2dsphere `location` field successfully back-filled on
+              legacy spots that had latitude/longitude but no
+              GeoJSON shape (pipeline-update guard wraps any Mongo<4.2
+              fallback).
+
+          ── B. /api/spots cursor pagination (20/20) ──
+            · Legacy list shape preserved when no cursor/paginated:
+              GET /api/spots?limit=10 returns raw JSON array.
+            · Wrapped shape on paginated=1:
+              {items, next_cursor, total_estimate, limit}.
+            · cursor=0→5→136 pages distinct, zero overlap,
+              overflow returns items=[] with next_cursor=null.
+
+          ── C. sort=distance ──
+            · GET /api/spots?sort=distance&lat=30.2672&lng=-97.7431&limit=10
+              returned 10 items monotonically ascending by distance_mi:
+              0.0, 0.27, 1.04, 1.32, 5.88, ...
+            · Every item carries distance_source="device_gps".
+            · Without lat/lng, degrades gracefully (distance_mi=null).
+
+          ── D. Other sort modes + filters preserved ──
+            · recent / quality / score / trending / golden_hour all 200.
+            · shoot_type / verified_recently / min_rating filters all 200.
+
+          ── E. NEW GET /api/spots/markers (FIXED route order) ──
+            · Route-order bug surfaced on first test pass — the new
+              handler was declared AFTER /spots/{spot_id}, so FastAPI
+              matched /spots/markers as spot_id="markers" and returned
+              404. Fix: moved the entire list_spot_markers function
+              + decorator to line ~310, BEFORE /spots/check-duplicates
+              (which is before /spots/{spot_id}). Documented the
+              ordering constraint in the function header comment.
+            · Basic shape: returns {items, count} with EXACTLY the
+              10 whitelisted fields per item — spot_id, title, lat,
+              lng, category, shoot_types, is_premium, is_hidden_gem,
+              score, thumb_url. NO description / images / comments /
+              owner blob (verified via projection).
+            · Bbox filter: 13/13 markers within [29..31, -99..-97]
+              when sw=(29,-99) ne=(31,-97).
+            · shoot_type filter parity with /api/spots.
+            · Auth matrix: unauth + admin both 200.
+
+          ── F. Regression smoke ──
+            · /api/spots/check-duplicates (which now sits AFTER /markers
+              in route order) still returns 200.
+            · /api/spots/{real_id} still 200, /api/spots/{nonexistent}
+              still 404 (markers route doesn't shadow it).
+            · /auth/me, /feed/home, /directory, /directory/facets,
+              /notifications all 200. Backend logs clean — no 500s.
+
+          Batch 1 launch-ready. Frontend wiring (Batch 2 + 3) is the
+          next step.
+
+
+
   - task: "Explore Speed CR — Batch 1 (June 2025): (1) New spot indexes + 2dsphere location backfill on startup; (2) GET /api/spots cursor pagination (paginated=1/cursor/limit wrapped response) + sort=distance with lat/lng; (3) NEW GET /api/spots/markers lightweight map-markers endpoint"
     implemented: true
     working: true
