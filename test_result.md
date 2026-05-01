@@ -14,7 +14,7 @@
 
   - task: "Explore Speed CR — Batch 2 (June 2025): frontend list optimizations. (1) Infinite scroll on Explore List view via cursor pagination — initial 24 + 12-per-page; (2) SkeletonSpotCard / SkeletonSpotList component for premium dark-mode loading state; (3) SWR cache via existing swrCache.ts keyed by filter signature + GPS bucket — instant hydration on tab return + background refresh; (4) SpotCard cover image now cascades thumb_url → card_url → image_url (smaller variant when backend has shipped one)."
     implemented: true
-    working: "NA"
+    working: false
     file: |
       /app/frontend/src/components/SkeletonSpotCard.tsx (NEW — animated shimmer, SkeletonSpotList wrapper with default 6 cards),
       /app/frontend/src/components/SpotCard.tsx (cover variant cascade thumb_url → card_url → image_url),
@@ -23,6 +23,76 @@
     priority: "high"
     needs_retesting: false
     status_history:
+        -working: false
+        -agent: "testing"
+        -comment: |
+          Explore Speed CR Batch 2 testing — BLOCKED by environment issue.
+          Tested on http://localhost:3000 (iPhone 12/13: 390x844 + Samsung
+          Galaxy S21: 360x800 viewports).
+
+          ── CRITICAL BLOCKER ──────────────────────────────────────────
+          The mobile app UI is NOT rendering at http://localhost:3000.
+          Instead, a web marketing landing page is served (HTML shows
+          `<nav id="ls-nav">` with "Home | Explore" links, "Welcome to
+          LumaScout" hero section). This is NOT the Expo mobile app
+          interface described in the code review.
+
+          ── Evidence ──────────────────────────────────────────────────
+          • URL http://localhost:3000/explore returns 200 but shows web
+            landing page, not the mobile Explore tab with List|Map toggle.
+          • No mobile app UI elements found:
+            - No [data-testid="explore-view-list"] toggle
+            - No [data-testid="explore-view-map"] toggle
+            - No [data-testid^="list-spot-"] cards
+            - No GPS trust strip
+            - No filter chips (All, Nearby, Wedding, etc.)
+          • Backend API is working correctly:
+            - 3 requests to /api/spots detected in network log
+            - Request 1: paginated=1&limit=24&cursor=0&sort=quality ✓
+            - Request 2-3: limit=200&sort=quality (legacy map view) ✓
+            - All requests returned 200 (no 4xx/5xx errors)
+          • Page HTML structure shows web nav: `<nav id="ls-nav">`,
+            `<a class="logo" href="/">`, `<div class="nav-links">`,
+            `<a data-tab="explore">Explore</a>` — this is a static
+            marketing site, not the React Native / Expo app.
+
+          ── Root Cause Hypothesis ───────────────────────────────────
+          The review request states "App URL: http://localhost:3000 (web
+          preview)" and expects to test the Expo mobile app via web
+          preview. However, the current localhost:3000 is serving a
+          different web application (likely a Next.js or static marketing
+          site) instead of the Expo web bundle.
+
+          Possible causes:
+          1. Expo dev server is not running on port 3000 (or is running
+             on a different port like 19006 / 8081).
+          2. Port 3000 is occupied by a separate web app (marketing site).
+          3. Expo web build is not configured / not started.
+          4. The "web preview" URL in the review request is incorrect.
+
+          ── What Cannot Be Tested ────────────────────────────────────
+          ALL Batch 2 test scenarios are blocked:
+          ✗ Explore initial load (skeleton → real cards)
+          ✗ Infinite scroll with cursor pagination
+          ✗ Filters + pagination
+          ✗ GPS distance sort
+          ✗ GPS fallback
+          ✗ Cache behavior (SWR)
+          ✗ Existing flows (spot detail, save, tab navigation)
+
+          The mobile app UI must be accessible at the test URL before
+          any frontend testing can proceed.
+
+          ── Action Required ──────────────────────────────────────────
+          Main agent must:
+          1. Verify Expo dev server is running and accessible.
+          2. Confirm the correct URL for the Expo web preview.
+          3. If Expo web is on a different port (e.g. 19006), update the
+             test URL or configure port forwarding.
+          4. Ensure `expo start --web` or equivalent is running and
+             serving the mobile app bundle (not a marketing site).
+
+          Once the mobile app UI is accessible, re-run this test suite.
         -working: "NA"
         -agent: "main"
         -comment: |
