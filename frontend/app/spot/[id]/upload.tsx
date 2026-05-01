@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Alert, ActivityIndicator, Pressable, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -48,7 +48,21 @@ export default function UploadScreen() {
       const urls = uploaded.map((u) => u.image_url);
       setPhotos((prev) => [...prev, ...urls].slice(0, 12));
     } catch (e: any) {
-      Alert.alert('Upload failed', e?.message || 'Could not upload one or more photos. Please try again.');
+      // Map upload-image.ts error categories to specific user-facing
+      // titles + bodies. The previous "Upload failed / Upload failed"
+      // duplicate alert is replaced with category-aware messaging that
+      // tells the user WHAT went wrong and HOW to fix it.
+      const name = e?.name || '';
+      const body = e?.message || 'Could not upload one or more photos. Please try again.';
+      let title = 'Photo upload issue';
+      if (name === 'TimeoutError') title = 'Upload timed out';
+      else if (name === 'NetworkError') title = 'No connection';
+      else if (name === 'AuthError') title = 'Session expired';
+      else if (name === 'PayloadTooLargeError') title = 'Photo too large';
+      else if (name === 'UnsupportedMediaError') title = 'Format not supported';
+      else if (name === 'RateLimitError') title = 'Slow down a moment';
+      else if (name === 'ServerError') title = 'Server hiccup';
+      Alert.alert(title, body);
     } finally {
       setUploading(false);
     }
@@ -64,26 +78,75 @@ export default function UploadScreen() {
 
   const removePhoto = (idx: number) => setPhotos((prev) => prev.filter((_, i) => i !== idx));
 
-  const canSubmit = photos.length > 0 && !submitting;
+  const canSubmit = photos.length > 0 && !submitting && !uploading;
+
+  // Tap-spam guard — multiple rapid Post-photos taps share a single
+  // in-flight POST so we never insert duplicate batches.
+  const submitInflightRef = useRef<Promise<any> | null>(null);
 
   const submit = async () => {
     if (!canSubmit) return;
+    if (submitInflightRef.current) {
+      try { await submitInflightRef.current; } catch {}
+      return;
+    }
     setSubmitting(true);
+    const promise = api.post(`/spots/${spotId}/uploads`, {
+      images: photos.map((u) => ({ image_url: u, caption: null })),
+      caption: caption.trim() || null,
+      condition_tags: tags,
+      visibility,
+    }, { timeout: 25000 });
+    submitInflightRef.current = promise;
     try {
-      const res = await api.post(`/spots/${spotId}/uploads`, {
-        images: photos.map((u) => ({ image_url: u, caption: null })),
-        caption: caption.trim() || null,
-        condition_tags: tags,
-        visibility,
-      });
+      const res = await promise;
+      // Invalidate Explore list cache so freshness ranking re-fetches
+      // on next visit (this spot just got fresh photos which may bump
+      // its score / position).
+      try {
+        const { invalidateCachePrefix } = await import('../../../src/utils/swrCache');
+        await invalidateCachePrefix('explore.list:v1');
+      } catch {}
       Alert.alert(
         res?.auto_approved ? 'Posted!' : 'Submitted for review',
         res?.message || 'Thanks for contributing — your photos help keep this spot alive.',
         [{ text: 'OK', onPress: () => router.back() }]
       );
     } catch (e: any) {
-      Alert.alert('Upload failed', e?.message || 'Please try again.');
+      // Categorize submission errors. Per spec, do NOT log the user
+      // out for upload timeout/failure/4xx/5xx — only confirmed 401/403
+      // (which the api.ts axios interceptor already owns) clears auth.
+      const status = Number(e?.response?.status || e?.status || 0);
+      const isTimeout = e?.code === 'ECONNABORTED' || /timeout/i.test(e?.message || '');
+      let title = 'Couldn\'t post photos';
+      let body = e?.response?.data?.detail || e?.message || 'Please try again.';
+      if (isTimeout) {
+        title = 'Taking longer than usual';
+        body = 'Photo post timed out. Please try again.';
+      } else if (status === 401 || status === 403) {
+        title = 'Session expired';
+        body = 'Please log in again to post photos.';
+      } else if (status === 404) {
+        title = 'Spot no longer available';
+        body = 'This location has been removed and can\'t accept new photos.';
+      } else if (status === 410) {
+        title = 'Spot deleted';
+        body = 'This location no longer exists.';
+      } else if (status === 413) {
+        title = 'Too many or too large';
+        body = 'Try fewer photos or smaller images.';
+      } else if (status >= 500) {
+        title = 'Server hiccup';
+        body = 'Something on our end is being slow. Tap Post again — it usually works.';
+      }
+      // Structured client log for production grep.
+      try {
+        // eslint-disable-next-line no-console
+        console.warn('[spot-upload]', { status, name: e?.name, message: e?.message });
+      } catch {}
+      Alert.alert(title, body);
     } finally {
+      submitInflightRef.current = null;
       setSubmitting(false);
     }
   };

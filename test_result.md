@@ -13182,6 +13182,99 @@ agent_communication:
           Test harness preserved at /app/backend_test.py for future
           smoke runs.
 
+backend:
+  - task: "HEIC upload fix — register pillow_heif at import time + structured logging on POST /api/uploads/image"
+    implemented: true
+    working: true
+    file: "/app/backend/routes/uploads.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          HEIC upload fix RE-TESTED — 15/15 assertions GREEN via
+          /app/backend_test.py against
+          https://photo-finder-60.preview.emergentagent.com/api.
+          Super_admin: admin@lumascout.app / Grayson@1117!!.
+
+          ── 0. pillow-heif registration ──
+            · pillow_heif 1.3.0 importable; register_heif_opener()
+              registers '.heic' -> 'HEIF' in Pillow.
+
+          ── 1. JPEG upload still works ──
+            · POST /api/uploads/image with image/jpeg multipart returns
+              200 with exact shape {image_url, width, height, bytes,
+              mime}. mime echoes 'image/jpeg', URL prefixed with
+              /api/uploads/.
+
+          ── 2. HEIC upload (KEY TEST) ──
+            · Synthesized 100x100 HEIC via pillow_heif.from_pillow + 
+              format='HEIF', POSTed with content_type 'image/heic'.
+            · Server returned 200 with mime='image/jpeg' (transcoded),
+              dims preserved at 100x100, file written under
+              /api/uploads/YYYY/MM/<uuid>.jpg. The previous generic
+              415 on iPhone HEIC uploads is FIXED.
+
+          ── 3. Error categorization ──
+            · Empty body → 400 "Empty upload — the photo data
+              didn't make it. Please try selecting it again."
+            · 11MB body → 413 "This photo is too large (11 MB).
+              Max 10 MB — please choose a smaller image or
+              compress it first."
+            · Text bytes with content_type=image/png → 415
+              "This file doesn't look like a supported image.
+              Please pick a JPEG, PNG, WEBP, or HEIC photo."
+            · Unauthenticated → 401.
+
+          ── 4. Structured logging ──
+            · Tail of /var/log/supervisor/backend.out.log after a
+              successful upload shows both `upload_image.start`
+              and `upload_image.ok` lines from logger
+              `lumascout.uploads`. The .ok line includes ALL of:
+              user_id, filename, in_bytes, in_mime, out_bytes,
+              out_dim, url, elapsed_ms.
+
+          ── 5. Community upload ──
+            · POST /api/spots/{real_spot_id}/uploads with
+              {images:[{image_url:<from step 1>}], caption:'Test
+              upload', condition_tags:['verified_today'],
+              visibility:'public'} → 200 with full shape
+              {ok, batch_id, moderation_status='approved',
+               auto_approved=true, count=1, message}.
+            · Verified row landed in db.spot_community_uploads via
+              GET /api/spots/{id}/uploads?limit=24 — exactly 1
+              item with matching batch_id surfaces.
+
+          ── 6. Regression smoke ──
+            · GET /auth/me, /feed/home, /spots?paginated=1&limit=10,
+              /spots/markers?limit=20 all 200.
+
+          Backend logs clean — no 500s during the run. The HEIC
+          upload pipeline is launch-ready. Test harness preserved
+          at /app/backend_test.py.
+
+metadata:
+  last_test_sequence: 15
+
+agent_communication:
+    -agent: "testing"
+    -message: |
+      HEIC upload fix verified — 15/15 backend assertions GREEN.
+      Key checks: (a) pillow_heif 1.3.0 registers .heic→HEIF in Pillow,
+      (b) HEIC POST to /api/uploads/image returns 200 with
+      mime=image/jpeg (server transcodes), (c) JPEG path unchanged,
+      (d) error categorization friendly (400 empty / 413 too large /
+      415 wrong format / 401 unauth), (e) structured logging
+      `upload_image.start` + `upload_image.ok` from logger
+      `lumascout.uploads` with all fields (user_id, filename,
+      in_bytes, in_mime, out_bytes, out_dim, url, elapsed_ms),
+      (f) /spots/{id}/uploads accepts the returned image_url and
+      writes a row to db.spot_community_uploads, (g) regression smoke
+      on /auth/me, /feed/home, /spots paginated, /spots/markers all
+      200. No 500s in backend logs. Harness at /app/backend_test.py.
+
 agent_communication:
     -agent: "testing"
     -message: |
