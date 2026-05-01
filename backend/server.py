@@ -5950,6 +5950,56 @@ async def on_startup():
     await db.users.create_index("user_id", unique=True)
     await db.spots.create_index("spot_id", unique=True)
     await db.spots.create_index("owner_user_id")
+    # ─────────────────────────────────────────────────────────────
+    # Explore Speed CR — Batch 1 (June 2025)
+    # Hot-path indexes for /api/spots and /api/spots/markers.
+    # All are idempotent; create_index is a no-op if the index already
+    # exists with the same key spec.
+    # ─────────────────────────────────────────────────────────────
+    await db.spots.create_index([("latitude", 1), ("longitude", 1)])
+    await db.spots.create_index([("created_at", -1)])
+    await db.spots.create_index("category")
+    await db.spots.create_index("visibility_status")
+    await db.spots.create_index("privacy_mode")
+    await db.spots.create_index("is_test_data")
+    await db.spots.create_index("is_premium")
+    await db.spots.create_index("is_hidden_gem")
+    await db.spots.create_index("city")
+    await db.spots.create_index([("shoot_score", -1)])
+    await db.spots.create_index([("quality_score", -1)])
+    # 2dsphere index on a GeoJSON `location` field. We back-fill missing
+    # `location` documents with a one-shot migration below so the index
+    # is immediately usable for /spots/markers $geoWithin queries on
+    # legacy data. New uploads should populate `location` on insert.
+    try:
+        # Back-fill `location` for spots that have lat/lng but no
+        # GeoJSON shape yet. Tiny payload + idempotent ($exists=False).
+        await db.spots.update_many(
+            {
+                "latitude": {"$type": "number"},
+                "longitude": {"$type": "number"},
+                "location": {"$exists": False},
+            },
+            [
+                {
+                    "$set": {
+                        "location": {
+                            "type": "Point",
+                            "coordinates": ["$longitude", "$latitude"],
+                        }
+                    }
+                }
+            ],
+        )
+    except Exception:
+        # Mongo < 4.2 doesn't support pipeline updates; non-fatal.
+        pass
+    try:
+        await db.spots.create_index([("location", "2dsphere")])
+    except Exception:
+        # If a doc somewhere has a malformed location, skip — the
+        # compound (lat, lng) index still backs bbox queries.
+        pass
     await db.spot_saves.create_index([("user_id", 1), ("spot_id", 1)], unique=True)
     await db.follows.create_index([("follower_user_id", 1), ("followed_user_id", 1)], unique=True)
     await db.audit_logs.create_index("created_at")
