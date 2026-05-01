@@ -14,11 +14,11 @@
 
   - task: "Explore Speed CR — Batch 1 (June 2025): (1) New spot indexes + 2dsphere location backfill on startup; (2) GET /api/spots cursor pagination (paginated=1/cursor/limit wrapped response) + sort=distance with lat/lng; (3) NEW GET /api/spots/markers lightweight map-markers endpoint"
     implemented: true
-    working: false
+    working: true
     file: |
       /app/backend/server.py (L5949-6002 — new indexes + 2dsphere backfill migration in startup_event),
-      /app/backend/routes/spots.py (L596-819 list_spots cursor/paginated/sort=distance, L830-914 NEW list_spot_markers endpoint)
-    stuck_count: 1
+      /app/backend/routes/spots.py (L322-402 list_spot_markers — moved BEFORE /spots/{spot_id}, L692-915 list_spots cursor/paginated/sort=distance)
+    stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
@@ -160,6 +160,93 @@
           Test harness at /app/backend_test.py. Re-run after the
           reorder fix to re-validate markers basic shape, bbox,
           shoot_type filter, and payload-size comparison.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          RETEST after route-order fix — FULL PASS 25/25 assertions
+          green via /app/backend_test.py against
+          https://photo-finder-60.preview.emergentagent.com/api.
+          Super_admin: admin@lumascout.app / Grayson@1117!!
+          (user_6daa7d0a3abc, plan=elite). Backend last reloaded at
+          18:09:38 after route reorder; logs clean (no 500s).
+
+          Confirmed `/api/spots/markers` is now declared at
+          routes/spots.py:322 — BEFORE `/api/spots/{spot_id}` at
+          line 531 — so FastAPI matches /markers before falling
+          through to the parameterised route.
+
+          ── SECTION 1: Basic shape (6/6 PASS) ──────────────────
+            · GET /api/spots/markers?limit=20 → 200 (no longer 404).
+            · Response body = {items: [...], count: 20}.
+            · Each item has EXACTLY the 10 allowed fields:
+              {spot_id, title, lat, lng, category, shoot_types,
+               is_premium, is_hidden_gem, score, thumb_url}.
+              No extras, no missing.
+            · NO description / images / comments / owner / reviews
+              keys present in any item — payload is the lightweight
+              shape spec'd.
+            · All 20 items have numeric lat/lng (int or float).
+
+          ── SECTION 2: Bbox filter (3/3 PASS) ──────────────────
+            · GET /api/spots/markers?sw_lat=29&sw_lng=-99&ne_lat=31&
+              ne_lng=-97&limit=200 → 200 with 13 markers.
+            · ALL 13 markers satisfy lat ∈ [29,31] AND
+              lng ∈ [-99,-97]. Server-side $gte/$lte query at
+              routes/spots.py:355-356 working as designed.
+
+          ── SECTION 3: Shoot-type filter (3/3 PASS) ────────────
+            · GET /api/spots/markers?shoot_type=wedding&limit=50
+              → 200 with 0 markers.
+            · Parity check: GET /api/spots?shoot_type=wedding
+              also returns 0 items, confirming the DB simply has
+              zero approved wedding-tagged public spots — the
+              filter itself is wired correctly. shoot_types=$value
+              query at routes/spots.py:348 fires regardless.
+
+          ── SECTION 4: Auth matrix (2/2 PASS) ──────────────────
+            · Unauth GET /api/spots/markers?limit=5 → 200 (count=5).
+            · Admin GET /api/spots/markers?limit=5 → 200 (count=5).
+            · `viewer: Optional[dict] = Depends(get_optional_user)`
+              works for both states.
+
+          ── SECTION 5-9: Regression smoke (11/11 PASS) ─────────
+            · /api/spots?paginated=1&limit=5&cursor=0 → 200 with
+              wrapped {items:[5], next_cursor:5, total_estimate:36,
+              limit:5}. Exact 4-key shape preserved.
+            · /api/spots?sort=distance&lat=30.2672&lng=-97.7431&
+              limit=10 → 200, 10 items, distance_mi monotonically
+              non-decreasing across all 10 items
+              (sample: 0.0, 0.27, 1.04, 1.32, 5.88).
+            · /api/spots/check-duplicates?latitude=30.2672&
+              longitude=-97.7431 → 200 with {count:1, candidates:[1]}.
+              Route still reachable (it sits 9 lines after the
+              relocated /markers handler).
+            · /api/spots/{real_id} for spot_6829d0a67f60
+              ("Bluebonnet Fields at Muleshoe Bend") → 200; full
+              detail payload returned. Route is NOT being eaten by
+              /markers.
+            · /api/spots/spot_definitely_not_real_xyz → 404 with
+              "Spot not found" — correct behaviour (proves the
+              parameterised route is still firing for unmatched
+              IDs but no longer swallowing 'markers').
+            · /api/auth/me (admin Bearer) → 200, user_id correct.
+            · /api/feed/home (admin Bearer) → 200.
+
+          ── BACKEND LOG CHECK ─────────────────────────────────
+          /var/log/supervisor/backend.out.log shows the test run's
+          /api/spots/markers calls all returning 200 OK now (vs
+          the prior run's "404 Not Found"). No 500s anywhere in
+          the trace. Application startup line at 18:09:39 is the
+          last reload; no exceptions since.
+
+          ── VERDICT ───────────────────────────────────────────
+          Route-order fix is CORRECT and COMPLETE. All 4 markers
+          test scenarios from the original failing run now pass.
+          All previously-passing regression tests continue to
+          pass (no regressions introduced by the reorder).
+          Explore Speed CR Batch 1 is launch-ready.
+
+          Test harness preserved at /app/backend_test.py.
 
 
 
