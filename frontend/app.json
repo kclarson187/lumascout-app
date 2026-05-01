@@ -88,9 +88,11 @@
       "typedRoutes": false
     },
     "extra": {
-      "router": {},
+      "router": {
+        "origin": "https://lumascout.app"
+      },
       "eas": {
-        "projectId": "9f304683-9099-4c6f-b1fc-96ab03125848"
+        "projectId": "343f8686-eae5-481d-b558-8370c82e4fef"
       },
       "privacyPolicyUrl": "https://lumascout.app/privacy"
     },
