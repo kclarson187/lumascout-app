@@ -12,7 +12,14 @@ PRESERVED SEMANTICS — no behaviour change, no path change.
 """
 from __future__ import annotations
 
+import logging as _logging
 import uuid
+
+# Batch #7 — graceful fallback wrapper. Used on `POST /referrals` so a
+# single unhandled validator / DB hiccup doesn't surface as a raw 500
+# to the creator composer UI.
+from common.graceful import graceful as _graceful
+_ref_logger = _logging.getLogger("referrals.create")
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -136,6 +143,12 @@ async def _shape_need(need: dict, viewer: Optional[dict] = None) -> dict:
 
 # --- create_referral_need (server.py:6756-6825) ---
 @router.post("/referrals")
+@_graceful(
+    fallback={"ok": False, "error": "We couldn't create your referral right now. Please try again.",
+              "degraded": True, "need_id": None},
+    label="/referrals",
+    logger=_ref_logger,
+)
 async def create_referral_need(
     body: ReferralCreateIn, user: dict = Depends(get_current_user),
 ):

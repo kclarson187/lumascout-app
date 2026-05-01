@@ -68,6 +68,37 @@ from server import (
     VALID_STATUSES,
 )
 
+# Batch #7 \u2014 graceful fallback helper for dashboards (admin/overview,
+# admin/analytics). Any unhandled aggregation crash returns a
+# shape-compatible empty payload instead of a raw 500, with the full
+# traceback captured in the server log for triage.
+import logging as _logging
+from common.graceful import graceful, safe_shape
+_admin_logger = _logging.getLogger("admin.dashboards")
+
+# Batch #7 fallbacks — shape-compatible with the success payloads so the
+# admin dashboard renders empty cards instead of an error screen if any
+# aggregation blows up. Always preserve top-level keys the frontend reads.
+_OVERVIEW_FALLBACK = {
+    "users": {"total": 0, "new_today": 0, "active_7d": 0, "suspended": 0,
+              "by_plan": {"free": 0, "pro": 0, "elite": 0}},
+    "moderation": {"pending_spots": 0, "pending_reports": 0, "pending_photos": 0},
+    "top_contributors": [],
+    "top_cities": [],
+    "revenue": {"monthly_estimate_usd": 0, "note": "Unavailable — dashboard degraded"},
+    "generated_at": None,
+    "degraded": True,
+}
+_ANALYTICS_FALLBACK = {
+    "days": 30,
+    "series": [],
+    "totals": {"signups": 0, "spots": 0, "approvals": 0, "rejections": 0},
+    "most_saved": [],
+    "top_cities": [],
+    "top_contributors": [],
+    "degraded": True,
+}
+
 router = APIRouter(prefix="/api", tags=["admin"])
 
 
@@ -1278,6 +1309,8 @@ async def admin_resolve_report(report_id: str, body: ReportResolveIn, user: dict
 
 # --- admin_overview (server.py:5847-5918) ---
 @router.get("/admin/overview")
+@graceful(fallback=lambda: {**_OVERVIEW_FALLBACK, "generated_at": utcnow().isoformat()},
+          label="/admin/overview", logger=_admin_logger)
 async def admin_overview(user: dict = Depends(require_role("moderator"))):
     """Top-level metrics for the admin dashboard home."""
     now = utcnow()
@@ -1617,6 +1650,8 @@ async def admin_audit_logs(
 
 # --- admin_analytics (server.py:6196-6303) ---
 @router.get("/admin/analytics")
+@graceful(fallback=lambda: {**_ANALYTICS_FALLBACK},
+          label="/admin/analytics", logger=_admin_logger)
 async def admin_analytics(days: int = 30, me: dict = Depends(require_role("moderator"))):
     days = max(1, min(90, days))
     now = utcnow()

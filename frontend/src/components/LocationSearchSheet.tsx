@@ -41,26 +41,43 @@ export default function LocationSearchSheet({
   const [results, setResults] = useState<PlaceResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [debouncing, setDebouncing] = useState(false);
+  // Batch #7 — surface graceful-fallback + timeout state to the user so a
+  // geocoder hiccup doesn't leave the sheet looking broken. If the backend
+  // returns `{degraded:true}` (see /api/geocode/search graceful wrapper)
+  // OR we never get a response, we drop into a "temporarily unavailable"
+  // state that still lets the user drop a pin manually.
+  const [degraded, setDegraded] = useState(false);
   const timer = useRef<any>(null);
 
   useEffect(() => {
     if (!visible) {
-      setQ(''); setResults([]); setLoading(false);
+      setQ(''); setResults([]); setLoading(false); setDegraded(false);
     }
   }, [visible]);
 
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current);
     if (!q || q.trim().length < 2) {
-      setResults([]); setDebouncing(false); return;
+      setResults([]); setDebouncing(false); setDegraded(false); return;
     }
     setDebouncing(true);
     timer.current = setTimeout(async () => {
-      setLoading(true); setDebouncing(false);
+      setLoading(true); setDebouncing(false); setDegraded(false);
       try {
         const r = await api.get('/geocode/search', { q: q.trim(), limit: 8 });
-        setResults(r?.results || []);
-      } catch { setResults([]); }
+        if (r?.degraded === true) {
+          setDegraded(true);
+          setResults([]);
+        } else {
+          setResults(r?.results || []);
+        }
+      } catch {
+        // Any network-level failure (timeout, offline, 5xx before the
+        // graceful wrapper fires) collapses into the same "unavailable"
+        // state so the user sees consistent copy instead of a blank list.
+        setDegraded(true);
+        setResults([]);
+      }
       finally { setLoading(false); }
     }, 350);
     return () => { if (timer.current) clearTimeout(timer.current); };
@@ -92,7 +109,7 @@ export default function LocationSearchSheet({
           {(loading || debouncing) && <ActivityIndicator size="small" color={colors.primary} />}
         </View>
 
-        {q.trim().length >= 2 && !loading && results.length === 0 && !debouncing && (
+        {q.trim().length >= 2 && !loading && results.length === 0 && !debouncing && !degraded && (
           <View style={styles.emptyWrap}>
             <Text style={styles.emptyTitle}>No results found</Text>
             <Text style={styles.emptyBody}>Try a different name or create the location manually.</Text>
@@ -100,6 +117,29 @@ export default function LocationSearchSheet({
               <TouchableOpacity style={styles.manualBtn} onPress={() => { onClose(); onManualEntry(); }} testID="place-search-manual">
                 <Plus size={14} color={colors.textInverse} />
                 <Text style={styles.manualBtnTxt}>Create custom location manually</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+
+        {/* Batch #7 — degraded-geocoder banner. Takes priority over the
+            empty-state UI so the user sees "this is us, not your query"
+            copy and still has a clean path to drop a pin manually. */}
+        {degraded && !loading && !debouncing && (
+          <View style={styles.emptyWrap} testID="place-search-degraded">
+            <Text style={styles.emptyTitle}>Location search is temporarily unavailable</Text>
+            <Text style={styles.emptyBody}>
+              You can still drop a pin manually — everything else about your spot
+              will save normally.
+            </Text>
+            {onManualEntry && (
+              <TouchableOpacity
+                style={styles.manualBtn}
+                onPress={() => { onClose(); onManualEntry(); }}
+                testID="place-search-manual-degraded"
+              >
+                <Plus size={14} color={colors.textInverse} />
+                <Text style={styles.manualBtnTxt}>Drop a pin manually</Text>
               </TouchableOpacity>
             )}
           </View>

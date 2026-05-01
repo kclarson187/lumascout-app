@@ -8,6 +8,10 @@ import os
 import uuid
 import math
 import logging
+# Batch #7 — graceful fallback wrapper. See /app/backend/common/graceful.py
+# for docs. Used to keep high-traffic endpoints from returning raw 500s on
+# aggregation failures / flaky third-party sub-calls.
+from common.graceful import graceful
 import asyncio
 import time
 import bcrypt
@@ -1183,6 +1187,12 @@ async def google_session(body: GoogleSessionIn):
 
 
 @api.get("/feed/home")
+@graceful(
+    fallback={"hero": [], "nearby": [], "golden": [], "seasonal": [],
+              "new": [], "trending": [], "featured": [], "degraded": True},
+    label="/feed/home",
+    logger=logging.getLogger("feed.home"),
+)
 async def home_feed(
     lat: Optional[float] = None,
     lng: Optional[float] = None,
@@ -2704,6 +2714,16 @@ GEOCODE_REVERSE_PROVIDERS: list = [
 
 
 @api.get("/geocode/search")
+@graceful(
+    fallback=lambda: {
+        "query": "",
+        "results": [],
+        "error": "Location search is temporarily unavailable. Please try again or drop a pin manually.",
+        "degraded": True,
+    },
+    label="/geocode/search",
+    logger=logging.getLogger("geocode.search"),
+)
 async def geocode_search(
     q: str,
     limit: int = 8,
