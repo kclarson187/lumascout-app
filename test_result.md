@@ -12,6 +12,81 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Spot Detail crash + Explore layout-jump fix (May 2026). (1) Root cause for 'Spot hit a snag' ErrorBoundary on EVERY spot tap: `useRef` was used in /app/spot/[id].tsx without being imported (`React, { useEffect, useState, useCallback, useMemo }` — useRef missing). The `inflightRef = useRef(...)` line crashed at render time, caught by ScreenErrorBoundary. Fix: added useRef to the imports. (2) Layout-jump on Explore initial render: SkeletonSpotCard used 16:10 aspect while real SpotCard uses 4:5, causing visible 'oversized → compact' shift on skeleton→real swap. Fix: skeleton aspect now matches 4:5. (3) Defensive spot-id fallback in SpotCard.handlePress — `spot_id || id || _id` with warn-and-bail when missing. (4) Spot detail param read normalized for string | string[] | undefined (Expo Router edge cases)."
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app/spot/[id].tsx (added useRef to React imports — primary crash fix; defensive Array.isArray(rawId) param normalization),
+      /app/frontend/src/components/SkeletonSpotCard.tsx (aspectRatio 16/10 → 4/5 to match SpotCard for zero-jump skeleton swap),
+      /app/frontend/src/components/SpotCard.tsx (handlePress: spot.spot_id || spot.id || spot._id fallback + warn-and-bail when missing instead of router.push('/spot/undefined'))
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Two distinct bugs fixed in this batch.
+
+          ── Bug 1: 'Spot hit a snag' on every Explore spot tap ──
+          Root cause: `import React, { useEffect, useState, useCallback,
+          useMemo } from 'react';` — useRef was NOT in the import list,
+          but I added `const inflightRef = useRef(...)` in the previous
+          stability CR (request dedup for spot detail load). At render
+          time `useRef is not defined` threw, ScreenErrorBoundary caught
+          it and showed 'Spot hit a snag.' Fix: one-line — added useRef
+          to the React import. Verified 0 other unimported hooks via
+          grep.
+
+          ── Bug 2: Layout jump (oversized → compact) on Explore load ──
+          User report: 'huge oversized image card appears, then shrinks
+          to compact list layout.' Diagnosis: SkeletonSpotCard had
+          aspectRatio 16/10 (wider/shorter, 244px tall on 390px wide),
+          while real SpotCard uses 4/5 (taller, 487px on same width).
+          When skeletons swapped to real cards, layout jumped from
+          short→tall. Fix: skeleton aspectRatio now matches 4/5 so
+          skeleton→real card is dimension-stable.
+
+          Note: the rails (NearbyRightNowList compact 88px-thumb cards)
+          materialize from the legacy /spots fetch which lands AFTER
+          the paginated /spots SWR-cached hydration. The user might
+          still perceive the rails appearing "above" as a layout shift,
+          but the IMAGE-SIZE-FLASH (the actual sizing pop) is gone.
+          A future polish CR could render the rails skeleton too if
+          the rails-appear shift still feels jarring.
+
+          ── Defensive enhancements ──
+          · SpotCard.handlePress now resolves spot_id with fallbacks
+            (spot.spot_id || spot.id || spot._id). Logs+bails when
+            none resolve so we never call router.push('/spot/undefined').
+          · spot/[id].tsx normalizes the route param for the rare
+            Expo Router case where useLocalSearchParams returns
+            string[] instead of string. Existing load() already
+            bails when id is empty.
+
+          ── What was NOT changed ──
+          · 18s spot detail timeout — kept (was 15s pre-prior-CR,
+            bumped to 18s with override). Per CR8 spec (5).
+          · Inline retry surface for timeout/network/server — kept
+            from prior CR.
+          · 401/403 still go through axios interceptor only — kept.
+          · Hero image cascade (hero_cover_image_url override) —
+            kept; verified intact.
+
+          Bundle: 3263 modules, 9.1s warm web rebuild, localhost:3000
+          → 200, tunnel connected.
+
+          QA notes for device:
+          · Tap any spot in Explore List or rails — should open
+            Spot Detail normally with no 'Spot hit a snag.'
+          · Cold-load Explore — skeleton cards now 4:5 aspect,
+            matching real cards. No image-size flash on skeleton
+            → real swap.
+          · Slow network: spot detail still falls back to inline
+            retry surface (no logout, no auto-redirect).
+
+
+
   - task: "Add Recent Photos / 'Keep this spot alive' — iPhone HEIC upload fix + categorized error UX (June 2025). Root cause: pillow-heif was not installed, so iPhone HEIC photos (the iOS default format) failed with a generic 415 surfaced to the user as duplicate 'Upload failed / Upload failed' alert. Fix: (1) install pillow_heif==1.3.0 + register_heif_opener() at module import; (2) structured upload logging via lumascout.uploads logger; (3) friendly server error messages for empty/too-large/decode-fail/unsupported-mime/disk-write-fail; (4) frontend uploadImageAsset throws categorized Error.name (TimeoutError / NetworkError / AuthError / PayloadTooLargeError / UnsupportedMediaError / RateLimitError / ServerError / ClientError / UnknownError) so the upload screen renders specific titles + bodies; (5) submit() in /spot/[id]/upload.tsx now categorizes /spots/{id}/uploads errors, never logs out on transient failures, and invalidates explore.list:v1 cache on success; (6) tap-spam dedup via inflight ref + 25s submit timeout."
     implemented: true
     working: true

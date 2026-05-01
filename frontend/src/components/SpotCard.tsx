@@ -104,7 +104,20 @@ function SpotCardImpl({
 
   const handlePress = () => {
     if (onPress) return onPress();
-    router.push(`/spot/${spot.spot_id}`);
+    // May 2026 stability fix — normalize spot ID with fallbacks so a
+    // server response that ever shipped with `id` or `_id` instead of
+    // `spot_id` (e.g. paginated wrapper, legacy endpoint, cached
+    // payloads) still navigates correctly. We log + bail when nothing
+    // resolves so we never call router.push('/spot/undefined').
+    const sid = spot?.spot_id || spot?.id || spot?._id;
+    if (!sid) {
+      try {
+        // eslint-disable-next-line no-console
+        console.warn('[SpotCard] press w/o id', { keys: spot && Object.keys(spot) });
+      } catch {}
+      return;
+    }
+    router.push(`/spot/${sid}`);
   };
 
   const handleLongPress = () => {

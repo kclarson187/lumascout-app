@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';import {
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';import {
   View,
   Text,
   StyleSheet,
@@ -63,7 +63,13 @@ function SpotDetailImpl() {
   const params = useLocalSearchParams<{ id: string }>();
   // Batch #8 — hero carousel opens a pinch-zoom lightbox on tap.
   const { open: openLightbox, Lightbox } = useLightbox();
-  const id = String(params.id || '');
+  // May 2026 stability fix — defensively read the id param. Expo Router
+  // can return string | string[] | undefined depending on the route
+  // definition. We coerce to a single string and trim. If empty, the
+  // load() bail-out below shows the inline error state instead of
+  // firing an undefined-id fetch.
+  const rawId = (params as any)?.id;
+  const id = String(Array.isArray(rawId) ? rawId[0] || '' : rawId || '').trim();
   const { user } = useAuth();
   const isAdminUser = user?.role === 'admin' || user?.role === 'super_admin';
   const [spot, setSpot] = useState<any | null>(null);
