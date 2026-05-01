@@ -8,13 +8,15 @@
     "scheme": "lumascout",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
+    "runtimeVersion": "1.0.0",
+    "updates": {
+      "enabled": false,
+      "fallbackToCacheTimeout": 0
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.lumascout.app",
       "buildNumber": "1",
-      "associatedDomains": [
-        "applinks:lumascout.app"
-      ],
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Show nearby photoshoot spots and save locations.",
         "NSPhotoLibraryUsageDescription": "Upload photos for your photoshoot spots.",
@@ -40,43 +42,6 @@
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.CAMERA",
         "android.permission.POST_NOTIFICATIONS"
-      ],
-      "intentFilters": [
-        {
-          "action": "VIEW",
-          "autoVerify": true,
-          "data": [
-            {
-              "scheme": "https",
-              "host": "lumascout.app",
-              "pathPrefix": "/spot"
-            },
-            {
-              "scheme": "https",
-              "host": "lumascout.app",
-              "pathPrefix": "/user"
-            },
-            {
-              "scheme": "https",
-              "host": "lumascout.app",
-              "pathPrefix": "/collection"
-            },
-            {
-              "scheme": "https",
-              "host": "lumascout.app",
-              "pathPrefix": "/community"
-            },
-            {
-              "scheme": "https",
-              "host": "lumascout.app",
-              "pathPrefix": "/marketplace"
-            }
-          ],
-          "category": [
-            "BROWSABLE",
-            "DEFAULT"
-          ]
-        }
       ]
     },
     "web": {
