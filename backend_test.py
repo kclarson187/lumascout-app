@@ -1,389 +1,417 @@
-"""
-Batch #6 "Trust Foundation" — focused backend verification.
+"""Batch #9A — Backend DM read-receipts tier gating regression test.
 
-Tests (per review request):
-  1. POST /api/auth/forgot-password — security hardening (P0-1)
-  2. POST /api/reports — consolidated reporting (P0-3)
-  3. Marketplace seller feature flag (P0-5)
-  4. Backwards-compatibility smoke
+Tests the dm_get_thread (GET /api/dm/threads/{thread_id}) endpoint to verify
+that read-receipt information is gated by the viewer's subscription tier.
 
-Target: http://localhost:8001/api
-Admin:  admin@lumascout.app / Grayson@1117!!
+Run:  python /app/backend_test.py
 """
 from __future__ import annotations
 
-import json
+import os
 import sys
 import time
 import uuid
-from typing import Any, Dict, List, Tuple
+import json
+import asyncio
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+from motor.motor_asyncio import AsyncIOMotorClient
 
-API = "http://localhost:8001/api"
+# ---- Config ----
+BACKEND_URL = os.environ.get(
+    "BACKEND_URL",
+    "https://photo-finder-60.preview.emergentagent.com",
+).rstrip("/")
+API = f"{BACKEND_URL}/api"
+
 ADMIN_EMAIL = "admin@lumascout.app"
 ADMIN_PASSWORD = "Grayson@1117!!"
 
-# Simple pass/fail tracker
-RESULTS: List[Tuple[str, str, bool, str]] = []  # (section, name, ok, detail)
+MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+DB_NAME = os.environ.get("DB_NAME", "photoscout_database")
+
+# ---- helpers ----
+PASSED: List[str] = []
+FAILED: List[str] = []
 
 
-def record(section: str, name: str, ok: bool, detail: str = "") -> None:
-    RESULTS.append((section, name, ok, detail))
-    status = "PASS" if ok else "FAIL"
-    print(f"[{status}] {section} :: {name}  {('| ' + detail) if detail else ''}")
+def check(cond: bool, label: str, detail: str = "") -> bool:
+    if cond:
+        PASSED.append(label)
+        print(f"  ✅ {label}")
+    else:
+        FAILED.append(f"{label} :: {detail}")
+        print(f"  ❌ {label}  {detail}")
+    return cond
 
 
-def login(email: str, password: str) -> Tuple[str, Dict[str, Any]]:
-    r = requests.post(f"{API}/auth/login", json={"email": email, "password": password}, timeout=15)
+def section(title: str) -> None:
+    print(f"\n{'='*72}\n{title}\n{'='*72}")
+
+
+def login(email: str, password: str) -> Tuple[str, dict]:
+    r = requests.post(
+        f"{API}/auth/login",
+        json={"email": email, "password": password},
+        timeout=15,
+    )
     r.raise_for_status()
-    data = r.json()
-    return data["token"], data["user"]
+    body = r.json()
+    return body["token"], body["user"]
 
 
-def register_user() -> Tuple[str, str]:
-    """Create a fresh free user and return (token, user_id)."""
-    sfx = uuid.uuid4().hex[:8]
-    email = f"b6qa_{sfx}@lumascout-qa.com"
-    password = "QaPass!1234"
-    payload = {
-        "email": email,
-        "password": password,
-        "name": f"B6 QA {sfx}",
-        "username": f"b6qa_{sfx}",
-    }
-    r = requests.post(f"{API}/auth/register", json=payload, timeout=15)
-    if r.status_code >= 400:
+def register_free_user(email: str, password: str, name: str) -> Tuple[str, dict]:
+    r = requests.post(
+        f"{API}/auth/register",
+        json={"email": email, "password": password, "name": name},
+        timeout=15,
+    )
+    if r.status_code != 200:
         raise RuntimeError(f"register failed: {r.status_code} {r.text}")
-    data = r.json()
-    return data["token"], data["user"]["user_id"]
+    body = r.json()
+    return body["token"], body["user"]
 
 
-# ============================================================================
-# SECTION 1 — POST /api/auth/forgot-password security hardening
-# ============================================================================
-def test_forgot_password() -> None:
-    section = "1.forgot-password"
-    forbidden_fields = ("dev_mode", "reset_token", "reset_link", "expires_at")
-
-    def _check_shape(label: str, resp: requests.Response) -> Dict[str, Any] | None:
-        record(section, f"{label}:status==200", resp.status_code == 200,
-               f"got {resp.status_code}, body={resp.text[:200]}")
-        try:
-            body = resp.json()
-        except Exception as e:
-            record(section, f"{label}:json_parseable", False, f"err={e}")
-            return None
-        record(section, f"{label}:ok==true", body.get("ok") is True,
-               f"ok={body.get('ok')}")
-        record(section, f"{label}:has_message", isinstance(body.get("message"), str) and len(body["message"]) > 0,
-               f"message={body.get('message')!r}")
-        leaks = [k for k in forbidden_fields if k in body]
-        record(section, f"{label}:no_leaked_fields", len(leaks) == 0,
-               f"leaked={leaks}; body_keys={list(body.keys())}")
-        return body
-
-    # 1a. Valid registered email (admin)
-    r = requests.post(f"{API}/auth/forgot-password",
-                      json={"email": ADMIN_EMAIL}, timeout=15)
-    body_valid = _check_shape("valid_email", r)
-
-    # 1b. Unknown email
-    r = requests.post(f"{API}/auth/forgot-password",
-                      json={"email": f"nobody_{uuid.uuid4().hex[:8]}@lumascout-qa.com"},
-                      timeout=15)
-    body_unknown = _check_shape("unknown_email", r)
-
-    # 1c. Malformed email
-    r = requests.post(f"{API}/auth/forgot-password",
-                      json={"email": "not-an-email"}, timeout=15)
-    body_malformed = _check_shape("malformed_email", r)
-
-    # 1d. Missing email body
-    r = requests.post(f"{API}/auth/forgot-password", json={}, timeout=15)
-    body_missing = _check_shape("missing_email", r)
-
-    # Identical-shape check: same keys for all 4 responses
-    if all(b is not None for b in (body_valid, body_unknown, body_malformed, body_missing)):
-        keys_sets = [sorted(list(b.keys())) for b in (body_valid, body_unknown, body_malformed, body_missing)]
-        all_same = all(ks == keys_sets[0] for ks in keys_sets)
-        record(section, "identical_shape_all_4",
-               all_same, f"key sets = {keys_sets}")
+def auth_headers(token: str) -> Dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
 
 
-# ============================================================================
-# SECTION 2 — POST /api/reports consolidated reporting
-# ============================================================================
-def test_reports(admin_token: str, user_token: str, user_id: str) -> None:
-    section = "2.reports"
-    auth_user = {"Authorization": f"Bearer {user_token}"}
-    auth_admin = {"Authorization": f"Bearer {admin_token}"}
-
-    # 2a. Unauth → 401
-    r = requests.post(f"{API}/reports", json={
-        "target_type": "spot", "target_id": "spot_test", "reason": "spam"
-    }, timeout=15)
-    record(section, "unauth:401", r.status_code == 401,
-           f"got {r.status_code} body={r.text[:150]}")
-
-    # 2b. Missing target_id → 422
-    r = requests.post(f"{API}/reports", json={
-        "target_type": "spot", "reason": "spam"
-    }, headers=auth_user, timeout=15)
-    record(section, "missing_target_id:422", r.status_code == 422,
-           f"got {r.status_code} body={r.text[:200]}")
-
-    # 2c. target_type="not_real" → 422
-    r = requests.post(f"{API}/reports", json={
-        "target_type": "not_real", "target_id": "xyz", "reason": "spam"
-    }, headers=auth_user, timeout=15)
-    record(section, "bad_target_type:422", r.status_code == 422,
-           f"got {r.status_code} body={r.text[:200]}")
-
-    # 2d. Empty whitespace reason → 422
-    r = requests.post(f"{API}/reports", json={
-        "target_type": "spot", "target_id": "spot_x", "reason": "   "
-    }, headers=auth_user, timeout=15)
-    record(section, "empty_reason:422", r.status_code == 422,
-           f"got {r.status_code} body={r.text[:200]}")
-
-    # 2e. Happy path — every target_type returns 200
-    target_types = ["spot", "user", "review", "post", "poll", "comment", "marketplace_item"]
-    report_ids_by_type: Dict[str, str] = {}
-    for tt in target_types:
-        tid = f"{tt}_qa_{uuid.uuid4().hex[:10]}"
-        r = requests.post(f"{API}/reports", json={
-            "target_type": tt,
-            "target_id": tid,
-            "reason": "spam",
-            "detail": f"batch6 qa probe for {tt}",
-        }, headers=auth_user, timeout=15)
-        ok = r.status_code == 200
-        detail = f"got {r.status_code} body={r.text[:200]}"
-        record(section, f"happy:{tt}:200", ok, detail)
-        if not ok:
-            continue
-        body = r.json()
-        record(section, f"happy:{tt}:ok", body.get("ok") is True, f"ok={body.get('ok')}")
-        record(section, f"happy:{tt}:deduped_false", body.get("deduped") is False,
-               f"deduped={body.get('deduped')}")
-        rid = body.get("report_id", "")
-        record(section, f"happy:{tt}:report_id_fmt",
-               isinstance(rid, str) and rid.startswith("rpt_"),
-               f"report_id={rid}")
-        record(section, f"happy:{tt}:target_type_echo", body.get("target_type") == tt,
-               f"got={body.get('target_type')}")
-        record(section, f"happy:{tt}:target_id_echo", body.get("target_id") == tid,
-               f"got={body.get('target_id')}")
-        record(section, f"happy:{tt}:status_pending", body.get("status") == "pending",
-               f"status={body.get('status')}")
-        report_ids_by_type[tt] = rid
-
-    # 2f. Dedupe — same reporter + same target → deduped:true with SAME report_id
-    if "spot" in report_ids_by_type:
-        # Find the most recently created spot report_id by repeating the same body
-        dedupe_tid = f"dedupe_spot_{uuid.uuid4().hex[:10]}"
-        # First call
-        r1 = requests.post(f"{API}/reports", json={
-            "target_type": "spot", "target_id": dedupe_tid,
-            "reason": "spam", "detail": "first"
-        }, headers=auth_user, timeout=15)
-        rid1 = r1.json().get("report_id") if r1.status_code == 200 else None
-        # Second call identical
-        r2 = requests.post(f"{API}/reports", json={
-            "target_type": "spot", "target_id": dedupe_tid,
-            "reason": "spam", "detail": "second"
-        }, headers=auth_user, timeout=15)
-        body2 = r2.json() if r2.status_code == 200 else {}
-        record(section, "dedupe:second_200", r2.status_code == 200,
-               f"got {r2.status_code}")
-        record(section, "dedupe:deduped_true", body2.get("deduped") is True,
-               f"deduped={body2.get('deduped')}")
-        record(section, "dedupe:same_report_id",
-               rid1 is not None and body2.get("report_id") == rid1,
-               f"rid1={rid1} rid2={body2.get('report_id')}")
-
-    # 2g. Legacy alias POST /api/report (singular)
-    tid = f"legacy_alias_{uuid.uuid4().hex[:10]}"
-    r = requests.post(f"{API}/report", json={
-        "target_type": "post", "target_id": tid,
-        "reason": "spam", "detail": "via /report singular"
-    }, headers=auth_user, timeout=15)
-    record(section, "legacy_alias:200", r.status_code == 200,
-           f"got {r.status_code} body={r.text[:200]}")
-    if r.status_code == 200:
-        body = r.json()
-        record(section, "legacy_alias:ok_true", body.get("ok") is True,
-               f"body={body}")
-        record(section, "legacy_alias:report_id_fmt",
-               str(body.get("report_id", "")).startswith("rpt_"),
-               f"report_id={body.get('report_id')}")
-
-    # 2h. Both detail + details set → no 500, detail wins
-    tid = f"both_fields_{uuid.uuid4().hex[:10]}"
-    r = requests.post(f"{API}/reports", json={
-        "target_type": "review", "target_id": tid,
-        "reason": "spam",
-        "detail": "PREFERRED_DETAIL",
-        "details": "LEGACY_DETAILS",
-    }, headers=auth_user, timeout=15)
-    record(section, "both_detail_fields:no_500", r.status_code != 500,
-           f"got {r.status_code} body={r.text[:200]}")
-    record(section, "both_detail_fields:200", r.status_code == 200,
-           f"got {r.status_code}")
-
-    # 2i. GET /api/reports/reasons → 200 list of keys
-    r = requests.get(f"{API}/reports/reasons", timeout=15)
-    record(section, "reasons:200", r.status_code == 200, f"got {r.status_code}")
-    if r.status_code == 200:
-        body = r.json()
-        is_list = isinstance(body, list) and len(body) > 0
-        record(section, "reasons:is_nonempty_list", is_list,
-               f"type={type(body).__name__} len={len(body) if is_list else 'n/a'}")
-        if is_list:
-            keys_present = all(isinstance(item, dict) and "key" in item for item in body)
-            record(section, "reasons:all_have_key", keys_present,
-                   f"sample={body[0]}")
-
-
-# ============================================================================
-# SECTION 3 — Marketplace seller feature flag
-# ============================================================================
-def test_seller_feature_flag(user_token: str) -> None:
-    section = "3.seller-flag"
-    auth = {"Authorization": f"Bearer {user_token}"}
-
-    # 3a. GET /me/seller/connect-status (default env → disabled)
-    r = requests.get(f"{API}/me/seller/connect-status", headers=auth, timeout=15)
-    record(section, "connect_status:200", r.status_code == 200,
-           f"got {r.status_code} body={r.text[:300]}")
-    if r.status_code == 200:
-        body = r.json()
-        record(section, "connect_status:seller_onboarding_enabled==false",
-               body.get("seller_onboarding_enabled") is False,
-               f"got={body.get('seller_onboarding_enabled')}")
-        record(section, "connect_status:has_disabled_reason",
-               isinstance(body.get("seller_onboarding_disabled_reason"), str) and
-               len(body["seller_onboarding_disabled_reason"]) > 0,
-               f"reason={body.get('seller_onboarding_disabled_reason')!r}")
-        record(section, "connect_status:stripe_ready==false",
-               body.get("stripe_ready") is False,
-               f"stripe_ready={body.get('stripe_ready')}")
-
-    # 3b. POST /me/seller/onboard (default env → 503)
-    r = requests.post(f"{API}/me/seller/onboard", headers=auth, timeout=15)
-    record(section, "onboard:503", r.status_code == 503,
-           f"got {r.status_code} body={r.text[:300]}")
-    if r.status_code == 503:
-        try:
-            body = r.json()
-            det = body.get("detail")
-            ok_shape = isinstance(det, dict) and det.get("seller_onboarding_disabled") is True
-            record(section, "onboard:detail.seller_onboarding_disabled==true",
-                   ok_shape, f"detail={det}")
-        except Exception as e:
-            record(section, "onboard:json_parseable", False, f"err={e}")
-
-    # 3c. Buyer-facing marketplace browse unchanged
-    r = requests.get(f"{API}/marketplace/products", params={"limit": 5}, timeout=15)
-    record(section, "browse_products:status!=500",
-           r.status_code != 500,
-           f"got {r.status_code} body={r.text[:200]}")
-    # Accept 200 or 404 (route naming may differ); but we want 200 per review
-    record(section, "browse_products:200",
-           r.status_code == 200,
-           f"got {r.status_code}")
-    if r.status_code == 200:
-        try:
-            body = r.json()
-            # Accept list OR {products: [...]} OR {items: [...]}
-            is_ok = (
-                isinstance(body, list)
-                or (isinstance(body, dict) and isinstance(body.get("products"), list))
-                or (isinstance(body, dict) and isinstance(body.get("items"), list))
-            )
-            record(section, "browse_products:list_like", is_ok,
-                   f"type={type(body).__name__} keys={list(body.keys()) if isinstance(body, dict) else 'list'}")
-        except Exception as e:
-            record(section, "browse_products:json_parseable", False, f"err={e}")
-
-
-# ============================================================================
-# SECTION 4 — Backwards-compat smoke
-# ============================================================================
-def test_backcompat(admin_token: str) -> None:
-    section = "4.backcompat"
-    auth_admin = {"Authorization": f"Bearer {admin_token}"}
-
-    # 4a. login returns {token, user}
-    r = requests.post(f"{API}/auth/login",
-                      json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=15)
-    record(section, "login:200", r.status_code == 200, f"got {r.status_code}")
-    if r.status_code == 200:
-        body = r.json()
-        record(section, "login:has_token", isinstance(body.get("token"), str) and len(body["token"]) > 20,
-               f"token_len={len(body.get('token') or '')}")
-        record(section, "login:has_user", isinstance(body.get("user"), dict),
-               f"user_keys={list((body.get('user') or {}).keys())[:6]}")
-
-    # 4b. GET /api/spots?limit=5
-    r = requests.get(f"{API}/spots", params={"limit": 5}, timeout=15)
-    record(section, "spots_list:200", r.status_code == 200,
-           f"got {r.status_code} body={r.text[:150]}")
-
-    # 4c. GET /api/feed/home (with admin token) — 200 or structured, NOT 500
-    r = requests.get(f"{API}/feed/home", headers=auth_admin, timeout=15)
-    record(section, "feed_home:not_500", r.status_code != 500,
-           f"got {r.status_code} body={r.text[:200]}")
-
-    # 4d. GET /api/admin/overview with admin token
-    r = requests.get(f"{API}/admin/overview", headers=auth_admin, timeout=15)
-    record(section, "admin_overview:200", r.status_code == 200,
-           f"got {r.status_code} body={r.text[:200]}")
-
-
-# ============================================================================
-# Main
-# ============================================================================
+# ---- main test ----
 def main() -> int:
-    print(f"=== Batch #6 Trust Foundation — backend verification ===")
-    print(f"API: {API}")
+    print(f"Backend: {API}")
 
-    # SECTION 1 — no auth required
-    test_forgot_password()
+    # ============================================================
+    # SECTION 1: Setup the two accounts
+    # ============================================================
+    section("SECTION 1 — Setup admin (Elite) + fresh free user")
+    admin_token, admin_user = login(ADMIN_EMAIL, ADMIN_PASSWORD)
+    check(admin_user.get("plan") == "elite", "admin is on elite plan",
+          f"plan={admin_user.get('plan')}")
+    admin_uid = admin_user["user_id"]
 
-    # Get tokens for the rest
-    try:
-        admin_token, admin_user = login(ADMIN_EMAIL, ADMIN_PASSWORD)
-        print(f"admin login OK: user_id={admin_user.get('user_id')} role={admin_user.get('role')}")
-    except Exception as e:
-        print(f"FATAL: admin login failed: {e}")
+    sfx = uuid.uuid4().hex[:8]
+    free_email = f"batch9a_sender_{sfx}@lumascout-qa.com"
+    free_password = "Test@FreeUser2026!"
+    free_token, free_user = register_free_user(
+        free_email, free_password, f"Batch 9A Sender {sfx}"
+    )
+    free_uid = free_user["user_id"]
+    check(free_user.get("plan") == "free", "free user is on free plan",
+          f"plan={free_user.get('plan')}")
+    print(f"  admin_uid={admin_uid}  free_uid={free_uid}")
+
+    # ============================================================
+    # SECTION 2: Free user opens a DM thread to admin
+    # ============================================================
+    section("SECTION 2 — Free user starts DM thread to admin")
+    r = requests.post(
+        f"{API}/dm/threads/start",
+        json={"user_id": admin_uid, "opening_body": "Hello from batch 9A tests"},
+        headers=auth_headers(free_token),
+        timeout=15,
+    )
+    check(r.status_code == 200, "POST /dm/threads/start (free → admin) → 200",
+          f"status={r.status_code} body={r.text[:200]}")
+    body = r.json() if r.status_code == 200 else {}
+    thread_id = body.get("thread_id")
+    check(bool(thread_id), "thread_id returned",
+          f"body keys={list(body.keys())}")
+    print(f"  thread_id={thread_id}  is_request={body.get('is_request')}")
+
+    # ============================================================
+    # SECTION 3: Send 2 more messages from the free user
+    # ============================================================
+    section("SECTION 3 — Free user sends 2 more messages")
+    sent_ids: List[str] = []
+    for i in range(2):
+        r = requests.post(
+            f"{API}/dm/threads/{thread_id}/messages",
+            json={"type": "text", "body": f"Message {i+2} from free user"},
+            headers=auth_headers(free_token),
+            timeout=15,
+        )
+        ok = r.status_code == 200
+        check(ok, f"POST /dm/threads/{{tid}}/messages [#{i+2}] → 200",
+              f"status={r.status_code} body={r.text[:200]}")
+        if ok:
+            sent_ids.append(r.json().get("message_id", ""))
+
+    # ============================================================
+    # SECTION 4: Admin opens thread + mark-read
+    # ============================================================
+    section("SECTION 4 — Admin (Elite) opens thread + mark-read")
+
+    # If is_request, admin must also be able to GET the thread.
+    # The endpoint allows participant access regardless of accepted state.
+    r = requests.get(
+        f"{API}/dm/threads/{thread_id}",
+        headers=auth_headers(admin_token),
+        timeout=15,
+    )
+    check(r.status_code == 200, "GET /dm/threads/{id} as admin → 200",
+          f"status={r.status_code} body={r.text[:200]}")
+    a_thread = r.json() if r.status_code == 200 else {}
+    msgs = a_thread.get("messages", [])
+    check(len(msgs) >= 3,
+          f"admin sees ≥3 messages (got {len(msgs)})",
+          f"messages_len={len(msgs)}")
+    # Response keys present
+    for k in ("thread", "other", "other_last_read_at", "messages"):
+        check(k in a_thread, f"response has key '{k}'",
+              f"keys={list(a_thread.keys())}")
+
+    # Admin marks read → should stamp seen_at on free user's 3 messages
+    r = requests.post(
+        f"{API}/dm/threads/{thread_id}/mark-read",
+        headers=auth_headers(admin_token),
+        timeout=15,
+    )
+    check(r.status_code == 200, "POST /dm/threads/{id}/mark-read (admin) → 200",
+          f"status={r.status_code} body={r.text[:200]}")
+    check((r.json() if r.status_code == 200 else {}).get("ok") is True,
+          "mark-read returns {ok:true}",
+          f"body={r.text[:200]}")
+
+    # Accept the request so the thread appears in admin's "accepted" tab
+    # (needed for SECTION 8 smoke test).
+    r = requests.get(
+        f"{API}/dm/threads?tab=requests",
+        headers=auth_headers(admin_token),
+        timeout=15,
+    )
+    if r.status_code == 200:
+        items = r.json().get("items", [])
+        # Find the request_id matching this thread
+        req_id = None
+        for it in items:
+            if it.get("thread_id") == thread_id and it.get("request_id"):
+                req_id = it.get("request_id")
+                break
+        if not req_id:
+            # Fallback: look up dm_requests via Mongo later. Use admin reply
+            # to implicitly accept? No — we have to call accept endpoint.
+            pass
+        if req_id:
+            r2 = requests.post(
+                f"{API}/dm/requests/{req_id}/accept",
+                headers=auth_headers(admin_token),
+                timeout=15,
+            )
+            print(f"  accepted request {req_id}: {r2.status_code}")
+
+    # ============================================================
+    # SECTION 5: Elite viewer fetch — confirm receipt fields populated
+    # ============================================================
+    section("SECTION 5 — Elite viewer (admin) sees receipts")
+
+    # Admin replies with 1 message → admin now has an outbound msg
+    r = requests.post(
+        f"{API}/dm/threads/{thread_id}/messages",
+        json={"type": "text", "body": "Reply from admin (Elite)"},
+        headers=auth_headers(admin_token),
+        timeout=15,
+    )
+    check(r.status_code == 200, "admin sends 1 outbound reply → 200",
+          f"status={r.status_code} body={r.text[:200]}")
+    admin_msg_id = r.json().get("message_id") if r.status_code == 200 else None
+
+    # Free user opens thread + mark-read → stamps seen_at on admin's reply
+    r = requests.get(
+        f"{API}/dm/threads/{thread_id}",
+        headers=auth_headers(free_token),
+        timeout=15,
+    )
+    check(r.status_code == 200, "free user GET thread → 200",
+          f"status={r.status_code} body={r.text[:200]}")
+    r = requests.post(
+        f"{API}/dm/threads/{thread_id}/mark-read",
+        headers=auth_headers(free_token),
+        timeout=15,
+    )
+    check(r.status_code == 200, "free user mark-read → 200",
+          f"status={r.status_code} body={r.text[:200]}")
+
+    # Admin re-fetches → admin's outbound message should have seen_at
+    r = requests.get(
+        f"{API}/dm/threads/{thread_id}",
+        headers=auth_headers(admin_token),
+        timeout=15,
+    )
+    check(r.status_code == 200, "admin GET thread (post-free-read) → 200")
+    a_body = r.json() if r.status_code == 200 else {}
+    a_msgs = a_body.get("messages", [])
+    # Find admin's outbound reply
+    admin_outbound = [m for m in a_msgs if m.get("sender_user_id") == admin_uid]
+    check(len(admin_outbound) >= 1, "admin has ≥1 outbound message",
+          f"count={len(admin_outbound)}")
+    if admin_outbound:
+        # Elite viewer: seen_at should be populated (ISO string) on at
+        # least the latest outbound message
+        latest_outbound = admin_outbound[-1]
+        seen_at = latest_outbound.get("seen_at")
+        check(seen_at is not None,
+              "Elite viewer: seen_at on own outbound msg is NOT null",
+              f"seen_at={seen_at!r}")
+        check(isinstance(seen_at, str) and len(seen_at) > 5,
+              "Elite viewer: seen_at is a non-empty string (ISO-like)",
+              f"seen_at={seen_at!r}")
+
+    # Verify other_last_read_at field is present (and not None now that
+    # free user has marked-read).
+    olra = a_body.get("other_last_read_at")
+    check("other_last_read_at" in a_body,
+          "Elite viewer response includes 'other_last_read_at' key")
+    check(olra is not None,
+          "Elite viewer: other_last_read_at populated after free user mark-read",
+          f"value={olra!r}")
+
+    # ============================================================
+    # SECTION 6: Free viewer fetch — gating must redact
+    # ============================================================
+    section("SECTION 6 — Free viewer: outbound seen_at and other_last_read_at redacted")
+
+    r = requests.get(
+        f"{API}/dm/threads/{thread_id}",
+        headers=auth_headers(free_token),
+        timeout=15,
+    )
+    check(r.status_code == 200, "free user GET thread → 200")
+    f_body = r.json() if r.status_code == 200 else {}
+    f_msgs = f_body.get("messages", [])
+
+    # Response keys
+    for k in ("thread", "other", "other_last_read_at", "messages"):
+        check(k in f_body, f"free-viewer response has key '{k}'",
+              f"keys={list(f_body.keys())}")
+
+    # other_last_read_at must be NULL for free viewer
+    check(f_body.get("other_last_read_at") is None,
+          "Free viewer: other_last_read_at is null",
+          f"value={f_body.get('other_last_read_at')!r}")
+
+    # Every outbound msg by the free viewer must have seen_at == null
+    free_outbound = [m for m in f_msgs if m.get("sender_user_id") == free_uid]
+    check(len(free_outbound) >= 3,
+          f"free viewer has ≥3 outbound messages in response (got {len(free_outbound)})")
+    all_null = all(m.get("seen_at") is None for m in free_outbound)
+    check(all_null,
+          "Free viewer: ALL own outbound messages have seen_at == null",
+          f"non-null count={sum(1 for m in free_outbound if m.get('seen_at') is not None)}")
+
+    # Inbound msgs (from admin) — seen_at should be left as stored.
+    # We can't directly verify the stored value via API as free, but we
+    # can verify the field is preserved as-is (not forced to null by the
+    # gate). Cross-check via DB later.
+    free_inbound = [m for m in f_msgs if m.get("sender_user_id") == admin_uid]
+    print(f"  free viewer inbound msg count: {len(free_inbound)}")
+    print(f"  free viewer inbound seen_at values: "
+          f"{[m.get('seen_at') for m in free_inbound]}")
+
+    # ============================================================
+    # SECTION 7: Verify mark-read still stamps seen_at at DB level
+    # ============================================================
+    section("SECTION 7 — DB-level: mark-read still authoritative regardless of viewer plan")
+
+    async def _check_db() -> Dict[str, Any]:
+        client = AsyncIOMotorClient(MONGO_URL)
+        db = client[DB_NAME]
+        # All messages in this thread
+        msgs_db = await db.dm_messages.find(
+            {"thread_id": thread_id, "is_deleted": {"$ne": True}},
+            {"_id": 0, "message_id": 1, "sender_user_id": 1, "seen_at": 1, "body": 1, "created_at": 1},
+        ).sort("created_at", 1).to_list(200)
+        # Free user's participant row (admin's authoritative last_read_at
+        # for the OTHER side, but more importantly: admin's participant
+        # row should have last_read_at populated.)
+        admin_part = await db.dm_participants.find_one(
+            {"thread_id": thread_id, "user_id": admin_uid}, {"_id": 0}
+        )
+        free_part = await db.dm_participants.find_one(
+            {"thread_id": thread_id, "user_id": free_uid}, {"_id": 0}
+        )
+        client.close()
+        return {
+            "msgs": msgs_db,
+            "admin_part": admin_part,
+            "free_part": free_part,
+        }
+
+    db_state = asyncio.get_event_loop().run_until_complete(_check_db())
+    # Free user's outbound messages (sender_user_id == free_uid) — at the
+    # DB level these should have seen_at stamped (because admin opened
+    # and called mark-read).
+    db_free_outbound = [m for m in db_state["msgs"] if m.get("sender_user_id") == free_uid]
+    db_free_outbound_seen = [m for m in db_free_outbound if m.get("seen_at") is not None]
+    check(len(db_free_outbound) >= 3,
+          f"DB has ≥3 free-user outbound messages (got {len(db_free_outbound)})")
+    check(len(db_free_outbound_seen) == len(db_free_outbound),
+          "DB: ALL free-user outbound messages have seen_at stamped (recipient-side authoritative)",
+          f"stamped {len(db_free_outbound_seen)}/{len(db_free_outbound)}")
+
+    # Admin's outbound (the reply) should also be stamped (because free
+    # user opened + marked-read).
+    db_admin_outbound = [m for m in db_state["msgs"] if m.get("sender_user_id") == admin_uid]
+    db_admin_outbound_seen = [m for m in db_admin_outbound if m.get("seen_at") is not None]
+    check(len(db_admin_outbound) >= 1, "DB has ≥1 admin outbound msg")
+    check(len(db_admin_outbound_seen) == len(db_admin_outbound),
+          "DB: admin outbound also stamped seen_at (free user's mark-read still works)",
+          f"stamped {len(db_admin_outbound_seen)}/{len(db_admin_outbound)}")
+
+    # Sanity: admin's own participant row has last_read_at stamped
+    check((db_state["admin_part"] or {}).get("last_read_at") is not None,
+          "DB: admin's dm_participants.last_read_at is set")
+    check((db_state["free_part"] or {}).get("last_read_at") is not None,
+          "DB: free user's dm_participants.last_read_at is set")
+
+    # ============================================================
+    # SECTION 8: Regression smoke on unrelated DM endpoints
+    # ============================================================
+    section("SECTION 8 — Regression smoke: list / unread-count / mark-read")
+
+    r = requests.get(
+        f"{API}/dm/threads?tab=accepted",
+        headers=auth_headers(admin_token),
+        timeout=15,
+    )
+    check(r.status_code == 200, "GET /dm/threads?tab=accepted (admin) → 200",
+          f"status={r.status_code} body={r.text[:200]}")
+    items = r.json().get("items", []) if r.status_code == 200 else []
+    found = any(it.get("thread_id") == thread_id for it in items)
+    check(found, "test thread appears in admin's accepted tab",
+          f"thread_id={thread_id}; items_count={len(items)}; "
+          f"first_3_ids={[it.get('thread_id') for it in items[:3]]}")
+
+    r = requests.get(
+        f"{API}/dm/unread-count",
+        headers=auth_headers(admin_token),
+        timeout=15,
+    )
+    check(r.status_code == 200, "GET /dm/unread-count → 200",
+          f"status={r.status_code} body={r.text[:200]}")
+
+    r = requests.post(
+        f"{API}/dm/threads/{thread_id}/mark-read",
+        headers=auth_headers(admin_token),
+        timeout=15,
+    )
+    check(r.status_code == 200, "POST /dm/threads/{id}/mark-read (admin) → 200")
+    check((r.json() if r.status_code == 200 else {}).get("ok") is True,
+          "mark-read returns {ok:true}",
+          f"body={r.text[:200]}")
+
+    # ---- Final summary ----
+    section("SUMMARY")
+    total = len(PASSED) + len(FAILED)
+    print(f"\nPASSED: {len(PASSED)} / {total}")
+    print(f"FAILED: {len(FAILED)} / {total}")
+    if FAILED:
+        print("\nFailures:")
+        for f in FAILED:
+            print(f"  • {f}")
         return 1
-
-    try:
-        user_token, user_id = register_user()
-        print(f"fresh free user registered: user_id={user_id}")
-    except Exception as e:
-        print(f"FATAL: free user register failed: {e}")
-        return 1
-
-    test_reports(admin_token, user_token, user_id)
-    test_seller_feature_flag(user_token)
-    test_backcompat(admin_token)
-
-    # Summary
-    total = len(RESULTS)
-    fails = [r for r in RESULTS if not r[2]]
-    print("\n=== SUMMARY ===")
-    print(f"total assertions: {total}")
-    print(f"passed: {total - len(fails)}")
-    print(f"failed: {len(fails)}")
-    if fails:
-        print("\n--- FAILURES ---")
-        for section, name, ok, detail in fails:
-            print(f"  [{section}] {name}: {detail}")
-
-    return 0 if not fails else 2
+    print("\nAll Batch #9A backend assertions green.")
+    return 0
 
 
 if __name__ == "__main__":

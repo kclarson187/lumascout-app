@@ -8,9 +8,9 @@ import * as ImagePicker from 'expo-image-picker';
 import { api } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
-import { timeAgo } from '../../src/components/FreshnessBits';
 import ReadReceipt from '../../src/components/ReadReceipt';
 import UserBadge from '../../src/components/UserBadge';
+import { formatMessageTime, isPaidPlan, isElitePlan } from '../../src/utils/messageTime';
 
 const QUICK_STARTERS = [
   'Love your work.',
@@ -207,8 +207,17 @@ function ThreadScreenImpl() {
                           </View>
                         </Pressable>
                       ) : null}
-                      <Text style={[s.ts, mine && { color: 'rgba(255,255,255,0.7)' }]}>{timeAgo(item.created_at)}</Text>
-                      {isLastMine ? (
+                      <Text style={[s.ts, mine && { color: 'rgba(255,255,255,0.7)' }]}>
+                        {/* Free: no timestamps. Pro/Elite: accurate
+                            local-timezone clock. (Batch #9A) */}
+                        {isPaidPlan(user?.plan)
+                          ? formatMessageTime(item.created_at, user?.plan, 'clock')
+                          : ''}
+                      </Text>
+                      {/* Elite-only read receipts on sent messages (Batch #9A).
+                          Backend already stamps seen_at on recipient open;
+                          we only render it for Elite senders. */}
+                      {isLastMine && isElitePlan(user?.plan) ? (
                         <ReadReceipt
                           deliveredAt={item.delivered_at}
                           seenAt={item.seen_at}

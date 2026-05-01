@@ -22,7 +22,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, Pressable, Image,
-  ActivityIndicator, Share, FlatList, Alert,
+  ActivityIndicator, Share, FlatList, Alert, RefreshControl,
 } from 'react-native';
 import { router } from 'expo-router';
 import {
@@ -289,6 +289,7 @@ export default function DiscoverPremiumView() {
   const [viewers, setViewers] = useState<{
     locked: boolean; total_views: number; viewers: any[];
   } | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -300,6 +301,19 @@ export default function DiscoverPremiumView() {
       setRails(r || {});
       if (v) setViewers(v);
     } finally { setLoading(false); }
+  }, []);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const [r, v] = await Promise.all([
+        api.get('/network/discover', { limit_per_rail: 12 }),
+        api.get('/me/viewers').catch(() => null),
+      ]);
+      setRails(r || {});
+      setViewers(v || null);
+      setFollowingMap({}); // reset optimistic follow state so backend is SoT
+    } catch {} finally { setRefreshing(false); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -422,6 +436,14 @@ export default function DiscoverPremiumView() {
       contentContainerStyle={{ paddingBottom: 120 }}
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor={colors.primary}
+          colors={[colors.primary]}
+        />
+      }
     >
       {/* Search bar */}
       <View style={{ paddingHorizontal: space.xl, paddingTop: 2 }}>
