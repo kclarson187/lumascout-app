@@ -60,3 +60,63 @@ export function distanceLabel(spot: SpotLike): string {
 export function hasDistance(spot: SpotLike): boolean {
   return pickMiles(spot) !== null;
 }
+
+/**
+ * calculateDistanceMiles — Haversine great-circle distance between two
+ * geo points, returned in statute miles.
+ *
+ * Added June 2025 for the "Nearby GPS & closest-first Explore list"
+ * CR. Centralised here so Explore / Home / Directory / Scout AI
+ * never duplicate the formula.
+ *
+ * Returns `null` if any coordinate is missing, non-finite, or obviously
+ * out of range (lat ±90 / lng ±180). Callers should guard the display
+ * path on null rather than fall back to a misleading "0 mi" label.
+ */
+export function calculateDistanceMiles(
+  userLat: number | null | undefined,
+  userLng: number | null | undefined,
+  spotLat: number | null | undefined,
+  spotLng: number | null | undefined,
+): number | null {
+  if (
+    userLat == null || userLng == null ||
+    spotLat == null || spotLng == null
+  ) return null;
+  const uLat = Number(userLat), uLng = Number(userLng);
+  const sLat = Number(spotLat), sLng = Number(spotLng);
+  if (!Number.isFinite(uLat) || !Number.isFinite(uLng)) return null;
+  if (!Number.isFinite(sLat) || !Number.isFinite(sLng)) return null;
+  if (Math.abs(uLat) > 90 || Math.abs(sLat) > 90) return null;
+  if (Math.abs(uLng) > 180 || Math.abs(sLng) > 180) return null;
+
+  const R_MI = 3958.7613; // Earth mean radius, miles
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(sLat - uLat);
+  const dLng = toRad(sLng - uLng);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(uLat)) *
+      Math.cos(toRad(sLat)) *
+      Math.sin(dLng / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const mi = R_MI * c;
+  return Number.isFinite(mi) ? mi : null;
+}
+
+/**
+ * resolveMiles — Best-effort miles for a spot given an optional user
+ * coordinate. Priority:
+ *   1. Server-attached distance_mi / distance_miles / distance_km.
+ *   2. Client-side Haversine from userLat/userLng → spot.lat/spot.lng.
+ * Falls back to null when neither is available.
+ */
+export function resolveMiles(
+  spot: SpotLike & { lat?: number | null; lng?: number | null },
+  userLat: number | null | undefined,
+  userLng: number | null | undefined,
+): number | null {
+  const server = pickMiles(spot);
+  if (server != null) return server;
+  return calculateDistanceMiles(userLat, userLng, spot?.lat, spot?.lng);
+}

@@ -12,6 +12,99 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Network Discover + Live GPS CR (June 2025) — (1) Remove pills under Discover search bar; (2) Centralize live GPS via `useCurrentLocation` hook + live watchPositionAsync (30s / 250m throttle) + retry(); (3) Centralize distance math in `calculateDistanceMiles` (Haversine) + `resolveMiles` (server preferred, Haversine fallback); (4) Sort Explore list closest-first when GPS granted, fall back to server quality sort otherwise"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/src/components/DiscoverPremiumView.tsx (removed horizontal filter pill row beneath search bar; no vertical dead-space left behind — freshness banner now sits directly under the search input),
+      /app/frontend/src/hooks/useCurrentLocation.ts (NEW — centralized live-GPS hook: permission flow, 5s race + Balanced-accuracy fallback, watchPositionAsync 30s/250m throttle, retry() for denied state, clean unmount),
+      /app/frontend/src/hooks/useGps.ts (LEGACY wrapper — now delegates to useCurrentLocation so Home tab inherits live-watch + retry with zero call-site churn),
+      /app/frontend/src/utils/distance.ts (added calculateDistanceMiles Haversine + resolveMiles helper: server distance_mi preferred, Haversine fallback from userLat/userLng ↔ spot.lat/lng),
+      /app/frontend/app/(tabs)/explore.tsx (imports resolveMiles; new `nearbySortedSpots` memo sorts by resolved miles ascending when gpsState==='granted' && userCoords; wired into `NearbyRightNowList` and the `All Nearby Spots` slice(0,24); map pins still read the raw `spots` list so list↔map stay synced)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Frontend-only CR — no backend endpoints added or modified
+          this round, so backend re-testing not required. Metro
+          bundle compiles clean (3221 modules, 2.5s web warm rebuild).
+
+          Task 1 — Discover pills removed:
+            · DiscoverPremiumView.tsx — deleted the horizontal filter
+              pill ScrollView that lived directly under the search bar.
+              Kept the search input + inline example chips
+              ('Austin wedding' / 'San Antonio pet' / 'Dallas portrait')
+              which only surface when the input is empty. No leftover
+              vertical whitespace — the freshness banner now sits
+              directly below search with the standard 12px gutter from
+              its own `marginTop`. The `filter` state variable is
+              retained (always 'all' since the pill row was its only
+              setter) so downstream rail visibility logic continues
+              to behave exactly like the 'all' selection.
+
+          Task 2 — Live GPS centralization:
+            · New `useCurrentLocation` hook (src/hooks/useCurrentLocation.ts)
+              · Status machine: idle|requesting|granted|denied|error
+              · Permission prompt via getForegroundPermissionsAsync ->
+                requestForegroundPermissionsAsync (one prompt, not
+                repeated on every render)
+              · Initial fix: 5s Promise.race on Accuracy.High with
+                Balanced-accuracy fallback if high-accuracy hangs.
+                Platform === 'web' starts on Balanced directly.
+              · Subscribes watchPositionAsync with timeInterval=30000ms
+                and distanceInterval=250m — updates `coords` only when
+                the user actually moves, protecting battery when
+                stationary.
+              · NaN/out-of-range coordinate guard so jail-broken iOS
+                mock-location apps can't poison the state.
+              · Clean unmount (sub.remove on the subscription ref).
+              · Exposes `retry()` so any screen can offer an explicit
+                re-prompt after a denial / timeout.
+            · `useGps` (legacy) now delegates to useCurrentLocation so
+              Home tab + any other legacy consumer inherits live-watch
+              behaviour without touching call sites.
+
+          Task 3 — Closest-first Explore list:
+            · distance.ts — added `calculateDistanceMiles(userLat, userLng,
+              spotLat, spotLng)` classic Haversine with R=3958.7613mi
+              (Earth mean radius miles), plus `resolveMiles(spot, uLat,
+              uLng)` which prefers the server's pre-computed
+              distance_mi / distance_miles / distance_km (×0.621371)
+              and falls back to client-side Haversine when the
+              server payload is missing it. Returns null rather
+              than fake "0 mi" when neither source is available.
+            · explore.tsx — new `nearbySortedSpots` memo (deps:
+              spots, gpsState, userCoords):
+                - When gpsState === 'granted' && userCoords: clone the
+                  spots array, compute resolveMiles per item, sort
+                  ascending, null miles sink to the bottom keeping
+                  their relative server order.
+                - When GPS denied / unavailable: return the raw
+                  server-ordered spots array verbatim — we NEVER pretend
+                  to "sort by distance" without real device GPS, since
+                  that would show misleading nearby results per the CR
+                  definition-of-done.
+              · Wired into `NearbyRightNowList items={nearbySortedSpots}`
+                (top 3 = literally the 3 nearest when GPS is on).
+              · Wired into the "All Nearby Spots" section:
+                `nearbySortedSpots.slice(0, 24).map(...)`.
+              · Map pins, search, filters, saved spots, spot detail
+                all continue to read the raw `spots` array — list +
+                map stay synced because the sort is only applied at
+                the terminal rendering step.
+              · Existing GPS trust strip + retry CTA already handles
+                the denied / error states ("Location access off · enable
+                for accurate nearby spots" + tappable 'Retry').
+
+          Testing protocol: All changes are frontend-only. Backend
+          API surface unchanged (confirmed /api/spots still accepts
+          lat/lng and responds with distance_mi + distance_source).
+          No backend re-test required. Metro bundle compiles cleanly.
+
+
   - task: "CR #1 (June 2025) — LumaScout targeted usability fixes: (Item 1) Explore default to List view with persisted List|Map toggle + lazy-mount map (AsyncStorage lumascout.explore.view); (Item 2) Spot Detail scrollable hero gallery with minimal `N / M` counter replacing dots; (Item 3) Network Directory single-axis facet pills (By city | By specialty) fed by new backend aggregation endpoint `GET /api/directory/facets` returning real top cities + top specialties (no hardcoded concat seed strings); (Item 5) Removed generic 'Best at Sunset/Sunrise' labels from card surfaces (PremiumExploreRails NearbyCard + Explore map PinPreview); (Item 6) Explore crash hardening — server-side hard-cap `limit` ≤200 on `GET /api/spots` + `POST /api/errors` telemetry + `ExploreErrorBoundary` wiring"
     implemented: true
     working: true
