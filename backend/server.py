@@ -5867,6 +5867,77 @@ async def _refresh_connect_status(user_id: str, acct_id: Optional[str] = None) -
 
 
 
+# ─────────────────────────────────────────────────────────────────────
+# CR #1 Ticket #6 · Client error telemetry (option B — no Sentry).
+#
+# Receives error reports from the mobile client's error boundaries and
+# persists them to `db.client_errors` for post-mortem soak analysis.
+# We deliberately rate-cap payload size so a runaway client can't spam
+# the DB, and we silently accept unauthenticated reports because the
+# error itself may be blocking the auth layer.
+# ─────────────────────────────────────────────────────────────────────
+class ClientErrorIn(BaseModel):
+    surface: str = "unknown"           # e.g. "explore", "spot_detail"
+    message: str = ""
+    stack: Optional[str] = None
+    component_stack: Optional[str] = None
+    # Arbitrary small JSON context (spotsCount, activeFilterKeys,
+    # viewport bounds, view mode). We cap serialized size below.
+    context: Optional[Dict[str, Any]] = None
+    route: Optional[str] = None
+    app_version: Optional[str] = None
+    platform: Optional[str] = None
+
+
+@api.post("/errors")
+@graceful(fallback={"ok": True}, label="client_errors.create")
+async def client_errors_create(
+    body: ClientErrorIn,
+    request: Request,
+    user: Optional[dict] = Depends(get_optional_user),
+):
+    # Hard cap on stored payload — keep it tiny. Even a 5 KB report is
+    # way more than we need for triage. Oversized strings get truncated
+    # with a marker so we can still see there was more.
+    def _clip(s: Optional[str], n: int) -> Optional[str]:
+        if not s:
+            return s
+        if len(s) <= n:
+            return s
+        return s[:n] + f"…[+{len(s) - n}B]"
+
+    ctx = body.context or {}
+    # JSON-size guard on context: if it's huge, drop all but the keys.
+    try:
+        if len(json.dumps(ctx, default=str)) > 2048:
+            ctx = {"_keys_only": list(ctx.keys())}
+    except Exception:
+        ctx = {"_context_unserializable": True}
+
+    doc = {
+        "error_id": str(uuid.uuid4()),
+        "surface": (body.surface or "unknown")[:32],
+        "message": _clip(body.message or "", 512),
+        "stack": _clip(body.stack, 2000),
+        "component_stack": _clip(body.component_stack, 2000),
+        "context": ctx,
+        "route": _clip(body.route, 256),
+        "app_version": _clip(body.app_version, 32),
+        "platform": _clip(body.platform, 16),
+        "user_id": (user or {}).get("user_id"),
+        "ip": (request.client.host if request.client else None),
+        "user_agent": request.headers.get("user-agent", "")[:256],
+        "created_at": utcnow(),
+    }
+    try:
+        await db.client_errors.insert_one(doc)
+    except Exception:
+        # Even DB failures must not bubble up — we're a sink, not a
+        # source of app errors.
+        pass
+    return {"ok": True, "error_id": doc["error_id"]}
+
+
 # Register the api router AFTER every @api.<method> decorator above has run.
 # FastAPI's include_router() snapshots routes at call-time, so this must be the
 # very last route-registration step before startup.
