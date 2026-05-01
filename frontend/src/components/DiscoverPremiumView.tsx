@@ -445,7 +445,15 @@ export default function DiscoverPremiumView() {
         />
       }
     >
-      {/* Search bar */}
+      {/* Search bar — Network Discover CR (June 2025, round 2): ALL
+          chip/pill content directly below the search input has been
+          removed per product spec. That includes both (a) the 5-filter
+          pill row (All / Nearby / Verified / Elite / New) and (b) the
+          inline "Austin wedding / San Antonio pet / Dallas portrait"
+          seeded example chips. The search bar now sits cleanly above
+          the freshness banner with no chips in between. The `filter`
+          state variable is retained (always 'all') so downstream
+          rail-gating keeps working as if 'all' were selected. */}
       <View style={{ paddingHorizontal: space.xl, paddingTop: 2 }}>
         <View style={s.searchBar}>
           <Search size={16} color={colors.textSecondary} />
@@ -458,26 +466,7 @@ export default function DiscoverPremiumView() {
             testID="discover-search"
           />
         </View>
-        {/* Inline example chips when input is empty */}
-        {!q ? (
-          <View style={{ flexDirection: 'row', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-            {['Austin wedding', 'San Antonio pet', 'Dallas portrait'].map((ex) => (
-              <Pressable key={ex} onPress={() => setQ(ex)} style={s.exChip}>
-                <Text style={s.exChipTxt}>{ex}</Text>
-              </Pressable>
-            ))}
-          </View>
-        ) : null}
       </View>
-
-      {/* Network Discover CR (June 2025) — filter pill row under the
-          search bar removed per product spec. The discover feed now
-          always renders the curated "all" rail set; inline example
-          chips above still seed quick searches. We keep the `filter`
-          state variable so any downstream rail-specific logic that
-          still reads it (visible_rails gating) continues to work as
-          if 'all' were selected. Zero dead-space below the search
-          bar — the freshness banner sits directly under the input. */}
 
       {/* Search results take over the feed when active */}
       {searchResults !== null ? (
