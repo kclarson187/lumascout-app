@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import io
 import os
+import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,7 +46,27 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from fastapi.responses import FileResponse
 from PIL import Image, ImageOps
 
+# CRITICAL (June 2025): register the HEIF/HEIC opener with Pillow at
+# import time. Without this, Pillow's `Image.open()` cannot decode
+# iPhone HEIC photos (the iOS default) and every iPhone upload fails
+# with a generic 415. With pillow-heif registered, HEIC is treated
+# transparently — the file decodes, we re-encode to JPEG, and the
+# rest of the pipeline is identical to JPEG/PNG uploads.
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except Exception:
+    # If pillow-heif fails to import (e.g. wrong arch in dev), HEIC
+    # uploads will still fail explicitly via the `Image.open` path
+    # below — at least the rest of the upload endpoint stays alive.
+    pass
+
 from server import get_current_user, check_rate_limit  # reuse existing hooks
+
+# Structured upload logger — separate from the root logger so prod
+# observability tooling can pin "uploads.image" to a specific
+# dashboard / retention bucket.
+_upload_log = logging.getLogger("lumascout.uploads")
 
 # --- Configuration ------------------------------------------------------------
 
@@ -81,54 +103,92 @@ async def upload_image(
         { "image_url": "/api/uploads/2026/04/abcd.jpg",
           "width": 2048, "height": 1365, "bytes": 412031, "mime": "image/jpeg" }
     """
-    check_rate_limit("image_upload", user["user_id"])
+    t0 = time.monotonic()
+    user_id = user.get("user_id")
+    fname = (file.filename or "")[:120]
+    ct_in = (file.content_type or "").lower()
+    _upload_log.info(
+        "upload_image.start user_id=%s filename=%r content_type=%r",
+        user_id, fname, ct_in,
+    )
+
+    check_rate_limit("image_upload", user_id)
 
     # Defensive MIME check — UploadFile.content_type is set from the client
     # header, but some devices send octet-stream. We also sniff the bytes
     # with Pillow below, so this is just a fast-fail.
-    ct = (file.content_type or "").lower()
-    if ct and ct not in ALLOWED_MIME:
-        raise HTTPException(status_code=415, detail=f"Unsupported image type: {ct}")
+    if ct_in and ct_in not in ALLOWED_MIME:
+        _upload_log.warning(
+            "upload_image.reject_mime user_id=%s filename=%r content_type=%r",
+            user_id, fname, ct_in,
+        )
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                f"This image format ({ct_in}) is not supported. "
+                "Please choose a JPEG, PNG, WEBP, or HEIC photo."
+            ),
+        )
 
     blob = await file.read()
+    size_in = len(blob)
     if not blob:
-        raise HTTPException(status_code=400, detail="Empty upload")
-    if len(blob) > MAX_UPLOAD_BYTES:
+        _upload_log.warning("upload_image.empty user_id=%s filename=%r", user_id, fname)
+        raise HTTPException(
+            status_code=400,
+            detail="Empty upload — the photo data didn't make it. Please try selecting it again.",
+        )
+    if size_in > MAX_UPLOAD_BYTES:
+        mb = MAX_UPLOAD_BYTES // (1024 * 1024)
+        _upload_log.warning(
+            "upload_image.too_large user_id=%s filename=%r bytes=%d limit=%d",
+            user_id, fname, size_in, MAX_UPLOAD_BYTES,
+        )
         raise HTTPException(
             status_code=413,
-            detail=f"Image too large. Max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
+            detail=f"This photo is too large ({size_in // (1024*1024)} MB). Max {mb} MB — please choose a smaller image or compress it first.",
         )
 
     try:
         img = Image.open(io.BytesIO(blob))
-        # HEIC/HEIF requires pillow-heif; we accept the upload but
-        # transparently convert. Pillow 12 ships with HEIF support via
-        # pillow-heif plugin if installed; the `open` will raise if not
-        # supported, which we handle below.
+        # HEIC/HEIF requires pillow-heif (registered at module import).
+        # `img.load()` triggers full decode so we surface format errors
+        # synchronously (Pillow is otherwise lazy).
         img.load()
     except Exception as e:
-        raise HTTPException(status_code=415, detail=f"Could not decode image: {e}")
+        _upload_log.error(
+            "upload_image.decode_fail user_id=%s filename=%r content_type=%r bytes=%d err=%s",
+            user_id, fname, ct_in, size_in, e,
+        )
+        # Map common decode errors to user-friendly messages.
+        msg = str(e).lower()
+        if "heif" in msg or "heic" in msg:
+            user_msg = (
+                "We couldn't open this HEIC photo. Try selecting it again, "
+                "or change your iPhone Camera setting to 'Most Compatible' "
+                "in Settings → Camera → Formats."
+            )
+        elif "cannot identify" in msg or "unknown image" in msg:
+            user_msg = (
+                "This file doesn't look like a supported image. "
+                "Please pick a JPEG, PNG, WEBP, or HEIC photo."
+            )
+        else:
+            user_msg = f"We couldn't read this photo ({e})."
+        raise HTTPException(status_code=415, detail=user_msg)
 
     # Normalise orientation using EXIF so portrait photos don't land
     # rotated 90°. Pillow's ImageOps.exif_transpose handles every case.
     img = ImageOps.exif_transpose(img)
-    # Convert any RGBA/P modes to RGB (JPEG can't hold alpha) — but
-    # preserve transparency-sensitive assets by saving as PNG if alpha
-    # is meaningful (rare for photos).
     save_format = "JPEG"
     ext = "jpg"
     if img.mode in ("RGBA", "LA"):
-        # Flatten against black — our gallery is dark-themed so this
-        # looks natural. If the user wanted transparency we'd have to
-        # keep PNG, but spot photos don't need it.
         bg = Image.new("RGB", img.size, (0, 0, 0))
         bg.paste(img, mask=img.split()[-1])
         img = bg
     elif img.mode not in ("RGB", "L"):
         img = img.convert("RGB")
 
-    # Downscale if the long edge exceeds the cap — avoids shipping 48MP
-    # raw iPhone images across the wire or storing them on disk.
     lw, lh = img.size
     long_edge = max(lw, lh)
     if long_edge > MAX_LONG_EDGE:
@@ -142,16 +202,31 @@ async def upload_image(
     img.save(out, save_format, quality=JPEG_QUALITY, optimize=True, progressive=True)
     encoded = out.getvalue()
 
-    # Store under /uploads/<YYYY>/<MM>/<uuid>.<ext>. Sharding by month
-    # keeps the directory listings small and makes backups/cleanup easy.
     now = datetime.now(timezone.utc)
     sub = UPLOADS_ROOT / f"{now.year:04d}" / f"{now.month:02d}"
     sub.mkdir(parents=True, exist_ok=True)
     name = f"{uuid.uuid4().hex}.{ext}"
     path = sub / name
-    path.write_bytes(encoded)
+    try:
+        path.write_bytes(encoded)
+    except OSError as e:
+        _upload_log.error(
+            "upload_image.disk_write_fail user_id=%s filename=%r err=%s",
+            user_id, fname, e,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Couldn't save the photo on our side. Please try again in a moment.",
+        )
 
     rel_url = f"/api/uploads/{now.year:04d}/{now.month:02d}/{name}"
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+    _upload_log.info(
+        "upload_image.ok user_id=%s filename=%r in_bytes=%d in_mime=%r out_bytes=%d "
+        "out_dim=%dx%d url=%s elapsed_ms=%d",
+        user_id, fname, size_in, ct_in, len(encoded),
+        img.size[0], img.size[1], rel_url, elapsed_ms,
+    )
     return {
         "image_url": rel_url,
         "width": img.size[0],

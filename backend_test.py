@@ -1,547 +1,434 @@
 """
-FINAL STABILITY PASS — Explore Speed CR (all 4 batches).
-Validates every backend surface exercised by real user behavior.
+Backend test for HEIC upload fix + community uploads regression.
 
-Sections:
-  A — Explore List (paginated /spots)
-  B — Map (lightweight markers)
-  C — Spot Detail / Upload
-  D — Regression smoke
-  E — Concurrency / abort
+Targeted scope (per review):
+  1. Confirm pillow-heif is registered in this Python.
+  2. JPEG upload via POST /api/uploads/image still works.
+  3. HEIC upload via POST /api/uploads/image succeeds (the key fix).
+  4. Error categorization (400 empty / 413 too large / 415 wrong format / 401 unauth).
+  5. Structured logging from `lumascout.uploads` is emitted.
+  6. POST /api/spots/{spot_id}/uploads (community photo bundle) ends up in
+     db.spot_community_uploads.
+  7. Regression smoke on /auth/me, /feed/home, /spots paginated, /spots/markers.
+
+Auth uses super_admin from /app/memory/test_credentials.md.
 """
-import asyncio
+from __future__ import annotations
+
+import io
+import json
+import os
 import sys
 import time
-import json
-import httpx
+import subprocess
+from typing import Any
 
-BASE = "https://photo-finder-60.preview.emergentagent.com/api"
+import requests
+from PIL import Image
+import pillow_heif
+
+BASE = os.environ.get("LS_TEST_BASE", "https://photo-finder-60.preview.emergentagent.com").rstrip("/")
+API = f"{BASE}/api"
+
 ADMIN_EMAIL = "admin@lumascout.app"
-ADMIN_PASS = "Grayson@1117!!"
+ADMIN_PASSWORD = "Grayson@1117!!"
 
-passed = 0
-failed = 0
-failures = []
-
-
-def ok(msg):
-    global passed
-    passed += 1
-    print(f"  ✅ {msg}")
+PASS_LOG: list[str] = []
+FAIL_LOG: list[str] = []
 
 
-def bad(msg):
-    global failed
-    failed += 1
-    failures.append(msg)
-    print(f"  ❌ {msg}")
+def ok(msg: str):
+    print(f"  PASS  {msg}")
+    PASS_LOG.append(msg)
 
 
-async def main():
-    async with httpx.AsyncClient(base_url=BASE, timeout=60.0) as client:
-        # ── Login admin ────────────────────────────────────
-        print("\n══ AUTH SETUP ══")
-        r = await client.post("/auth/login",
-                              json={"email": ADMIN_EMAIL, "password": ADMIN_PASS})
-        if r.status_code != 200:
-            bad(f"Admin login failed: {r.status_code} {r.text[:300]}")
-            return 1
-        auth_payload = r.json()
-        token = auth_payload.get("token")
-        admin_uid = (auth_payload.get("user") or {}).get("user_id") or auth_payload.get("user_id")
-        admin_h = {"Authorization": f"Bearer {token}"}
-        ok(f"Admin login → token len={len(token or '')} uid={admin_uid}")
+def fail(msg: str):
+    print(f"  FAIL  {msg}")
+    FAIL_LOG.append(msg)
 
-        # ════════════════════════════════════════════════════════
-        # SECTION A — EXPLORE LIST (paginated /spots)
-        # ════════════════════════════════════════════════════════
-        print("\n══ SECTION A — Explore List (paginated /spots) ══")
 
-        # A1. paginated=1&limit=24&cursor=0&sort=quality
-        print("\n── A1. GET /spots?paginated=1&limit=24&cursor=0&sort=quality ──")
-        r = await client.get("/spots", params={"paginated": 1, "limit": 24, "cursor": 0, "sort": "quality"})
-        page1_ids = set()
-        page1_items = []
-        if r.status_code != 200:
-            bad(f"A1: {r.status_code} {r.text[:200]}")
+def section(title: str):
+    print(f"\n=== {title} ===")
+
+
+# ---------------------------------------------------------------------------
+# Section 0: pillow-heif registration sanity check (in-process)
+# ---------------------------------------------------------------------------
+def test_pillow_heif_registered():
+    section("0. pillow-heif registered locally")
+    pillow_heif.register_heif_opener()
+    ext = Image.registered_extensions().get(".heic")
+    if ext == "HEIF":
+        ok(f"Image.registered_extensions()['.heic'] == 'HEIF' (pillow_heif {pillow_heif.__version__})")
+    else:
+        fail(f"Expected '.heic' -> 'HEIF', got {ext!r}")
+
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+def login_admin() -> str | None:
+    section("Auth: login admin")
+    r = requests.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=20)
+    if r.status_code != 200:
+        fail(f"/auth/login -> {r.status_code} body={r.text[:200]}")
+        return None
+    tok = r.json().get("token")
+    if not tok:
+        fail(f"/auth/login missing token: {r.json()}")
+        return None
+    ok(f"/auth/login -> 200, token len={len(tok)}")
+    return tok
+
+
+# ---------------------------------------------------------------------------
+# Section 1: JPEG upload
+# ---------------------------------------------------------------------------
+def make_jpeg_bytes(size=(120, 120), color=(50, 100, 200)) -> bytes:
+    img = Image.new("RGB", size, color)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
+
+
+def make_heic_bytes(size=(100, 100), color=(200, 100, 50)) -> bytes:
+    img = Image.new("RGB", size, color)
+    buf = io.BytesIO()
+    pillow_heif.from_pillow(img).save(buf, format="HEIF")
+    return buf.getvalue()
+
+
+def test_jpeg_upload(token: str) -> str | None:
+    section("1. JPEG upload via /api/uploads/image")
+    jpeg = make_jpeg_bytes()
+    files = {"file": ("test.jpg", jpeg, "image/jpeg")}
+    r = requests.post(
+        f"{API}/uploads/image",
+        files=files,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        fail(f"JPEG upload -> {r.status_code} body={r.text[:300]}")
+        return None
+    j = r.json()
+    expected_keys = {"image_url", "width", "height", "bytes", "mime"}
+    missing = expected_keys - set(j.keys())
+    if missing:
+        fail(f"JPEG upload response missing keys: {missing}; got {set(j.keys())}")
+        return None
+    if j["mime"] != "image/jpeg":
+        fail(f"JPEG upload mime expected image/jpeg got {j['mime']!r}")
+    if not isinstance(j["width"], int) or not isinstance(j["height"], int):
+        fail(f"JPEG upload width/height not int: {j['width']!r}, {j['height']!r}")
+    if not str(j["image_url"]).startswith("/api/uploads/"):
+        fail(f"JPEG upload image_url unexpected: {j['image_url']!r}")
+    ok(f"JPEG -> 200 {j['width']}x{j['height']} bytes={j['bytes']} mime={j['mime']} url={j['image_url']}")
+    return j["image_url"]
+
+
+# ---------------------------------------------------------------------------
+# Section 2: HEIC upload — the key fix
+# ---------------------------------------------------------------------------
+def test_heic_upload(token: str):
+    section("2. HEIC upload via /api/uploads/image (KEY FIX)")
+    try:
+        heic = make_heic_bytes()
+    except Exception as e:
+        fail(f"Failed to synthesize HEIC bytes locally: {e}")
+        return
+    if len(heic) < 100:
+        fail(f"Synthesized HEIC suspiciously small: {len(heic)} bytes")
+        return
+    files = {"file": ("test.heic", heic, "image/heic")}
+    r = requests.post(
+        f"{API}/uploads/image",
+        files=files,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        fail(f"HEIC upload -> {r.status_code} body={r.text[:400]}")
+        return
+    j = r.json()
+    if j.get("mime") != "image/jpeg":
+        fail(f"HEIC server output mime expected image/jpeg got {j.get('mime')!r}")
+        return
+    if not (j.get("width") and j.get("height")):
+        fail(f"HEIC upload missing width/height: {j}")
+        return
+    ok(f"HEIC -> 200 transcoded to JPEG {j['width']}x{j['height']} bytes={j['bytes']} url={j['image_url']}")
+
+
+# ---------------------------------------------------------------------------
+# Section 3: Error categorization
+# ---------------------------------------------------------------------------
+def test_empty_body(token: str):
+    section("3a. Empty body -> 400 friendly")
+    files = {"file": ("empty.jpg", b"", "image/jpeg")}
+    r = requests.post(
+        f"{API}/uploads/image",
+        files=files,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=20,
+    )
+    if r.status_code != 400:
+        fail(f"Empty body expected 400 got {r.status_code} body={r.text[:200]}")
+        return
+    detail = ""
+    try:
+        detail = r.json().get("detail", "")
+    except Exception:
+        detail = r.text
+    if "empty" in detail.lower() or "didn't make it" in detail.lower() or "didnt make it" in detail.lower():
+        ok(f"Empty body -> 400 detail={detail!r}")
+    else:
+        fail(f"Empty body 400 but detail unfriendly: {detail!r}")
+
+
+def test_too_large(token: str):
+    section("3b. >10MB body -> 413 friendly")
+    # 11 MB of pseudo-random bytes; doesn't need to be a valid image because
+    # the size check fires before Pillow decode.
+    blob = os.urandom(11 * 1024 * 1024)
+    files = {"file": ("huge.jpg", blob, "image/jpeg")}
+    r = requests.post(
+        f"{API}/uploads/image",
+        files=files,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=60,
+    )
+    if r.status_code != 413:
+        fail(f"11MB body expected 413 got {r.status_code} body={r.text[:200]}")
+        return
+    detail = ""
+    try:
+        detail = r.json().get("detail", "")
+    except Exception:
+        detail = r.text
+    low = detail.lower()
+    if "too large" in low or "max" in low or "mb" in low or "size" in low:
+        ok(f"11MB -> 413 detail={detail!r}")
+    else:
+        fail(f"11MB 413 but detail not size-related: {detail!r}")
+
+
+def test_wrong_format(token: str):
+    section("3c. Text file with image/png content_type -> 415 friendly")
+    body = b"this is plain text, not an image\n" * 8
+    files = {"file": ("notes.png", body, "image/png")}
+    r = requests.post(
+        f"{API}/uploads/image",
+        files=files,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=20,
+    )
+    if r.status_code != 415:
+        fail(f"Text-as-png expected 415 got {r.status_code} body={r.text[:200]}")
+        return
+    detail = ""
+    try:
+        detail = r.json().get("detail", "")
+    except Exception:
+        detail = r.text
+    low = detail.lower()
+    if any(s in low for s in ["jpeg", "png", "webp", "heic", "supported", "doesn't look"]):
+        ok(f"Text-as-png -> 415 detail={detail!r}")
+    else:
+        fail(f"Text-as-png 415 but detail not format-related: {detail!r}")
+
+
+def test_unauthenticated():
+    section("3d. Unauthenticated -> 401")
+    jpeg = make_jpeg_bytes()
+    files = {"file": ("test.jpg", jpeg, "image/jpeg")}
+    r = requests.post(f"{API}/uploads/image", files=files, timeout=20)
+    if r.status_code in (401, 403):
+        ok(f"Unauth -> {r.status_code}")
+    else:
+        fail(f"Unauth expected 401/403 got {r.status_code} body={r.text[:200]}")
+
+
+# ---------------------------------------------------------------------------
+# Section 4: Structured logging
+# ---------------------------------------------------------------------------
+def test_structured_logging(token: str):
+    section("4. Structured logging on lumascout.uploads after a successful upload")
+    # Trigger a fresh upload, then tail backend logs.
+    jpeg = make_jpeg_bytes(size=(64, 64), color=(10, 200, 30))
+    files = {"file": ("logprobe.jpg", jpeg, "image/jpeg")}
+    r = requests.post(
+        f"{API}/uploads/image",
+        files=files,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=20,
+    )
+    if r.status_code != 200:
+        fail(f"Could not seed log line: upload -> {r.status_code} {r.text[:200]}")
+        return
+    # Give the logger a moment to flush.
+    time.sleep(0.8)
+    log_text = ""
+    for path in (
+        "/var/log/supervisor/backend.out.log",
+        "/var/log/supervisor/backend.err.log",
+    ):
+        try:
+            res = subprocess.run(
+                ["tail", "-n", "400", path],
+                capture_output=True, text=True, timeout=10,
+            )
+            log_text += "\n" + (res.stdout or "")
+        except Exception:
+            pass
+    if not log_text.strip():
+        fail("No backend log content captured from supervisor logs")
+        return
+    has_start = "upload_image.start" in log_text
+    has_ok = "upload_image.ok" in log_text
+    if has_start and has_ok:
+        # Pull the most recent .ok line for inspection.
+        last_ok = ""
+        for line in reversed(log_text.splitlines()):
+            if "upload_image.ok" in line:
+                last_ok = line
+                break
+        # Quick sanity that fields we care about appear.
+        wanted = ["user_id=", "filename=", "in_bytes=", "in_mime=", "out_bytes=", "out_dim=", "url=", "elapsed_ms="]
+        missing = [w for w in wanted if w not in last_ok]
+        if missing:
+            fail(f"upload_image.ok line missing fields {missing}; line={last_ok!r}")
         else:
-            body = r.json()
-            if isinstance(body, dict) and {"items", "next_cursor", "total_estimate", "limit"} <= set(body.keys()):
-                ok(f"A1: wrapped shape OK; items={len(body['items'])} next_cursor={body['next_cursor']} total_estimate={body['total_estimate']}")
-                if len(body["items"]) <= 24:
-                    ok(f"A1: items≤24 ({len(body['items'])})")
-                else:
-                    bad(f"A1: items > 24 ({len(body['items'])})")
-                page1_items = body["items"]
-                page1_ids = {it.get("spot_id") for it in page1_items}
-            else:
-                bad(f"A1: wrong shape, keys={list(body.keys()) if isinstance(body, dict) else type(body)}")
+            ok(f"Structured log .start + .ok present; .ok line includes all expected fields")
+    else:
+        fail(f"Expected upload_image.start and upload_image.ok in logs (start={has_start} ok={has_ok})")
 
-        # A2. paginated=1&limit=12&cursor=24&sort=quality — no overlap
-        print("\n── A2. GET /spots?paginated=1&limit=12&cursor=24&sort=quality ──")
-        r = await client.get("/spots", params={"paginated": 1, "limit": 12, "cursor": 24, "sort": "quality"})
-        if r.status_code != 200:
-            bad(f"A2: {r.status_code} {r.text[:200]}")
+
+# ---------------------------------------------------------------------------
+# Section 5: Community photo upload to a real spot
+# ---------------------------------------------------------------------------
+def test_community_upload(token: str, image_url: str):
+    section("5. POST /api/spots/{spot_id}/uploads")
+    if not image_url:
+        fail("Skipped: no image_url available from JPEG step")
+        return
+    # Find any real spot.
+    r = requests.get(f"{API}/spots?limit=5", timeout=20)
+    if r.status_code != 200:
+        fail(f"/spots -> {r.status_code}")
+        return
+    arr = r.json()
+    if not isinstance(arr, list) or not arr:
+        fail(f"/spots returned empty/non-list: {type(arr).__name__}")
+        return
+    spot_id = arr[0].get("spot_id")
+    if not spot_id:
+        fail(f"First spot has no spot_id: {arr[0]}")
+        return
+    body = {
+        "images": [{"image_url": image_url, "caption": None}],
+        "caption": "Test upload",
+        "condition_tags": ["verified_today"],
+        "visibility": "public",
+    }
+    r = requests.post(
+        f"{API}/spots/{spot_id}/uploads",
+        json=body,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        fail(f"community upload -> {r.status_code} body={r.text[:300]}")
+        return
+    j = r.json()
+    expected = {"ok", "batch_id", "moderation_status", "auto_approved", "count", "message"}
+    missing = expected - set(j.keys())
+    if missing:
+        fail(f"Community upload response missing keys: {missing}; got {j}")
+        return
+    if not j.get("ok") or j.get("count") != 1 or not j.get("batch_id"):
+        fail(f"Community upload payload unexpected: {j}")
+        return
+    ok(
+        f"community upload -> 200 ok=True batch_id={j['batch_id']} "
+        f"status={j['moderation_status']} auto_approved={j['auto_approved']}"
+    )
+
+    # Verify row landed in db.spot_community_uploads via list endpoint.
+    r2 = requests.get(
+        f"{API}/spots/{spot_id}/uploads?limit=24",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=20,
+    )
+    if r2.status_code != 200:
+        fail(f"/spots/{{id}}/uploads list -> {r2.status_code}")
+        return
+    listing = r2.json()
+    items = listing.get("items") if isinstance(listing, dict) else listing
+    if not isinstance(items, list):
+        fail(f"uploads list shape unexpected: {type(listing).__name__}")
+        return
+    matching = [u for u in items if u.get("batch_id") == j["batch_id"]]
+    if matching:
+        ok(f"Row landed in spot_community_uploads — found {len(matching)} item(s) with batch_id")
+    else:
+        # If auto_approved was False and viewer is not owner/admin, list may not show pending.
+        # Admin should see pending items.
+        if not j.get("auto_approved"):
+            # admin viewer should still see pending (since admin is staff)
+            fail(f"Admin should see new pending upload but no rows match batch_id={j['batch_id']}")
         else:
-            body = r.json()
-            items = body.get("items", [])
-            if len(items) <= 12:
-                ok(f"A2: items≤12 ({len(items)})")
-            else:
-                bad(f"A2: items > 12 ({len(items)})")
-            page2_ids = {it.get("spot_id") for it in items}
-            overlap = page1_ids & page2_ids
-            if not overlap:
-                ok(f"A2: disjoint from page1 (0 overlap); p1={len(page1_ids)} p2={len(page2_ids)}")
-            else:
-                bad(f"A2: overlap with page1: {len(overlap)} shared ids {list(overlap)[:5]}")
+            fail(f"Auto-approved upload not surfaced in list endpoint")
 
-        # A3. overflow cursor
-        print("\n── A3. GET /spots?paginated=1&limit=12&cursor=99999 (overflow) ──")
-        r = await client.get("/spots", params={"paginated": 1, "limit": 12, "cursor": 99999, "sort": "quality"})
-        if r.status_code != 200:
-            bad(f"A3: {r.status_code} {r.text[:200]}")
-        else:
-            body = r.json()
-            items = body.get("items", [])
-            nxt = body.get("next_cursor")
-            if items == [] and nxt is None:
-                ok("A3: overflow → items=[] and next_cursor=null")
-            else:
-                bad(f"A3: unexpected overflow response: items={len(items)} next_cursor={nxt}")
 
-        # A4. sort=distance — ASC by distance_mi
-        print("\n── A4. GET /spots?paginated=1&limit=24&cursor=0&sort=distance&lat=30.2672&lng=-97.7431 ──")
-        r = await client.get("/spots", params={
-            "paginated": 1, "limit": 24, "cursor": 0,
-            "sort": "distance", "lat": 30.2672, "lng": -97.7431
-        })
-        if r.status_code != 200:
-            bad(f"A4: {r.status_code} {r.text[:200]}")
-        else:
-            body = r.json()
-            items = body.get("items", [])
-            first5 = items[:5]
-            d = [it.get("distance_mi") for it in first5]
-            if all(x is not None for x in d) and all(d[i] <= d[i + 1] for i in range(len(d) - 1)):
-                ok(f"A4: first 5 items ASC by distance_mi: {d}")
-            else:
-                bad(f"A4: first 5 distance_mi NOT ASC or has None: {d}")
-
-        # A5. filter+pagination: shoot_type=portrait
-        print("\n── A5. GET /spots?paginated=1&limit=10&cursor=0&shoot_type=portrait ──")
-        r = await client.get("/spots", params={"paginated": 1, "limit": 10, "cursor": 0, "shoot_type": "portrait"})
-        portrait_p1_ids = set()
-        if r.status_code != 200:
-            bad(f"A5: {r.status_code} {r.text[:200]}")
-        else:
-            body = r.json()
-            items = body.get("items", [])
-            bad_items = [it for it in items if "portrait" not in (it.get("shoot_types") or [])]
-            if not bad_items:
-                ok(f"A5: all {len(items)} items have 'portrait' in shoot_types (or empty list)")
-            else:
-                bad(f"A5: {len(bad_items)} items missing 'portrait' in shoot_types; sample spot_ids={[b.get('spot_id') for b in bad_items[:3]]}, shoot_types={[b.get('shoot_types') for b in bad_items[:3]]}")
-            portrait_p1_ids = {it.get("spot_id") for it in items}
-
-            # Next page preserves filter
-            r2 = await client.get("/spots", params={"paginated": 1, "limit": 10, "cursor": 10, "shoot_type": "portrait"})
-            if r2.status_code == 200:
-                items2 = r2.json().get("items", [])
-                bad2 = [it for it in items2 if "portrait" not in (it.get("shoot_types") or [])]
-                if not bad2:
-                    ok(f"A5 page2: filter preserved; items={len(items2)}, all tagged portrait (or empty)")
-                else:
-                    bad(f"A5 page2: filter not preserved on {len(bad2)} items")
-                overlap = portrait_p1_ids & {it.get("spot_id") for it in items2}
-                if not overlap:
-                    ok("A5 page2: disjoint from page1 portrait set")
-                else:
-                    bad(f"A5 page2: overlap with page1 portrait: {len(overlap)}")
-            else:
-                bad(f"A5 page2: {r2.status_code}")
-
-        # A6. search q=lake
-        print("\n── A6. GET /spots?q=lake&paginated=1&limit=10 (search support probe) ──")
-        r = await client.get("/spots", params={"q": "lake", "paginated": 1, "limit": 10})
-        if r.status_code != 200:
-            bad(f"A6: {r.status_code} {r.text[:200]}")
-        else:
-            body = r.json()
-            items = body.get("items", [])
-            # Check if any item title/city contains "lake" (case-insensitive)
-            lake_hits = [it for it in items if "lake" in ((it.get("title") or "") + " " + (it.get("city") or "")).lower()]
-            if items:
-                if lake_hits:
-                    ok(f"A6: q=lake search returned {len(items)} items; {len(lake_hits)} contain 'lake' in title/city — likely supported")
-                else:
-                    ok(f"A6: q=lake returned {len(items)} items but none match 'lake' string — q param may be unsupported/ignored (NOT failing, just noted)")
-            else:
-                ok("A6: q=lake returned 0 items — param accepted; support unclear")
-
-        # A7. save toggle
-        print("\n── A7. POST /spots/{id}/save toggle ──")
-        if page1_items:
-            sid = page1_items[0].get("spot_id")
-            if sid:
-                r1 = await client.post(f"/spots/{sid}/save", headers=admin_h)
-                r2 = await client.post(f"/spots/{sid}/save", headers=admin_h)
-                if r1.status_code == 200 and r2.status_code == 200:
-                    ok(f"A7: save toggle {sid} → 200 both times (r1={r1.json().get('saved')}, r2={r2.json().get('saved')})")
-                else:
-                    bad(f"A7: save toggle {sid} → r1={r1.status_code} r2={r2.status_code} ; r1.text={r1.text[:150]}")
-            else:
-                bad("A7: no spot_id from page1")
-        else:
-            bad("A7: no page1 items to test save toggle")
-
-        # ════════════════════════════════════════════════════════
-        # SECTION B — MAP (lightweight markers)
-        # ════════════════════════════════════════════════════════
-        print("\n══ SECTION B — Map (/spots/markers) ══")
-
-        # B8. basic shape — no heavy keys
-        print("\n── B8. GET /spots/markers?limit=20 ──")
-        r = await client.get("/spots/markers", params={"limit": 20})
-        b8_bytes = len(r.content) if r.status_code == 200 else 0
-        if r.status_code != 200:
-            bad(f"B8: {r.status_code} {r.text[:200]}")
-        else:
-            body = r.json()
-            if isinstance(body, dict) and "items" in body and "count" in body:
-                ok(f"B8: shape {{items, count}}; count={body['count']}")
-            else:
-                bad(f"B8: wrong shape: keys={list(body.keys()) if isinstance(body, dict) else type(body)}")
-            BANNED = {"description", "images", "comments", "owner",
-                      "owner_user_id", "reviews", "checkins"}
-            seen_banned = set()
-            for it in body.get("items", []):
-                seen_banned |= set(it.keys()) & BANNED
-            if seen_banned:
-                bad(f"B8: BANNED keys leaking in markers: {seen_banned}")
-            else:
-                ok("B8: no description/images/comments/owner blob in any item")
-
-        # B9. bbox
-        print("\n── B9. GET /spots/markers?sw_lat=29&sw_lng=-99&ne_lat=31&ne_lng=-97&limit=200 ──")
-        r = await client.get("/spots/markers", params={
-            "sw_lat": 29, "sw_lng": -99, "ne_lat": 31, "ne_lng": -97, "limit": 200
-        })
-        if r.status_code != 200:
-            bad(f"B9: {r.status_code} {r.text[:200]}")
-        else:
-            items = r.json().get("items", [])
-            out = [(it.get("lat"), it.get("lng"), it.get("spot_id")) for it in items
-                   if not (29 <= it.get("lat", -1) <= 31) or not (-99 <= it.get("lng", -1) <= -97)]
-            if not out:
-                ok(f"B9: all {len(items)} markers within bbox")
-            else:
-                bad(f"B9: {len(out)} markers outside bbox; sample={out[:3]}")
-
-        # B10. empty bbox
-        print("\n── B10. GET /spots/markers (empty bbox near 0,0) ──")
-        r = await client.get("/spots/markers", params={
-            "sw_lat": 0, "sw_lng": 0, "ne_lat": 0.001, "ne_lng": 0.001, "limit": 20
-        })
-        if r.status_code != 200:
-            bad(f"B10: {r.status_code} {r.text[:200]}")
-        else:
-            items = r.json().get("items", [])
-            if len(items) == 0:
-                ok(f"B10: empty bbox → items=[] (no 500)")
-            else:
-                ok(f"B10: empty bbox → {len(items)} items (near-zero acceptable; no 500)")
-
-        # B11. shoot_type filter
-        print("\n── B11. GET /spots/markers?shoot_type=wedding&limit=50 ──")
-        r = await client.get("/spots/markers", params={"shoot_type": "wedding", "limit": 50})
-        if r.status_code != 200:
-            bad(f"B11: {r.status_code} {r.text[:200]}")
-        else:
-            items = r.json().get("items", [])
-            bad_items = [it for it in items if "wedding" not in (it.get("shoot_types") or [])]
-            if not bad_items:
-                ok(f"B11: all {len(items)} markers tagged 'wedding' (or 0 items)")
-            else:
-                bad(f"B11: {len(bad_items)} markers missing 'wedding' shoot_type")
-
-        # B12. auth matrix
-        print("\n── B12. auth matrix ──")
-        r_un = await client.get("/spots/markers", params={"limit": 5})
-        r_ad = await client.get("/spots/markers", params={"limit": 5}, headers=admin_h)
-        if r_un.status_code == 200 and r_ad.status_code == 200:
-            ok(f"B12: unauth 200 + admin 200 (both work)")
-        else:
-            bad(f"B12: unauth={r_un.status_code} admin={r_ad.status_code}")
-
-        # B13. payload size sanity
-        print("\n── B13. payload size sanity ──")
-        r_m = await client.get("/spots/markers", params={"limit": 20})
-        r_s = await client.get("/spots", params={"limit": 20})
-        if r_m.status_code == 200 and r_s.status_code == 200:
-            markers_items = r_m.json().get("items", [])
-            spots_items = r_s.json() if isinstance(r_s.json(), list) else r_s.json().get("items", [])
-            if markers_items and spots_items:
-                m_avg = sum(len(json.dumps(it)) for it in markers_items) / len(markers_items)
-                s_avg = sum(len(json.dumps(it)) for it in spots_items) / len(spots_items)
-                ok(f"B13: marker avg={m_avg:.0f}B ; full-spot avg={s_avg:.0f}B ; ratio={s_avg/m_avg:.1f}x")
-                if m_avg <= 500:
-                    ok(f"B13: marker avg ≤500B ({m_avg:.0f}B)")
-                else:
-                    bad(f"B13: marker avg > 500B ({m_avg:.0f}B)")
-                if s_avg > m_avg * 2:
-                    ok(f"B13: full /spots item is ≥2x larger ({s_avg/m_avg:.1f}x)")
-                else:
-                    bad(f"B13: full /spots not materially larger ({s_avg/m_avg:.1f}x)")
-            else:
-                bad(f"B13: empty items in one; markers={len(markers_items)} spots={len(spots_items)}")
-        else:
-            bad(f"B13: markers={r_m.status_code} spots={r_s.status_code}")
-
-        # ════════════════════════════════════════════════════════
-        # SECTION C — Spot Detail / Upload
-        # ════════════════════════════════════════════════════════
-        print("\n══ SECTION C — Spot Detail / Upload ══")
-
-        # C14. real spot detail
-        real_sid = None
-        if page1_items:
-            real_sid = page1_items[0].get("spot_id")
-        print(f"\n── C14. GET /spots/{real_sid} ──")
-        if real_sid:
-            r = await client.get(f"/spots/{real_sid}")
-            if r.status_code != 200:
-                bad(f"C14: {r.status_code} {r.text[:200]}")
-            else:
-                body = r.json()
-                has_desc = "description" in body
-                has_imgs = "images" in body or "image_url" in body
-                if body.get("spot_id") == real_sid and (has_desc or has_imgs):
-                    ok(f"C14: spot detail OK (has_desc={has_desc}, has_images={has_imgs}, title='{(body.get('title') or '')[:40]}')")
-                else:
-                    bad(f"C14: missing desc/images; keys_sample={list(body.keys())[:10]}")
-        else:
-            bad("C14: no real spot to fetch")
-
-        # C15. 404 for nonexistent
-        print("\n── C15. GET /spots/spot_does_not_exist ──")
-        r = await client.get("/spots/spot_does_not_exist")
-        if r.status_code == 404:
-            ok("C15: nonexistent spot → 404 (markers route not shadowing)")
-        else:
-            bad(f"C15: expected 404, got {r.status_code} {r.text[:150]}")
-
-        # C16. check-duplicates
-        print("\n── C16. GET /spots/check-duplicates?latitude=30.2672&longitude=-97.7431 ──")
-        r = await client.get("/spots/check-duplicates",
-                             params={"latitude": 30.2672, "longitude": -97.7431})
+# ---------------------------------------------------------------------------
+# Section 6: Regression smoke
+# ---------------------------------------------------------------------------
+def test_regression_smoke(token: str):
+    section("6. Regression smoke")
+    h = {"Authorization": f"Bearer {token}"}
+    cases = [
+        ("/auth/me", h),
+        ("/feed/home", h),
+        ("/spots?paginated=1&limit=10", None),
+        ("/spots/markers?limit=20", None),
+    ]
+    for path, hh in cases:
+        r = requests.get(f"{API}{path}", headers=hh or {}, timeout=20)
         if r.status_code == 200:
-            body = r.json()
-            ok(f"C16: check-duplicates → 200 (count={body.get('count')}, candidates={len(body.get('candidates', []))})")
+            ok(f"GET {path} -> 200")
         else:
-            bad(f"C16: {r.status_code} {r.text[:200]}")
+            fail(f"GET {path} -> {r.status_code} body={r.text[:200]}")
 
-        # C17. POST new spot
-        print("\n── C17. POST /spots (minimal valid payload) ──")
-        new_spot_payload = {
-            "title": f"QA Stability Pass Spot {int(time.time())}",
-            "description": "Final stability pass — test spot from backend QA harness.",
-            "latitude": 30.2672,
-            "longitude": -97.7431,
-            "city": "Austin",
-            "state": "TX",
-            "country": "US",
-            "category": "outdoor",
-            "shoot_types": ["portrait"],
-            "tags": ["qa", "test"],
-        }
-        r = await client.post("/spots", json=new_spot_payload, headers=admin_h)
-        new_spot_id = None
-        if r.status_code in (200, 201):
-            body = r.json()
-            new_spot_id = body.get("spot_id") or (body.get("spot") or {}).get("spot_id")
-            if new_spot_id:
-                ok(f"C17: POST /spots → {r.status_code}; spot_id={new_spot_id}")
-            else:
-                bad(f"C17: POST /spots → {r.status_code} but no spot_id; body keys={list(body.keys())}")
-        else:
-            bad(f"C17: POST /spots → {r.status_code} {r.text[:300]}")
 
-        # C17b. verify appears in list
-        if new_spot_id:
-            r = await client.get("/spots", params={"paginated": 1, "limit": 24, "sort": "recent"})
-            if r.status_code == 200:
-                ids = {it.get("spot_id") for it in r.json().get("items", [])}
-                if new_spot_id in ids:
-                    ok(f"C17b: new spot_id {new_spot_id} appears in paginated list (sort=recent)")
-                else:
-                    # Try with larger limit or without strict sort
-                    r2 = await client.get("/spots", params={"paginated": 1, "limit": 50, "cursor": 0})
-                    if r2.status_code == 200:
-                        ids2 = {it.get("spot_id") for it in r2.json().get("items", [])}
-                        if new_spot_id in ids2:
-                            ok(f"C17b: new spot_id in first 50 paginated results")
-                        else:
-                            # Check via direct GET
-                            r3 = await client.get(f"/spots/{new_spot_id}")
-                            if r3.status_code == 200:
-                                ok(f"C17b: new spot fetched directly (visibility gate may filter from list; GET detail OK)")
-                            else:
-                                bad(f"C17b: new spot_id NOT findable (direct GET={r3.status_code})")
-                    else:
-                        bad(f"C17b: retry list {r2.status_code}")
-            else:
-                bad(f"C17b: list {r.status_code}")
+# ---------------------------------------------------------------------------
+# Run
+# ---------------------------------------------------------------------------
+def main():
+    print(f"BASE: {API}")
+    test_pillow_heif_registered()
+    token = login_admin()
+    if not token:
+        print("\nABORT: admin login failed; cannot continue.")
+        return 1
+    image_url = test_jpeg_upload(token)
+    test_heic_upload(token)
+    test_empty_body(token)
+    test_too_large(token)
+    test_wrong_format(token)
+    test_unauthenticated()
+    test_structured_logging(token)
+    test_community_upload(token, image_url or "")
+    test_regression_smoke(token)
 
-        # ════════════════════════════════════════════════════════
-        # SECTION D — Regression smoke
-        # ════════════════════════════════════════════════════════
-        print("\n══ SECTION D — Regression smoke ══")
-
-        # D18. /auth/me
-        r = await client.get("/auth/me", headers=admin_h)
-        if r.status_code == 200:
-            ok(f"D18: /auth/me → 200 (uid={r.json().get('user_id')})")
-        else:
-            bad(f"D18: /auth/me → {r.status_code}")
-
-        # D19. /feed/home with lat/lng
-        r = await client.get("/feed/home", params={"lat": 30.27, "lng": -97.74}, headers=admin_h)
-        if r.status_code == 200:
-            body = r.json()
-            has_content = "spots" in body or "recommendations" in body or "rails" in body or isinstance(body, dict)
-            ok(f"D19: /feed/home?lat=30.27&lng=-97.74 → 200; keys={list(body.keys())[:8]}")
-        else:
-            bad(f"D19: /feed/home → {r.status_code}")
-
-        # D20. /feed/home no lat/lng
-        r = await client.get("/feed/home", headers=admin_h)
-        if r.status_code == 200:
-            ok("D20: /feed/home (no lat/lng) → 200")
-        else:
-            bad(f"D20: /feed/home → {r.status_code}")
-
-        # D21. /directory
-        r = await client.get("/directory", params={"limit": 10}, headers=admin_h)
-        if r.status_code == 200:
-            ok(f"D21: /directory?limit=10 → 200")
-        else:
-            bad(f"D21: /directory → {r.status_code}")
-
-        # D22. /directory/facets
-        r = await client.get("/directory/facets", params={"limit": 12})
-        if r.status_code == 200:
-            body = r.json()
-            if "top_cities" in body and "top_specialties" in body:
-                ok(f"D22: /directory/facets → 200; top_cities={len(body['top_cities'])} top_specialties={len(body['top_specialties'])}")
-            else:
-                bad(f"D22: facets missing keys; have={list(body.keys())}")
-        else:
-            bad(f"D22: /directory/facets → {r.status_code}")
-
-        # D23. /notifications
-        r = await client.get("/notifications", params={"limit": 5}, headers=admin_h)
-        if r.status_code == 200:
-            ok("D23: /notifications?limit=5 → 200")
-        else:
-            bad(f"D23: /notifications → {r.status_code}")
-
-        # D24. /dm/unread-count
-        r = await client.get("/dm/unread-count", headers=admin_h)
-        if r.status_code == 200:
-            ok(f"D24: /dm/unread-count → 200 ({r.json()})")
-        else:
-            bad(f"D24: /dm/unread-count → {r.status_code} {r.text[:200]}")
-
-        # D25. moderation queue — actual routes are /admin/pending + /admin/spot-uploads/pending
-        print("\n── D25. moderation queue (actual routes) ──")
-        r = await client.get("/admin/pending", headers=admin_h)
-        if r.status_code == 200:
-            ok(f"D25: /admin/pending (admin moderation queue) → 200")
-        else:
-            bad(f"D25: /admin/pending → {r.status_code} {r.text[:200]}")
-        r = await client.get("/admin/spot-uploads/pending", headers=admin_h)
-        if r.status_code == 200:
-            ok(f"D25b: /admin/spot-uploads/pending → 200")
-        else:
-            bad(f"D25b: /admin/spot-uploads/pending → {r.status_code}")
-        # Note: /admin/spots/queue does NOT exist in the codebase — review spec named it
-        # but actual routes are /admin/pending + /admin/spot-uploads/pending.
-        r = await client.get("/admin/spots/queue", headers=admin_h)
-        if r.status_code in (404, 405):
-            ok(f"D25-note: /admin/spots/queue doesn't exist ({r.status_code}) — expected; use /admin/pending instead")
-        # D26. saved spots list — actual route is /me/saved (not /users/{id}/saved-spots)
-        print("\n── D26. /me/saved (actual saved-spots route) ──")
-        r = await client.get("/me/saved", headers=admin_h)
-        if r.status_code == 200:
-            body = r.json()
-            ok(f"D26: /me/saved → 200 ({'items' in body and len(body.get('items', [])) or 'unknown shape'})")
-        else:
-            bad(f"D26: /me/saved → {r.status_code} {r.text[:200]}")
-
-        # D27. legacy /api/spots without paginated → raw array
-        r = await client.get("/spots", params={"limit": 10})
-        if r.status_code == 200:
-            body = r.json()
-            if isinstance(body, list):
-                ok(f"D27: legacy /spots?limit=10 → raw JSON ARRAY (len={len(body)})")
-            else:
-                bad(f"D27: legacy shape broken — expected list, got {type(body)} keys={list(body.keys()) if isinstance(body, dict) else '?'}")
-        else:
-            bad(f"D27: legacy /spots → {r.status_code}")
-
-        # ════════════════════════════════════════════════════════
-        # SECTION E — Concurrency / abort
-        # ════════════════════════════════════════════════════════
-        print("\n══ SECTION E — Concurrency ══")
-
-        # E28. 10 parallel /spots?paginated=1 with different cursors
-        print("\n── E28. 10 parallel paginated /spots requests ──")
-        tasks = []
-        for cur in [0, 5, 10, 15, 20, 25, 30, 35, 40, 45]:
-            tasks.append(client.get("/spots", params={"paginated": 1, "limit": 5, "cursor": cur, "sort": "quality"}))
-        t0 = time.time()
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        dt = (time.time() - t0) * 1000
-        statuses = [res.status_code if hasattr(res, "status_code") else f"exc:{type(res).__name__}" for res in results]
-        all_200 = all(s == 200 for s in statuses)
-        any_5xx = any(isinstance(s, int) and s >= 500 for s in statuses)
-        if all_200:
-            ok(f"E28: all 10 parallel requests returned 200 in {dt:.0f}ms")
-        elif any_5xx:
-            bad(f"E28: got 5xx: {statuses}")
-        else:
-            bad(f"E28: statuses mixed: {statuses}")
-
-        # E29. 5 markers + 5 paginated in parallel
-        print("\n── E29. 5 /markers + 5 paginated in parallel ──")
-        tasks = []
-        for _ in range(5):
-            tasks.append(client.get("/spots/markers", params={"limit": 50}))
-        for cur in [0, 5, 10, 15, 20]:
-            tasks.append(client.get("/spots", params={"paginated": 1, "limit": 5, "cursor": cur}))
-        t0 = time.time()
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        dt = (time.time() - t0) * 1000
-        statuses = [res.status_code if hasattr(res, "status_code") else f"exc:{type(res).__name__}" for res in results]
-        if all(s == 200 for s in statuses):
-            ok(f"E29: mixed 10 parallel → all 200 in {dt:.0f}ms")
-        else:
-            bad(f"E29: mixed parallel statuses: {statuses}")
-
-        # ────────────────────────────────────────────────────
-        # SUMMARY
-        # ────────────────────────────────────────────────────
-        print(f"\n{'='*60}")
-        print(f"SUMMARY: {passed} passed / {failed} failed")
-        if failures:
-            print("FAILURES:")
-            for f in failures:
-                print(f"  • {f}")
-        print(f"{'='*60}")
-        return failed
+    print("\n" + "=" * 60)
+    print(f"RESULTS: {len(PASS_LOG)} pass, {len(FAIL_LOG)} fail")
+    if FAIL_LOG:
+        print("\nFAILURES:")
+        for f in FAIL_LOG:
+            print(f"  - {f}")
+    return 0 if not FAIL_LOG else 2
 
 
 if __name__ == "__main__":
-    rc = asyncio.run(main())
-    sys.exit(0 if rc == 0 else 1)
+    sys.exit(main())
