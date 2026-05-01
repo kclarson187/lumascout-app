@@ -14,6 +14,7 @@ import { formatDistance, resolveMiles } from '../../src/utils/distance';
 import { api } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
 import SpotCard from '../../src/components/SpotCard';
+import { SkeletonSpotList } from '../../src/components/SkeletonSpotCard';
 import { Chip, EmptyState } from '../../src/components/ui';
 import { Button } from '../../src/components/Button';
 import ScoutAICard from '../../src/components/ScoutAICard';
@@ -37,6 +38,7 @@ import { MapView, ClusteredMapView, Marker } from '../../src/components/maps-mod
 import SafeClusteredMapView from '../../src/components/SafeClusteredMapView';
 import { Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { readCache, writeCache } from '../../src/utils/swrCache';
 import { useAuth } from '../../src/auth';
 
 // FIX(pre-launch UX cleanup #1): Map default region fallback chain.
@@ -231,6 +233,152 @@ export default function Explore() {
     });
     return withMi.map((x) => x.sp);
   }, [spots, gpsState, userCoords]);
+
+  // ────────────────────────────────────────────────────────────────
+  // Explore Speed CR — Batch 2 (June 2025): paginated infinite-scroll
+  // list state.
+  //
+  //   • Initial page : limit=24
+  //   • Subsequent   : limit=12 / page
+  //   • Cursor       : server-emitted next_cursor (offset).
+  //   • Sort         : 'distance' when GPS granted, else 'quality'
+  //   • SWR          : initial page hydrated synchronously from the
+  //                    AsyncStorage cache so a cold tab-switch never
+  //                    flashes a blank screen. Background refresh
+  //                    runs immediately after.
+  //
+  // We keep the legacy `spots` array around because the map view
+  // (and the Nearby/Trending/Golden Hour rails) still consume it.
+  // Batch 3 will swap the map to /api/spots/markers; until then the
+  // two paths coexist without breaking each other.
+  // ────────────────────────────────────────────────────────────────
+  const PAGE_SIZE_FIRST = 24;
+  const PAGE_SIZE_NEXT = 12;
+  const [listSpots, setListSpots] = useState<any[]>([]);
+  const [listCursor, setListCursor] = useState<number>(0);
+  const [listHasMore, setListHasMore] = useState<boolean>(true);
+  const [listLoadingInitial, setListLoadingInitial] = useState<boolean>(true);
+  const [listLoadingMore, setListLoadingMore] = useState<boolean>(false);
+  const listInflight = useRef<AbortController | null>(null);
+  const listOnEndReachedFiring = useRef<boolean>(false);
+
+  // Cache key encodes filters + GPS bucket. We round coords to ~1 mile
+  // (0.02°) so users moving through a city don't blow the cache.
+  const listCacheKey = useMemo(() => {
+    const parts: string[] = ['explore.list:v1'];
+    Object.entries(filters).forEach(([k, v]) => {
+      if (v == null || v === '' || v === false) return;
+      parts.push(`${k}=${v}`);
+    });
+    if (gpsState === 'granted' && userCoords) {
+      const lat = (Math.round(userCoords.lat * 50) / 50).toFixed(2);
+      const lng = (Math.round(userCoords.lng * 50) / 50).toFixed(2);
+      parts.push(`g=${lat},${lng}`);
+    } else {
+      parts.push('g=none');
+    }
+    return parts.join('|');
+  }, [filters, gpsState, userCoords]);
+
+  const buildListParams = useCallback((cursor: number, pageSize: number) => {
+    const params: any = {
+      paginated: 1,
+      limit: pageSize,
+      cursor,
+      sort: gpsState === 'granted' && userCoords ? 'distance' : 'quality',
+    };
+    Object.entries(filters).forEach(([k, v]) => {
+      if (v != null && v !== '' && v !== false) params[k] = v;
+    });
+    if (gpsState === 'granted' && userCoords) {
+      params.lat = userCoords.lat;
+      params.lng = userCoords.lng;
+    }
+    return params;
+  }, [filters, gpsState, userCoords]);
+
+  // SWR hydrate — show last cached payload instantly when filters/GPS
+  // bucket match. Runs once per cache-key change.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const cached = await readCache<{ items: any[]; cursor: number; hasMore: boolean }>(listCacheKey);
+        if (alive && cached?.items?.length) {
+          setListSpots(cached.items);
+          setListCursor(cached.cursor || cached.items.length);
+          setListHasMore(cached.hasMore !== false);
+          setListLoadingInitial(false);
+        }
+      } catch {}
+    })();
+    return () => { alive = false; };
+  }, [listCacheKey]);
+
+  // Initial fetch — called when filters or GPS bucket changes.
+  const loadListInitial = useCallback(async () => {
+    if (listInflight.current) {
+      try { listInflight.current.abort(); } catch {}
+    }
+    const ac = new AbortController();
+    listInflight.current = ac;
+    // Don't flip loading to true if we already have cached data — keep
+    // the cards on screen and let the background refresh swap them in.
+    setListSpots((prev) => (prev.length ? prev : prev));
+    if (listSpots.length === 0) setListLoadingInitial(true);
+    try {
+      const params = buildListParams(0, PAGE_SIZE_FIRST);
+      const resp = await api.get('/spots', params);
+      if (ac.signal.aborted) return;
+      // Wrapped shape from backend (paginated=1).
+      const items: any[] = Array.isArray(resp?.items) ? resp.items : (Array.isArray(resp) ? resp : []);
+      const next: number | null = (resp && typeof resp.next_cursor === 'number') ? resp.next_cursor : null;
+      setListSpots(items);
+      setListCursor(next ?? items.length);
+      setListHasMore(next !== null);
+      writeCache(listCacheKey, { items, cursor: next ?? items.length, hasMore: next !== null }).catch(() => {});
+    } catch (e: any) {
+      if (!ac.signal.aborted) exploreLog('warn', 'list_initial_error', { message: e?.message });
+    } finally {
+      if (listInflight.current === ac) listInflight.current = null;
+      setListLoadingInitial(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buildListParams, listCacheKey]);
+
+  // Pagination — pull next page of 12.
+  const loadListNextPage = useCallback(async () => {
+    if (!listHasMore || listLoadingMore) return;
+    if (listOnEndReachedFiring.current) return;
+    listOnEndReachedFiring.current = true;
+    setListLoadingMore(true);
+    try {
+      const params = buildListParams(listCursor, PAGE_SIZE_NEXT);
+      const resp = await api.get('/spots', params);
+      const newItems: any[] = Array.isArray(resp?.items) ? resp.items : [];
+      const next: number | null = (resp && typeof resp.next_cursor === 'number') ? resp.next_cursor : null;
+      setListSpots((prev) => {
+        const merged = [...prev, ...newItems];
+        // Persist updated cache so a tab return shows the full scrolled list.
+        writeCache(listCacheKey, { items: merged, cursor: next ?? merged.length, hasMore: next !== null }).catch(() => {});
+        return merged;
+      });
+      setListCursor(next ?? listCursor + newItems.length);
+      setListHasMore(next !== null);
+    } catch (e: any) {
+      exploreLog('warn', 'list_next_error', { message: e?.message });
+    } finally {
+      setListLoadingMore(false);
+      listOnEndReachedFiring.current = false;
+    }
+  }, [buildListParams, listCursor, listHasMore, listLoadingMore, listCacheKey]);
+
+  // Re-run initial fetch when filters / GPS bucket change.
+  useEffect(() => {
+    if (view !== 'list') return; // don't fetch list when on map
+    loadListInitial();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listCacheKey, view]);
 
   const load = useCallback(async () => {
     // Cancel any prior /spots request so the most-recent filter wins.
@@ -839,15 +987,36 @@ export default function Explore() {
         </View>
       ) : (
         <View style={{ flex: 1 }}>
-          {loading ? (
-            <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
-          ) : spots.length === 0 ? (
+          {/* Explore Speed CR — Batch 2 (June 2025): skeleton card stack
+              for initial load + infinite scroll for pagination. The
+              `loading` flag is the legacy /spots fetch (still feeds the
+              map view); for the LIST we look at `listLoadingInitial &&
+              listSpots.length === 0` so cached-from-AsyncStorage
+              hydration shows immediately and avoids a flash. */}
+          {(loading && spots.length === 0 && listSpots.length === 0) || (listLoadingInitial && listSpots.length === 0) ? (
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={{ paddingTop: 12, paddingBottom: 120 }}
+              showsVerticalScrollIndicator={false}
+            >
+              <SkeletonSpotList count={6} />
+            </ScrollView>
+          ) : (listSpots.length === 0 && spots.length === 0) ? (
             <EmptyState title="No spots match" subtitle="Loosen your filters to see more." />
           ) : (
             <ScrollView
               style={{ flex: 1 }}
               contentContainerStyle={{ paddingBottom: 120 }}
               showsVerticalScrollIndicator={false}
+              onScroll={(e) => {
+                const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+                const distanceFromBottom =
+                  contentSize.height - contentOffset.y - layoutMeasurement.height;
+                if (distanceFromBottom < 600 && listHasMore && !listLoadingMore) {
+                  loadListNextPage();
+                }
+              }}
+              scrollEventThrottle={150}
             >
               {/* Smart alert chip — surfaces newly-added spots */}
               <SmartAlertChip
@@ -929,10 +1098,17 @@ export default function Explore() {
                 </Text>
               </View>
               <View style={{ paddingHorizontal: 12, gap: space.md }}>
-                {/* June 2025 CR — closest-first when GPS is granted. When
-                    GPS is denied / unavailable, we fall back to the
-                    backend quality sort (no misleading "nearby" label). */}
-                {nearbySortedSpots.slice(0, 24).map((item, idx) => (
+                {/* Explore Speed CR — Batch 2 (June 2025): paginated list
+                    sourced from `listSpots`. Backend already sorts by
+                    distance when GPS granted (sort=distance + lat/lng),
+                    else by quality. We DON'T re-sort client-side here
+                    so the paged appends slot in cleanly behind the
+                    existing items.
+
+                    Fallback: if listSpots is empty (e.g. legacy code path
+                    populated `spots` first), we fall back to
+                    `nearbySortedSpots.slice(0, 24)` so cards still show. */}
+                {(listSpots.length > 0 ? listSpots : nearbySortedSpots.slice(0, 24)).map((item, idx) => (
                   <SpotCard
                     key={
                       item?.spot_id ||
@@ -942,6 +1118,19 @@ export default function Explore() {
                     testID={`list-spot-${item?.spot_id || `fallback-${idx}`}`}
                   />
                 ))}
+                {/* Pagination footer — small skeleton stack while loading
+                    next page so the user sees "more is coming" without
+                    a jarring spinner takeover. */}
+                {listLoadingMore ? (
+                  <SkeletonSpotList count={2} />
+                ) : null}
+                {!listHasMore && listSpots.length > 8 ? (
+                  <View style={{ alignItems: 'center', paddingVertical: 18 }}>
+                    <Text style={{ color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase' }}>
+                      That's everything for now
+                    </Text>
+                  </View>
+                ) : null}
               </View>
             </ScrollView>
           )}
