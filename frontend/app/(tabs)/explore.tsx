@@ -440,6 +440,74 @@ export default function Explore() {
 
   useEffect(() => { load(); }, [load]);
 
+  // ────────────────────────────────────────────────────────────────
+  // Explore Speed CR — Batch 3 (June 2025): lightweight map markers.
+  //
+  // The map view consumes /api/spots/markers (≈6 KB / 200 markers)
+  // instead of /api/spots (≈80 KB / 200 spots). The marker payload
+  // ships ONLY the fields the marker needs: spot_id, lat, lng, title,
+  // category, shoot_types, is_premium, is_hidden_gem, score, thumb_url.
+  //
+  // We keep the legacy `spots` state untouched — it still feeds the
+  // list-view rails (NearbyRightNowList / TrendingNearbyList /
+  // GoldenHourRail) which need full descriptions + image arrays.
+  // The map rendering switches to `mapMarkers` (coerced to lat/lng →
+  // latitude/longitude so the existing normalizeSpotsForMap helper
+  // works without refactor).
+  // ────────────────────────────────────────────────────────────────
+  const [mapMarkers, setMapMarkers] = useState<any[]>([]);
+  const markersInflight = useRef<AbortController | null>(null);
+
+  const loadMapMarkers = useCallback(async (region?: any) => {
+    if (markersInflight.current) {
+      try { markersInflight.current.abort(); } catch {}
+    }
+    const ac = new AbortController();
+    markersInflight.current = ac;
+    try {
+      const params: any = { limit: 500 };
+      // Bbox filter from current region (5x viewport so the user can
+      // pan a bit without triggering a fresh fetch).
+      if (region && Number.isFinite(region.latitude) && Number.isFinite(region.longitude)) {
+        const padLat = Math.max(0.1, (region.latitudeDelta || 0.5) * 2.5);
+        const padLng = Math.max(0.1, (region.longitudeDelta || 0.5) * 2.5);
+        params.sw_lat = region.latitude - padLat;
+        params.sw_lng = region.longitude - padLng;
+        params.ne_lat = region.latitude + padLat;
+        params.ne_lng = region.longitude + padLng;
+      }
+      // Forward shoot_type filter (server side accepts it directly).
+      if (filters.shoot_type) params.shoot_type = filters.shoot_type;
+      if (filters.niche) params.shoot_type = filters.niche;
+      const resp = await api.get('/spots/markers', params);
+      if (ac.signal.aborted) return;
+      const items: any[] = Array.isArray(resp?.items) ? resp.items : [];
+      // Coerce shape: lat/lng → latitude/longitude so our existing
+      // normalizeSpotsForMap helper just works. We keep the original
+      // lat/lng keys too in case downstream callers prefer them.
+      const coerced = items.map((m) => ({
+        ...m,
+        latitude: typeof m.lat === 'number' ? m.lat : m.latitude,
+        longitude: typeof m.lng === 'number' ? m.lng : m.longitude,
+      }));
+      setMapMarkers(coerced);
+      exploreLog('info', 'markers_loaded', { count: coerced.length, hasBbox: !!region });
+    } catch (e: any) {
+      if (!ac.signal.aborted) exploreLog('warn', 'markers_load_error', { message: e?.message });
+    } finally {
+      if (markersInflight.current === ac) markersInflight.current = null;
+    }
+  }, [filters]);
+
+  // Initial markers fetch — fires once when user opens Map view, then
+  // anytime the filters change. Lazy: only when view==='map' AND the
+  // map has actually been mounted at least once.
+  useEffect(() => {
+    if (view !== 'map' || !mapEverMounted) return;
+    loadMapMarkers(currentRegion.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, mapEverMounted, filters.shoot_type, filters.niche]);
+
   // Refresh when the Explore tab regains focus (e.g., after returning from
   // the Admin Cover Editor or Admin Spot Menu actions).
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -604,29 +672,37 @@ export default function Explore() {
     String(filters.niche).toLowerCase();
 
   // (Apr 2026 hardening) Compute the renderable marker set ONCE per
-  // `spots` change. The normalizer drops invalid coords / duplicates /
+  // `mapMarkers` change. The normalizer drops invalid coords / duplicates /
   // over-cap entries and emits debug breadcrumbs. Memoised so the marker
   // tree only re-renders when the data actually changes — not on every
   // map gesture (saved-id flips re-key from inside the marker render
   // path, not here).
+  //
+  // Explore Speed CR — Batch 3 (June 2025): source switched from the
+  // legacy full /spots payload to the lightweight /spots/markers feed
+  // (mapMarkers). When mapMarkers is empty (e.g. cold start before the
+  // first /markers response lands), we fall back to the legacy `spots`
+  // array so the user never sees an empty map during the swap.
   const mapMarkerData = useMemo(() => {
-    const result = normalizeSpotsForMap(spots);
+    const source = mapMarkers.length > 0 ? mapMarkers : spots;
+    const result = normalizeSpotsForMap(source);
     if (
       result.droppedInvalid > 0 ||
       result.droppedDuplicate > 0 ||
       result.droppedOverCap > 0
     ) {
       exploreLog('warn', 'spots_normalised', {
-        total: Array.isArray(spots) ? spots.length : 0,
+        total: Array.isArray(source) ? source.length : 0,
         renderable: result.renderable.length,
         droppedInvalid: result.droppedInvalid,
         droppedDuplicate: result.droppedDuplicate,
         droppedOverCap: result.droppedOverCap,
         reasons: result.reasons,
+        mapMarkerSource: mapMarkers.length > 0 ? 'lightweight' : 'legacy',
       });
     }
     return result;
-  }, [spots]);
+  }, [mapMarkers, spots]);
 
   // (Apr 2026 hardening) Debounced region-change handler. Without this,
   // every micro-pan fires a setState which forces a re-render of the
@@ -651,16 +727,37 @@ export default function Explore() {
     }
     if (regionDebounce.current) clearTimeout(regionDebounce.current);
     regionDebounce.current = setTimeout(() => {
+      // Explore Speed CR — Batch 3 (June 2025): refetch lightweight
+      // markers when the user pans/zooms far enough from the last
+      // anchor. Threshold is 30% of the current viewport delta — i.e.
+      // a noticeable scroll, not a hairline twitch. Bbox params on
+      // /spots/markers ensure we only ever ship pins for the current
+      // viewport (huge perf win on dense areas like NYC / SF).
       if (!lastLoadCenter.current) {
         lastLoadCenter.current = { lat: region.latitude, lng: region.longitude };
+        // First emit — if mapMarkers hasn't been hydrated yet, kick
+        // off a bbox-aware fetch now that we know the region.
+        if (mapMarkers.length === 0 && view === 'map') {
+          loadMapMarkers(region);
+        }
         return;
       }
       const dLat = Math.abs(region.latitude - lastLoadCenter.current.lat);
       const dLng = Math.abs(region.longitude - lastLoadCenter.current.lng);
       const threshold = Math.max(region.latitudeDelta, region.longitudeDelta) * 0.3;
-      if (dLat > threshold || dLng > threshold) setShowSearchArea(true);
-    }, 300);
-  }, []);
+      if (dLat > threshold || dLng > threshold) {
+        setShowSearchArea(true);
+        // Also opportunistically prefetch the lightweight markers for
+        // the new viewport so that when the user taps "Search this area"
+        // the pins are already there. Only does this when we're on the
+        // map view; the list view doesn't care about marker churn.
+        if (view === 'map') {
+          lastLoadCenter.current = { lat: region.latitude, lng: region.longitude };
+          loadMapMarkers(region);
+        }
+      }
+    }, 350);
+  }, [view, mapMarkers.length, loadMapMarkers]);
 
   return (
     <SafeAreaView style={styles.root} edges={['top']}>

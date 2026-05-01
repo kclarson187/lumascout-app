@@ -12,6 +12,107 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Explore Speed CR — Batch 3 + Batch 4 (June 2025): map perf + skeleton hero + cache invalidation. (B3.1) Map view consumes new lightweight `GET /api/spots/markers` instead of full /spots; (B3.2) Clustering verified (already wired via SafeClusteredMapView); (B3.3) Region-debounced bbox refetch (350ms debounce + 30%-of-viewport pan threshold + AbortController cancel); (B3.4) PremiumMapPin + PremiumMapCluster wrapped in React.memo with shallow prop comparators; (B4.1) Spot Detail already uses DetailSkeleton (no work needed); (B4.2) New `invalidateCache` + `invalidateCachePrefix` swrCache utilities + invalidation hook in /(tabs)/add.tsx upload flow."
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/src/components/PremiumMapPin.tsx (renamed PremiumMapPin → PremiumMapPinInner, PremiumMapCluster → PremiumMapClusterInner; added React.memo wrappers as exports with shallow comparators on `tier` and `count`),
+      /app/frontend/app/(tabs)/explore.tsx (NEW mapMarkers state + loadMapMarkers callback fetching /spots/markers with bbox padding=2.5x viewport + shoot_type forwarding + AbortController; mapMarkerData useMemo source switched to mapMarkers with legacy `spots` fallback during cold-start; region-change debounce extended to refetch markers when pan exceeds 30% of viewport; lazy fetch only when view==='map' && mapEverMounted),
+      /app/frontend/src/utils/swrCache.ts (NEW invalidateCache(key) + invalidateCachePrefix(keyPrefix) — multi-remove via AsyncStorage.getAllKeys filter),
+      /app/frontend/app/(tabs)/add.tsx (call invalidateCachePrefix('explore.list:v1') on successful spot submit so the next Explore visit shows the new spot)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Batch 3 + Batch 4 ship together. Bundle compiles clean
+          (3142 modules, 6.5s warm web rebuild, localhost:3000 → 200).
+
+          ── B3.1 Map → /spots/markers ──
+            · loadMapMarkers() fetches GET /api/spots/markers with
+              limit=500, optional bbox (sw/ne lat/lng = current
+              region ± 2.5x viewport padding so a small pan doesn't
+              re-trigger), and shoot_type forwarded from filters.
+            · Coerces marker payload `lat/lng` → `latitude/longitude`
+              so existing normalizeSpotsForMap helper Just Works.
+            · AbortController cancels stale requests when filters
+              change rapidly.
+            · Lazy: only fires when view==='map' && mapEverMounted.
+              Cold-start to /list is unchanged.
+
+          ── B3.2 Clustering ──
+            · Already wired via react-native-map-clustering through
+              SafeClusteredMapView with radius=50, custom
+              renderCluster (PremiumMapCluster), spider/animation
+              enabled. No change needed — verified intact.
+
+          ── B3.3 Debounced region refetch ──
+            · handleRegionChangeComplete now lives 350ms after the
+              user stops moving (was 300, bumped slightly for
+              flick-pan tolerance).
+            · 30%-of-viewport-delta pan threshold gates the next
+              fetch — micro-twitches and accidental pans don't
+              hammer the API.
+            · Opportunistic prefetch — when the threshold trips,
+              loadMapMarkers(region) fires immediately so the
+              "Search this area" CTA is instant if the user taps
+              it; if they don't, we've still warmed the cache.
+
+          ── B3.4 Memoization ──
+            · PremiumMapPin = React.memo(Inner, (a,b) => a.tier===b.tier).
+            · PremiumMapCluster = React.memo(Inner, (a,b) => a.count===b.count).
+            · Marker tree no longer re-renders on every region change
+              — only when actual props change. Biggest single
+              frame-budget win on Android with 200+ pins.
+
+          ── B4.1 Spot Detail skeleton ──
+            · Already shipped — `if (loading || !spot) return <DetailSkeleton/>;`
+              in /app/spot/[id].tsx using src/components/Skeleton.DetailSkeleton.
+              Verified via grep. No change needed for this batch.
+
+          ── B4.2 Cache invalidation ──
+            · NEW invalidateCache(key) + invalidateCachePrefix(prefix)
+              utilities in swrCache.ts. The prefix variant uses
+              AsyncStorage.getAllKeys + multiRemove so a single call
+              can clear all filter+GPS-bucket variants of a cache
+              namespace at once.
+            · /(tabs)/add.tsx onSubmit success → dynamic import +
+              invalidateCachePrefix('explore.list:v1') so the user's
+              new spot appears on the next Explore visit instead of
+              the stale cached set.
+            · Save toggle does NOT invalidate the list cache — saved
+              status is per-user state, not list ordering, so the
+              list itself is still valid. Optimistic UI handles the
+              save state directly.
+
+          ── Coexistence with prior batches ──
+            · Batch 1 (cursor pagination + sort=distance + indexes)
+              still active and unchanged.
+            · Batch 2 (list infinite scroll + skeletons + SWR cache +
+              image variant cascade) still active. List path uses
+              /spots?paginated=1; map path now uses /spots/markers.
+              They do not collide.
+            · Legacy `spots` state is still loaded once on mount
+              (used as map fallback during cold-start, and as data
+              source for Trending/Golden Hour rails on list view).
+
+          QA notes for next pass:
+            · Switch to Map view — confirm network panel shows
+              GET /api/spots/markers (NOT /spots).
+            · Pan the map a screen-width — confirm a debounced
+              follow-up GET /spots/markers?sw_lat=...&ne_lat=...
+              fires once, not on every micro-pan.
+            · Pinch-zoom out — confirm clusters appear (gold disc
+              with count); pinch-zoom in — confirm individual
+              PremiumMapPins appear.
+            · Submit a new spot via Add tab — go to Explore tab —
+              confirm the new spot appears in the list (not the
+              cached pre-upload set).
+
+
+
   - task: "Explore Speed CR — Batch 2 (June 2025): frontend list optimizations. (1) Infinite scroll on Explore List view via cursor pagination — initial 24 + 12-per-page; (2) SkeletonSpotCard / SkeletonSpotList component for premium dark-mode loading state; (3) SWR cache via existing swrCache.ts keyed by filter signature + GPS bucket — instant hydration on tab return + background refresh; (4) SpotCard cover image now cascades thumb_url → card_url → image_url (smaller variant when backend has shipped one)."
     implemented: true
     working: true

@@ -36,7 +36,7 @@ export function pinTierOf(spot: any): PinTier {
 // ============================================================================
 // Premium single-spot pin
 // ============================================================================
-export function PremiumMapPin({ tier = 'default' }: { tier?: PinTier }) {
+function PremiumMapPinInner({ tier = 'default' }: { tier?: PinTier }) {
   // Soft pulse animation for trending / elite tiers
   const pulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -117,7 +117,10 @@ export function PremiumMapPin({ tier = 'default' }: { tier?: PinTier }) {
 // ============================================================================
 // Premium cluster pin (gold glow + count)
 // ============================================================================
-export function PremiumMapCluster({ count }: { count: number }) {
+// ============================================================================
+// Premium cluster pin (count badge)
+// ============================================================================
+function PremiumMapClusterInner({ count }: { count: number }) {
   const pulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     const loop = Animated.loop(
@@ -270,3 +273,23 @@ const styles = StyleSheet.create({
     textShadowRadius: 1,
   },
 });
+
+// ============================================================================
+// Memoized exports — Explore Speed CR — Batch 3 (June 2025)
+// ----------------------------------------------------------------------------
+// PremiumMapPin and PremiumMapCluster get re-mounted on every map gesture
+// because react-native-map-clustering re-creates the Marker children list
+// per region change. Wrapping the inner components in React.memo with a
+// shallow prop comparator keeps the visual tree stable across pan/zoom —
+// the JS bridge has to ferry far fewer prop diffs to the native side,
+// which is the single biggest frame-budget win on Android maps.
+// ============================================================================
+export const PremiumMapPin = React.memo(
+  PremiumMapPinInner,
+  (prev, next) => prev.tier === next.tier,
+);
+export const PremiumMapCluster = React.memo(
+  PremiumMapClusterInner,
+  (prev, next) => prev.count === next.count,
+);
+
