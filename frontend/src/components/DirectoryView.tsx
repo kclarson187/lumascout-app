@@ -31,6 +31,7 @@ import {
   Modal,
   RefreshControl,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router, useFocusEffect } from 'expo-router';
 import {
   Search,
@@ -235,6 +236,47 @@ export default function DirectoryView() {
   const [filter, setFilter] = useState('all');
   const [sort, setSort] = useState('popular');
   const [specialty, setSpecialty] = useState<string | null>(null);
+  // CR #1 Item 3 (June 2025): single-axis facet pills (City | Specialty).
+  // Default axis is "city" per product spec. Persisted under
+  // `lumascout.network.pillAxis`. Pills are populated from real aggregated
+  // data via GET /api/directory/facets (no seed strings, no concat).
+  const AXIS_KEY = 'lumascout.network.pillAxis';
+  const [pillAxis, setPillAxis] = useState<'city' | 'specialty'>('city');
+  const [activeCity, setActiveCity] = useState<string | null>(null);
+  const [facets, setFacets] = useState<{
+    top_cities: Array<{ city: string; count: number }>;
+    top_specialties: Array<{ specialty: string; count: number }>;
+  }>({ top_cities: [], top_specialties: [] });
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(AXIS_KEY);
+        if (raw === 'city' || raw === 'specialty') setPillAxis(raw);
+      } catch {}
+    })();
+  }, []);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await api.get('/directory/facets', { limit: 12 });
+        setFacets({
+          top_cities: Array.isArray(r?.top_cities) ? r.top_cities : [],
+          top_specialties: Array.isArray(r?.top_specialties) ? r.top_specialties : [],
+        });
+      } catch {
+        setFacets({ top_cities: [], top_specialties: [] });
+      }
+    })();
+  }, []);
+  const setAxis = useCallback((next: 'city' | 'specialty') => {
+    setPillAxis(next);
+    // Clear the inactive-axis selection when switching axes so the query
+    // never mixes city + specialty filters from the pill row (search
+    // input can still narrow across both).
+    if (next === 'city') setSpecialty(null);
+    else setActiveCity(null);
+    AsyncStorage.setItem(AXIS_KEY, next).catch(() => {});
+  }, []);
   const [items, setItems] = useState<DirItem[]>([]);
   const [cursor, setCursor] = useState<number | null>(0);
   const [loading, setLoading] = useState(false);
@@ -260,6 +302,7 @@ export default function DirectoryView() {
         sort,
         filter,
         specialty: specialty || undefined,
+        city: activeCity || undefined,
         cursor: resetCursor ? 0 : cursor,
         limit: 20,
       });
@@ -272,14 +315,14 @@ export default function DirectoryView() {
       setLoading(false);
       setPaging(false);
     }
-  }, [q, sort, filter, specialty, cursor]);
+  }, [q, sort, filter, specialty, activeCity, cursor]);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => load(true), 250);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, sort, filter, specialty]);
+  }, [q, sort, filter, specialty, activeCity]);
 
   // FIX(stale-directory bug): the directory used to render stale cached
   // `items` after navigating away and back (e.g. Admin → delete user →
@@ -326,6 +369,7 @@ export default function DirectoryView() {
 
   const resetFilters = useCallback(() => {
     setQ(''); setFilter('all'); setSort('popular'); setSpecialty(null);
+    setActiveCity(null);
   }, []);
 
   // Pull-to-refresh — re-fetches the current filter set fresh from server.
@@ -339,6 +383,7 @@ export default function DirectoryView() {
         sort,
         filter,
         specialty: specialty || undefined,
+        city: activeCity || undefined,
         cursor: 0,
         limit: 20,
       });
@@ -347,9 +392,9 @@ export default function DirectoryView() {
     } catch {} finally {
       setRefreshing(false);
     }
-  }, [q, sort, filter, specialty]);
+  }, [q, sort, filter, specialty, activeCity]);
 
-  const hasActiveFilters = !!(q || filter !== 'all' || specialty);
+  const hasActiveFilters = !!(q || filter !== 'all' || specialty || activeCity);
   const sortLabel = SORTS.find((srt) => srt.key === sort)?.label || 'Popular';
 
   return (
@@ -374,6 +419,78 @@ export default function DirectoryView() {
           </Pressable>
         ) : null}
       </View>
+
+      {/* CR #1 Item 3 (June 2025): single-axis facet pills (City | Specialty).
+          Fetched from real aggregated data via /api/directory/facets —
+          no hardcoded concatenated seed strings. Default axis = city. */}
+      <View style={s.axisWrap}>
+        <View style={s.axisTrack}>
+          <Pressable
+            onPress={() => setAxis('city')}
+            style={[s.axisBtn, pillAxis === 'city' && s.axisBtnActive]}
+            testID="directory-axis-city"
+          >
+            <Text style={[s.axisBtnTxt, pillAxis === 'city' && s.axisBtnTxtActive]}>
+              By city
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setAxis('specialty')}
+            style={[s.axisBtn, pillAxis === 'specialty' && s.axisBtnActive]}
+            testID="directory-axis-specialty"
+          >
+            <Text style={[s.axisBtnTxt, pillAxis === 'specialty' && s.axisBtnTxtActive]}>
+              By specialty
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+      {(pillAxis === 'city' ? facets.top_cities.length : facets.top_specialties.length) > 0 ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={s.facetRow}
+          style={{ flexGrow: 0, maxHeight: 46 }}
+        >
+          {pillAxis === 'city'
+            ? facets.top_cities.map((c) => {
+                const active = activeCity === c.city;
+                return (
+                  <Pressable
+                    key={`city-${c.city}`}
+                    onPress={() => setActiveCity(active ? null : c.city)}
+                    style={[s.facetPill, active && s.facetPillActive]}
+                    testID={`directory-city-${c.city}`}
+                  >
+                    <Text style={[s.facetPillTxt, active && s.facetPillTxtActive]} numberOfLines={1}>
+                      {c.city}
+                    </Text>
+                    <Text style={[s.facetPillCount, active && { color: colors.primary }]}>
+                      {c.count}
+                    </Text>
+                  </Pressable>
+                );
+              })
+            : facets.top_specialties.map((sp) => {
+                const active = specialty === sp.specialty;
+                return (
+                  <Pressable
+                    key={`spec-${sp.specialty}`}
+                    onPress={() => setSpecialty(active ? null : sp.specialty)}
+                    style={[s.facetPill, active && s.facetPillActive]}
+                    testID={`directory-specialty-pill-${sp.specialty}`}
+                  >
+                    <Text style={[s.facetPillTxt, active && s.facetPillTxtActive]} numberOfLines={1}>
+                      {sp.specialty}
+                    </Text>
+                    <Text style={[s.facetPillCount, active && { color: colors.primary }]}>
+                      {sp.count}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+        </ScrollView>
+      ) : null}
 
       {/* 3 primary filter cards — flexed equally per the mockup */}
       <View style={s.fcardRow}>
@@ -571,6 +688,75 @@ const s = StyleSheet.create({
   fcardRow: {
     flexDirection: 'row', gap: 8,
     paddingHorizontal: space.xl, paddingTop: 10, paddingBottom: 4,
+  },
+  // CR #1 Item 3 (June 2025) — axis toggle + facet pill styles.
+  axisWrap: {
+    paddingHorizontal: space.xl,
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
+  axisTrack: {
+    flexDirection: 'row',
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.surface1,
+    borderWidth: 1, borderColor: colors.border,
+    padding: 3,
+  },
+  axisBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 13,
+  },
+  axisBtnActive: {
+    backgroundColor: colors.text,
+  },
+  axisBtnTxt: {
+    color: colors.textSecondary,
+    fontFamily: font.bodySemibold,
+    fontSize: 12,
+    letterSpacing: 0.2,
+  },
+  axisBtnTxtActive: {
+    color: colors.bg,
+    fontFamily: font.bodyBold,
+  },
+  facetRow: {
+    paddingHorizontal: space.xl,
+    paddingVertical: 8,
+    gap: 6,
+  },
+  facetPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    height: 30,
+    paddingHorizontal: 12,
+    borderRadius: 15,
+    backgroundColor: colors.surface1,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  facetPillActive: {
+    backgroundColor: 'rgba(245,166,35,0.14)',
+    borderColor: 'rgba(245,166,35,0.55)',
+  },
+  facetPillTxt: {
+    color: colors.text,
+    fontFamily: font.bodySemibold,
+    fontSize: 12,
+    maxWidth: 140,
+  },
+  facetPillTxtActive: {
+    color: colors.primary,
+    fontFamily: font.bodyBold,
+  },
+  facetPillCount: {
+    color: colors.textTertiary,
+    fontFamily: font.bodyMedium,
+    fontSize: 10.5,
+    letterSpacing: 0.3,
   },
   fcard: {
     flex: 1,

@@ -1470,6 +1470,70 @@ async def directory_browse(
     }
 
 
+@router.get("/directory/facets")
+@_graceful(fallback={"top_cities": [], "top_specialties": []},
+           label="/directory/facets",
+           logger=logging.getLogger("directory.facets"))
+async def directory_facets(
+    limit: int = 12,
+    viewer: Optional[dict] = Depends(get_optional_user),
+):
+    """CR #1 Item 3 (June 2025) — single-axis facet pills for Directory.
+
+    Returns the top cities and top specialties aggregated from real
+    directory-eligible user accounts (no concatenated seed strings).
+    Frontend renders a "By city | By specialty" toggle and uses whichever
+    axis is active to drive single-select filter pills.
+    """
+    limit = max(3, min(30, int(limit or 12)))
+    base = {
+        "is_bot": {"$ne": True},
+        "is_official": {"$ne": True},
+        "plan": {"$ne": "suspended"},
+        "deleted_at": {"$exists": False},
+        "status": {"$ne": "deleted"},
+        "deleted": {"$ne": True},
+        "is_test_account": {"$ne": True},
+    }
+
+    # Top cities (group by city, ignore blank/null, sort by count desc).
+    city_pipeline = [
+        {"$match": {**base, "city": {"$nin": [None, ""]}}},
+        {"$group": {"_id": "$city", "count": {"$sum": 1}}},
+        {"$match": {"count": {"$gte": 1}}},
+        {"$sort": {"count": -1, "_id": 1}},
+        {"$limit": limit},
+        {"$project": {"_id": 0, "city": "$_id", "count": 1}},
+    ]
+    try:
+        top_cities = await db.users.aggregate(city_pipeline).to_list(limit)
+    except Exception:
+        top_cities = []
+
+    # Top specialties (unwind the specialties array).
+    spec_pipeline = [
+        {"$match": {**base, "specialties": {"$exists": True, "$ne": []}}},
+        {"$unwind": "$specialties"},
+        {"$match": {"specialties": {"$nin": [None, ""]}}},
+        {"$group": {"_id": "$specialties", "count": {"$sum": 1}}},
+        {"$match": {"count": {"$gte": 1}}},
+        {"$sort": {"count": -1, "_id": 1}},
+        {"$limit": limit},
+        {"$project": {"_id": 0, "specialty": "$_id", "count": 1}},
+    ]
+    try:
+        top_specialties = await db.users.aggregate(spec_pipeline).to_list(limit)
+    except Exception:
+        top_specialties = []
+
+    return {
+        "top_cities": top_cities,
+        "top_specialties": top_specialties,
+    }
+
+
+
+
 @router.get("/directory/suggested")
 @_graceful(fallback={"items": []}, label="/directory/suggested",
            logger=logging.getLogger("directory.suggested"))

@@ -624,6 +624,11 @@ async def list_spots(
     q: Optional[str] = None,
     sort: str = "recent",  # recent, trending, golden_hour, score
     limit: int = 40,
+    # CR #1 Item 6 (June 2025): enforce hard cap of 200 spots per /spots
+    # request. Previously the frontend was free to pass limit=1000+, which
+    # blew RN-Maps memory on Android and was the root cause of Explore
+    # tab crashes on mid-range devices. Cap at 200 server-side so no
+    # client can ever over-fetch.
     # FIX(2026-04 Item #3 round 3): URGENT distance bug.
     # Explore was calling /spots WITHOUT user GPS, so distance_km was
     # never computed and the frontend rendered any stale value present.
@@ -633,6 +638,8 @@ async def list_spots(
     lng: Optional[float] = None,
     viewer: Optional[dict] = Depends(get_optional_user),
 ):
+    # CR #1 Item 6 (June 2025): enforce 200-spot hard cap server-side.
+    limit = max(1, min(200, int(limit or 40)))
     query: dict = {
         "privacy_mode": {"$in": ["public", "premium"]},
         "visibility_status": "approved",
