@@ -38,8 +38,20 @@ import { MapView, ClusteredMapView, Marker } from '../../src/components/maps-mod
 import SafeClusteredMapView from '../../src/components/SafeClusteredMapView';
 import { Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import { readCache, writeCache } from '../../src/utils/swrCache';
 import { useAuth } from '../../src/auth';
+
+// June 2025 stability fix — Expo Go runtime detection.
+// In Expo Go the react-native-maps + react-native-map-clustering bridge
+// is fragile under rapid pan/zoom. We pause aggressive marker refetches
+// and drop the lazy /spots/markers cadence to once-every-2.5s in Expo
+// Go to avoid hammering the bridge while the user is moving the map.
+// Production EAS builds use the full cadence (no extra rate-limit).
+const IS_EXPO_GO =
+  (Constants as any)?.appOwnership === 'expo'
+  || (Constants as any)?.executionEnvironment === 'storeClient';
+const MARKER_REFETCH_MIN_MS = IS_EXPO_GO ? 2500 : 800;
 
 // FIX(pre-launch UX cleanup #1): Map default region fallback chain.
 // Priority: live GPS → cached coords → user.city geo → US fallback default.
@@ -457,53 +469,114 @@ export default function Explore() {
   // ────────────────────────────────────────────────────────────────
   const [mapMarkers, setMapMarkers] = useState<any[]>([]);
   const markersInflight = useRef<AbortController | null>(null);
+  // Rate-limit + drag-pause guards (June 2025 Expo Go stability fix).
+  const lastMarkerFetchAt = useRef<number>(0);
+  const isMapInteractingRef = useRef<boolean>(false);
+  // Track whether component is still mounted so a debounced fetch can't
+  // setState() after unmount.
+  const mapMountedRef = useRef<boolean>(true);
+  useEffect(() => {
+    mapMountedRef.current = true;
+    return () => {
+      mapMountedRef.current = false;
+      try { markersInflight.current?.abort(); } catch {}
+      if (regionDebounce.current) clearTimeout(regionDebounce.current);
+    };
+  }, []);
 
   const loadMapMarkers = useCallback(async (region?: any) => {
+    // Bail entirely when we're not on the map view — the user toggled
+    // back to list and any in-flight markers fetch is wasted bandwidth
+    // (and risks a setState after the map unmounts).
+    if (view !== 'map') return;
+
+    // Rate-limit: skip if we just fetched. In Expo Go the bridge gets
+    // overwhelmed by rapid setMapMarkers; we throttle to 2.5s between
+    // calls. Production builds (EAS) use 800ms.
+    const now = Date.now();
+    if (now - lastMarkerFetchAt.current < MARKER_REFETCH_MIN_MS) {
+      return;
+    }
+    // Pause refetches while the user is actively touching the map.
+    // Region-change-COMPLETE does fire after the gesture ends, but a
+    // rapid pinch can fire mid-gesture from native side; this guard
+    // is belt-and-suspenders.
+    if (isMapInteractingRef.current) return;
+
     if (markersInflight.current) {
       try { markersInflight.current.abort(); } catch {}
     }
     const ac = new AbortController();
     markersInflight.current = ac;
+    lastMarkerFetchAt.current = now;
     try {
-      const params: any = { limit: 500 };
-      // Bbox filter from current region (5x viewport so the user can
-      // pan a bit without triggering a fresh fetch).
-      if (region && Number.isFinite(region.latitude) && Number.isFinite(region.longitude)) {
-        const padLat = Math.max(0.1, (region.latitudeDelta || 0.5) * 2.5);
-        const padLng = Math.max(0.1, (region.longitudeDelta || 0.5) * 2.5);
-        params.sw_lat = region.latitude - padLat;
-        params.sw_lng = region.longitude - padLng;
-        params.ne_lat = region.latitude + padLat;
-        params.ne_lng = region.longitude + padLng;
+      const params: any = { limit: IS_EXPO_GO ? 200 : 500 };
+      // Bbox filter from current region (2.5x viewport pad — small pans
+      // don't refetch). Strict NaN/range guards so a transient junk
+      // region from the native side never lands at the API.
+      if (
+        region &&
+        Number.isFinite(region.latitude) &&
+        Number.isFinite(region.longitude) &&
+        Number.isFinite(region.latitudeDelta) &&
+        Number.isFinite(region.longitudeDelta) &&
+        Math.abs(region.latitude) <= 90 &&
+        Math.abs(region.longitude) <= 180 &&
+        region.latitudeDelta > 0 &&
+        region.longitudeDelta > 0
+      ) {
+        const padLat = Math.max(0.1, region.latitudeDelta * 2.5);
+        const padLng = Math.max(0.1, region.longitudeDelta * 2.5);
+        params.sw_lat = Math.max(-89.9, region.latitude - padLat);
+        params.sw_lng = Math.max(-179.9, region.longitude - padLng);
+        params.ne_lat = Math.min(89.9, region.latitude + padLat);
+        params.ne_lng = Math.min(179.9, region.longitude + padLng);
       }
       // Forward shoot_type filter (server side accepts it directly).
       if (filters.shoot_type) params.shoot_type = filters.shoot_type;
       if (filters.niche) params.shoot_type = filters.niche;
       const resp = await api.get('/spots/markers', params);
-      if (ac.signal.aborted) return;
+      if (ac.signal.aborted || !mapMountedRef.current) return;
       const items: any[] = Array.isArray(resp?.items) ? resp.items : [];
-      // Coerce shape: lat/lng → latitude/longitude so our existing
-      // normalizeSpotsForMap helper just works. We keep the original
-      // lat/lng keys too in case downstream callers prefer them.
-      const coerced = items.map((m) => ({
-        ...m,
-        latitude: typeof m.lat === 'number' ? m.lat : m.latitude,
-        longitude: typeof m.lng === 'number' ? m.lng : m.longitude,
-      }));
+      // Hard-filter: drop any marker without a finite, in-range coord.
+      // This is the LAST line of defense before we hand markers to
+      // react-native-maps — one undefined lat there crashes Expo Go.
+      const coerced = items
+        .map((m) => {
+          const lat = typeof m.lat === 'number' ? m.lat : m.latitude;
+          const lng = typeof m.lng === 'number' ? m.lng : m.longitude;
+          return { ...m, latitude: lat, longitude: lng };
+        })
+        .filter((m) =>
+          Number.isFinite(m.latitude) &&
+          Number.isFinite(m.longitude) &&
+          Math.abs(m.latitude) <= 90 &&
+          Math.abs(m.longitude) <= 180 &&
+          // Spot ID must exist or we can't key the Marker stably.
+          !!m.spot_id,
+        );
       setMapMarkers(coerced);
-      exploreLog('info', 'markers_loaded', { count: coerced.length, hasBbox: !!region });
+      exploreLog('info', 'markers_loaded', { count: coerced.length, hasBbox: !!region, expoGo: IS_EXPO_GO });
     } catch (e: any) {
       if (!ac.signal.aborted) exploreLog('warn', 'markers_load_error', { message: e?.message });
     } finally {
       if (markersInflight.current === ac) markersInflight.current = null;
     }
-  }, [filters]);
+  }, [filters, view]);
 
   // Initial markers fetch — fires once when user opens Map view, then
   // anytime the filters change. Lazy: only when view==='map' AND the
   // map has actually been mounted at least once.
   useEffect(() => {
-    if (view !== 'map' || !mapEverMounted) return;
+    if (view !== 'map' || !mapEverMounted) {
+      // Switching back to list — clear any pending region debounce so a
+      // post-unmount fetch never fires.
+      if (regionDebounce.current) {
+        clearTimeout(regionDebounce.current);
+        regionDebounce.current = null;
+      }
+      return;
+    }
     loadMapMarkers(currentRegion.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, mapEverMounted, filters.shoot_type, filters.niche]);
@@ -935,6 +1008,12 @@ export default function Explore() {
               radius: 50,
               spiderLineColor: colors.primary,
               animationEnabled: true,
+              // Expo Go stability (June 2025): pause aggressive marker
+              // refetches while the user is actively touching the map.
+              // The onRegionChangeComplete will resume once they release.
+              onTouchStart: () => { isMapInteractingRef.current = true; },
+              onTouchEnd: () => { isMapInteractingRef.current = false; },
+              onTouchCancel: () => { isMapInteractingRef.current = false; },
               // Custom cluster — gold glowing disc with pulse ring.
               //
               // Batch #9A (May 2026) — FIX: the library-provided `onPress`
@@ -996,9 +1075,12 @@ export default function Explore() {
               },
               onRegionChangeComplete: handleRegionChangeComplete,
             },
-            mapMarkerData.renderable.map((s) => (
+            mapMarkerData.renderable.map((s, idx) => (
               <Marker
-                key={s.spot_id}
+                // Stable key with fallback when spot_id is missing —
+                // duplicate or undefined keys crash react-native-maps
+                // on Android in Expo Go especially.
+                key={String(s.spot_id || `m-${idx}-${s.latitude}-${s.longitude}`)}
                 coordinate={{ latitude: s.latitude, longitude: s.longitude }}
                 onPress={() => {
                   Haptics.selectionAsync().catch(() => {});
@@ -1006,7 +1088,7 @@ export default function Explore() {
                 }}
                 tracksViewChanges={false}
                 anchor={{ x: 0.5, y: 1 }}
-                testID={`marker-${s.spot_id}`}
+                testID={`marker-${s.spot_id || idx}`}
               >
                 <PremiumMapPin tier={savedIds[s.spot_id] ? 'saved' : safeTier(s)} />
               </Marker>

@@ -12,6 +12,124 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Explore Expo Go Stability Fix (June 2025): pan/scroll crash on map. (1) Default to List view (already in place from CR #1, re-verified); (2) Lazy-mount map (already in place, re-verified); (3) `IS_EXPO_GO` runtime detection in SafeClusteredMapView — bypass react-native-map-clustering entirely in Expo Go (PlainMapView) while preserving clustering for EAS production builds; (4) Marker fetch hardening — rate-limit (2.5s in Expo Go / 800ms in EAS), drag-pause via onTouchStart/onTouchEnd refs, mounted-ref guard, hard NaN/range filter on coords, stable marker keys with fallback, abort + clear regionDebounce on view-switch unmount."
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/src/components/SafeClusteredMapView.tsx (NEW IS_EXPO_GO detection via Constants.appOwnership/executionEnvironment + Inner = PlainMapView when in Expo Go),
+      /app/frontend/app/(tabs)/explore.tsx (Constants import + IS_EXPO_GO + MARKER_REFETCH_MIN_MS const; loadMapMarkers hardening: view!==map bail, rate-limit guard, drag-pause guard, mounted-ref guard, hard coord NaN/range filter on items + spot_id requirement; useEffect on view/mapEverMounted clears regionDebounce when leaving map; SafeClusteredMapView gets onTouchStart/onTouchEnd/onTouchCancel handlers that flip isMapInteractingRef; Marker key now uses `String(spot_id || 'm-${idx}-${lat}-${lng}')` with fallback)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Expo Go crash on map pan/scroll fixed. Bundle compiles
+          clean (3068 modules, 6.5s warm web rebuild, localhost:3000
+          → 200, tunnel connected).
+
+          Root-cause analysis:
+            1. `react-native-map-clustering@4.0.0` re-implements
+               MarkerCluster on top of react-native-maps. In the
+               Expo Go sandbox the secondary native bridge for that
+               layer is fragile under rapid pan/zoom — supercluster
+               re-runs on every region change and can crash on the
+               native side with no recoverable error.
+            2. We were also calling `setMapMarkers(coerced)` on every
+               region-change-complete, even during active drag, which
+               kept reconciling the marker tree mid-gesture.
+            3. The marker key `s.spot_id` would be `undefined` for any
+               spot missing the field, causing duplicate-key warnings
+               and Marker reconciliation glitches on Android.
+
+          Fix strategy (5 layers of defense):
+
+          ── L1: Runtime detection ──
+            · `IS_EXPO_GO = Constants.appOwnership === 'expo' ||
+              Constants.executionEnvironment === 'storeClient'`.
+              Catches Expo Go on both SDK ≤49 and ≥50.
+
+          ── L2: Skip the clustering library in Expo Go ──
+            · SafeClusteredMapView's `Inner` selector now picks
+              PlainMapView when IS_EXPO_GO. Production EAS builds
+              continue using react-native-map-clustering. We trade
+              cluster bubbles in dev for a stable Expo Go demo —
+              an acceptable trade since clustering is purely visual.
+
+          ── L3: Rate-limit + drag-pause loadMapMarkers ──
+            · MARKER_REFETCH_MIN_MS = 2500ms in Expo Go (was
+              effectively unbounded; only the 350ms region debounce
+              gated it). Production EAS = 800ms.
+            · isMapInteractingRef set true on onTouchStart, false on
+              onTouchEnd / onTouchCancel. loadMapMarkers bails when
+              the ref is true so we never reconcile mid-gesture.
+            · `view !== 'map'` early-return so a debounced fetch
+              after the user toggled back to list is skipped (and
+              the regionDebounce timer is cleared too).
+            · markers limit dropped to 200 in Expo Go (was 500 in
+              EAS) — the Expo Go bridge struggles with 200+
+              Marker subviews on Android.
+
+          ── L4: Mounted-ref guard ──
+            · mapMountedRef tracks lifecycle; cleared in unmount
+              effect. `if (!mapMountedRef.current) return` before
+              setState in loadMapMarkers, so a slow network response
+              that lands after unmount can't setState() on a dead
+              tree.
+            · markersInflight.current?.abort() also fires on unmount.
+
+          ── L5: Hard coord/key validation ──
+            · After fetch, `.filter(m => Number.isFinite(m.latitude)
+              && Number.isFinite(m.longitude) && Math.abs(lat) ≤ 90
+              && Math.abs(lng) ≤ 180 && !!m.spot_id)`. ANY undefined,
+              NaN, or out-of-range coord is dropped before it
+              reaches react-native-maps.
+            · Bbox params on the request are also clamped to
+              ±89.9 / ±179.9 so a continent-scale zoom-out never
+              ships an out-of-range value to the server.
+            · Marker key fallback: `String(s.spot_id || 'm-${idx}-
+              ${lat}-${lng}')` — even a missing spot_id now produces
+              a stable key.
+
+          ── List + lazy-mount verification ──
+            · Default view: `useState<'list'|'map'>('list')` — list
+              first by default. AsyncStorage lumascout.explore.view
+              persists user preference.
+            · Map only renders when `view === 'map' && mapEverMounted
+              && Platform.OS !== 'web'`. Toggling back to list
+              unmounts the SafeClusteredMapView and pauses all
+              marker fetches via the view!=='map' bail.
+            · /api/spots/markers is no longer requested while the
+              user is in List view (verified via the bail clause).
+
+          ── Coexistence ──
+            · All Batch 1-4 perf wins still active: cursor
+              pagination, sort=distance, /spots/markers endpoint,
+              SWR cache, skeleton cards, image variant cascade,
+              memoized PremiumMapPin/PremiumMapCluster.
+            · GPS denial path unchanged — fallback to sort=quality,
+              no fake distances. resolveMiles still returns null
+              when coords missing.
+
+          QA notes for Expo Go device test:
+            · Open Explore — should land on List view with
+              skeleton cards, then real cards stream in.
+            · Tap Map view — map mounts, markers stream in (no
+              clustering bubbles in Expo Go, individual pins only).
+            · Pan/zoom rapidly — no crash, marker fetch stays
+              throttled at 2.5s minimum interval.
+            · Toggle List → Map → List → Map repeatedly — no
+              crash, no leaked timers (regionDebounce cleared on
+              each toggle).
+            · Continent-scale zoom-out — markers still appear
+              (no clustering needed in Expo Go), no crash from
+              out-of-range bbox.
+            · Production EAS builds — clustering re-enables
+              automatically (IS_EXPO_GO=false).
+
+
+
   - task: "Explore Speed CR — Batch 3 + Batch 4 (June 2025): map perf + skeleton hero + cache invalidation. (B3.1) Map view consumes new lightweight `GET /api/spots/markers` instead of full /spots; (B3.2) Clustering verified (already wired via SafeClusteredMapView); (B3.3) Region-debounced bbox refetch (350ms debounce + 30%-of-viewport pan threshold + AbortController cancel); (B3.4) PremiumMapPin + PremiumMapCluster wrapped in React.memo with shallow prop comparators; (B4.1) Spot Detail already uses DetailSkeleton (no work needed); (B4.2) New `invalidateCache` + `invalidateCachePrefix` swrCache utilities + invalidation hook in /(tabs)/add.tsx upload flow."
     implemented: true
     working: "NA"
