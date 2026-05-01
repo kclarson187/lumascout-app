@@ -10,7 +10,13 @@ Phase 2b of the server.py modularization. 10 endpoints + 3 request models +
 
 PRESERVED SEMANTICS — no behaviour change, no path change.
 """
-from __future__ import annotations
+# Batch #7 — intentionally NOT using `from __future__ import annotations`
+# in this module. That future import stringifies every annotation, and
+# when combined with @_graceful (which uses functools.wraps and thus
+# preserves the wrapped signature) FastAPI fails to resolve
+# `body: ReferralCreateIn` as a JSON body — it degrades to a Query
+# parameter, which in turn breaks /openapi.json and every POST /referrals
+# call. Leaving annotations eagerly-evaluated here fixes both.
 
 import logging as _logging
 import uuid
@@ -22,7 +28,7 @@ from common.graceful import graceful as _graceful
 _ref_logger = _logging.getLogger("referrals.create")
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
 from server import (
@@ -150,7 +156,15 @@ async def _shape_need(need: dict, viewer: Optional[dict] = None) -> dict:
     logger=_ref_logger,
 )
 async def create_referral_need(
-    body: ReferralCreateIn, user: dict = Depends(get_current_user),
+    # Batch #7 — explicit Body(...) annotation is REQUIRED here because this
+    # file uses `from __future__ import annotations` AND the handler is
+    # wrapped by @_graceful (functools.wraps). Under those two conditions
+    # FastAPI's dependency resolver cannot tell that `ReferralCreateIn` is
+    # a pydantic model rather than a raw Query parameter, which blows up
+    # the body parse (and /openapi.json). Naming Body() explicitly sidesteps
+    # the inference step entirely.
+    body: ReferralCreateIn = Body(...),
+    user: dict = Depends(get_current_user),
 ):
     now = utcnow()
     exp_days = max(1, min(int(body.expires_in_days or 30), 90))
