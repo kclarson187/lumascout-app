@@ -11,6 +11,8 @@ import UserBadge from '../../src/components/UserBadge';
 import ThreadActionSheet, { ThreadActionTarget } from '../../src/components/ThreadActionSheet';
 import SwipeableThreadRow from '../../src/components/SwipeableThreadRow';
 import { useUnreadMessages } from '../../src/hooks/useUnreadMessages';
+import { useAuth } from '../../src/auth';
+import { isPaidPlan } from '../../src/utils/messageTime';
 
 /**
  * Tier 2 Inbox — Archive, Pin (cap 3), Search, Swipe actions, Mark-all-read.
@@ -27,6 +29,7 @@ type Tab = 'accepted' | 'archived' | 'requests';
 
 export default function InboxScreen() {
   const params = useLocalSearchParams<{ tab?: string }>();
+  const { user } = useAuth();
   const [tab, setTab] = useState<Tab>((params.tab as Tab) || 'accepted');
   const [threads, setThreads] = useState<any[]>([]);
   const [archived, setArchived] = useState<any[]>([]);
@@ -187,7 +190,12 @@ export default function InboxScreen() {
               {o.verification_status === 'verified' ? <ShieldCheck size={12} color="#3b82f6"/> : null}
               <UserBadge user={o} variant="compact" />
               {item.is_muted ? <BellOff size={11} color={colors.textTertiary}/> : null}
-              <Text style={s.tTime}>{timeAgo(item.last_message_at) || timeAgo(item.created_at)}</Text>
+              {/* Timestamp analytics are a paid-plan perk (Batch #9A).
+                  Free viewers see no timestamp; Pro/Elite see a
+                  relative cue in their local timezone. */}
+              {isPaidPlan(user?.plan) ? (
+                <Text style={s.tTime}>{timeAgo(item.last_message_at) || timeAgo(item.created_at)}</Text>
+              ) : null}
             </View>
             <Text style={[s.tPreview, unreadRow && { color: colors.text }]} numberOfLines={1}>{item.last_message_preview || 'Start a conversation…'}</Text>
           </View>
@@ -282,7 +290,7 @@ export default function InboxScreen() {
                   {se.avatar_url ? <Image source={{ uri: se.avatar_url }} style={s.reqAvatar}/> : <View style={[s.reqAvatar,{backgroundColor:colors.surface2, alignItems:'center', justifyContent:'center'}]}><Text style={{color:colors.textSecondary,fontFamily:font.bodyBold}}>{se.name?.[0]?.toUpperCase() || '?'}</Text></View>}
                   <View style={{ flex: 1 }}>
                     <Text style={s.reqName}>{se.name || '@'+se.username}{se.verification_status === 'verified' ? ' ' : ''}{se.verification_status === 'verified' ? <ShieldCheck size={12} color="#3b82f6"/> : null}</Text>
-                    <Text style={s.reqMeta}>{se.city ? `${se.city}${se.state ? `, ${se.state}` : ''}` : 'Photographer'} · {timeAgo(item.created_at)}</Text>
+                    <Text style={s.reqMeta}>{se.city ? `${se.city}${se.state ? `, ${se.state}` : ''}` : 'Photographer'}{isPaidPlan(user?.plan) ? ` · ${timeAgo(item.created_at)}` : ''}</Text>
                     {item.kind && item.kind !== 'message' ? <Text style={s.reqKind}>{item.kind === 'refer' ? '💌 Referral request' : item.kind === 'collab' ? '🤝 Collab invite' : ''}</Text> : null}
                   </View>
                 </Pressable>

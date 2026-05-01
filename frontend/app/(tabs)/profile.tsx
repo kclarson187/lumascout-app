@@ -15,6 +15,7 @@ import {
   KeyboardAvoidingView,
   Modal,
   Pressable,
+  RefreshControl,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -94,7 +95,7 @@ export default function Profile() {
 }
 
 function ProfileImpl() {
-  const { user, logout, updateProfile } = useAuth();
+  const { user, logout, updateProfile, refresh } = useAuth();
   const [mySpots, setMySpots] = useState<any[]>([]);
   const [myPosts, setMyPosts] = useState<any[]>([]);
   const [collections, setCollections] = useState<any[]>([]);
@@ -107,6 +108,7 @@ function ProfileImpl() {
   const [portfolioEmptyOpen, setPortfolioEmptyOpen] = useState(false);
   const [uploading, setUploading] = useState<'banner' | 'avatar' | null>(null);
   const [form, setForm] = useState(emptyForm);
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -125,6 +127,18 @@ function ProfileImpl() {
   }, [user]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // Pull-to-refresh — re-fetches profile lists + refreshes auth/me so
+  // stats, plan, usage stay live. Profile lists are `set*` (not push),
+  // so items can never duplicate after a refresh.
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([load(), refresh()]);
+    } catch {} finally {
+      setRefreshing(false);
+    }
+  }, [load, refresh]);
 
   useEffect(() => {
     if (user && !editMode) {
@@ -298,7 +312,17 @@ function ProfileImpl() {
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <ScrollView contentContainerStyle={{ paddingBottom: 60 }}>
+        <ScrollView
+          contentContainerStyle={{ paddingBottom: 60 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.primary}
+              colors={[colors.primary]}
+            />
+          }
+        >
           {/* Apr 2026 — Premium kicker header. "PROFILE / Your creator hub"
               + Share + Settings icons sits ABOVE the banner so the page
               opens with a clear identity statement instead of jumping

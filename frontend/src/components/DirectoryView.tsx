@@ -29,6 +29,7 @@ import {
   ScrollView,
   FlatList,
   Modal,
+  RefreshControl,
 } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import {
@@ -241,6 +242,7 @@ export default function DirectoryView() {
   const [busyFollow, setBusyFollow] = useState<string | null>(null);
   const [sortSheetOpen, setSortSheetOpen] = useState(false);
   const [specSheetOpen, setSpecSheetOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const debounceRef = useRef<any>(null);
 
   const load = useCallback(async (resetCursor = true) => {
@@ -325,6 +327,27 @@ export default function DirectoryView() {
   const resetFilters = useCallback(() => {
     setQ(''); setFilter('all'); setSort('popular'); setSpecialty(null);
   }, []);
+
+  // Pull-to-refresh — re-fetches the current filter set fresh from server.
+  // Avoids appending or duplicating rows (resetCursor=true replaces items).
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      setCursor(0);
+      const r = await api.get('/directory', {
+        q: q || undefined,
+        sort,
+        filter,
+        specialty: specialty || undefined,
+        cursor: 0,
+        limit: 20,
+      });
+      setItems(r.items || []);
+      setCursor(r.next_cursor);
+    } catch {} finally {
+      setRefreshing(false);
+    }
+  }, [q, sort, filter, specialty]);
 
   const hasActiveFilters = !!(q || filter !== 'all' || specialty);
   const sortLabel = SORTS.find((srt) => srt.key === sort)?.label || 'Popular';
@@ -436,6 +459,14 @@ export default function DirectoryView() {
           // with the same key" warning. Order remains stable.
           keyExtractor={(u: DirItem, idx: number) => `${u.user_id}_${idx}`}
           contentContainerStyle={s.listContent}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.primary}
+              colors={[colors.primary]}
+            />
+          }
           renderItem={({ item }) => (
             <CreatorCard
               u={item}

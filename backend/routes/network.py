@@ -753,10 +753,27 @@ async def dm_get_thread(
     other_u = await db.users.find_one({"user_id": others[0]} if others else {"user_id": "__none__"},
         {"_id": 0, "user_id": 1, "name": 1, "username": 1, "avatar_url": 1, "verification_status": 1, "plan": 1, "role": 1, "city": 1, "specialties": 1}) if others else None
     other_part = await db.dm_participants.find_one({"thread_id": thread_id, "user_id": others[0]}, {"_id": 0}) if others else None
+
+    # Batch #9A — Elite-only read receipts. If the viewer (and implicit
+    # sender of their own messages) is NOT on an Elite tier, strip the
+    # per-message `seen_at` stamp and the `other_last_read_at` hint so
+    # read-receipt information is never exposed to Free / Pro senders.
+    # Recipient-side state (last_read_at, seen_at on others' messages)
+    # continues to be persisted server-side — we only redact on response.
+    viewer_plan = str(_effective_plan(plan_of(user)) or "free").lower()
+    is_elite_viewer = viewer_plan in {"elite", "comp_elite", "trial_elite"}
+    other_last_read_at = (other_part or {}).get("last_read_at") if is_elite_viewer else None
+    if not is_elite_viewer:
+        for m in msgs:
+            if m.get("sender_user_id") == user["user_id"]:
+                # Only strip on viewer's own outbound messages — that's
+                # where the receipt would render. Leave inbound seen_at
+                # alone (the other party isn't rendering receipts here).
+                m["seen_at"] = None
     return {
         "thread": thread,
         "other": other_u,
-        "other_last_read_at": (other_part or {}).get("last_read_at"),
+        "other_last_read_at": other_last_read_at,
         "messages": msgs,
     }
 
