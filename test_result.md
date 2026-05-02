@@ -12,6 +12,45 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Map View CR — June 2025: fix blank preview images + crash hardening."
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/src/utils/spot-cover.ts (NEW — unified resolveSpotCover(spot) cascade: hero_cover_image_url → cover_image_url → card_url → image_url → thumb_url (top-level from /api/spots/markers) → images[].is_cover → images[0]; absolutizes relative /api/uploads/... paths via EXPO_PUBLIC_BACKEND_URL),
+      /app/frontend/app/(tabs)/explore.tsx (PinPreview: uses resolveSpotCover instead of inline cascade that missed top-level thumb_url → FIXES blank preview cards; replaces plain surface2 placeholder with <SpotImageFallback> branded gradient fallback; marker tap guarded against missing spot_id / non-finite lat/lng; added useEffect that clears selectedSpot on view/filter change to prevent stale marker crashes; wrapped <PinPreview> render in <SectionErrorBoundary label="map-pin-preview" fallback={null}> so any preview render crash cannot take down Map View)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Root causes fixed:
+          1. Blank preview photos — /api/spots/markers ships top-level `thumb_url`
+             but PinPreview only read `spot.hero_cover_image_url` and
+             `spot.images[0].image_url`, neither of which exists on the
+             lightweight marker payload. New resolveSpotCover() unifies the
+             cascade across all surfaces (SpotCard list, Nearby Right Now,
+             Trending Nearby, Map preview card, Spot Detail hero).
+          2. Map View crashes — three compounding risks:
+             a) No error boundary around <PinPreview> → one bad field
+                would escalate to ExploreErrorBoundary and red-screen the
+                tab. Now wrapped in SectionErrorBoundary with null fallback.
+             b) selectedSpot held stale marker references across
+                list↔map toggles and filter changes. useEffect now clears
+                it on view/filter change.
+             c) Marker tap accepted any object → guard added to reject
+                markers with missing spot_id or non-finite coordinates.
+
+          Visual fallback — instead of a dark dead square when a spot
+          has no photo, we now render the branded SpotImageFallback
+          (deterministic gradient per spot id + camera glyph + shoot
+          type chip), matching what SpotCard already does in list view.
+
+          Backend unchanged — /api/spots/markers still returns thumb_url
+          correctly; verified via curl.
+
+
   - task: "TestFlight build prep — defensive wrapping for Spot Detail (May 2026). Created SectionErrorBoundary lightweight per-section boundary; wrapped 5 risky subsections (owner-row, community-uploads, latest-conditions, seasonal-timeline, similar-spots, reviews) so a single subsection crash hides only that section instead of bouncing the whole screen to ScreenErrorBoundary. SpotCard.handlePress already has spot_id || id || _id fallback (prior CR). All useRef/useEffect/useState imports verified across spot/[id].tsx + child components. App.json `updates.enabled: false` retained per user request to preserve OTA-disabled posture and avoid SDK-54 mismatch risk."
     implemented: true
     working: "NA"

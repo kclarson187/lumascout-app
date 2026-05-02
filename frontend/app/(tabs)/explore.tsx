@@ -26,6 +26,9 @@ import {
 } from '../../src/components/PremiumExploreRails';
 import { PremiumMapPin, PremiumMapCluster } from '../../src/components/PremiumMapPin';
 import ExploreErrorBoundary from '../../src/components/ExploreErrorBoundary';
+import SectionErrorBoundary from '../../src/components/SectionErrorBoundary';
+import SpotImageFallback from '../../src/components/SpotImageFallback';
+import { resolveSpotCover } from '../../src/utils/spot-cover';
 import {
   safeTier,
   normalizeSpotsForMap,
@@ -564,6 +567,16 @@ export default function Explore() {
     }
   }, [filters, view]);
 
+  // Clear any open PinPreview when the user swaps view (list↔map),
+  // changes filters, or the marker feed reloads. Holding a stale
+  // marker reference across these transitions was suspected as one of
+  // the Map View crash triggers (June 2025 report): the preview card
+  // could try to render against a spot that's no longer in the marker
+  // array, using fields that no longer exist on the swapped payload.
+  useEffect(() => {
+    setSelectedSpot(null);
+  }, [view, filters.shoot_type, filters.niche, filters.is_premium, filters.is_hidden_gem]);
+
   // Initial markers fetch — fires once when user opens Map view, then
   // anytime the filters change. Lazy: only when view==='map' AND the
   // map has actually been mounted at least once.
@@ -1083,6 +1096,21 @@ export default function Explore() {
                 key={String(s.spot_id || `m-${idx}-${s.latitude}-${s.longitude}`)}
                 coordinate={{ latitude: s.latitude, longitude: s.longitude }}
                 onPress={() => {
+                  // Stability guard — Map View CR (June 2025). Reject
+                  // marker taps that hand us a junk spot object: no
+                  // spot_id means we can't key PinPreview's save/
+                  // directions/details actions; non-finite lat/lng
+                  // would crash subsequent "Directions" intent launch.
+                  if (!s || !s.spot_id ||
+                      !Number.isFinite(s.latitude) ||
+                      !Number.isFinite(s.longitude)) {
+                    exploreLog('warn', 'marker_tap_rejected', {
+                      spot_id: s?.spot_id,
+                      lat: s?.latitude,
+                      lng: s?.longitude,
+                    });
+                    return;
+                  }
                   Haptics.selectionAsync().catch(() => {});
                   setSelectedSpot(s);
                 }}
@@ -1147,21 +1175,34 @@ export default function Explore() {
             {/* (Apr 2026) Removed list-toggle FAB — Explore is map-only now. */}
           </View>
 
-          {selectedSpot && (
-            <PinPreview
-              spot={selectedSpot}
-              onClose={() => setSelectedSpot(null)}
-              isSaved={!!savedIds[selectedSpot.spot_id]}
-              onToggleSave={() => {
-                const id = selectedSpot.spot_id;
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-                setSavedIds((prev) => ({ ...prev, [id]: !prev[id] }));
-                api.post(`/spots/${id}/save`).catch(() => {
-                  // Roll back optimistic state on error
+          {selectedSpot && !!selectedSpot.spot_id && (
+            // Section-scoped crash boundary — June 2025 Map View CR.
+            // If PinPreview throws during render (malformed marker,
+            // missing field, image error propagation), we swallow the
+            // error, log it, and keep the map itself mounted. The user
+            // can still pan/zoom; they just lose the preview card for
+            // that one spot. Previously a single bad render could take
+            // down the entire Explore tab with a red screen.
+            <SectionErrorBoundary
+              label="map-pin-preview"
+              fallback={null}
+            >
+              <PinPreview
+                spot={selectedSpot}
+                onClose={() => setSelectedSpot(null)}
+                isSaved={!!savedIds[selectedSpot.spot_id]}
+                onToggleSave={() => {
+                  const id = selectedSpot.spot_id;
+                  if (!id) return;
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
                   setSavedIds((prev) => ({ ...prev, [id]: !prev[id] }));
-                });
-              }}
-            />
+                  api.post(`/spots/${id}/save`).catch(() => {
+                    // Roll back optimistic state on error
+                    setSavedIds((prev) => ({ ...prev, [id]: !prev[id] }));
+                  });
+                }}
+              />
+            </SectionErrorBoundary>
           )}
         </View>
       ) : (
@@ -1350,22 +1391,11 @@ function PinPreview({
 }) {
   const verified = spot.owner?.verification_status === 'verified';
   const premium = spot.privacy_mode === 'premium';
-  const rawCover =
-    spot.hero_cover_image_url ||
-    (Array.isArray(spot.images)
-      ? (spot.images.find((i: any) => i.is_cover)?.image_url || spot.images[0]?.image_url)
-      : null);
-  // (Apr 2026 hardening) Validate cover URI before passing to <Image>.
-  // React Native's Image component will throw a native render error on
-  // some platforms when given an empty string, an unfinished URI, or a
-  // non-string value. Treat anything we don't recognise as "no cover"
-  // and render the surface2 placeholder instead.
-  const cover =
-    typeof rawCover === 'string' &&
-    rawCover.trim().length > 0 &&
-    /^(https?:|data:|file:|content:|asset:)/i.test(rawCover.trim())
-      ? rawCover.trim()
-      : null;
+  // Unified cover resolver (Map View CR — June 2025). Handles both
+  // lightweight markers (top-level `thumb_url` from /api/spots/markers)
+  // and full spots (`hero_cover_image_url`, `images[]`). Absolutizes
+  // app-relative paths so React Native's <Image> can render them.
+  const cover = resolveSpotCover(spot);
   // FIX (Apr 2026): no more fake "100 Score / Best at Sunset" on every
   // preview. Both are now gated on real backend data — if the field is
   // missing we hide the module entirely rather than fabricating. Score
@@ -1506,9 +1536,25 @@ function PinPreview({
         {/* Hero image — LEFT, 140x140 square per mockup */}
         <View style={styles.sheetHeroWrap}>
           {cover ? (
-            <Image source={{ uri: cover }} style={styles.sheetHero} />
+            <Image
+              source={{ uri: cover }}
+              style={styles.sheetHero}
+              // When the image URL fails to load (CORS, 404, broken
+              // link) the <Image> simply renders nothing. The parent
+              // View's background shows through — which is fine because
+              // we layered a SpotImageFallback below. This avoids the
+              // previous "dead dark square" look on missing photos.
+              onError={() => { /* silently keep fallback visible */ }}
+            />
           ) : (
-            <View style={[styles.sheetHero, { backgroundColor: colors.surface2 }]} />
+            <View style={styles.sheetHero}>
+              <SpotImageFallback
+                title={spot.title}
+                seed={spot.spot_id || spot.title}
+                shootType={Array.isArray(spot.shoot_types) ? spot.shoot_types[0] : undefined}
+                compact
+              />
+            </View>
           )}
           {/* VERIFIED pill overlay bottom-left */}
           {verified ? (
