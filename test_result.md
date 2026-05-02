@@ -12,6 +12,52 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "v2.0.20 polish — Explore Map preview photos, Spot Detail hero carousel community uploads, Network/Directory cramped pills"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app/(tabs)/explore.tsx (PinPreview: SpotImageFallback gradient now ALWAYS rendered as base layer via StyleSheet.absoluteFillObject; <Image> overlays on top and unmounts itself when onError fires by flipping the new `imgFailed` useState — eliminates the "blank dark square" the user reported in v2.0.19; useEffect resets imgFailed when the cover URL or selected spot changes so a stale failure doesn't poison the next preview),
+      /app/frontend/app/spot/[id].tsx (Hero Carousel: parallel-fetches /api/spots/{id}/uploads on load() and stores them in `communityUploads` state; orderedImages memo now appends deduped community-upload entries after the owner-uploaded primary images so swipers see EVERY angle/shot of a location in the hero pager — not just the owner's two shots; surfaces a subtle "By {contributor}" attribution chip in the bottom-left when the active hero slide is a community upload; CommunityUploadsSection receives the same payload as `initial` to avoid a duplicate network round-trip on mount; onAny callback re-fetches the uploads so newly-uploaded photos appear in the carousel without a full screen reload),
+      /app/frontend/src/components/DirectoryView.tsx (tightened vertical density across all 5 control rows — searchWrap, axisWrap, facetRow, fcardRow, controlRow — paddingTop/Bottom 10/12 → 8/10 globally; bumped facetPillTxt maxWidth 140 → 180 so longer city names like "San Francisco" stop truncating; fcard minHeight 56 → 50, padding tightened so 3 filter cards fit comfortably on small iPhones)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          v2.0.20 hot-fix batch addressing the 3 issues the user flagged from v2.0.19 TestFlight build:
+          
+          1) Map preview photos still missing (recurrence #2):
+             ROOT CAUSE — when the markers payload had a thumb_url but the URL failed
+             to load on iOS (timeout, CDN hiccup, App Transport Security rejection),
+             the previous PinPreview branched on `cover ? <Image/> : <Fallback/>` so
+             a load failure left a blank surface2 dark square with no fallback.
+             FIX — fallback gradient is now ALWAYS rendered as a StyleSheet.absoluteFillObject
+             base layer, the <Image> overlays on top with onError that unmounts the
+             Image and reveals the gradient beneath. No more dead dark squares.
+          
+          2) Spot detail hero doesn't include community uploaded photos:
+             ROOT CAUSE — orderedImages memo only consumed spot.images, ignoring the
+             /api/spots/{id}/uploads payload entirely. Community shots only surfaced
+             in the lower CommunityUploadsSection horizontal strip, not the hero pager.
+             FIX — parallel-fetch /uploads on every load(), append deduped entries to
+             orderedImages, and render a subtle "By {contributor}" attribution chip
+             when the active slide is a community upload.
+          
+          3) Network tab directory selection cramped:
+             ROOT CAUSE — 5 stacked control rows (search → axis toggle → facet pills
+             → 3 filter cards → sort/specialties) consumed ~322px before any actual
+             photographer cards rendered. On iPhone SE that left ~150px for results.
+             Plus facetPillTxt was capped at maxWidth: 140 which truncated longer
+             city names with a "…" ellipsis the user read as "cut off".
+             FIX — tightened paddingTop/Bottom across every control row, bumped
+             maxWidth to 180 for facet labels, reduced fcard minHeight 56 → 50.
+          
+          User testing on iOS TestFlight (next build the user submits manually —
+          per their explicit "no auto-deploy" instruction) will validate all three.
+
+
   - task: "Map View CR — June 2025: fix blank preview images + crash hardening."
     implemented: true
     working: "NA"

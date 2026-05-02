@@ -1435,6 +1435,15 @@ function PinPreview({
   // and full spots (`hero_cover_image_url`, `images[]`). Absolutizes
   // app-relative paths so React Native's <Image> can render them.
   const cover = resolveSpotCover(spot);
+  // FIX (June 2025 v2.0.20 — Map preview missing photos, recurrence #2):
+  // Track image load failure per-preview so a 404/CDN-timeout/ATS-rejection
+  // unmounts the <Image> and reveals the gradient fallback layered
+  // beneath. Reset whenever the cover URL or selected spot changes so
+  // a previous failure doesn't poison the next preview.
+  const [imgFailed, setImgFailed] = React.useState(false);
+  React.useEffect(() => {
+    setImgFailed(false);
+  }, [cover, spot?.spot_id]);
   // FIX (Apr 2026): no more fake "100 Score / Best at Sunset" on every
   // preview. Both are now gated on real backend data — if the field is
   // missing we hide the module entirely rather than fabricating. Score
@@ -1579,29 +1588,31 @@ function PinPreview({
       <View style={styles.previewHandle} />
 
       <View style={styles.sheetBody}>
-        {/* Hero image — LEFT, 140x140 square per mockup */}
+        {/* Hero image — LEFT, 132x132 square per mockup.
+            FIX (June 2025 v2.0.20): the gradient fallback is now ALWAYS
+            rendered as the base layer (StyleSheet.absoluteFillObject).
+            When `cover` resolves we layer the <Image> ON TOP. If the
+            URL fails to load on iOS (rejected by ATS, 404, slow CDN),
+            our `onError` flips `imgFailed` and the Image is unmounted —
+            revealing the gradient beneath instead of the previous
+            "dead dark square" the user reported in v2.0.19. */}
         <View style={styles.sheetHeroWrap}>
-          {cover ? (
+          <View style={StyleSheet.absoluteFillObject}>
+            <SpotImageFallback
+              title={spot.title}
+              seed={spot.spot_id || spot.title}
+              shootType={Array.isArray(spot.shoot_types) ? spot.shoot_types[0] : undefined}
+              compact
+            />
+          </View>
+          {cover && !imgFailed ? (
             <Image
               source={{ uri: cover }}
               style={styles.sheetHero}
-              // When the image URL fails to load (CORS, 404, broken
-              // link) the <Image> simply renders nothing. The parent
-              // View's background shows through — which is fine because
-              // we layered a SpotImageFallback below. This avoids the
-              // previous "dead dark square" look on missing photos.
-              onError={() => { /* silently keep fallback visible */ }}
+              onError={() => setImgFailed(true)}
+              onLoad={() => { /* keep mounted */ }}
             />
-          ) : (
-            <View style={styles.sheetHero}>
-              <SpotImageFallback
-                title={spot.title}
-                seed={spot.spot_id || spot.title}
-                shootType={Array.isArray(spot.shoot_types) ? spot.shoot_types[0] : undefined}
-                compact
-              />
-            </View>
-          )}
+          ) : null}
           {/* VERIFIED pill overlay bottom-left */}
           {verified ? (
             <View style={styles.sheetVerifiedPill}>

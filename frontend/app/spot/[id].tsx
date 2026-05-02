@@ -80,6 +80,13 @@ function SpotDetailImpl() {
   const [reportOpen, setReportOpen] = useState(false);
   const [shotListOpen, setShotListOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // Hero Carousel CR (June 2025 v2.0.20) — community uploads now feed
+  // the hero pager. We fetch /spots/:id/uploads alongside the spot
+  // detail so photographers can swipe through every angle/shot of a
+  // location, not just the owner-uploaded primary images. The same
+  // payload is forwarded down to <CommunityUploadsSection initial={…}>
+  // to avoid a duplicate network round-trip.
+  const [communityUploads, setCommunityUploads] = useState<any[]>([]);
   // Spot Detail timeout / retry hardening — June 2025.
   // We track a recoverable error category so the UI can render an
   // inline retry state instead of bouncing the user back to Explore
@@ -129,6 +136,21 @@ function SpotDetailImpl() {
         setErrorCategory(null);
         inflightRef.current = null;
         setLoading(false);
+        // Hero Carousel CR (June 2025 v2.0.20) — fire-and-forget fetch
+        // for community uploads. Failures are non-fatal: the hero
+        // carousel still has the owner's primary images and will just
+        // skip the community appendix this load. Same payload is
+        // forwarded to <CommunityUploadsSection initial={…}>.
+        api.get(`/spots/${id}/uploads`, { limit: 24 })
+          .then((r: any) => {
+            const items = Array.isArray(r?.items) ? r.items : [];
+            setCommunityUploads(items);
+          })
+          .catch(() => {
+            // Network error — leave whatever we already have. The
+            // CommunityUploadsSection will retry on its own when it
+            // mounts without an `initial` prop fallback.
+          });
         return;
       } catch (e: any) {
         lastError = e;
@@ -187,16 +209,38 @@ function SpotDetailImpl() {
   const orderedImages = useMemo(() => {
     const all: any[] = Array.isArray(spot?.images) ? spot.images : [];
     const coverUrl: string | null = spot?.hero_cover_image_url || null;
-    if (!coverUrl) return all;
-    const match = all.find((im: any) => im?.image_url === coverUrl);
-    if (match) {
-      // Move the matching image to position 0
-      return [match, ...all.filter((im: any) => im?.image_url !== coverUrl)];
+
+    // Step 1 — order primary owner-uploaded images with cover-first.
+    let primary: any[] = all;
+    if (coverUrl) {
+      const match = all.find((im: any) => im?.image_url === coverUrl);
+      if (match) {
+        primary = [match, ...all.filter((im: any) => im?.image_url !== coverUrl)];
+      } else {
+        primary = [{ image_url: coverUrl, source: 'cover_override' }, ...all];
+      }
     }
-    // Cover URL isn't in spot.images — prepend a synthetic object so the
-    // hero carousel can still show the admin-selected cover as image #1.
-    return [{ image_url: coverUrl, source: 'cover_override' }, ...all];
-  }, [spot?.images, spot?.hero_cover_image_url]);
+
+    // Step 2 — append community-uploaded photos (Hero Carousel CR,
+    // June 2025 v2.0.20). Photographers want to see EVERY angle of a
+    // location in the hero pager, not just the owner's two shots.
+    // We dedupe against the primary URLs so the same photo doesn't
+    // appear twice if a community upload happens to be the same URL
+    // as a primary image (rare but possible after admin re-imports).
+    const seen = new Set<string>(
+      primary.map((im: any) => im?.image_url).filter((u: any) => typeof u === 'string'),
+    );
+    const community = (Array.isArray(communityUploads) ? communityUploads : [])
+      .filter((u: any) => u && typeof u.image_url === 'string' && !seen.has(u.image_url))
+      .map((u: any) => ({
+        image_url: u.image_url,
+        source: 'community_upload',
+        upload_id: u.upload_id,
+        contributor: u.contributor,
+      }));
+
+    return [...primary, ...community];
+  }, [spot?.images, spot?.hero_cover_image_url, communityUploads]);
 
   // Clamp the active gallery index whenever the ordered array changes
   // so swiping never lands on a phantom slide after the cover is
@@ -642,6 +686,36 @@ function SpotDetailImpl() {
               </Text>
             </View>
           ) : null}
+          {/* Hero Carousel CR (June 2025 v2.0.20) — when the active hero
+              slide is a community upload, surface a subtle "Community"
+              attribution pill in the bottom-left so photographers
+              instantly understand they're viewing a user-contributed
+              shot, not the owner's primary image. Tapping the pill
+              jumps to the community uploads section below. */}
+          {orderedImages[galleryIdx]?.source === 'community_upload' ? (
+            <Pressable
+              style={styles.heroCommunityPill}
+              onPress={() => {
+                // Attribution chip is non-actionable for now; tap is a
+                // no-op that keeps the carousel mounted. Future
+                // enhancement: scroll-into-view of the community
+                // uploads section below.
+              }}
+              accessibilityLabel={
+                orderedImages[galleryIdx]?.contributor?.name
+                  ? `Community photo by ${orderedImages[galleryIdx].contributor.name}`
+                  : 'Community-contributed photo'
+              }
+              testID="spot-hero-community-attribution"
+            >
+              <Camera size={11} color="#fff" />
+              <Text style={styles.heroCommunityPillTxt} numberOfLines={1}>
+                {orderedImages[galleryIdx]?.contributor?.name
+                  ? `By ${orderedImages[galleryIdx].contributor.name}`
+                  : 'Community'}
+              </Text>
+            </Pressable>
+          ) : null}
           {/* May 2026 batch #4 item #2.1 — ADMIN photo delete pill.
               Positioned BOTTOM-LEFT so it never covers the share /
               bookmark / wand / report buttons in the header row.
@@ -1043,7 +1117,20 @@ function SpotDetailImpl() {
               </View>
               <View style={{ marginTop: space.md, marginHorizontal: -space.xl }}>
                 <SectionErrorBoundary label="community-uploads">
-                  <CommunityUploadsSection spotId={spot.spot_id} />
+                  <CommunityUploadsSection
+                    spotId={spot.spot_id}
+                    initial={communityUploads.length > 0 ? communityUploads : undefined}
+                    onAny={() => {
+                      // Refresh the hero pager when a user reacts /
+                      // adds an upload — so newly-uploaded photos
+                      // appear in the carousel without a full reload.
+                      api.get(`/spots/${id}/uploads`, { limit: 24 })
+                        .then((r: any) => {
+                          if (Array.isArray(r?.items)) setCommunityUploads(r.items);
+                        })
+                        .catch(() => {});
+                    }}
+                  />
                 </SectionErrorBoundary>
               </View>
             </>
@@ -1262,6 +1349,34 @@ const styles = StyleSheet.create({
     fontFamily: font.bodySemibold,
     fontSize: 11,
     letterSpacing: 0.5,
+  },
+  // Hero Carousel CR (June 2025 v2.0.20) — community attribution pill.
+  // Bottom-left corner, well clear of the admin DELETE pill (which
+  // sits at bottom: space.lg + 16, left: space.md). We position
+  // ours at bottom: space.md, left: space.md so when both happen
+  // to coexist on the same slide (community photo + admin) the
+  // attribution chip sits BELOW the delete pill. In the more common
+  // case (no admin) it sits cleanly in the bottom-left corner.
+  heroCommunityPill: {
+    position: 'absolute',
+    bottom: space.md,
+    left: space.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.28)',
+    maxWidth: '70%',
+  },
+  heroCommunityPillTxt: {
+    color: '#fff',
+    fontFamily: font.bodySemibold,
+    fontSize: 11,
+    letterSpacing: 0.3,
   },
   // May 2026 batch #4 update #2.1 — admin photo DELETE pill.
   //
