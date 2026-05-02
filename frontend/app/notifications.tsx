@@ -7,6 +7,7 @@ import { ChevronLeft, Heart, Camera, CheckCircle, Flower, Sparkles, Image as Img
 import { api } from '../src/api';
 import { colors, font, space, radii } from '../src/theme';
 import { timeAgo } from '../src/components/FreshnessBits';
+import { BrandedRefreshControl, useBrandedRefresh } from '../src/theme/refresh';
 
 /**
  * Notifications inbox — single place to see fresh-photo alerts on saved
@@ -66,6 +67,15 @@ export default function NotificationsScreen() {
 
   useEffect(() => { load(); }, [load]);
 
+  // CR Item 11 (May 2026) — branded pull-to-refresh.
+  const pullRefresh = useBrandedRefresh<number>({
+    load: async () => {
+      await load();
+      return items.length;
+    },
+    isChanged: (prev, next) => prev !== null && prev !== next,
+  });
+
   const markAllRead = async () => {
     try {
       await api.post('/notifications/mark-read', {});
@@ -112,8 +122,15 @@ export default function NotificationsScreen() {
           renderItem={({ item }) => <NotifRow n={item} onTap={onTap} />}
           ItemSeparatorComponent={() => <View style={styles.sep} />}
           contentContainerStyle={{ paddingBottom: 60 }}
+          refreshControl={
+            <BrandedRefreshControl
+              refreshing={pullRefresh.refreshing}
+              onRefresh={pullRefresh.onRefresh}
+            />
+          }
         />
       )}
+      <pullRefresh.Toast />
     </SafeAreaView>
   );
 }

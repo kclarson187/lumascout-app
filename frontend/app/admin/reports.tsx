@@ -5,6 +5,7 @@ import { router } from 'expo-router';
 import { Check, X, AlertTriangle, ShieldCheck, Clock } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
+import { BrandedRefreshControl, useBrandedRefresh } from '../../src/theme/refresh';
 
 // Humanized relative timestamp so admins can see at a glance how stale a report is.
 function timeAgo(iso?: string): string {
@@ -58,6 +59,12 @@ export default function AdminReports() {
 
   useEffect(() => { load(); }, [load]);
 
+  // CR Item 11 (May 2026) — branded pull-to-refresh on admin reports.
+  const pullRefresh = useBrandedRefresh<number>({
+    load: async () => { await load(); return reports.length; },
+    isChanged: (prev, next) => prev !== null && prev !== next,
+  });
+
   const resolve = async (id: string, action: 'dismissed' | 'removed' | 'warned') => {
     try {
       await api.post(`/admin/reports/${id}/resolve`, { action });
@@ -104,7 +111,15 @@ export default function AdminReports() {
           </Text>
         </View>
       ) : (
-        <ScrollView contentContainerStyle={{ padding: space.xl, gap: space.md, paddingBottom: 100 }}>
+        <ScrollView
+          contentContainerStyle={{ padding: space.xl, gap: space.md, paddingBottom: 100 }}
+          refreshControl={
+            <BrandedRefreshControl
+              refreshing={pullRefresh.refreshing}
+              onRefresh={pullRefresh.onRefresh}
+            />
+          }
+        >
           {reports.map((r) => (
             <View key={r.report_id} style={styles.card}>
               <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
@@ -165,6 +180,7 @@ export default function AdminReports() {
           ))}
         </ScrollView>
       )}
+      <pullRefresh.Toast />
     </View>
   );
 }

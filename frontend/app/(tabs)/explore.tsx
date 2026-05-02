@@ -29,6 +29,7 @@ import ExploreErrorBoundary from '../../src/components/ExploreErrorBoundary';
 import SectionErrorBoundary from '../../src/components/SectionErrorBoundary';
 import SpotImageFallback from '../../src/components/SpotImageFallback';
 import { resolveSpotCover } from '../../src/utils/spot-cover';
+import { BrandedRefreshControl, useBrandedRefresh } from '../../src/theme/refresh';
 import {
   safeTier,
   normalizeSpotsForMap,
@@ -451,6 +452,21 @@ export default function Explore() {
   }, [filters, userCoords]);
 
   useEffect(() => { load(); }, [load]);
+
+  // CR Item 11 (May 2026) — branded pull-to-refresh on Explore List view.
+  // Refresh path: re-runs full /api/spots load + the markers fetch. The
+  // `isChanged` predicate compares spot-id sets so the toast only fires
+  // when the result actually differs (avoids "Updated just now" noise on
+  // every pull when nothing changed).
+  const listPullRefresh = useBrandedRefresh<string>({
+    load: async () => {
+      await load();
+      // Cheap snapshot key: sorted spot_id concatenation (good enough
+      // for change detection without storing big objects in the ref).
+      return (spots || []).map((s) => s?.spot_id || '').sort().join(',');
+    },
+    isChanged: (prev, next) => prev !== null && prev !== next,
+  });
 
   // ────────────────────────────────────────────────────────────────
   // Explore Speed CR — Batch 3 (June 2025): lightweight map markers.
@@ -1241,6 +1257,12 @@ export default function Explore() {
               style={{ flex: 1 }}
               contentContainerStyle={{ paddingBottom: 120 }}
               showsVerticalScrollIndicator={false}
+              refreshControl={
+                <BrandedRefreshControl
+                  refreshing={listPullRefresh.refreshing}
+                  onRefresh={listPullRefresh.onRefresh}
+                />
+              }
               onScroll={(e) => {
                 const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
                 const distanceFromBottom =
@@ -1367,6 +1389,10 @@ export default function Explore() {
               </View>
             </ScrollView>
           )}
+          {/* CR Item 11 (May 2026) — "Updated just now" toast for the
+              List view branded refresh. Rendered at the screen-level
+              wrapper so it floats above ScrollView contents. */}
+          <listPullRefresh.Toast />
           {/* (Apr 2026) Map-toggle FAB removed — Explore is dedicated map. */}
         </View>
       )}

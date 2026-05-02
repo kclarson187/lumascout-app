@@ -28,8 +28,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Platform, RefreshControl, RefreshControlProps, StyleSheet, Text, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import { colors } from './colors';
-import { font } from './fonts';
+import { colors, font } from '../theme';
 
 const AMBER = '#F5A524';
 
