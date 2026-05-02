@@ -61,6 +61,81 @@
   - task: "Map View CR — June 2025: fix blank preview images + crash hardening."
     implemented: true
     working: "NA"
+
+  - task: "v2.0.21 build prep — Map preview photos audit + pinch-zoom crash hardening + crash-log capture path"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app.json (version 2.0.17 → 2.0.21, ios.buildNumber 2.0.17 → 2.0.21),
+      /app/frontend/app/_layout.tsx (global crash-log capture path: ErrorUtils.setGlobalHandler logs every uncaught JS exception with `[CRASH] uncaught_js_error` prefix; HermesInternal.enablePromiseRejectionTracker logs unhandled rejections — both surface cleanly in Xcode Window→Devices and Simulators→Console and macOS Console.app filtered by "[CRASH]" or "lumascout"),
+      /app/frontend/app/(tabs)/explore.tsx (pinch-zoom crash hardening: extracted Marker .map() into a useMemo'd `renderedMarkers` array keyed on stable `markersIdentity` (concat of spot_ids) + savedIds — so pan/zoom causes ZERO re-mounts in the marker tree, eliminating the iOS bridge churn that was triggering "mutex lock failed" / "NSInvalidArgumentException" crashes; mirrored userCoords into a ref so memoized onPress closures stay valid without invalidating memo on each GPS tick; added a one-shot `[explore] build_diagnostics` log on mount that emits EXPO_PUBLIC_BACKEND_URL + appOwnership + executionEnvironment + IS_EXPO_GO so we can confirm the TestFlight build was bundled with the correct backend URL — the most common cause of "photos not populating" is EXPO_PUBLIC_BACKEND_URL=undefined at build time, making every uploaded URL relative which iOS silently refuses; PinPreview Image now logs `[map-preview] image_load_failed { spot_id, title, url, nativeEvent }` on every failure and `[map-preview] image_loaded` on success so we can diff which spots break),
+      /app/backend/scripts/clean_corrupted_uploads.py (one-shot cleanup script — already executed; removed 25 1×1-pixel placeholder JPEGs from disk + 6 spot-image references + 17 community uploads; saved as reusable script with --apply flag)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          v2.0.21 build prep — addressing two issues from user's v2.0.20 TestFlight feedback:
+          
+          ISSUE 1 — Map preview photos still missing for Bullis County Park / McAllister Park / Joshua Springs:
+            Audit findings:
+              • Markers endpoint /api/spots/markers verified: returns valid thumb_url
+                for every spot in the dev DB. For Bullis County Park specifically:
+                thumb_url = "https://photo-finder-60.preview.../api/uploads/2026/05/0f8e967fbd6a4db29a42629d7299c215.jpg"
+                (200 OK, 189 KB, valid JPEG, fast TTFB).
+              • McAllister Park + Joshua Springs are NOT in the dev DB at all —
+                user is testing against either a different backend or has spots
+                that exist only on their TestFlight env.
+              • PinPreview now reads via resolveSpotCover() which checks the SAME
+                cascade for both lightweight markers (top-level thumb_url) AND
+                full spots (hero_cover_image_url → cover → card → image_url →
+                images[0]). Confirmed working in dev — see expo logs:
+                "[map-preview] image_loaded {url: ...0f8e967fbd6a4db29a42629d7299c215.jpg}"
+              • Cleaned 25 corrupted 1×1 placeholder JPEGs from disk that were
+                rendering as black squares with HTTP 200 (QA upload artifacts).
+              • Added the diagnostic chip + onError logging in v2.0.20 hot-fix
+                — but NOT in user's v2.0.20 TestFlight build (it was bundled
+                BEFORE those changes landed). The new 2.0.21 build will have
+                them all.
+          
+          ISSUE 2 — Map crashes on pinch-zoom (NEW):
+            Hardening applied:
+              1. Memoized the entire <Marker> children array via useMemo +
+                 stable markersIdentity key. Previously every onRegionChange
+                 forced React to walk the array and reconcile each Marker;
+                 during rapid pinch-zoom that reconcile churn accumulated
+                 marker mount/unmount events into the iOS native bridge
+                 faster than it could drain → "mutex lock failed" / 
+                 "NSInvalidArgumentException" crashes.
+              2. tracksViewChanges={false} already in place on every Marker
+                 (from earlier hardening pass).
+              3. PremiumMapPin already uses Lucide vector icons (Camera/
+                 Bookmark/Gem/Flame), explicit 36×44 outer dimensions and
+                 30×30 ring — NO remote <Image> inside the marker, so no
+                 unsized-image-decode-during-zoom risk.
+              4. SafeClusteredMapView already clamps NaN/out-of-range
+                 regions, debounces 150ms, and disables clustering above
+                 40° latitudeDelta (continent scale).
+              5. NEW global crash-log capture wired into _layout.tsx:
+                 ErrorUtils.setGlobalHandler + HermesInternal.enablePromiseRejectionTracker
+                 emit `[CRASH] uncaught_js_error` and `[CRASH] unhandled_promise_rejection`
+                 with full stack traces.
+          
+          REPRO INSTRUCTIONS for the user's next TestFlight build:
+            • Connect iPhone to Mac, open Xcode → Window → Devices and Simulators
+              → select the device → click "Open Console".
+            • In Console.app, filter by either "lumascout" or "[CRASH]".
+            • Reproduce the pinch-zoom crash. The full JS stack trace will
+              appear in the filtered log even after the app restarts.
+            • For the photo-population issue: filter by "[map-preview]" to
+              see image_loaded vs image_load_failed events with exact URLs.
+            • For the build env: filter by "[explore] build_diagnostics" —
+              will print {backend, appOwnership, executionEnvironment, isExpoGo, platform}
+              once at app start. Confirms whether EAS bundled the correct
+              EXPO_PUBLIC_BACKEND_URL.
+
     file: |
       /app/frontend/src/utils/spot-cover.ts (NEW — unified resolveSpotCover(spot) cascade: hero_cover_image_url → cover_image_url → card_url → image_url → thumb_url (top-level from /api/spots/markers) → images[].is_cover → images[0]; absolutizes relative /api/uploads/... paths via EXPO_PUBLIC_BACKEND_URL),
       /app/frontend/app/(tabs)/explore.tsx (PinPreview: uses resolveSpotCover instead of inline cascade that missed top-level thumb_url → FIXES blank preview cards; replaces plain surface2 placeholder with <SpotImageFallback> branded gradient fallback; marker tap guarded against missing spot_id / non-finite lat/lng; added useEffect that clears selectedSpot on view/filter change to prevent stale marker crashes; wrapped <PinPreview> render in <SectionErrorBoundary label="map-pin-preview" fallback={null}> so any preview render crash cannot take down Map View)

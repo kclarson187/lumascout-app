@@ -31,6 +31,58 @@ try {
   SplashScreen.setOptions?.({ duration: 700, fade: true });
 } catch {}
 
+// v2.0.21 — Global crash-log capture path (requested by user for the
+// pinch-zoom map crash repro).
+//
+// Wires up:
+//   1. A global JS error handler (ErrorUtils on RN) that logs every
+//      uncaught exception with a `[CRASH]` prefix so they surface
+//      cleanly in Xcode + macOS Console.app filtered logs.
+//   2. An unhandled promise rejection handler — many "silent" iOS
+//      crashes are actually unhandled rejections that escape to the
+//      bridge and corrupt state.
+//
+// Xcode: Window → Devices and Simulators → select device → "Open
+// Console". Filter by "lumascout" or "[CRASH]" to capture repros.
+// macOS Console.app: Devices tab → iPhone → filter "[CRASH]".
+try {
+  const ErrorUtils = (global as any).ErrorUtils;
+  if (ErrorUtils && typeof ErrorUtils.setGlobalHandler === 'function') {
+    const previous = ErrorUtils.getGlobalHandler?.() || (() => {});
+    ErrorUtils.setGlobalHandler((error: any, isFatal?: boolean) => {
+      try {
+        // eslint-disable-next-line no-console
+        console.error('[CRASH] uncaught_js_error', {
+          fatal: !!isFatal,
+          name: error?.name,
+          message: error?.message,
+          stack: (error?.stack || '').split('\n').slice(0, 8).join('\n'),
+        });
+      } catch {}
+      try { previous(error, isFatal); } catch {}
+    });
+  }
+  // Unhandled promise rejection (RN polyfills via `promise` lib, exposes
+  // a `tracking` channel that we can subscribe to via the global event
+  // emitter).
+  const HermesInternal = (global as any).HermesInternal;
+  if (HermesInternal && typeof HermesInternal.enablePromiseRejectionTracker === 'function') {
+    HermesInternal.enablePromiseRejectionTracker({
+      allRejections: true,
+      onUnhandled: (id: any, rejection: any) => {
+        try {
+          // eslint-disable-next-line no-console
+          console.warn('[CRASH] unhandled_promise_rejection', {
+            id,
+            message: rejection?.message,
+            stack: (rejection?.stack || '').split('\n').slice(0, 6).join('\n'),
+          });
+        } catch {}
+      },
+    });
+  }
+} catch {}
+
 /**
  * Mount once at app root: wire push-notification tap handler so notifications
  * with `data.deep_link` route into the app. Silent no-op on web.
