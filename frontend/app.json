@@ -15,7 +15,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.lumascout.app",
+      "bundleIdentifier": "app.emergent.photofinder60669d6fa1",
       "buildNumber": "2.0.15",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Show nearby photoshoot spots and save locations.",
