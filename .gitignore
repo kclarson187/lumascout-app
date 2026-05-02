@@ -182,3 +182,7 @@ credentials.json
 *.pem
 *.key
 .credentials
+
+# Apple ASC API Key + secrets
+secrets/
+*.p8
