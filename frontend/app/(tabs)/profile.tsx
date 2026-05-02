@@ -267,9 +267,20 @@ function ProfileImpl() {
   };
 
   const shareProfile = async () => {
+    // CR Item 8 (May 2026) — was previously calling Share.share with
+    // ONLY a `message` field and no URL → recipients got just a string
+    // with no link. Now wired through the unified shareProfile helper
+    // which calls /api/share/user/{id} (returns Open Graph metadata
+    // + UA-driven App Store / Play Store / web fallback). Recipients
+    // see a proper link card preview in iMessage / SMS / Slack /
+    // Twitter and a tappable URL that lands on the right destination.
     try {
-      await Share.share({
-        message: `Check out ${user.name}'s photography profile on LumaScout`,
+      const { shareProfile: shareProfileSmart } = await import('../../src/utils/share');
+      await shareProfileSmart({
+        user_id: user.user_id || user.id,
+        display_name: user.name || user.display_name,
+        username: user.username,
+        specialty: user.specialty || user.photographer_specialty,
       });
     } catch {}
   };

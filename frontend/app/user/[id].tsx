@@ -159,9 +159,16 @@ export default function UserProfile() {
   };
 
   const shareProfile = async () => {
+    // CR Item 8 (May 2026) — wired to smart-link share endpoint with
+    // Open Graph metadata. Replaces previous text-only share that
+    // produced a bare string with no clickable URL.
     try {
-      await Share.share({
-        message: `Check out ${profile?.name}'s photography profile on LumaScout`,
+      const { shareProfile: shareProfileSmart } = await import('../../src/utils/share');
+      await shareProfileSmart({
+        user_id: profile?.user_id || (id as string),
+        display_name: profile?.name,
+        username: profile?.username,
+        specialty: profile?.specialty,
       });
     } catch {}
   };

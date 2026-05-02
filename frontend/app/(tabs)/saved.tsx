@@ -23,6 +23,7 @@ import { Button } from '../../src/components/Button';
 import UpgradeBanner from '../../src/components/UpgradeBanner';
 import ScoutAICard from '../../src/components/ScoutAICard';
 import { SpotCardSkeleton } from '../../src/components/Skeleton';
+import { BrandedRefreshControl, useBrandedRefresh } from '../../src/theme/refresh';
 
 type SortKey = 'recent' | 'score' | 'distance' | 'city' | 'shoot_type';
 const SORT_LABELS: Record<SortKey, string> = {
@@ -92,6 +93,19 @@ export default function Saved() {
   }, [user, loaded]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // CR Item 11 (May 2026) — branded pull-to-refresh hook. The
+  // `isChanged` predicate compares the snapshot count of saved spots
+  // so we don't fire a "Updated just now" toast when the user pulls
+  // and nothing actually changed.
+  const pullRefresh = useBrandedRefresh<number>({
+    load: async () => {
+      setLoaded(false);
+      await load();
+      return savedSpots.length;
+    },
+    isChanged: (prev, next) => prev !== null && prev !== next,
+  });
 
   // --- Favorites: sort + filter ----------------------------------------
   const sortedFavs = useMemo(() => {
@@ -308,8 +322,18 @@ export default function Saved() {
                   keyExtractor={(i) => i.spot_id}
                   contentContainerStyle={{ padding: space.xl, gap: space.md, paddingBottom: 100 }}
                   renderItem={({ item }) => <SpotCard spot={item} width={undefined as any} onToggleSave={load} />}
+                  // CR Item 11 (May 2026) — branded pull-to-refresh.
+                  // The toast view (Toast component) is rendered at the
+                  // top-level wrapper so it floats above the FlatList.
+                  refreshControl={
+                    <BrandedRefreshControl
+                      refreshing={pullRefresh.refreshing}
+                      onRefresh={pullRefresh.onRefresh}
+                    />
+                  }
                 />
               )}
+              <pullRefresh.Toast />
             </>
           )}
         </>

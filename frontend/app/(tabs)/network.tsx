@@ -90,13 +90,13 @@ export default function NetworkTab() {
 
   const onShareApp = async () => {
     Haptics.selectionAsync().catch(() => {});
+    // CR Item 7 (May 2026) — was sharing the dead "lumascout.app" URL.
+    // Now goes through the smart-link share endpoint which returns
+    // Open Graph metadata + UA-driven App Store / Play Store / web
+    // routing so recipients get a real install destination.
     try {
-      await Share.share({
-        message:
-          'Join me on LumaScout — find amazing photo spots, connect with photographers 📸\n\nhttps://lumascout.app',
-        url: 'https://lumascout.app',
-        title: 'LumaScout',
-      });
+      const { shareApp } = await import('../../src/utils/share');
+      await shareApp();
     } catch {}
   };
 
