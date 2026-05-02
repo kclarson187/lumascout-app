@@ -1609,9 +1609,38 @@ function PinPreview({
             <Image
               source={{ uri: cover }}
               style={styles.sheetHero}
-              onError={() => setImgFailed(true)}
-              onLoad={() => { /* keep mounted */ }}
+              onError={(e) => {
+                // v2.0.20 diagnostic — log the exact URL + nativeError
+                // so we can see in device logs / Xcode console why an
+                // image failed on a user's device. Also surfaces the
+                // gradient fallback via imgFailed state flip.
+                try {
+                  // eslint-disable-next-line no-console
+                  console.warn('[map-preview] image_load_failed', {
+                    spot_id: spot?.spot_id,
+                    title: spot?.title,
+                    url: cover,
+                    nativeEvent: e?.nativeEvent,
+                  });
+                } catch {}
+                setImgFailed(true);
+              }}
+              onLoad={() => {
+                try {
+                  // eslint-disable-next-line no-console
+                  console.log('[map-preview] image_loaded', { url: cover });
+                } catch {}
+              }}
             />
+          ) : null}
+          {/* Visible debug chip when image fails — flags to the user
+              exactly which spots have broken/missing photos instead of
+              silently blending into the gradient. Keeps the premium
+              gradient but adds a subtle eyebrow so they can report. */}
+          {imgFailed && cover ? (
+            <View style={styles.sheetImgFailedChip} pointerEvents="none">
+              <Text style={styles.sheetImgFailedTxt}>Photo unavailable</Text>
+            </View>
           ) : null}
           {/* VERIFIED pill overlay bottom-left */}
           {verified ? (
@@ -2125,6 +2154,27 @@ const styles = StyleSheet.create({
     fontFamily: font.bodyBold,
     fontSize: 9,
     letterSpacing: 0.6,
+  },
+  // v2.0.20 diagnostic — surfaces a compact "Photo unavailable" chip on
+  // top of the gradient fallback when an Image load actually FAILED
+  // (not just "no cover URL at all"). Positioned top-right so it
+  // never overlaps the bottom-left verified pill.
+  sheetImgFailedChip: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 8,
+    backgroundColor: 'rgba(10,10,10,0.7)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.22)',
+  },
+  sheetImgFailedTxt: {
+    color: 'rgba(255,255,255,0.85)',
+    fontFamily: font.bodyMedium,
+    fontSize: 9,
+    letterSpacing: 0.3,
   },
   sheetRight: {
     flex: 1,
