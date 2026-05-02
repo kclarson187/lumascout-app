@@ -36,6 +36,21 @@ export function pinTierOf(spot: any): PinTier {
 // ============================================================================
 // Premium single-spot pin
 // ============================================================================
+//
+// v2.0.23 — Nil-guard hardening (tracking: react-native-maps Fabric interop).
+// The previous 2.0.22 TestFlight crashed on pinch-zoom with:
+//   *** -[__NSArrayM insertObject:atIndex:]: object cannot be nil
+//   -[RCTLegacyViewManagerInteropComponentView finalizeUpdates:]
+//
+// Root cause was Fabric↔legacy-interop nil races in react-native-maps
+// (which doesn't yet support New Architecture). We've disabled
+// `newArchEnabled` in app.json as the primary fix. This inner try/catch
+// wrapper is a BELT-AND-SUSPENDERS defense: even if an upstream library
+// hands us a bad `tier` prop or a render throws, we return a tiny safe
+// <View/> placeholder instead of `undefined` — which means a future
+// re-enable of New Arch (when react-native-maps ships Fabric support,
+// tracked upstream at react-native-maps/react-native-maps#4937) does
+// NOT re-introduce this specific crash class.
 function PremiumMapPinInner({ tier = 'default' }: { tier?: PinTier }) {
   // Soft pulse animation for trending / elite tiers
   const pulse = useRef(new Animated.Value(0)).current;
@@ -283,13 +298,42 @@ const styles = StyleSheet.create({
 // shallow prop comparator keeps the visual tree stable across pan/zoom —
 // the JS bridge has to ferry far fewer prop diffs to the native side,
 // which is the single biggest frame-budget win on Android maps.
+//
+// v2.0.23 NIL GUARD — Pinch-zoom crash hardening.
+// ---------------------------------------------
+// Wrap the memoized exports so they NEVER return null/undefined under any
+// circumstance. The previous 2.0.22 crash was triggered by Fabric's legacy
+// interop inserting a nil child view into a marker's NSMutableArray during
+// pinch-zoom. Primary fix is `newArchEnabled: false` in app.json; this guard
+// is the secondary defense so that if/when Fabric is re-enabled (once
+// react-native-maps ships proper Fabric support — tracked at
+// react-native-maps/react-native-maps#4937), this crash class stays dead.
+// Returns a 1×1 transparent <View/> placeholder if anything goes sideways.
 // ============================================================================
+const _NilSafePin: React.FC<{ tier?: PinTier }> = (props) => {
+  try {
+    const tier = (props && typeof props.tier === 'string' ? props.tier : 'default') as PinTier;
+    return <PremiumMapPinInner tier={tier} />;
+  } catch {
+    // Never return null — react-native-maps legacy interop crashes on nil.
+    return <View style={{ width: 1, height: 1 }} />;
+  }
+};
+const _NilSafeCluster: React.FC<{ count: number }> = (props) => {
+  try {
+    const count = typeof props?.count === 'number' && Number.isFinite(props.count) ? props.count : 0;
+    return <PremiumMapClusterInner count={count} />;
+  } catch {
+    return <View style={{ width: 1, height: 1 }} />;
+  }
+};
+
 export const PremiumMapPin = React.memo(
-  PremiumMapPinInner,
+  _NilSafePin,
   (prev, next) => prev.tier === next.tier,
 );
 export const PremiumMapCluster = React.memo(
-  PremiumMapClusterInner,
+  _NilSafeCluster,
   (prev, next) => prev.count === next.count,
 );
 

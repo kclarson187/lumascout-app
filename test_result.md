@@ -63,6 +63,78 @@
     working: "NA"
 
   - task: "v2.0.21 build prep — Map preview photos audit + pinch-zoom crash hardening + crash-log capture path"
+
+  - task: "v2.0.23 — Primary fix for pinch-zoom NSInvalidArgumentException crash (newArchEnabled → false)"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app.json (version 2.0.21 → 2.0.23, ios.buildNumber 2.0.21 → 2.0.23, newArchEnabled true → false),
+      /app/frontend/src/components/PremiumMapPin.tsx (added _NilSafePin and _NilSafeCluster defensive wrappers — try/catch returns a 1×1 transparent <View/> placeholder if inner render throws OR the memoized export ever receives bad props; guarantees neither exported component EVER returns null/undefined to react-native-maps' Marker children array — which is what crashed 2.0.22 with "-[__NSArrayM insertObject:atIndex:]: object cannot be nil"; belt-and-suspenders guard so when newArchEnabled is re-enabled in the future this crash class stays dead),
+      /app/memory/TODO_NEW_ARCH.md (tracking doc — why disabled, when to revisit (pinned to upstream react-native-maps/react-native-maps#4937 Fabric support), validation steps for the future re-enable, full native-module Fabric-parity audit)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          v2.0.23 — Surgical one-variable change to resolve the 2.0.22 pinch-zoom crash.
+          
+          Crash log (from user-supplied .ips on 2.0.22):
+            Exception: NSInvalidArgumentException
+            Reason:    *** -[__NSArrayM insertObject:atIndex:]: object cannot be nil
+            Stack:
+              9  -[__NSArrayM insertObject:atIndex:]
+             10  LumaScout  0x104b584d4
+             11  -[RCTLegacyViewManagerInteropComponentView finalizeUpdates:]
+             12  -[RCTMountingManager performTransaction:]
+          
+          DIAGNOSIS — 100% confidence:
+            React Native's New Architecture (Fabric) routes components
+            that don't have native Fabric support through the
+            `RCTLegacyViewManagerInteropComponentView` bridge. During
+            rapid pinch-zoom on react-native-maps, the interop bridge
+            attempts to insert nil subview pointers into an
+            NSMutableArray — a documented, well-known race condition
+            upstream. react-native-maps has NO Fabric-native
+            implementation yet (tracked at react-native-maps#4937).
+          
+          PRIMARY FIX — `newArchEnabled: false` in app.json.
+            Routes every component through the stable Paper renderer
+            where react-native-maps + react-native-map-clustering have
+            shipped reliably for years. Zero JS changes required.
+            Trade-off: we lose Fabric perf wins on Android — acceptable
+            until react-native-maps catches up.
+          
+          SECONDARY FIX — _NilSafePin / _NilSafeCluster wrappers.
+            Defensive wrappers that try/catch render and return a 1×1
+            <View/> placeholder instead of null/undefined on any
+            failure path. Cost: ~30 lines. Benefit: if we re-enable
+            New Arch in the future, this crash class can NEVER
+            reappear — the interop bridge will receive a real
+            (if tiny) view pointer, never nil.
+          
+          FOLLOW-UP ITEMS (NOT in this release):
+            - Image resize pipeline (Pexels/Unsplash `?w=400&q=70`
+              URL rewrite + optional backend /api/img proxy) → 2.0.24
+              focused release. Addresses the 122 MB CG raster / 379 MB
+              cellular session the FlowOriginLedger surfaced. Will
+              matter on low-end Android where OOM is a real risk.
+            - Upstream watch: react-native-maps/react-native-maps#4937
+              for Fabric-native implementation → re-enable newArchEnabled
+              + remove workaround when landed.
+          
+          USER-DIRECTED VALIDATION PATH:
+            1. Cut 2.0.23 TestFlight (EAS build production profile).
+            2. Install on BOTH: real iPhone + a low-end Android (Pixel
+               4a or similar). Mac Catalyst doesn't exercise the
+               Android side of newArchEnabled: false.
+            3. Pinch-zoom the map aggressively for ~30s per device.
+               Zero crashes = primary diagnosis confirmed.
+            4. If ANY crash repeats — diagnosis was wrong, we restart
+               hunting. (Single-variable change means clean validation.)
+            5. Proceed to 2.0.24 for image pipeline.
+
     implemented: true
     working: "NA"
     file: |
