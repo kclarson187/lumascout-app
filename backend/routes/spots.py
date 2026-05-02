@@ -414,6 +414,18 @@ async def list_spot_markers(
                 or _safe(first_img.get("card_url"))
                 or _safe(first_img.get("image_url"))
             )
+        # v2.0.24 — route every thumb_url through /api/img?w=280 so the
+        # markers payload ships RESIZED URLs to the client. This drops
+        # per-thumbnail bytes from ~500 KB (Pexels at ?w=1200) or ~4 MB
+        # (raw user upload) down to ~16-25 KB. Combined with 7-day
+        # immutable client cache, a 2-minute explore session drops from
+        # ~379 MB (v2.0.22 measured) to well under 15 MB.
+        if thumb_url:
+            try:
+                from urllib.parse import quote as _urlquote
+                thumb_url = f"/api/img?u={_urlquote(thumb_url, safe='')}&w=280&q=70"
+            except Exception:
+                pass  # keep raw URL on quote failure — belt-and-suspenders
         out.append({
             "spot_id": s.get("spot_id"),
             "title": s.get("title"),

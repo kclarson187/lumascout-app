@@ -7149,6 +7149,7 @@ from routes import users as _users_routes  # noqa: E402
 from routes import edit_requests as _edit_requests_routes  # noqa: E402
 from routes import uploads as _uploads_routes  # noqa: E402
 from routes import share as _share_routes  # noqa: E402
+from routes import img_proxy as _img_proxy_routes  # noqa: E402
 
 app.include_router(_scout_ai_routes.router)
 app.include_router(_support_routes.router)
@@ -7168,3 +7169,11 @@ app.include_router(_uploads_routes.router)
 # clients pasting the URL into iMessage / Twitter / Slack and need full
 # Open Graph metadata at the document root, not inside a JSON wrapper).
 app.include_router(_share_routes.router)
+# v2.0.24 — image-resize proxy. Exposed under /api prefix with its own
+# router (not inside the main `api` APIRouter) so the `/img` path lives
+# at /api/img and cache headers / streaming Response objects aren't
+# wrapped in the JSON helpers the core APIRouter applies.
+from fastapi import APIRouter as _ImgAPIRouter  # noqa: E402
+_img_api = _ImgAPIRouter(prefix="/api")
+_img_api.include_router(_img_proxy_routes.router)
+app.include_router(_img_api)

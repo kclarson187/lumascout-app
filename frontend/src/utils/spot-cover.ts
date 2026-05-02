@@ -60,6 +60,98 @@ export function absolutizeImageUrl(url: string | null | undefined): string | nul
   return trimmed;
 }
 
+/**
+ * v2.0.24 — Image-resize URL rewriter.
+ * ───────────────────────────────────
+ * Belt-and-suspenders pair to the backend /api/img proxy. Even though
+ * /api/spots/markers already ships thumb_urls that point at /api/img,
+ * many call-sites resolve covers from FULL /spots/{id} payloads where
+ * `hero_cover_image_url` is the raw Pexels/Unsplash/user-upload URL —
+ * NOT pre-wrapped. This helper ensures EVERY <Image> URL renders at a
+ * sane size regardless of how it entered the app.
+ *
+ * The 379 MB cellular session in v2.0.22 was caused by raw 1200px
+ * Pexels URLs + 3–8 MB user uploads being served straight into 140×140
+ * thumbnail slots. With this rewrite:
+ *   • Pexels / Unsplash — append/replace `?w=<width>&q=70` so the CDN
+ *     pre-scales BEFORE we download bytes. CDN compute is free to us.
+ *   • photo-finder-60.preview.emergentagent.com — wrap through our
+ *     /api/img proxy for server-side resize + 7-day disk cache.
+ *   • Anything else — pass through unchanged (fallback safety).
+ *
+ * Width presets (2x DPR already factored in — these are pixel widths,
+ * not point widths):
+ *   MAP_THUMB = 280   (140pt × 2x for Retina)
+ *   LIST_CARD = 560   (280pt × 2x)
+ *   HERO      = 1080  (spot-detail hero carousel; looks great at 2x on
+ *                      iPhone-sized screens up through 6.7")
+ */
+export const IMG_PRESETS = {
+  MAP_THUMB: 280,
+  LIST_CARD: 560,
+  HERO: 1080,
+} as const;
+
+function _hostOf(url: string): string {
+  try {
+    // Cheap host extract without URL constructor (RN URL can be flaky).
+    const m = url.match(/^https?:\/\/([^/?#]+)/i);
+    return (m ? m[1] : '').toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+export function resizeImageUrl(
+  url: string | null | undefined,
+  width: number = IMG_PRESETS.MAP_THUMB,
+  quality: number = 70,
+): string | null {
+  if (!url || typeof url !== 'string') return null;
+  const u = url.trim();
+  if (!u) return null;
+
+  // Data URIs, local assets, absolute-path `/api/img?u=...` (already
+  // proxied), or relative paths we can't absolutize — pass through.
+  if (/^(data:|file:|content:|asset:)/i.test(u)) return u;
+  if (u.startsWith('/api/img?')) return absolutizeImageUrl(u);
+  if (u.startsWith('/') && !u.startsWith('/api/uploads/')) return absolutizeImageUrl(u);
+
+  const host = _hostOf(u);
+
+  // Pexels / Unsplash — CDN handles resize. Overwrite w= and q=.
+  if (host.endsWith('pexels.com') || host.endsWith('unsplash.com')) {
+    let out = u;
+    if (/[?&]w=/.test(out)) {
+      out = out.replace(/([?&])w=[^&]*/i, `$1w=${width}`);
+    } else {
+      out += (out.includes('?') ? '&' : '?') + `w=${width}`;
+    }
+    if (/[?&]q=/.test(out)) {
+      out = out.replace(/([?&])q=[^&]*/i, `$1q=${quality}`);
+    } else {
+      out += `&q=${quality}`;
+    }
+    return out;
+  }
+
+  // User uploads on our backend — route through the proxy for resize
+  // + 7-day disk cache. absolutizeImageUrl first so relative paths
+  // become full URLs our proxy can ingest.
+  const abs = absolutizeImageUrl(u);
+  if (!abs) return u;
+  const absHost = _hostOf(abs);
+  if (absHost.includes('photo-finder-60') || absHost.includes('emergentagent.com')) {
+    const base = backendBaseUrl();
+    if (!base) return abs; // no backend known — can't proxy
+    const proxied = `${base}/api/img?u=${encodeURIComponent(abs)}&w=${width}&q=${quality}`;
+    return proxied;
+  }
+
+  // Unknown host — pass through. React Native <Image> will load it as-is.
+  return abs;
+}
+
 /** Pull the smallest usable variant from a single image object. */
 function pickVariant(img: any): string | null {
   if (!img) return null;
@@ -82,8 +174,13 @@ function pickVariant(img: any): string | null {
  *
  * Safe for any shape: lightweight markers, full spots, partial saved list
  * entries, or freshly-submitted drafts with only an `images[0]` string.
+ *
+ * v2.0.24 — now accepts an optional `width` hint (default MAP_THUMB=280)
+ * so the resize rewriter can produce the right-sized thumbnail per
+ * surface. Callers pass `IMG_PRESETS.LIST_CARD` (560) or
+ * `IMG_PRESETS.HERO` (1080) when they need larger variants.
  */
-export function resolveSpotCover(spot: any): string | null {
+export function resolveSpotCover(spot: any, width: number = IMG_PRESETS.MAP_THUMB): string | null {
   if (!spot || typeof spot !== 'object') return null;
 
   // 1. Admin-pinned / rotation cover
@@ -96,7 +193,7 @@ export function resolveSpotCover(spot: any): string | null {
     (typeof spot.image_url === 'string' && spot.image_url) ||
     (typeof spot.thumb_url === 'string' && spot.thumb_url) ||
     null;
-  if (topLevel) return absolutizeImageUrl(topLevel);
+  if (topLevel) return resizeImageUrl(absolutizeImageUrl(topLevel), width);
 
   // 4. Explicit cover in images[]
   const images = Array.isArray(spot.images) ? spot.images : null;
@@ -105,18 +202,18 @@ export function resolveSpotCover(spot: any): string | null {
       (i: any) => i && typeof i === 'object' && i.is_cover === true,
     );
     const fromCover = pickVariant(cover);
-    if (fromCover) return absolutizeImageUrl(fromCover);
+    if (fromCover) return resizeImageUrl(absolutizeImageUrl(fromCover), width);
 
     // 5. First image fallback
     const fromFirst = pickVariant(images[0]);
-    if (fromFirst) return absolutizeImageUrl(fromFirst);
+    if (fromFirst) return resizeImageUrl(absolutizeImageUrl(fromFirst), width);
   }
 
   return null;
 }
 
 /** Drop-in <Image> source helper for call-sites that prefer objects. */
-export function resolveSpotCoverSource(spot: any) {
-  const u = resolveSpotCover(spot);
+export function resolveSpotCoverSource(spot: any, width: number = IMG_PRESETS.MAP_THUMB) {
+  const u = resolveSpotCover(spot, width);
   return u ? { uri: u } : undefined;
 }

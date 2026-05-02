@@ -26,7 +26,7 @@ import { api, formatApiError, categorizeApiError, type ApiErrorCategory } from '
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 import { formatDistance } from '../../src/utils/distance';
-import { resolveImageUrl } from '../../src/utils/image-url';
+import { resolveImageUrl, IMG_SIZES } from '../../src/utils/image-url';
 import SafeImage from '../../src/components/SafeImage';
 import { useLightbox } from '../../src/components/ImageLightbox';
 import ScoreRing from '../../src/components/ScoreRing';
@@ -626,11 +626,11 @@ function SpotDetailImpl() {
               <TouchableOpacity
                 key={img.image_url || i}
                 activeOpacity={0.95}
-                onPress={() => openLightbox(resolveImageUrl(img.image_url))}
+                onPress={() => openLightbox(resolveImageUrl(img.image_url, IMG_SIZES.HERO))}
                 testID={`spot-hero-image-${i}`}
               >
                 <SafeImage
-                  source={{ uri: resolveImageUrl(img.image_url) }}
+                  source={{ uri: resolveImageUrl(img.image_url, IMG_SIZES.HERO) }}
                   style={styles.heroImg}
                   resizeMode="cover"
                 />
