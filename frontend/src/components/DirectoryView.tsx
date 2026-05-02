@@ -685,15 +685,19 @@ const s = StyleSheet.create({
     backgroundColor: colors.surface2,
   },
   // 3 filter cards row
+  // CR (June 2025 v2.0.20 — Network tab cramped fix): tightened
+  // vertical padding across every Directory control row so the
+  // photographer list breathes on smaller iPhones (SE / mini) instead
+  // of the previous 5-rows-of-controls-then-50px-of-actual-content.
   fcardRow: {
-    flexDirection: 'row', gap: 8,
-    paddingHorizontal: space.xl, paddingTop: 10, paddingBottom: 4,
+    flexDirection: 'row', gap: 10,
+    paddingHorizontal: space.xl, paddingTop: 8, paddingBottom: 2,
   },
   // CR #1 Item 3 (June 2025) — axis toggle + facet pill styles.
   axisWrap: {
     paddingHorizontal: space.xl,
-    paddingTop: 10,
-    paddingBottom: 4,
+    paddingTop: 8,
+    paddingBottom: 2,
   },
   axisTrack: {
     flexDirection: 'row',
@@ -724,8 +728,9 @@ const s = StyleSheet.create({
   },
   facetRow: {
     paddingHorizontal: space.xl,
-    paddingVertical: 8,
-    gap: 6,
+    paddingVertical: 4,
+    gap: 8,
+    alignItems: 'center',
   },
   facetPill: {
     flexDirection: 'row',
@@ -746,7 +751,10 @@ const s = StyleSheet.create({
     color: colors.text,
     fontFamily: font.bodySemibold,
     fontSize: 12,
-    maxWidth: 140,
+    // CR (June 2025 v2.0.20): bumped from 140 → 180 so longer city
+    // names ("San Francisco", "Los Angeles") render fully instead of
+    // truncating with an ellipsis the user reported as "cut off".
+    maxWidth: 180,
   },
   facetPillTxtActive: {
     color: colors.primary,
@@ -760,13 +768,13 @@ const s = StyleSheet.create({
   },
   fcard: {
     flex: 1,
-    minHeight: 56,
-    paddingHorizontal: 10, paddingVertical: 9,
+    minHeight: 50,
+    paddingHorizontal: 8, paddingVertical: 8,
     borderRadius: 14,
     backgroundColor: colors.surface1,
     borderWidth: 1, borderColor: colors.border,
     alignItems: 'center', justifyContent: 'center',
-    gap: 3,
+    gap: 4,
   },
   fcardActive: {
     backgroundColor: 'rgba(245,166,35,0.08)',
@@ -774,11 +782,11 @@ const s = StyleSheet.create({
   },
   fcardLabel: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
   fcardLabelActive: { color: colors.primary, fontFamily: font.bodyBold },
-  fcardSub: { color: colors.textTertiary, fontFamily: font.body, fontSize: 9, textAlign: 'center', marginTop: 1 },
+  fcardSub: { color: colors.textTertiary, fontFamily: font.body, fontSize: 9.5, textAlign: 'center', marginTop: 1 },
   // Sort + Specialties row
   controlRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: space.xl, paddingTop: 10, paddingBottom: 12,
+    paddingHorizontal: space.xl, paddingTop: 8, paddingBottom: 10,
   },
   sortPill: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   sortLabel: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.4 },
