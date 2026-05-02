@@ -26,15 +26,22 @@ import { colors, font, radii } from '../theme';
 
 // Curated dark-premium gradient stops. All paired against the app's charcoal
 // palette so they feel native to LumaScout's dark theme.
+//
+// May 2026 (Map preview gradient palette CR): Dropped the "Charcoal neutral"
+// stop because it produced near-black thumbnails that read as "broken" on
+// device. Brightened the start-stops on the dark-side gradients so each
+// fallback now has visible warmth/colour even at the corners. The end-stops
+// (the bright accents at the bottom-right) are kept saturated so the
+// camera glyph + title always pop.
 const GRADIENTS: [string, string, string][] = [
-  ['#3a1d0e', '#7a3a0f', '#F5A623'], // Amber sunset
-  ['#0b1e33', '#1e3a5f', '#3b82f6'], // Deep ocean
-  ['#0f1f16', '#164332', '#10B981'], // Forest
-  ['#2a0f1f', '#5e1a3e', '#D04848'], // Rose
-  ['#1a0e2a', '#3b2157', '#8b5cf6'], // Purple dusk
-  ['#0b1624', '#163045', '#60A5FA'], // Ice blue
-  ['#241308', '#4a250f', '#FBBF24'], // Warm ember
-  ['#14141a', '#26262E', '#71717A'], // Charcoal neutral
+  ['#5a2d18', '#a9521b', '#F5A623'], // Amber sunset (brightened start)
+  ['#13355c', '#2e598f', '#3b82f6'], // Deep ocean (brightened start)
+  ['#143b29', '#1f614b', '#10B981'], // Forest (brightened start)
+  ['#3f1730', '#831f5c', '#D04848'], // Rose (brightened start)
+  ['#2a1844', '#5c3382', '#A78BFA'], // Purple dusk (was too dark, brightened)
+  ['#13283a', '#234d6c', '#60A5FA'], // Ice blue (brightened start)
+  ['#3a1d0c', '#6c3a17', '#FBBF24'], // Warm ember (brightened start)
+  ['#3a2718', '#6e4528', '#F59E0B'], // Caramel (replaces charcoal neutral)
 ];
 
 function hashStr(s: string): number {

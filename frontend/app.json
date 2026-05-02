@@ -72,13 +72,13 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/splash/Splash-LumaScout.png",
-          "resizeMode": "cover",
-          "backgroundColor": "#020816",
+          "image": "./assets/splash/Splash-LumaScout-Black.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#000000",
           "dark": {
-            "image": "./assets/splash/Splash-LumaScout.png",
-            "resizeMode": "cover",
-            "backgroundColor": "#020816"
+            "image": "./assets/splash/Splash-LumaScout-Black.png",
+            "resizeMode": "contain",
+            "backgroundColor": "#000000"
           }
         }
       ],

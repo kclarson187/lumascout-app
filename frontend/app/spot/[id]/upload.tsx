@@ -61,7 +61,7 @@ export default function UploadScreen() {
       else if (name === 'PayloadTooLargeError') title = 'Photo too large';
       else if (name === 'UnsupportedMediaError') title = 'Format not supported';
       else if (name === 'RateLimitError') title = 'Slow down a moment';
-      else if (name === 'ServerError') title = 'Server hiccup';
+        else if (name === 'ServerError') title = "Couldn't upload photos";
       Alert.alert(title, body);
     } finally {
       setUploading(false);
@@ -136,8 +136,8 @@ export default function UploadScreen() {
         title = 'Too many or too large';
         body = 'Try fewer photos or smaller images.';
       } else if (status >= 500) {
-        title = 'Server hiccup';
-        body = 'Something on our end is being slow. Tap Post again — it usually works.';
+        title = "Couldn't post photos";
+        body = 'Check your connection and try again.';
       }
       // Structured client log for production grep.
       try {
