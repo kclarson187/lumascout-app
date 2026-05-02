@@ -580,8 +580,8 @@ export default function DirectoryView() {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              tintColor={colors.primary}
-              colors={[colors.primary]}
+              tintColor={'#F5A524'}
+              colors={['#F5A524']}
             />
           }
           renderItem={({ item }) => (
