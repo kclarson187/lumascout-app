@@ -250,13 +250,12 @@ function SpotDetailImpl() {
   //      trust this for OG/preview cards, but it lets QR-coded links
   //      open in-app for testers.
   const spotPublicUrl = useMemo(() => {
-    const webBase = (process.env.EXPO_PUBLIC_WEB_BASE_URL || '').replace(/\/+$/, '');
+    // CR Item 7 (May 2026) — point at the smart-link share endpoint
+    // which returns Open Graph metadata + UA-driven App Store / Play
+    // Store / web routing. Replaces the previous web-base direct URL
+    // that produced bare links with no preview card.
     const backendBase = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/+$/, '');
-    const base = webBase || backendBase;
-    if (base) return `${base}/spot/${id}`;
-    // Last-resort: scheme-based deep link. Shareable to devices with
-    // the app installed; useless to anyone else. NEVER emit the dead
-    // lumascout.app host — it doesn't serve the web bundle yet.
+    if (backendBase) return `${backendBase}/api/share/spot/${id}`;
     try {
       return ExpoLinking.createURL(`/spot/${id}`);
     } catch {

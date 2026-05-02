@@ -7148,6 +7148,7 @@ from routes import spots as _spots_routes  # noqa: E402
 from routes import users as _users_routes  # noqa: E402
 from routes import edit_requests as _edit_requests_routes  # noqa: E402
 from routes import uploads as _uploads_routes  # noqa: E402
+from routes import share as _share_routes  # noqa: E402
 
 app.include_router(_scout_ai_routes.router)
 app.include_router(_support_routes.router)
@@ -7162,3 +7163,8 @@ app.include_router(_spots_routes.router)
 app.include_router(_users_routes.router)
 app.include_router(_edit_requests_routes.router)
 app.include_router(_uploads_routes.router)
+# CR Items 7 & 8 (May 2026) — smart-link share endpoints (HTML responses,
+# returned outside of `api` APIRouter because they're consumed by external
+# clients pasting the URL into iMessage / Twitter / Slack and need full
+# Open Graph metadata at the document root, not inside a JSON wrapper).
+app.include_router(_share_routes.router)
