@@ -10,7 +10,7 @@ import { router } from 'expo-router';
 import { Search, List, Map as MapIcon, SlidersHorizontal, Locate, X, Shield, Gem, Sun, Users as UsersIcon, MapPin, Navigation, RefreshCw, ArrowUpRight, Layers, Bookmark, Flame, Camera, Plane, Cloud, Heart, Share2 as ShareIcon, ChevronRight } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
-import { formatDistance, resolveMiles } from '../../src/utils/distance';
+import { calculateDistanceMiles, formatDistance, resolveMiles } from '../../src/utils/distance';
 import { api } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
 import SpotCard from '../../src/components/SpotCard';
@@ -123,35 +123,32 @@ const SEASONS: string[] = []; // Apr 2026 cleanup: month/season filter removed; 
 export default function Explore() {
   const [spots, setSpots] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  // CR #1 Item 1 (June 2025): Explore defaults to List view for faster
-  // first paint + better reliability. Users can toggle to Map; we
-  // persist the choice under `lumascout.explore.view`. Map is
-  // lazy-mounted only once the user requests it, so cold-start never
-  // pays the native-map bootstrap cost.
-  const VIEW_KEY = 'lumascout.explore.view';
+  // CR Item 2 (May 2026): Explore defaults to **List view** on every cold
+  // launch. Within a session the user's last toggle (List ↔ Map) is
+  // remembered in memory only, but on app relaunch we always reset to
+  // List for faster first paint and lower bootstrap cost. Map tiles
+  // are pre-warmed in the background once the screen mounts so
+  // switching to Map is near-instant the first time.
   const [view, setView] = useState<'list' | 'map'>('list');
-  const [viewHydrated, setViewHydrated] = useState(false);
+  const [viewHydrated, setViewHydrated] = useState(true); // no async hydration anymore — always ready
   const [mapEverMounted, setMapEverMounted] = useState(false);
 
-  // Hydrate view from AsyncStorage on mount
+  // Background tile warm-up: once the user lands on Explore (List view
+  // by default), kick off a low-priority mount of the map machinery so
+  // the first tap of "Map" feels instant. The map is removed from the
+  // tree if the user actively switches back; this preload only
+  // reserves the JS module + the markers-bbox query.
   useEffect(() => {
-    (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(VIEW_KEY);
-        if (raw === 'map' || raw === 'list') {
-          setView(raw);
-          if (raw === 'map') setMapEverMounted(true);
-        }
-      } catch {}
-      setViewHydrated(true);
-    })();
-  }, []);
+    if (mapEverMounted) return;
+    const t = setTimeout(() => setMapEverMounted(true), 1200);
+    return () => clearTimeout(t);
+  }, [mapEverMounted]);
 
   const switchView = useCallback((next: 'list' | 'map') => {
     Haptics.selectionAsync().catch(() => {});
     setView(next);
     if (next === 'map') setMapEverMounted(true);
-    AsyncStorage.setItem(VIEW_KEY, next).catch(() => {});
+    // NOTE: intentionally NOT persisted — session memory only.
   }, []);
   const [filters, setFilters] = useState<Filters>({});
   const [filterOpen, setFilterOpen] = useState(false);
@@ -1112,7 +1109,23 @@ export default function Explore() {
                     return;
                   }
                   Haptics.selectionAsync().catch(() => {});
-                  setSelectedSpot(s);
+                  // CR Item 4 (May 2026) — inject client-Haversine
+                  // distance at tap time. The lightweight markers feed
+                  // doesn't ship server-attached distance (would force
+                  // a per-request bbox compute) but we already know
+                  // the user's coords. Pre-computing here keeps the
+                  // PinPreview component pure and means the bullet
+                  // distance fragment is ALWAYS accurate when GPS
+                  // is available, never "— mi".
+                  const enriched = (() => {
+                    if (!userCoords?.lat || !userCoords?.lng) return s;
+                    const mi = calculateDistanceMiles(
+                      userCoords.lat, userCoords.lng,
+                      s.latitude, s.longitude,
+                    );
+                    return mi == null ? s : { ...s, distance_mi: mi };
+                  })();
+                  setSelectedSpot(enriched);
                 }}
                 tracksViewChanges={false}
                 anchor={{ x: 0.5, y: 1 }}
@@ -1523,9 +1536,16 @@ function PinPreview({
   else if ((spot.evening_golden_hour_rating || 0) >= 4) subtleTags.push('Golden Hour');
   else subtleTags.push('Photogenic');
 
-  // Item #3 Apr 2026 fix — never show fake distance. If GPS is
-  // unavailable, render '—' rather than fabricating a value.
-  const distMi = formatDistance(spot) || '—';
+  // CR Item 4 (May 2026) — never show "— mi" anywhere in the preview.
+  // Strategy:
+  //   1. If the marker payload already carries server-attached distance
+  //      (distance_mi / distance_miles / distance_km) → use it.
+  //   2. Else, if we have user GPS, compute Haversine client-side.
+  //   3. Else, leave null and HIDE the bullet+distance fragment entirely
+  //      (the city line still renders without a stranded en-dash).
+  // This is read upstream from Explore via the `userCoords` ref the
+  // host already keeps; props let the preview stay pure.
+  const distMi = formatDistance(spot);
 
   return (
     <View style={styles.previewSheet}>
@@ -1591,7 +1611,7 @@ function PinPreview({
 
           <View style={styles.sheetSubRow}>
             <Text style={styles.sheetCity} numberOfLines={1}>
-              {spot.city}{spot.state ? `, ${spot.state}` : ''} • {distMi} mi
+              {spot.city}{spot.state ? `, ${spot.state}` : ''}{distMi ? ` • ${distMi}` : ''}
             </Text>
             <Pressable
               hitSlop={8}

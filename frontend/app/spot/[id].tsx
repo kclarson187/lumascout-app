@@ -101,65 +101,76 @@ function SpotDetailImpl() {
     }
     setLoading(true);
     setErrorCategory(null);
-    // Allow up to 18s for the spot detail call — generous enough for
-    // slow cellular while still bounding an infinite hang.
-    const promise = api.get(`/spots/${id}`, undefined, { timeout: 18000 });
-    inflightRef.current = promise;
-    try {
-      const data = await promise;
-      setSpot(data);
-      setErrorCategory(null);
-    } catch (e: any) {
-      const cat = categorizeApiError(e);
-      // Categorized log so we can grep production reports later.
+
+    // CR Item 5 (May 2026): Auto-retry with exponential backoff before
+    // surfacing any error UI. Three attempts at 1s / 2s / 4s back-offs
+    // (total worst-case ≈ 7s + 18s timeout × 3 = 61s, but the typical
+    // path is "first attempt succeeds in <1s"). We only retry on the
+    // categories that are actually recoverable: timeout, network,
+    // server (5xx), unknown. We do NOT retry 401/402/403/404/410 —
+    // those are deterministic and a retry just wastes the user's time.
+    const RETRYABLE: ApiErrorCategory[] = ['timeout', 'network', 'server', 'unknown'];
+    const BACKOFFS_MS = [0, 1000, 2000, 4000]; // 4 attempts total; first is immediate
+    let lastError: any = null;
+    let lastCat: ApiErrorCategory | null = null;
+    for (let attempt = 0; attempt < BACKOFFS_MS.length; attempt++) {
+      if (BACKOFFS_MS[attempt] > 0) {
+        try {
+          // eslint-disable-next-line no-console
+          console.warn('[spot-detail] retrying', { id, attempt, delay: BACKOFFS_MS[attempt] });
+        } catch {}
+        await new Promise(r => setTimeout(r, BACKOFFS_MS[attempt]));
+      }
+      const promise = api.get(`/spots/${id}`, undefined, { timeout: 18000 });
+      inflightRef.current = promise;
       try {
-        // eslint-disable-next-line no-console
-        console.warn('[spot-detail]', cat, {
-          id,
-          status: e?.response?.status,
-          code: e?.code,
-          message: e?.message,
-        });
-      } catch {}
-      // 404 / 410 — genuinely missing. Show a one-time alert and
-      // navigate the user back so they don't sit on a blank screen
-      // forever. Do NOT clear auth state.
-      if (cat === 'missing') {
-        Alert.alert(
-          'Spot no longer available',
-          'This location has been removed or is no longer public.',
-          [{
-            text: 'OK',
-            onPress: () => {
-              if (router.canGoBack()) router.back();
-              else router.replace('/(tabs)/explore');
-            },
-          }],
-        );
+        const data = await promise;
+        setSpot(data);
+        setErrorCategory(null);
+        inflightRef.current = null;
+        setLoading(false);
         return;
+      } catch (e: any) {
+        lastError = e;
+        lastCat = categorizeApiError(e);
+        try {
+          // eslint-disable-next-line no-console
+          console.warn('[spot-detail]', lastCat, {
+            id, attempt,
+            status: e?.response?.status,
+            code: e?.code,
+            message: e?.message,
+          });
+        } catch {}
+        // Non-retryable categories — break immediately so we don't
+        // burn the user's bandwidth/battery on doomed retries.
+        if (!RETRYABLE.includes(lastCat)) break;
+      } finally {
+        inflightRef.current = null;
       }
-      // 401 / 403 — the api.ts axios interceptor already handles
-      // 401-driven logout. We do NOT redirect here; we let the
-      // interceptor's onUnauthorized handler do its job. Surface a
-      // gentle message so the user knows something happened.
-      if (cat === 'auth') {
-        setErrorCategory('auth');
-        return;
-      }
-      // 402 — paywall is dispatched globally; just clear loading.
-      if (cat === 'paywall') {
-        setErrorCategory('paywall');
-        return;
-      }
-      // timeout / network / server / client / unknown — recoverable.
-      // Render an inline retry state. The user STAYS on this screen
-      // (no auto-back, no auto-replace) and can tap Retry. They can
-      // also tap the X button in the header to leave intentionally.
-      setErrorCategory(cat);
-    } finally {
-      inflightRef.current = null;
-      setLoading(false);
     }
+
+    // All retries exhausted (or we hit a non-retryable category).
+    // Apply the same UX branching as before, just sourced from
+    // the final attempt's category.
+    setLoading(false);
+    if (lastCat === 'missing') {
+      Alert.alert(
+        'Spot no longer available',
+        'This location has been removed or is no longer public.',
+        [{
+          text: 'OK',
+          onPress: () => {
+            if (router.canGoBack()) router.back();
+            else router.replace('/(tabs)/explore');
+          },
+        }],
+      );
+      return;
+    }
+    if (lastCat === 'auth') { setErrorCategory('auth'); return; }
+    if (lastCat === 'paywall') { setErrorCategory('paywall'); return; }
+    setErrorCategory(lastCat);
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
@@ -408,24 +419,31 @@ function SpotDetailImpl() {
     const isNet = errorCategory === 'network';
     const isAuth = errorCategory === 'auth';
     const isServer = errorCategory === 'server';
+    // CR Item 5 (May 2026): All copy here was rewritten to read like a
+    // premium product, not a casual side project. "Server hiccup",
+    // "Tap retry — it usually works", and the like felt apologetic and
+    // hobbyist. We've already retried with backoff before reaching
+    // this UI, so the error state can speak with confidence about
+    // *what* went wrong (connection vs server) and offer a single
+    // clean Retry. No exclamation marks, no apologies.
     const headline = isAuth
-      ? 'Session needed'
+      ? 'Sign in to continue'
       : isTimeout
-        ? 'Taking longer than usual'
+        ? 'This is taking longer than expected'
         : isNet
           ? 'No connection'
           : isServer
-            ? 'Server hiccup'
-            : 'Unable to load spot';
+            ? "Couldn't load this spot"
+            : "Couldn't load this spot";
     const sub = isAuth
-      ? 'Please sign in again to view this spot.'
+      ? 'Your session has ended. Sign in again to view this spot.'
       : isTimeout
-        ? 'The server took too long to respond. This sometimes happens on slow networks — give it another go.'
+        ? 'The server is responding slowly. Check your connection and try again.'
         : isNet
-          ? 'Check your internet connection and try again.'
+          ? 'Check your connection and try again.'
           : isServer
-            ? 'Something on our end is being slow. Tap retry — it usually works.'
-            : 'Please try again in a moment.';
+            ? 'Check your connection and try again.'
+            : 'Check your connection and try again.';
     return (
       <View style={{ flex: 1, backgroundColor: colors.bg, paddingHorizontal: 24, paddingTop: 80 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 24 }}>

@@ -377,16 +377,43 @@ async def list_spot_markers(
         # full images[] payload.
         "images": {"$slice": 1},
         "owner_user_id": 1,
+        # CR May 2026 — also surface admin-pinned/legacy cover fields so
+        # the markers endpoint never returns thumb_url=None when a spot
+        # genuinely has a cover. Previously we only looked at images[0],
+        # which missed spots whose primary cover lived at the top level
+        # (rotation pin, legacy import, hero override).
+        "hero_cover_image_url": 1,
+        "cover_image_url": 1,
+        "card_url": 1,
+        "image_url": 1,
     }
     rows = await db.spots.find(query, projection).limit(limit).to_list(limit)
     out = []
     for s in rows:
         first_img = (s.get("images") or [{}])[0] if s.get("images") else {}
-        thumb_url = None
-        if isinstance(first_img, dict):
-            thumb_url = (first_img.get("thumb_url")
-                         or first_img.get("card_url")
-                         or first_img.get("image_url"))
+        # Cascade priority (mirror of frontend resolveSpotCover):
+        # 1) admin-pinned hero  2) legacy cover  3) legacy card/image
+        # 4) images[0].thumb→card→image  Avoid base64 data URIs over
+        # the wire — they bloat the markers payload (some legacy spots
+        # have multi-MB data: URLs which would crash slow connections).
+        def _safe(u):
+            if not isinstance(u, str) or not u:
+                return None
+            if u.startswith("data:"):
+                return None  # too large for a markers feed
+            return u
+        thumb_url = (
+            _safe(s.get("hero_cover_image_url"))
+            or _safe(s.get("cover_image_url"))
+            or _safe(s.get("card_url"))
+            or _safe(s.get("image_url"))
+        )
+        if not thumb_url and isinstance(first_img, dict):
+            thumb_url = (
+                _safe(first_img.get("thumb_url"))
+                or _safe(first_img.get("card_url"))
+                or _safe(first_img.get("image_url"))
+            )
         out.append({
             "spot_id": s.get("spot_id"),
             "title": s.get("title"),
