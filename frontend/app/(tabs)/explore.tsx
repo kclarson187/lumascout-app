@@ -803,6 +803,102 @@ export default function Explore() {
     return result;
   }, [mapMarkers, spots]);
 
+  // v2.0.21 — Pinch-zoom crash hardening (issue #2 from user report).
+  //
+  // Build a STABLE identity key from the marker set so we can memoize
+  // the entire <Marker> JSX array. Without this, every onRegionChange
+  // forces React to walk the array and reconcile each Marker — even
+  // though the underlying spot data hasn't changed. During rapid
+  // pinch-zoom, that reconcile churn accumulates marker mount/unmount
+  // events into the native bridge faster than iOS can drain them →
+  // common cause of `mutex lock failed` / `NSInvalidArgumentException`
+  // crashes in react-native-maps on iOS.
+  //
+  // Identity is a simple concatenation of spot_ids (stable across
+  // viewport pans because mapMarkerData.renderable only changes when
+  // the underlying /spots/markers fetch returns new IDs).
+  const markersIdentity = useMemo(
+    () =>
+      mapMarkerData.renderable
+        .map((s) => s.spot_id || `${s.latitude}_${s.longitude}`)
+        .join('|'),
+    [mapMarkerData.renderable],
+  );
+
+  // Mirror userCoords into a ref so the memoized marker onPress
+  // closures can read fresh GPS without invalidating the memo on
+  // every coord update.
+  const userCoordsRef = useRef(userCoords);
+  useEffect(() => {
+    userCoordsRef.current = userCoords;
+  }, [userCoords]);
+
+  // Build the memoized <Marker> children. Re-renders ONLY when:
+  //   1. the marker identity set changes (new fetch),
+  //   2. saved-state map changes (a star toggle),
+  //   3. GPS first lands or drifts significantly.
+  // Pan/zoom alone produces zero re-renders here — exactly what
+  // we need for iOS pinch-zoom stability.
+  const renderedMarkers = useMemo(
+    () =>
+      mapMarkerData.renderable.map((s, idx) => (
+        <Marker
+          key={String(s.spot_id || `m-${idx}-${s.latitude}-${s.longitude}`)}
+          coordinate={{ latitude: s.latitude, longitude: s.longitude }}
+          onPress={() => {
+            if (!s || !s.spot_id ||
+                !Number.isFinite(s.latitude) ||
+                !Number.isFinite(s.longitude)) {
+              exploreLog('warn', 'marker_tap_rejected', {
+                spot_id: s?.spot_id, lat: s?.latitude, lng: s?.longitude,
+              });
+              return;
+            }
+            Haptics.selectionAsync().catch(() => {});
+            const uc = userCoordsRef.current;
+            const enriched = (() => {
+              if (!uc?.lat || !uc?.lng) return s;
+              const mi = calculateDistanceMiles(uc.lat, uc.lng, s.latitude, s.longitude);
+              return mi == null ? s : { ...s, distance_mi: mi };
+            })();
+            setSelectedSpot(enriched);
+          }}
+          tracksViewChanges={false}
+          anchor={{ x: 0.5, y: 1 }}
+          testID={`marker-${s.spot_id || idx}`}
+        >
+          <PremiumMapPin tier={savedIds[s.spot_id] ? 'saved' : safeTier(s)} />
+        </Marker>
+      )),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [markersIdentity, savedIds],
+  );
+
+  // v2.0.21 — Build environment diagnostic.
+  // Logged once at mount so we can confirm in Xcode / Console.app
+  // that the TestFlight build was bundled against the expected
+  // backend URL. The most common iOS image-load failure is the
+  // build was bundled with EXPO_PUBLIC_BACKEND_URL=undefined (.env
+  // not picked up by EAS). When that happens, every uploaded photo
+  // URL becomes "/api/uploads/..." (relative) which iOS silently
+  // refuses to load — looking like "photos not populating" even
+  // though the backend is healthy.
+  useEffect(() => {
+    try {
+      const backend = (process.env.EXPO_PUBLIC_BACKEND_URL as string | undefined) || '(empty)';
+      const owner = (Constants as any)?.appOwnership || '(none)';
+      const exec = (Constants as any)?.executionEnvironment || '(none)';
+      // eslint-disable-next-line no-console
+      console.log('[explore] build_diagnostics', {
+        backend,
+        appOwnership: owner,
+        executionEnvironment: exec,
+        isExpoGo: IS_EXPO_GO,
+        platform: Platform.OS,
+      });
+    } catch {}
+  }, []);
+
   // (Apr 2026 hardening) Debounced region-change handler. Without this,
   // every micro-pan fires a setState which forces a re-render of the
   // marker tree on Android. 300ms hits the sweet spot — fast enough that
@@ -1101,55 +1197,12 @@ export default function Explore() {
               },
               onRegionChangeComplete: handleRegionChangeComplete,
             },
-            mapMarkerData.renderable.map((s, idx) => (
-              <Marker
-                // Stable key with fallback when spot_id is missing —
-                // duplicate or undefined keys crash react-native-maps
-                // on Android in Expo Go especially.
-                key={String(s.spot_id || `m-${idx}-${s.latitude}-${s.longitude}`)}
-                coordinate={{ latitude: s.latitude, longitude: s.longitude }}
-                onPress={() => {
-                  // Stability guard — Map View CR (June 2025). Reject
-                  // marker taps that hand us a junk spot object: no
-                  // spot_id means we can't key PinPreview's save/
-                  // directions/details actions; non-finite lat/lng
-                  // would crash subsequent "Directions" intent launch.
-                  if (!s || !s.spot_id ||
-                      !Number.isFinite(s.latitude) ||
-                      !Number.isFinite(s.longitude)) {
-                    exploreLog('warn', 'marker_tap_rejected', {
-                      spot_id: s?.spot_id,
-                      lat: s?.latitude,
-                      lng: s?.longitude,
-                    });
-                    return;
-                  }
-                  Haptics.selectionAsync().catch(() => {});
-                  // CR Item 4 (May 2026) — inject client-Haversine
-                  // distance at tap time. The lightweight markers feed
-                  // doesn't ship server-attached distance (would force
-                  // a per-request bbox compute) but we already know
-                  // the user's coords. Pre-computing here keeps the
-                  // PinPreview component pure and means the bullet
-                  // distance fragment is ALWAYS accurate when GPS
-                  // is available, never "— mi".
-                  const enriched = (() => {
-                    if (!userCoords?.lat || !userCoords?.lng) return s;
-                    const mi = calculateDistanceMiles(
-                      userCoords.lat, userCoords.lng,
-                      s.latitude, s.longitude,
-                    );
-                    return mi == null ? s : { ...s, distance_mi: mi };
-                  })();
-                  setSelectedSpot(enriched);
-                }}
-                tracksViewChanges={false}
-                anchor={{ x: 0.5, y: 1 }}
-                testID={`marker-${s.spot_id || idx}`}
-              >
-                <PremiumMapPin tier={savedIds[s.spot_id] ? 'saved' : safeTier(s)} />
-              </Marker>
-            ))
+            // v2.0.21 — Use the memoized markers array instead of mapping
+            // mapMarkerData.renderable inline. This is the single biggest
+            // win for iOS pinch-zoom stability: marker JSX is reconciled
+            // ONLY when the underlying spot identity set or saved-state
+            // changes, never on viewport pan/zoom.
+            renderedMarkers
           )}
 
           {/* Apr 2026 cleanup — trending floating chip removed per
