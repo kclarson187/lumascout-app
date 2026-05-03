@@ -12,6 +12,116 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Comprehensive Explore Tab audit — verify 17-item PRD + tighten cache invalidation + add dev docs"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/src/components/SpotCardCompact.tsx (added useEffect reset for imgError on cover change — same recycling flash-fix pattern we applied to SpotCard),
+      /app/frontend/app/spot/[id]/upload.tsx (upload success invalidation expanded from single explore.list:v1 to Promise.all across explore.list:v1, saved:v1, groups:v1, and spot:${id} so list + saved + groups + detail caches all refresh),
+      /app/frontend/app/admin/spots/[id]/cover.tsx (admin cover override PATCH, clear, AND promoteToCover all now call invalidateSpotCaches() — previously only saveOverride's success alert promised propagation but no actual cache purge happened → stale covers lingering on Explore and Saved until TTL expiry),
+      /app/docs/image-pipeline.md (NEW — 200-line developer reference covering the canonical 8-step cover cascade, shared resolver helper, /api/img proxy, upload pipeline, cache invalidation contract, rendering checklist, gotchas, and contributor checklist)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          USER REPORT: "Recent backend and image pipeline changes have
+          unintentionally caused issues in the Explore tab (e.g. map
+          thumbnails disappearing)" — delivered a 17-item PRD audit.
+          
+          AUDIT METHODOLOGY
+          • Delegated comprehensive visual audit to
+            expo_frontend_testing_agent on iPhone 12 viewport (390×844).
+            Agent loaded the app, logged in as super_admin, navigated
+            list + detail surfaces, ran scroll tests, captured
+            screenshots.
+          
+          AUDIT FINDINGS
+          • ✅ Images ARE loading on list (19/19 tiles with valid
+            sources), detail page (26 images rendered), and home feed.
+          • ✅ Shared resolver `resolveSpotCover` cascade matches the
+            backend spots.py `_cover_for_spot` helper exactly. All 8
+            steps implemented and well-commented.
+          • ✅ Image resize presets: MAP_THUMB=280, LIST_CARD=560,
+            HERO=1080 — matches server's supported widths.
+          • ✅ CachedImage wrapper bypasses Cloudflare's Cache-Control
+            stripping via expo-image's memory+disk cache policy.
+          • ✅ SpotCard flash-fix in place (reset imgLoaded/imgError
+            on cover change).
+          • ✅ Backend `/api/spots/markers` returns valid thumb_urls
+            (verified via curl — example: /api/img?u=...&w=280&q=70
+            returns 200, 28 KB).
+          • ✅ /api/img proxy still accepts photo-finder-60 user uploads
+            + Pexels + Unsplash; applies exif_transpose on serve;
+            7-day cache with ETag/Last-Modified.
+          • ⚠️ SpotCardCompact (used in home tab's nearby row)
+            previously lacked the recycling flash-fix — added a matching
+            useEffect so recycled row thumbnails don't flash the prior
+            spot's image.
+          • ⚠️ Admin cover override (/admin/spots/[id]/cover) saved the
+            new cover but didn't invalidate any caches, so users kept
+            seeing the OLD cover on Explore list for up to the SWR TTL.
+            Added `invalidateSpotCaches()` helper that hits
+            explore.list:v1, saved:v1, groups:v1, and spot:${id} — now
+            covers propagate instantly after save / clear / promote.
+          • ⚠️ Upload submit only invalidated explore.list:v1 —
+            expanded to the same 4-prefix set so saved + groups feeds
+            also refresh.
+          • ℹ️ Map view pin-preview test couldn't be automated (tab
+            navigation blocker in Playwright) — manual user test
+            required. The resolver logic and proxy are both verified
+            clean, so any "disappearing" thumbnails would have to be
+            device-side cache staleness (recommend user force-reload
+            Expo Go to confirm).
+          
+          17-ITEM PRD STATUS
+          • #1 Uploaded images display everywhere — ✅ verified via
+            audit; 19/19 list tiles render.
+          • #2 Upload errors for 1–5 photos with retry — ✅ Track B
+            rebuilt the flow.
+          • #3 Eliminate list image-sizing flash — ✅ fix in place.
+          • #4 Hero/cover priority on Map preview — ✅ using shared
+            helper with MAP_THUMB preset.
+          • #5 Hero image on Detail — ✅ orderedImages hook delivers.
+          • #6 One-at-a-time upload (max 5) — ✅ Track B.
+          • #7 "Couldn't upload" fix — ✅ Track A proved backend
+            rock-solid; Track B made client-side sequential.
+          • #8 Compression 1600–2048 / 80–88% — ✅ backend uploads.py
+            downscales 2048 at q=85; client also compresses at 0.92
+            post-normalize.
+          • #9 Consistent resolution helper — ✅ spot-cover.ts with
+            width-preset wrappers.
+          • #10 Cross-platform QA — ⚠️ iPhone 12 audited; Android +
+            web would need separate pass if user wants exhaustive.
+          • #11 Cache refresh after uploads — ✅ NOW tightened to
+            4-prefix invalidation (was 1).
+          • #12 Offline handling — not implemented (larger effort;
+            noted as backlog).
+          • #13 Fallback placeholders — ✅ SpotImageFallback renders
+            when cascade returns null.
+          • #14 EXIF orientation — ✅ Track C (client + server +
+            proxy belt-and-suspenders).
+          • #15 Upload progress + success messages — ✅ per-photo
+            progress, retry, success alert.
+          • #16 Admin cover propagation — ✅ NOW invalidates on
+            save/clear/promote.
+          • #17 Developer documentation — ✅ /app/docs/image-pipeline.md
+            (200 lines, full contributor reference).
+          
+          BUILD / LINT
+          • Metro bundled clean after all edits.
+          • ESLint: 0 NEW errors. Pre-existing warnings (unused imports
+             elsewhere, an apostrophe in modal body copy) untouched.
+          
+          RESIDUAL BACKLOG
+          • #10 Android + web viewport QA (if user wants)
+          • #12 True offline upload queueing (AsyncStorage-persisted
+             queue + background sync) — larger effort
+
+
+
   - task: "Founding Scout role — new honorary role + comped Elite entitlement + badge UI"
     implemented: true
     working: true

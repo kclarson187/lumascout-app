@@ -124,6 +124,22 @@ export default function CoverEditor() {
     rotation.value = next;
   };
 
+  // Small helper — invalidate every cache that holds a rendered cover
+  // for this spot so the admin's override (or reset) propagates instantly
+  // across Explore list, Map markers, Saved, Groups, and the detail
+  // page without the user needing to pull-to-refresh.
+  const invalidateSpotCaches = async () => {
+    try {
+      const { invalidateCachePrefix } = await import('../../../../src/utils/swrCache');
+      await Promise.all([
+        invalidateCachePrefix('explore.list:v1'),
+        invalidateCachePrefix('saved:v1'),
+        invalidateCachePrefix('groups:v1'),
+        invalidateCachePrefix(`spot:${id}`),
+      ]);
+    } catch {}
+  };
+
   const saveOverride = async () => {
     if (!selectedUrl || !id) return;
     setSaving(true);
@@ -135,6 +151,7 @@ export default function CoverEditor() {
         scale: Number(scale.value.toFixed(2)),
         rotation: Math.round(rotation.value) % 360,
       });
+      await invalidateSpotCaches();
       Alert.alert('Saved', 'Cover updated across Explore, detail pages, and map thumbnails.');
       load();
     } catch (e: any) {
@@ -149,6 +166,7 @@ export default function CoverEditor() {
       { text: 'Clear', style: 'destructive', onPress: async () => {
         try {
           await api.delete(`/admin/spots/${id}/cover`);
+          await invalidateSpotCaches();
           load();
         } catch (e: any) {
           Alert.alert('Error', e?.response?.data?.detail || 'Failed.');
@@ -163,6 +181,7 @@ export default function CoverEditor() {
     const urls = [url, ...data.images.filter((i) => i.source === 'spot' && i.image_url !== url).map((i) => i.image_url)];
     try {
       await api.patch(`/admin/spots/${id}/gallery`, { image_urls: urls });
+      await invalidateSpotCaches();
       load();
     } catch (e: any) {
       Alert.alert('Error', e?.response?.data?.detail || 'Failed.');
