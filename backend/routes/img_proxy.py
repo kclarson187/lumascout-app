@@ -52,6 +52,7 @@ CANNOT be used as an open proxy / SSRF vector.
 from __future__ import annotations
 
 import asyncio
+import email.utils
 import hashlib
 import io
 import logging
@@ -64,7 +65,7 @@ from urllib.parse import urlparse
 
 import aiofiles
 import aiohttp
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Header, HTTPException, Query, Response
 from PIL import Image
 
 # Register HEIF opener once, globally.
@@ -244,39 +245,137 @@ _inflight: dict[str, asyncio.Future] = {}
 _inflight_lock = asyncio.Lock()
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Response header helpers — v2.0.25 CDN hardening
+# ──────────────────────────────────────────────────────────────────────────
+# WHY THIS SECTION EXISTS:
+#
+# v2.0.24 shipped with `Cache-Control: public, max-age=604800, immutable`
+# which is a perfectly correct RFC7234 header. But during TestFlight
+# validation we confirmed (via `curl -D` against the public host) that
+# Cloudflare sits in front of the preview ingress and REWRITES our
+# header to `no-store, no-cache, must-revalidate` at the edge — observable
+# as `cf-cache-status: DYNAMIC` on every response. iOS URLCache / Android
+# OkHttp honor `no-store` strictly, meaning a perfectly-implemented server
+# cache was buying us zero client-side reuse.
+#
+# We attack this on three fronts:
+#
+#   1. `ETag` + `Last-Modified`  → allow conditional GETs (304 Not
+#      Modified). Even when `Cache-Control: no-store` is in effect,
+#      some intermediaries respect ETag-based conditional requests,
+#      and if Cloudflare is ever reconfigured to let our headers
+#      pass, the existing client cache will revalidate for free.
+#
+#   2. `CDN-Cache-Control` + `Surrogate-Control`  → Cloudflare's
+#      published documentation says `Cache-Control` is regularly
+#      rewritten by their edge, but `CDN-Cache-Control` is a
+#      Cloudflare-specific header that takes precedence at the edge
+#      and is NOT stripped. Setting both widens the chance that
+#      *some* cache layer (theirs, ours, a future shared proxy)
+#      honors the intent.
+#
+#   3. `X-Content-Cache-Control`  → purely informational mirror of
+#      the intended policy, useful for on-device diagnostics so we
+#      can detect header strip in logs.
+#
+# The *primary* fix is client-side: the RN app now renders these
+# URLs via <CachedImage> (expo-image) which keeps its own disk
+# cache keyed on URL, independent of HTTP cache headers. This block
+# is belt-and-suspenders for the CDN / browser layer.
+
+def _etag_for(url: str, w: int, q: int) -> str:
+    """Strong ETag built from the cache key. Same bytes → same ETag."""
+    h = hashlib.sha256(f"{url}|{w}|{q}".encode("utf-8")).hexdigest()[:16]
+    return f'"img-{h}"'
+
+
+def _http_date(ts: float) -> str:
+    return email.utils.formatdate(timeval=ts, usegmt=True)
+
+
+def _cache_headers(
+    *,
+    etag: str,
+    last_modified_ts: Optional[float] = None,
+    x_img_cache: str,
+) -> dict[str, str]:
+    """Build the full cache-header bundle for a 200 response."""
+    h = {
+        "Cache-Control": "public, max-age=604800, immutable",
+        # Cloudflare-specific — survives Cache-Control rewrites at edge.
+        "CDN-Cache-Control": "public, max-age=604800, immutable",
+        # Reverse-proxy / Varnish dialect — same intent, different header.
+        "Surrogate-Control": "max-age=604800",
+        # Mirror for diagnostics — readable from the client to detect
+        # the rewrite-at-edge case in device logs.
+        "X-Content-Cache-Control": "public, max-age=604800, immutable",
+        "ETag": etag,
+        "Vary": "Accept",
+        "X-Img-Cache": x_img_cache,
+    }
+    if last_modified_ts:
+        h["Last-Modified"] = _http_date(last_modified_ts)
+    return h
+
+
 @router.get("/img")
 async def img_proxy(
     u: str = Query(..., description="Source image URL (allowlisted hosts only)"),
     w: int = Query(280, ge=MIN_WIDTH, le=MAX_WIDTH, description="Target width in px"),
     q: int = Query(DEFAULT_QUALITY, ge=MIN_QUALITY, le=MAX_QUALITY, description="JPEG quality 20-95"),
+    if_none_match: Optional[str] = Header(default=None, alias="If-None-Match"),
 ):
     """
     Resize an allowlisted source image to w px wide, quality q JPEG, with
     7-day immutable cache. Returns the JPEG bytes directly.
+
+    Supports conditional GET: a request with `If-None-Match: <etag>`
+    matching the current ETag returns `304 Not Modified` with empty body.
     """
     # 1. Allowlist check.
     if not _is_allowed_host(u):
         raise HTTPException(status_code=400, detail="host_not_allowed")
 
-    # 2. For Pexels / Unsplash, push our target w + q upstream so the
+    # 2. Compute the deterministic ETag for this (u, w, q) — the cache key
+    #    itself is the version identifier because all sources are immutable
+    #    (CDN URLs for Pexels/Unsplash; UUID-filenames for uploads).
+    etag = _etag_for(u, w, q)
+
+    # 3. Conditional GET short-circuit — even if Cloudflare strips our
+    #    Cache-Control header downstream, the client (or any upstream
+    #    cache that stored a copy) can still revalidate for free.
+    if if_none_match and etag in if_none_match:
+        return Response(
+            status_code=304,
+            headers=_cache_headers(etag=etag, x_img_cache="revalidated"),
+        )
+
+    # 4. For Pexels / Unsplash, push our target w + q upstream so the
     #    CDN pre-scales before we even touch the bytes.
     effective_url = _rewrite_upstream_query(u, w, q)
 
-    # 3. Disk cache lookup (keyed on the ORIGINAL user-requested url
+    # 5. Disk cache lookup (keyed on the ORIGINAL user-requested url
     #    + w + q so our logic remains stable even if CDN semantics shift).
     cache_p = _cache_path(u, w, q)
     cached = await _load_from_cache(cache_p)
     if cached is not None:
+        mtime = None
+        try:
+            mtime = cache_p.stat().st_mtime
+        except OSError:
+            pass
         return Response(
             content=cached,
             media_type="image/jpeg",
-            headers={
-                "Cache-Control": "public, max-age=604800, immutable",
-                "X-Img-Cache": "hit",
-            },
+            headers=_cache_headers(
+                etag=etag,
+                last_modified_ts=mtime,
+                x_img_cache="hit",
+            ),
         )
 
-    # 4. Coalesce concurrent misses for the same key.
+    # 6. Coalesce concurrent misses for the same key.
     key = f"{u}|{w}|{q}"
     async with _inflight_lock:
         existing = _inflight.get(key)
@@ -296,13 +395,14 @@ async def img_proxy(
         return Response(
             content=data,
             media_type="image/jpeg",
-            headers={
-                "Cache-Control": "public, max-age=604800, immutable",
-                "X-Img-Cache": "coalesced",
-            },
+            headers=_cache_headers(
+                etag=etag,
+                last_modified_ts=time.time(),
+                x_img_cache="coalesced",
+            ),
         )
 
-    # 5. We own the miss — fetch + resize + cache.
+    # 7. We own the miss — fetch + resize + cache.
     try:
         source_bytes = await _fetch_source(effective_url)
         # PIL work on thread pool to not block event loop.
@@ -310,13 +410,19 @@ async def img_proxy(
         resized = await loop.run_in_executor(None, _resize_to_jpeg, source_bytes, w, q)
         await _save_to_cache(cache_p, resized)
         fut.set_result(resized)
+        mtime = None
+        try:
+            mtime = cache_p.stat().st_mtime
+        except OSError:
+            pass
         return Response(
             content=resized,
             media_type="image/jpeg",
-            headers={
-                "Cache-Control": "public, max-age=604800, immutable",
-                "X-Img-Cache": "miss",
-            },
+            headers=_cache_headers(
+                etag=etag,
+                last_modified_ts=mtime,
+                x_img_cache="miss",
+            ),
         )
     except HTTPException as e:
         fut.set_exception(e)

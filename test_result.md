@@ -16,6 +16,127 @@
     implemented: true
     working: "NA"
 
+  - task: "v2.0.25 — CDN Cache-Control workaround: client-side disk cache via expo-image + backend ETag/Last-Modified/304 hardening"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/src/components/CachedImage.tsx (NEW — drop-in <Image> replacement wrapping expo-image with cachePolicy="memory-disk". Keeps its own disk cache keyed by URL, independent of HTTP Cache-Control. Ports SafeImage's broken-URL short-circuit to stop 404 retry storms. Mapping layer between RN's resizeMode and expo-image's contentFit for drop-in ergonomics),
+      /app/frontend/app/(tabs)/explore.tsx (map bottom-sheet preview swapped from native <Image> to <CachedImage> — highest-frequency thumbnail surface on cellular),
+      /app/frontend/app/spot/[id].tsx (hero carousel swapped from <SafeImage> to <CachedImage> — HERO-size JPEGs were being re-fetched on every back-navigation because Cloudflare rewrote our immutable Cache-Control to no-store),
+      /app/backend/routes/img_proxy.py (v2.0.25 hardening — ETag derived from sha256(url|w|q) for strong cache-key identity; Last-Modified from cache file mtime; If-None-Match → 304 Not Modified conditional GET support; CDN-Cache-Control + Surrogate-Control + X-Content-Cache-Control belt-and-suspenders headers so intermediaries that strip Cache-Control still see the intent; Vary: Accept; all header bundles produced via _cache_headers() helper for consistency)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          v2.0.25 BACKEND IMG PROXY HARDENING — 12/12 PASS against
+          http://localhost:8001/api/img. Test script: /app/backend_test_img.py
+
+          1. Basic 200 + header bundle ✅
+             • Content-Type: image/jpeg
+             • Cache-Control: public, max-age=604800, immutable
+             • CDN-Cache-Control: public, max-age=604800, immutable
+             • Surrogate-Control: max-age=604800
+             • X-Content-Cache-Control: public, max-age=604800, immutable
+             • Vary: Accept
+             • ETag: "img-6cd49b91f98a74c2" (22 chars incl quotes, matches
+               ^"img-[0-9a-f]{16}"$)
+             • X-Img-Cache: hit (observed hit; miss also accepted)
+             • Last-Modified: valid RFC 1123 date on cache hit
+          2. ETag stability ✅ — 3 GETs returned identical ETag.
+          3. ETag varies by w (280 vs 560), q (70 vs 50), and u (Pexels
+             photo 1640772 vs 624015) — all three pairs produced DIFFERENT
+             ETags.
+          4. Conditional GET with If-None-Match ✅
+             • Returns 304, empty body (0 bytes)
+             • Full cache header bundle present on 304 response
+             • X-Img-Cache: revalidated
+          5. Mismatched If-None-Match ("img-deadbeefdeadbeef") ✅
+             correctly returns 200 with full JPEG bytes (15872 bytes).
+          6. Multi-ETag If-None-Match list
+             ('"img-xxxxxxxxxxxxxxxx", <realetag>') ✅ returns 304 per
+             RFC 7232 — the `etag in if_none_match` substring check in
+             img_proxy.py handles comma-separated correctly because the
+             real ETag still appears verbatim in the header value.
+          7. Allowlist enforced ✅ — GET u=https://evil.com/pic.jpg
+             returns 400 with {"detail":"host_not_allowed"}.
+          8. Parameter bounds enforced ✅ (all 4 cases → 422)
+             • w=10, w=5000, q=5, q=100 all rejected with 422.
+          9. /api/img/stats ✅ — 200 with files=33, bytes, mb=0.42,
+             allowed_hosts (3 entries), ttl_days=7.
+          10. Unsplash source ✅ — photo-1506905925346-21bda4d32df4
+              w=280 q=70 returns 200 image/jpeg 7088 bytes with ETag.
+          11. Different w/q cache independently ✅ — w=280 and w=560
+              returned DIFFERENT ETags and neither was `revalidated`
+              (cache lookup used distinct keys).
+          12. Thundering-herd coalescing ✅ — 10 concurrent requests
+              to a fresh (u, w, q) triple (cache file deleted first)
+              all returned 200, unique ETag count=1, X-Img-Cache
+              distribution: {'miss': 1, 'coalesced': 9}. This is the
+              EXACT expected behavior — one request owned the miss and
+              did the upstream fetch, the other 9 awaited on the same
+              asyncio.Future and returned from the in-process coalesce.
+
+          NO REGRESSIONS observed on existing pass-through behavior.
+          Backend logs clean throughout the test run.
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          v2.0.25 — CDN Cache-Control workaround.
+
+          Root cause (validated via curl -D against public host):
+          The preview ingress sits behind Cloudflare. Cloudflare is
+          rewriting our 
+            Cache-Control: public, max-age=604800, immutable
+          to 
+            Cache-Control: no-store, no-cache, must-revalidate
+          at the edge (cf-cache-status: DYNAMIC on every response).
+          Native <Image> on iOS uses URLCache / Android OkHttp — both
+          honor no-store strictly. So the excellent /api/img proxy we
+          shipped in v2.0.24 was bypassed on every re-render: every pan,
+          every back-navigation, every reopen = full re-download.
+
+          Fix attacks the problem on three axes:
+
+          1. **Client-side (primary)**: <CachedImage> wraps expo-image
+             with cachePolicy="memory-disk". expo-image maintains its
+             OWN persistent disk cache keyed by URL — independent of
+             HTTP cache semantics. Cloudflare's header rewrite becomes
+             irrelevant. This is the actual win.
+
+          2. **Backend ETag/Last-Modified/304 (defense-in-depth)**:
+             img_proxy.py now emits ETag (strong, derived from cache
+             key) + Last-Modified. Verified via curl that both survive
+             Cloudflare's header rewrite — unlike Cache-Control, these
+             two pass through. Enables conditional GET: if expo-image
+             ever evicts and re-requests, the client can send 
+             If-None-Match and receive a 304 (empty body). Server-side
+             logic: the 304 path short-circuits before the disk read,
+             which is already O(1) but the conditional path is O(0).
+
+          3. **Alternate cache-control dialects**: CDN-Cache-Control,
+             Surrogate-Control, X-Content-Cache-Control all set. 
+             Cloudflare docs say CDN-Cache-Control is honored at the
+             edge, though testing shows their preview tier strips it.
+             Surrogate-Control survives end-to-end for downstream proxies.
+             X-Content-Cache-Control is a diagnostic mirror so future
+             device logs can detect the rewrite-at-edge case.
+
+          Validation (curl -D):
+            • Local origin 200:  Cache-Control + CDN-Cache-Control +
+              Surrogate-Control + X-Content-Cache-Control + ETag +
+              Last-Modified + Vary all emitted ✅
+            • Local origin 304:  If-None-Match → 304 Not Modified
+              with empty body and full header bundle ✅
+            • Public (Cloudflare):  ETag + Last-Modified + Surrogate +
+              X-Content-Cache-Control survive edge ✅. Cache-Control
+              and CDN-Cache-Control are still rewritten ❌ (expected —
+              this is WHY we added the client-side fix).
+
+          Next: ship behind v2.0.25 TestFlight build for user validation.
+
   - task: "v2.0.24 — Image resize pipeline (target: 379 MB session → <15 MB; 500 KB thumb → 15-25 KB)"
     implemented: true
     working: "NA"
