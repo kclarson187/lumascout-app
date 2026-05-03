@@ -16,6 +16,62 @@
     implemented: true
     working: "NA"
 
+  - task: "v2.0.26 — Emergent deploy + eas-ipa-build fixes (expo-doctor failures, package.json misplacement, yarn.lock deadlock)"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/app.config.js (rewritten to use Expo's standard ({ config }) => ({ ...config, ... }) callback pattern. Previous version manually read app.json with fs.readFileSync which triggered expo-doctor's "app.config.js is not using values from app.json" failure on the EAS build server.),
+      /app/frontend/package.json (moved "eslint-config-expo": "~10.0.0" from dependencies to devDependencies. Previous placement caused expo-doctor to fail with "eslint-config-expo is added as a dependency in package.json but it doesn't seem to be installed" because EAS build environments often strip devDeps OR the install order left peer deps unresolved. As a lint-only package it correctly belongs in devDependencies.),
+      /app/frontend/yarn.lock (regenerated from scratch to resolve yarn 1 invariant violation: "could not find a copy of eslint to link in node_modules/eslint-plugin-expo/node_modules". Regeneration was required after the eslint-config-expo move because yarn 1's peer-dep tree resolution got stuck. Fresh install succeeds cleanly in 29s.)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          v2.0.26 — Deployment build log analysis and targeted fixes.
+
+          Root cause #1: expo-doctor failure #1 on EAS build.
+             Error: "CommandError: eslint-config-expo is added as a 
+             dependency in your project's package.json but it doesn't 
+             seem to be installed."
+             Cause: eslint-config-expo was in `dependencies` (wrong).
+             Fix:  moved to devDependencies. Since it's a linting
+                   config only, this is where it semantically belongs.
+
+          Root cause #2: expo-doctor failure #2 on EAS build.
+             Error: "You have an app.json file in your project, but your
+             app.config.js is not using the values from it."
+             Cause: app.config.js was doing `fs.readFileSync('./app.json')`
+                    manually instead of accepting the `{ config }` callback
+                    parameter from Expo CLI.
+             Fix:  rewrote to `module.exports = ({ config }) => ({...config, overrides})`
+                   pattern. Runtime behaviour is identical — deep-link
+                   overrides still injected after Expo loads app.json —
+                   but doctor's static analyzer now passes.
+
+          Verification:
+            * `npx expo-doctor` → 17/17 checks passed. No issues detected!
+            * Expo bundle /         → HTTP 200, 65109 bytes
+            * Backend /api/         → HTTP 200
+            * Backend /api/img proxy → HTTP 200
+            * All 4 supervisor services RUNNING (backend/expo/mongodb/nginx-code-proxy)
+
+          Remaining iOS pod concern: The final build error in the log was
+          "Unknown error. See logs of the Install pods build phase for more
+          information." This is a SEPARATE CocoaPods issue that we cannot
+          debug locally without the Xcode build logs from the EAS cloud
+          runner. Most likely it was a cascade failure from expo-doctor
+          aborting the build prematurely. Now that expo-doctor passes,
+          the next deploy attempt should progress further. If pod install
+          still fails, user will need to share the specific xcode logs
+          from the EAS build detail page (link in EAS_FAILURE_DETAILS).
+
+          Environment artifact: yarn.lock was fully regenerated (not just
+          patched) because yarn 1's peer-dep tree got stuck on an invariant
+          violation. Fresh install succeeds cleanly; 0 functional changes.
+
   - task: "v2.0.25 refactor — spot/[id].tsx split into hook + styles + atoms (1699 → 1136 lines, 33% reduction)"
     implemented: true
     working: "NA"
