@@ -12,6 +12,117 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Founding Scout role — new honorary role + comped Elite entitlement + badge UI"
+    implemented: true
+    working: true
+    file: |
+      /app/backend/server.py (added founding_scout to VALID_ROLES + ROLE_LEVELS at level 0; plan_of() now returns comp_elite for role==founding_scout when no paid/explicit-comp plan is set, even after comp_expiration lapses),
+      /app/backend/routes/admin.py (admin_update_user now explicitly allows admin + super_admin to assign/remove founding_scout with a 403 fallback guard; on role→founding_scout auto-grants comp_elite + comped_tier/reason/by/started_at when target isn't already paid Elite; on role away-from founding_scout reverts comp_elite→free only if WE granted it via comped_reason=="founding_scout"),
+      /app/frontend/src/utils/roles.ts (NEW — single source of truth for RoleKey / ROLE_DEFS / ROLE_OPTIONS / canAssignRole / hasEliteEntitlement; Founding Scout positioned between User and Moderator per PRD),
+      /app/frontend/src/components/FoundingScoutBadge.tsx (NEW — premium honorary-role badge wrapping the uploaded PNG with sm/md/lg/xl size presets, transparent background, aspect-preserving resize),
+      /app/frontend/src/components/UserBadge.tsx (new priority tier: founding_scout slots between admin/moderator and Elite plan so the badge shows up EVERYWHERE UserBadge is used — profile header, user cards, follow lists, author rows, directory, discover),
+      /app/frontend/app/admin/user/[id].tsx (refactored to import ROLE_OPTIONS/ROLE_DEFS from shared roles.ts; role chip for founding_scout shows the badge inline; role authorization chip uses canAssignRole so admins can flip user↔founding_scout without being super_admin; Subscription plan section shows "Elite Access: Free via Founding Scout" comp banner when target is founding_scout; role definitions card shows the same comp indicator when current),
+      /app/frontend/assets/badges/founding_scout.png (NEW — 611KB uploaded badge artwork, used as canonical source for all founding_scout surfaces)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          FEATURE: Add Founding Scout as a distinct honorary role with
+          the uploaded badge image, free Elite membership entitlement,
+          admin+super_admin assign/remove authorization, and display on
+          all user surfaces.
+          
+          BACKEND (server.py + routes/admin.py)
+          • VALID_ROLES += "founding_scout"
+          • ROLE_LEVELS["founding_scout"] = 0 — same permission level as
+            user. The role grants ZERO moderation or admin powers; its
+            only functional effect is auto-comped Elite access.
+          • plan_of(user) returns "comp_elite" when user.role ==
+            "founding_scout" AND current plan is free/None (or a non-
+            Elite comp/trial). Paid "elite" subscriptions are never
+            overridden. Also survives expired comp_expiration — the
+            role itself is the entitlement.
+          • admin_update_user:
+              – Defense-in-depth 403 guard: admin OR super_admin can
+                assign/remove founding_scout. Moderator/support/user/
+                founding_scout are rejected server-side. (The
+                require_role("admin") dep already blocks non-admins
+                from reaching this endpoint; the inner guard exists so
+                the auth rules stay visible where they're enforced.)
+              – ROLE→founding_scout transition: auto-sets
+                plan=comp_elite, comped_tier=elite, comped_reason=
+                "founding_scout", comped_by=me, comped_started_at=now,
+                unless target already has a paid or already-comped
+                Elite plan.
+              – ROLE away-from founding_scout: reverts plan to free ONLY
+                if WE granted it (comped_reason=="founding_scout").
+                Paid Elite or admin-comped Elite is left untouched.
+              – Both transitions flow through the existing audit_log
+                pipeline (user.update action with before/after role
+                AND plan deltas).
+          
+          FRONTEND
+          • src/utils/roles.ts — single source of truth. ROLE_OPTIONS
+            order: user → founding_scout → moderator → support → admin
+            → super_admin (matches backend ROLE_LEVELS hierarchy).
+            canAssignRole(actor, target) mirrors backend rules exactly:
+              ∘ admin + super_admin can target user / founding_scout /
+                moderator / support
+              ∘ only super_admin can target admin / super_admin
+          • FoundingScoutBadge component uses the uploaded PNG with
+            resizeMode=contain + transparent wrapper so it drops cleanly
+            on dark/black/navy. Four size presets (sm/md/lg/xl) plus a
+            numeric override for bespoke surfaces.
+          • UserBadge (the global identity badge used EVERYWHERE) gained
+            a new priority-3 branch: role==founding_scout renders the
+            Founding Scout PNG. This single change surfaces the badge
+            on: profile header, user cards, follower list chips, inbox
+            row, post/comment author rows, discover, directory,
+            admin user detail header.
+          • admin/user/[id].tsx imports the shared roles (removes ~70
+            lines of duplicate role-def boilerplate). Role chip for
+            founding_scout renders the badge image inline before the
+            label. Role legend card for founding_scout shows an
+            "Elite Access: Free via Founding Scout" highlight when
+            current. Subscription-plan section shows a prominent amber
+            banner with the badge + "Elite Access: Free via Founding
+            Scout" text whenever the target user has the role.
+          • Role-chip disable condition uses canAssignRole() so admins
+            are NOT locked out of assigning founding_scout anymore —
+            only the staff roles remain super_admin-only.
+          
+          BACKEND TESTING (deep_testing_backend_v2) — 17/17 PASS
+          1. Role enum accepts founding_scout (200).
+          2. Auto-comp: assigning role sets plan=comp_elite +
+             comped_reason=founding_scout + comped_by +
+             comped_started_at.
+          3. Removal cleanly reverts plan→free + clears comp markers
+             when WE granted the comp.
+          4. Audit log records before/after role and plan transitions.
+          5. Non-admin PATCH → 403 Forbidden.
+          6. plan_of() returns comp_elite for founding_scout regardless
+             of stored plan field, even after expiry.
+          7. /me endpoint reflects the elite tier correctly for a
+             founding_scout user.
+          
+          LINT / BUILD
+          • Metro bundled cleanly after restart.
+          • ESLint: 0 new errors. Pre-existing warnings (unused imports
+             elsewhere, an apostrophe in modal body copy) untouched.
+          
+          NOT YET VERIFIED (OPTIONAL FOLLOW-UPS)
+          • Profile header self-view & public /user/[id] page visual
+            check on mobile — UserBadge is already wired there, so the
+            badge will appear automatically without any further code
+            changes. Recommend a light FE smoke test before shipping.
+          • Post/comment author rows — same UserBadge component; no new
+            wiring needed.
+
+
+
   - task: "Founding Scout role — backend (PATCH /api/admin/users/{id} + plan_of() override + auto-comp Elite + audit log)"
     implemented: true
     working: true
