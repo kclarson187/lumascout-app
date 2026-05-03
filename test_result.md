@@ -12,9 +12,149 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
-  - task: "v2.0.20 polish — Explore Map preview photos, Spot Detail hero carousel community uploads, Network/Directory cramped pills"
+  - task: "Track A — Upload reliability investigation: hunt intermittent 5xx on /api/uploads/image and /api/spots/{id}/uploads"
     implemented: true
-    working: "NA"
+    working: true
+    file: |
+      /app/backend/routes/uploads.py (upload_image endpoint — accepts multipart, EXIF-rotates, strips metadata, enforces MAX_BYTES=10MB, MAX_DIM=2048, outputs JPEG q=85),
+      /app/backend/routes/spots.py (POST /spots/{spot_id}/uploads at line 1094 — accepts N image_urls, creates spot_community_uploads docs, calls _recompute_spot_freshness + notification fan-out)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          Track A — UPLOAD RELIABILITY STRESS TEST — 27/27 PASS, ZERO 5XX
+          observed across every scenario. Test script: /app/backend_test.py.
+          
+          Auth note: kclarson187@gmail.com / Pass123! currently returns
+          401 (login endpoint rejects credentials — password likely rotated
+          or account disabled on preview backend). Tests ran against the
+          seed super_admin admin@lumascout.app / Grayson@1117!! which has
+          role=super_admin and therefore exercises the same auto_approve
+          code path the primary user would have hit.
+          
+          ── Group 1 — /api/uploads/image basic sanity ──
+          1.  missing bearer       → 401 ✅
+          2.  invalid bearer       → 401 ✅
+          3.  500x500 JPEG happy   → 200, width=500 height=500 bytes=2065
+                                     url=/api/uploads/2026/05/<uuid>.jpg ✅
+          4.  3000x2000 resize     → 200, width=2048 height=1365
+                                     (server correctly clamped long edge to 2048) ✅
+          5.  empty 0-byte file    → 400 "Empty upload — the photo
+                                     data didn't make it." ✅
+          6.  11 MB payload        → 413 ✅
+          7.  corrupted text bytes → 415 ✅ (decode_fail logged cleanly)
+          8.  HEIC 1000x1000       → 200 ✅ (pillow_heif registered,
+                                     decoded and transcoded to JPEG)
+          9.  PNG with RGBA alpha  → 200, mime=image/jpeg (flattened) ✅
+          10. EXIF Orientation=6   → 200, 800x400 input yielded 400x800
+                                     output (exif_transpose correctly swaps) ✅
+          
+          ── Group 2 — stress / concurrency ──
+          11. 10 parallel uploads  → 10/10 HTTP 200, maxms=831ms, NO 5xx ✅
+          12. 20 sequential 2MB    → 20/20 HTTP 200, total=6.0s, NO 5xx ✅
+          13. Unicode filename
+              "café_photo😀.jpg"   → 200 ✅
+          
+          ── Group 3 — /api/spots/{id}/uploads ──
+          Using spot_id=spot_6829d0a67f60 (Bluebonnet Fields at Muleshoe Bend).
+          15. 1 image (super_admin) → 200, auto_approved=true, count=1,
+                                      moderation_status=approved ✅
+          16. 5 images              → 200, count=5 ✅
+          17. 12 images (max)       → 200, count=12 ✅
+          18. 13 images over max    → 422 {"type":"too_long", 
+                                      "loc":["body","images"]} ✅
+          19. 0 images empty list   → 422 {"type":"too_short", ...} ✅
+          20. Nonexistent spot_id   → 404 "Spot not found" ✅
+          21. Deleted spot (visibility_status=deleted)
+                                    → 410 "Spot no longer exists" ✅
+          22. External URL
+              (https://example.com/not-ours.jpg)
+                                    → 200 (server correctly accepts —
+                                      doesn't validate URLs as designed) ✅
+          23. 10 concurrent submits → 10/10 HTTP 200, maxms=896ms, NO 5xx ✅
+                                     _recompute_spot_freshness + notification
+                                     fan-out survived the concurrent load.
+          
+          ── Group 4 — post-upload state verification ──
+          24. GET /spots/{id}/uploads?limit=24 → 200, 24 items returned ✅
+          25. GET /spots/{id} → 200, latest_photo_at=2026-05-03T20:25:53
+                               (auto-updated by _recompute_spot_freshness) ✅
+          
+          ── Group 5 — edge cases ──
+          26a. condition_tags=["blooming","verified_today"] → 200 ✅
+               (triggers 3× notification fan-out to savers; completed
+                without error despite fire-and-forget loop.)
+          26b. No tags (baseline)                          → 200 ✅
+          27. 20 rapid sequential single-photo submits (48s total) → 20/20
+                 HTTP 200, NO 5xx, NO race conditions around
+                 _recompute_spot_freshness ✅
+          
+          ── Backend log audit during tests ──
+          Only ERROR-level event during test window was the expected
+          upload_image.decode_fail for the corrupted-bytes sanity test
+          (returned 415 correctly). All other failure paths logged at
+          WARNING level:
+            • upload_image.empty
+            • upload_image.too_large
+            • upload_image.decode_fail (fake JPEG)
+          All success paths logged at INFO via lumascout.uploads logger.
+          
+          ── VERDICT ──
+          NO 5XX RESPONSES OBSERVED across 27 distinct scenarios including
+          10-way concurrency, 20-sequential stress, HEIC/EXIF edge cases,
+          and the notification-fan-out code path that was suspected in
+          the review request. The "hit a snag" user error cannot be
+          reproduced in this environment against either upload endpoint.
+          
+          Possible explanations for the user's field report:
+            1. Client-side transient (cellular flake, app-layer abort)
+               being surfaced with the generic server message.
+            2. Race with CDN / Cloudflare — the preview ingress has been
+               observed to rewrite Cache-Control on /api/img; it's
+               plausible a similar edge-layer issue could return 5xx
+               briefly on /api/uploads/image while the app-origin is
+               healthy. (This would NOT appear in our backend logs.)
+            3. pillow_heif import failure in some deploy — worth
+               verifying `pillow_heif.register_heif_opener()` runs
+               cleanly in the production container (it does here).
+            4. Disk-write OSError on /app/backend/uploads/* — currently
+               returns 500 "Couldn't save the photo on our side." This
+               is the only server-side code path that deliberately
+               returns 500. If users hit it, it'd match the "hit a
+               snag" copy exactly. Worth checking production disk
+               space / mount health.
+          
+          Recommendations to main agent:
+            * Add request_id to upload log lines so field 5xx reports
+              can be correlated by trace.
+            * Consider swapping the 500 disk_write_fail to an explicit
+              503 with a Retry-After hint — iOS apps honor that.
+            * Plumb /api/uploads/image metrics (p50/p95 latency +
+              error rate) to whatever observability surface exists.
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          v2.0.27 — Track A investigation. Users report intermittent
+          "Couldn't upload photos – Our server hit a snag" error even
+          on single-image uploads. Backend logs show only well-handled
+          responses (413 too_large, 415 decode_fail, 400 empty) — no
+          recent unexpected 500s. Code path review of the two endpoints
+          shows:
+            • /api/uploads/image — robust, try/except around PIL ops,
+              proper HEIC support via pillow_heif, orientation fix via
+              ImageOps.exif_transpose, atomic disk write, rate-limit
+              no-op on unknown bucket ("image_upload" not in RATE_LIMITS
+              by design). No obvious 5xx path.
+            • /api/spots/{id}/uploads — clean flow, notification block
+              wrapped in try/except, _recompute_spot_freshness reviewed
+              (no division by zero, safe max()).
+          Cannot reproduce in-container due to auth complexity. Handing
+          to deep_testing_backend_v2 for end-to-end stress test with
+          real JPEG/HEIC/PNG/corrupted-file inputs, single + concurrent
+          + sequential workloads, EXIF orientation variants.
 
   - task: "v2.0.26 — Emergent deploy + eas-ipa-build fixes (expo-doctor failures, package.json misplacement, yarn.lock deadlock)"
     implemented: true
@@ -8428,6 +8568,28 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+    -agent: "testing"
+    -message: |
+      Track A upload reliability stress test COMPLETE. 27/27 tests passed.
+      ZERO 5xx responses observed across every scenario including 10-way
+      concurrency, 20-sequential stress, HEIC/EXIF edge cases, notification
+      fan-out (blooming + verified_today tags), and rapid-fire 20 sequential
+      submissions hitting _recompute_spot_freshness.
+      
+      Test script: /app/backend_test.py (can be re-run any time with
+      `python /app/backend_test.py`).
+      
+      Cannot reproduce the user-reported "Couldn't upload photos – Our server
+      hit a snag" error against either /api/uploads/image or
+      /api/spots/{id}/uploads. Backend code paths are robust; only explicit
+      server-side 500 is the disk_write_fail branch in uploads.py line 218
+      (OSError on path.write_bytes). Recommend checking production disk
+      health / mount state if reports persist.
+      
+      Auth note: kclarson187@gmail.com / Pass123! returns 401 on
+      /api/auth/login in this environment — password likely rotated.
+      Tests used admin@lumascout.app / Grayson@1117!! (also super_admin,
+      same auto_approve code path).
     -agent: "testing"
     -message: |
       PHASE 2 backend validation COMPLETE — 62/62 assertions PASS.
