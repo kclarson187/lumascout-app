@@ -389,6 +389,15 @@ async def list_spot_markers(
     }
     rows = await db.spots.find(query, projection).limit(limit).to_list(limit)
     out = []
+    # v2.0.24 continuation — Cover-Image Source-of-Truth CR (2026-05).
+    # Track spots that have NO primary cover so we can do a SINGLE
+    # batch query against spot_community_uploads at the end. For a
+    # location like McAllister Park where the admin hasn't uploaded
+    # primary images but 5 community photographers have, the map
+    # preview must still surface their shots — not a placeholder.
+    # One aggregate call is O(1) regardless of marker count.
+    missing_cover_ids: list[str] = []
+    missing_cover_indices: dict[str, int] = {}
     for s in rows:
         first_img = (s.get("images") or [{}])[0] if s.get("images") else {}
         # Cascade priority (mirror of frontend resolveSpotCover):
@@ -426,6 +435,13 @@ async def list_spot_markers(
                 thumb_url = f"/api/img?u={_urlquote(thumb_url, safe='')}&w=280&q=70"
             except Exception:
                 pass  # keep raw URL on quote failure — belt-and-suspenders
+        else:
+            # Cover-Image Source-of-Truth CR — track for batch community-
+            # upload fallback query below. Position index = len(out).
+            sid_for_fallback = s.get("spot_id")
+            if sid_for_fallback:
+                missing_cover_indices[sid_for_fallback] = len(out)
+                missing_cover_ids.append(sid_for_fallback)
         out.append({
             "spot_id": s.get("spot_id"),
             "title": s.get("title"),
@@ -438,6 +454,45 @@ async def list_spot_markers(
             "score": s.get("shoot_score") or s.get("quality_score") or 0,
             "thumb_url": thumb_url,
         })
+
+    # Cover-Image Source-of-Truth CR (2026-05) — community-upload fallback.
+    # ────────────────────────────────────────────────────────────────────
+    # For every spot that still has thumb_url=None (admin uploaded no
+    # primary cover / images[]), fall back to the OLDEST approved
+    # community upload. One aggregate query for all such spots —
+    # O(1) regardless of marker count. Preserves single-source-of-truth
+    # with the detail page, which now does the same cascade.
+    if missing_cover_ids:
+        try:
+            cu_pipeline = [
+                {"$match": {
+                    "spot_id": {"$in": missing_cover_ids},
+                    "moderation_status": "approved",
+                    "image_url": {"$nin": [None, ""]},
+                }},
+                {"$sort": {"created_at": 1}},
+                {"$group": {
+                    "_id": "$spot_id",
+                    "image_url": {"$first": "$image_url"},
+                }},
+            ]
+            async for doc in db.spot_community_uploads.aggregate(cu_pipeline):
+                sid = doc.get("_id")
+                url = doc.get("image_url")
+                idx = missing_cover_indices.get(sid)
+                if idx is None or not url or not isinstance(url, str):
+                    continue
+                if url.startswith("data:"):
+                    continue
+                try:
+                    from urllib.parse import quote as _urlquote
+                    out[idx]["thumb_url"] = f"/api/img?u={_urlquote(url, safe='')}&w=280&q=70"
+                except Exception:
+                    out[idx]["thumb_url"] = url
+        except Exception:
+            # Non-fatal — markers still render, just without community
+            # fallback thumbs for spots with no admin-uploaded primary.
+            pass
     return {"items": out, "count": len(out)}
 
 
@@ -688,6 +743,47 @@ async def get_spot(spot_id: str, viewer: Optional[dict] = Depends(get_optional_u
         "scale":   (cover_override or {}).get("scale",   1.0),
         "rotation": (cover_override or {}).get("rotation", 0),
     } if cover_override else {"focal_x": 0.5, "focal_y": 0.5, "scale": 1.0, "rotation": 0}
+
+    # Cover-Image Source-of-Truth CR (2026-05) — canonical `cover_image_url`.
+    # ────────────────────────────────────────────────────────────────────
+    # Exposes the SAME cover URL as /api/spots/markers using the identical
+    # cascade. MUST match markers exactly or the map preview thumbnail
+    # and the detail hero will drift. Critical: do NOT fall back to
+    # `view["hero_cover_image_url"]` here — that's been recomputed by
+    # the runtime rotation logic above and can pick a different image
+    # than markers' raw-doc read. Parity requires both endpoints to
+    # read the same stored fields in the same priority order.
+    def _safe_cover(u):
+        if not isinstance(u, str) or not u or u.startswith("data:"):
+            return None
+        return u
+    _canon = (
+        _safe_cover(spot.get("hero_cover_image_url"))
+        or _safe_cover(spot.get("cover_image_url"))
+        or _safe_cover(spot.get("card_url"))
+        or _safe_cover(spot.get("image_url"))
+    )
+    if not _canon:
+        imgs_ = spot.get("images") or []
+        # is_cover=True first (matches markers' first_img pickup order
+        # when users haven't set the legacy fields but have marked a
+        # primary image as the cover explicitly).
+        first_cover = next(
+            (im for im in imgs_ if isinstance(im, dict) and im.get("is_cover") is True),
+            None,
+        )
+        for im in ([first_cover] if first_cover else []) + [im for im in imgs_ if im is not first_cover]:
+            if isinstance(im, dict):
+                _canon = _safe_cover(im.get("image_url")) or _safe_cover(im.get("card_url")) or _safe_cover(im.get("thumb_url"))
+                if _canon:
+                    break
+    if not _canon:
+        # Final fallback: oldest approved community upload (matches markers).
+        for u in community_uploads:
+            _canon = _safe_cover(u.get("image_url"))
+            if _canon:
+                break
+    view["cover_image_url"] = _canon
 
     # --- Seasonal timeline ---
     seasonal_timeline: Dict[str, list] = {"spring": [], "summer": [], "fall": [], "winter": []}
