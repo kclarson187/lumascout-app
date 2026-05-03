@@ -36,6 +36,7 @@ import Animated, { FadeIn, FadeOut, Layout } from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
 import { api } from '../../../src/api';
 import { uploadImageAssetWithProgress, UploadedImage } from '../../../src/utils/upload-image';
+import { normalizePickedImages } from '../../../src/utils/normalize-image';
 import { colors, font, space, radii } from '../../../src/theme';
 import { CONDITION_TAGS } from '../../../src/components/FreshnessBits';
 import KeyboardSafe from '../../../src/components/KeyboardSafe';
@@ -219,8 +220,22 @@ export default function UploadScreen() {
         selectionLimit: remainingSlots,
       });
       if (r.canceled || !r.assets?.length) return;
+      // Track C (May 2026): normalize EXIF orientation client-side so
+      // the local preview thumbnail matches what the server will save.
+      // Backend still runs its own ImageOps.exif_transpose as a belt-
+      // and-suspenders safety net — this step just makes sure the UI
+      // never shows a sideways preview on Android / web / HEIC paths.
+      const normalized = await normalizePickedImages(
+        r.assets.slice(0, remainingSlots).map((a) => ({
+          uri: a.uri,
+          mimeType: a.mimeType,
+          fileName: a.fileName,
+          width: a.width,
+          height: a.height,
+        })),
+      );
       const now = Date.now();
-      const toAdd: QItem[] = r.assets.slice(0, remainingSlots).map((a, idx) => ({
+      const toAdd: QItem[] = normalized.map((a, idx) => ({
         id: `${newId()}_${idx}`,
         localUri: a.uri,
         mimeType: a.mimeType,

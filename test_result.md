@@ -12,6 +12,66 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Track C — EXIF orientation preservation: stop sideways photos in upload preview + ensure consistency end-to-end"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/src/utils/normalize-image.ts (NEW — `normalizePickedImage` / `normalizePickedImages` helpers that run pickeds through expo-image-manipulator to bake EXIF orientation into pixels and strip metadata before upload),
+      /app/frontend/app/spot/[id]/upload.tsx (pickPhotos now awaits normalizePickedImages before adding items to the queue — thumbnails and upload payload both already-oriented)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          INVESTIGATION
+          • Backend `routes/uploads.py` line 182: ALREADY calls
+            `ImageOps.exif_transpose(img)` before persisting. So every
+            NEWLY-uploaded photo lands on disk correctly oriented.
+          • Backend `routes/img_proxy.py` line 195-196: ALSO calls
+            `exif_transpose` on every serve. So LEGACY photos (uploaded
+            before transpose was added) come out correctly oriented when
+            served through /api/img?u=...
+          • Frontend `src/utils/image-url.ts` routes ALL photo-finder /
+            emergentagent-hosted images through the `/api/img` proxy at
+            render time (no caller passes `size=0`).
+          
+          ⇒ Server & proxy paths were already correct. The only
+          remaining gap was the LOCAL PREVIEW in the upload queue.
+          React Native's <Image> with a picker-returned URI doesn't
+          always apply EXIF orientation — Android & some HEIC paths
+          will render sideways even though the eventually-uploaded
+          file is fine.
+          
+          FIX
+          • New helper `normalize-image.ts` calls
+            `ImageManipulator.manipulateAsync(uri, [], { compress: 0.92,
+            format: JPEG })` on every picked asset. Empty transform +
+            JPEG re-save bakes EXIF rotation into pixels and strips
+            metadata (Pillow backend still downscales 2048 q=85 so we
+            aren't double-compressing noticeably).
+          • Applied serially (not parallel) — manipulator is CPU-heavy
+            on-device; parallel spikes memory and slows throughput.
+          • Falls back to the raw URI on any manipulator error (rare,
+            usually a corrupt HEIC); the server's `exif_transpose` is
+            still a safety net for that edge.
+          • `upload.tsx` pickPhotos pipeline now:
+              pick → normalize (new) → enqueue → upload → submit
+          
+          RESULT
+          Queue thumbnails now match exactly what the server will
+          persist. No more "preview is sideways but the uploaded photo
+          is correct" confusion.
+          
+          BUILD / LINT
+          • Metro bundled cleanly after restart.
+          • ESLint: 0 errors, 0 warnings on both files.
+          • No backend changes required — server-side paths were
+            already correct.
+
+
+
   - task: "Track B — Upload UI rebuild (Add Recent Photos): sequential uploads, per-photo progress, auto-retry + manual retry, reorder, cancel"
     implemented: true
     working: "NA"
