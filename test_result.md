@@ -16,6 +16,44 @@
     implemented: true
     working: "NA"
 
+  - task: "v2.0.25 refactor — spot/[id].tsx split into hook + styles + atoms (1699 → 1136 lines, 33% reduction)"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/src/components/spot-detail/useSpotDetail.ts (NEW — 247 lines. Owns every piece of async state: spot, loading, communityUploads, errorCategory, orderedImages, galleryIdx. Preserves all v2.0.20 behaviours: in-flight dedup via inflightRef, auto-retry with exponential backoff (0/1s/2s/4s) on recoverable categories only, fire-and-forget community-uploads fetch, useFocusEffect reload on screen re-focus, galleryIdx auto-clamp when orderedImages shrinks. Exposes setSpot/setCommunityUploads so the screen can still do optimistic UI for admin photo delete + post-upload splice),
+      /app/frontend/src/components/spot-detail/styles.ts (NEW — 382 lines. Extracted both StyleSheets (main `styles` + destructive-action `sadStyles`) + the W screen-width constant. Zero behavioural change; pure relocation),
+      /app/frontend/src/components/spot-detail/atoms.tsx (NEW — 81 lines. InfoCard / LogisticsRow / Badge leaf components that were module-private helpers at the bottom of [id].tsx. Shared styles imported from ./styles so visual changes remain single-file edits),
+      /app/frontend/app/spot/[id].tsx (refactored — was 1699 lines, now 1136 lines. Now focused on orchestration + render only. Removed: useState/useRef/useEffect/useMemo/useCallback for async state, the 200-line load() retry ladder, the 50-line orderedImages memo, the focus-effect reload, the galleryIdx clamp, the module-private InfoCard/LogisticsRow/Badge defs, the 350-line StyleSheet, the W Dimensions call. Kept: UI state (atcOpen, reportOpen, shotListOpen, deleteOpen), onShare handler, onDeletePhoto optimistic handler, submitSuperDelete, initialCoverUrl decode memo, spotPublicUrl memo, and the entire render tree)
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          v2.0.25 refactor. Extracted spot/[id].tsx's data-fetching,
+          styles, and atom components into a dedicated spot-detail/
+          bundle. No behavioural changes \u2014 every preserved code path
+          is documented inline in useSpotDetail.ts for future maintainers.
+
+          Verification:
+            \u2022 TypeScript: `tsc --noEmit` on the three new files \u2014 clean.
+              The 2 remaining errors in [id].tsx (font.serif, spot_id
+              undefined) are pre-existing and identical to pre-refactor
+              output.
+            \u2022 Expo bundle: HTTP 200 at /spot/:id route, 65KB in 0.78s
+              after expo restart. No new bundle errors.
+            \u2022 No regressions in other screens \u2014 only [id].tsx imports
+              changed.
+
+          Note: during the refactor we also discovered that
+          `react-native-worklets@0.5.1` was listed in package.json but
+          NOT installed in node_modules, causing expo to crash-loop on
+          restart (strict dep validation in newer Expo SDK). Ran
+          `yarn add react-native-worklets@0.5.1` to repair \u2014 this was
+          a pre-existing environment issue exposed by the restart, NOT
+          introduced by the refactor.
+
   - task: "v2.0.25 — CDN Cache-Control workaround: client-side disk cache via expo-image + backend ETag/Last-Modified/304 hardening"
     implemented: true
     working: true

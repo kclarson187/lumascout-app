@@ -1,11 +1,10 @@
-import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';import {
+import React, { useState, useCallback, useMemo } from 'react';import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   Image,
   TouchableOpacity,
-  Dimensions,
   Alert,
   Share,
   Linking,
@@ -13,7 +12,7 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
   Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useLocalSearchParams, useFocusEffect } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import * as ExpoLinking from 'expo-linking';
 import Head from 'expo-router/head';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -22,7 +21,7 @@ import {
   Camera, Car, Accessibility, Users, Shield, DogIcon, BabyIcon, TicketIcon, ClockIcon, CheckCircle,
   FolderPlus, MessageSquarePlus, Navigation, Wand2, ChevronRight, Trash2, PenLine, X,
 } from 'lucide-react-native';
-import { api, formatApiError, categorizeApiError, type ApiErrorCategory } from '../../src/api';
+import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 import { formatDistance } from '../../src/utils/distance';
@@ -48,7 +47,13 @@ import ScoutAICard from '../../src/components/ScoutAICard';
 import DeleteConfirmSheet, { SPOT_DELETE_PRESETS } from '../../src/components/DeleteConfirmSheet';
 import { goldenHourLabel } from '../../src/utils/sun';
 
-const { width: W } = Dimensions.get('window');
+// v2.0.25 refactor — data-fetching + ordering + retry logic lives in
+// useSpotDetail; style sheet + shared atoms (InfoCard / LogisticsRow /
+// Badge) live in the spot-detail bundle. The screen component below
+// is now focused on orchestration + render only.
+import { useSpotDetail } from '../../src/components/spot-detail/useSpotDetail';
+import { styles, sadStyles, W } from '../../src/components/spot-detail/styles';
+import { InfoCard, LogisticsRow, Badge } from '../../src/components/spot-detail/atoms';
 
 import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
 import SectionErrorBoundary from '../../src/components/SectionErrorBoundary';
@@ -90,218 +95,29 @@ function SpotDetailImpl() {
   const id = String(Array.isArray(rawId) ? rawId[0] || '' : rawId || '').trim();
   const { user } = useAuth();
   const isAdminUser = user?.role === 'admin' || user?.role === 'super_admin';
-  const [spot, setSpot] = useState<any | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [galleryIdx, setGalleryIdx] = useState(0);
+
+  // v2.0.25 refactor — all async state (spot / loading / community
+  // uploads / error category / ordered images / galleryIdx clamping +
+  // retry + focus-refresh) lives in the hook. The screen owns only
+  // the lightweight UI state below (sheets open/closed, etc.) and the
+  // handlers that call into the hook's setters for optimistic updates.
+  const {
+    spot,
+    setSpot,
+    loading,
+    galleryIdx,
+    setGalleryIdx,
+    errorCategory,
+    orderedImages,
+    communityUploads,
+    setCommunityUploads,
+    reload: load,
+  } = useSpotDetail(id, initialCoverUrl);
+
   const [atcOpen, setAtcOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [shotListOpen, setShotListOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  // Hero Carousel CR (June 2025 v2.0.20) — community uploads now feed
-  // the hero pager. We fetch /spots/:id/uploads alongside the spot
-  // detail so photographers can swipe through every angle/shot of a
-  // location, not just the owner-uploaded primary images. The same
-  // payload is forwarded down to <CommunityUploadsSection initial={…}>
-  // to avoid a duplicate network round-trip.
-  const [communityUploads, setCommunityUploads] = useState<any[]>([]);
-  // Spot Detail timeout / retry hardening — June 2025.
-  // We track a recoverable error category so the UI can render an
-  // inline retry state instead of bouncing the user back to Explore
-  // (which felt like being "kicked out / logged out"). A 404/410
-  // still redirects (the spot is genuinely gone), but timeouts /
-  // network errors / 5xx now show a Retry button.
-  const [errorCategory, setErrorCategory] = useState<ApiErrorCategory | null>(null);
-  // Request dedup — tap-spam guard. Multiple rapid taps on the same
-  // spot ID share a single in-flight fetch promise.
-  const inflightRef = useRef<Promise<any> | null>(null);
-
-  const load = useCallback(async () => {
-    if (!id) return;
-    // Dedup: if a load is already in-flight for this id, attach to it
-    // instead of firing a duplicate request.
-    if (inflightRef.current) {
-      try { await inflightRef.current; } catch {}
-      return;
-    }
-    setLoading(true);
-    setErrorCategory(null);
-
-    // CR Item 5 (May 2026): Auto-retry with exponential backoff before
-    // surfacing any error UI. Three attempts at 1s / 2s / 4s back-offs
-    // (total worst-case ≈ 7s + 18s timeout × 3 = 61s, but the typical
-    // path is "first attempt succeeds in <1s"). We only retry on the
-    // categories that are actually recoverable: timeout, network,
-    // server (5xx), unknown. We do NOT retry 401/402/403/404/410 —
-    // those are deterministic and a retry just wastes the user's time.
-    const RETRYABLE: ApiErrorCategory[] = ['timeout', 'network', 'server', 'unknown'];
-    const BACKOFFS_MS = [0, 1000, 2000, 4000]; // 4 attempts total; first is immediate
-    let lastError: any = null;
-    let lastCat: ApiErrorCategory | null = null;
-    for (let attempt = 0; attempt < BACKOFFS_MS.length; attempt++) {
-      if (BACKOFFS_MS[attempt] > 0) {
-        try {
-          // eslint-disable-next-line no-console
-          console.warn('[spot-detail] retrying', { id, attempt, delay: BACKOFFS_MS[attempt] });
-        } catch {}
-        await new Promise(r => setTimeout(r, BACKOFFS_MS[attempt]));
-      }
-      const promise = api.get(`/spots/${id}`, undefined, { timeout: 18000 });
-      inflightRef.current = promise;
-      try {
-        const data = await promise;
-        setSpot(data);
-        setErrorCategory(null);
-        inflightRef.current = null;
-        setLoading(false);
-        // Hero Carousel CR (June 2025 v2.0.20) — fire-and-forget fetch
-        // for community uploads. Failures are non-fatal: the hero
-        // carousel still has the owner's primary images and will just
-        // skip the community appendix this load. Same payload is
-        // forwarded to <CommunityUploadsSection initial={…}>.
-        api.get(`/spots/${id}/uploads`, { limit: 24 })
-          .then((r: any) => {
-            const items = Array.isArray(r?.items) ? r.items : [];
-            setCommunityUploads(items);
-          })
-          .catch(() => {
-            // Network error — leave whatever we already have. The
-            // CommunityUploadsSection will retry on its own when it
-            // mounts without an `initial` prop fallback.
-          });
-        return;
-      } catch (e: any) {
-        lastError = e;
-        lastCat = categorizeApiError(e);
-        try {
-          // eslint-disable-next-line no-console
-          console.warn('[spot-detail]', lastCat, {
-            id, attempt,
-            status: e?.response?.status,
-            code: e?.code,
-            message: e?.message,
-          });
-        } catch {}
-        // Non-retryable categories — break immediately so we don't
-        // burn the user's bandwidth/battery on doomed retries.
-        if (!RETRYABLE.includes(lastCat)) break;
-      } finally {
-        inflightRef.current = null;
-      }
-    }
-
-    // All retries exhausted (or we hit a non-retryable category).
-    // Apply the same UX branching as before, just sourced from
-    // the final attempt's category.
-    setLoading(false);
-    if (lastCat === 'missing') {
-      Alert.alert(
-        'Spot no longer available',
-        'This location has been removed or is no longer public.',
-        [{
-          text: 'OK',
-          onPress: () => {
-            if (router.canGoBack()) router.back();
-            else router.replace('/(tabs)/explore');
-          },
-        }],
-      );
-      return;
-    }
-    if (lastCat === 'auth') { setErrorCategory('auth'); return; }
-    if (lastCat === 'paywall') { setErrorCategory('paywall'); return; }
-    setErrorCategory(lastCat);
-  }, [id]);
-
-  useEffect(() => { load(); }, [load]);
-
-  // CRITICAL FIX (Apr 2026 #2 — second pass): compute the *effective*
-  // ordered images EXACTLY ONCE and use it for the hero carousel, the
-  // dot indicators, and any other per-image logic. Previously the dots
-  // still pointed at the raw `spot.images` order while the carousel
-  // was reordered, which desynchronised the dot count / highlight. We
-  // also handle the edge case where `hero_cover_image_url` exists but
-  // the matching object isn't in `spot.images` (e.g. override points at
-  // a UGC upload not yet in the gallery array) — in that case we
-  // PREPEND a synthetic image object so the cover still renders first.
-  const orderedImages = useMemo(() => {
-    // Cover Source-of-Truth CR (v2.0.24) — during the <1s window while
-    // /spots/:id is still fetching, render the map-preview cover URL
-    // from the route param so the hero carousel's first slide appears
-    // instantly. This is replaced by the canonical server response as
-    // soon as it lands.
-    if (!spot && initialCoverUrl) {
-      return [{ image_url: initialCoverUrl, source: 'initial_cover_from_map' }];
-    }
-    const all: any[] = Array.isArray(spot?.images) ? spot.images : [];
-    // v2.0.24 Cover Source-of-Truth CR — prefer the canonical
-    // `cover_image_url` field that matches /api/spots/markers exactly.
-    // Fall back to the legacy hero_cover_image_url when the older
-    // field path returned a value. This ensures the hero carousel's
-    // slide 0 is the SAME photo the user just saw in the map preview.
-    const coverUrl: string | null =
-      spot?.cover_image_url || spot?.hero_cover_image_url || null;
-
-    // Step 1 — order primary owner-uploaded images with cover-first.
-    let primary: any[] = all;
-    if (coverUrl) {
-      const match = all.find((im: any) => im?.image_url === coverUrl);
-      if (match) {
-        primary = [match, ...all.filter((im: any) => im?.image_url !== coverUrl)];
-      } else if (all.length > 0) {
-        // Cover lives outside images[] (e.g. pulled from community
-        // uploads by the backend rotation logic). Prepend a synthetic
-        // entry so the hero pager still starts on the map-preview image.
-        primary = [{ image_url: coverUrl, source: 'cover_override' }, ...all];
-      } else {
-        // No primary images at all — the cover IS our only primary.
-        primary = [{ image_url: coverUrl, source: 'cover_override' }];
-      }
-    }
-
-    // Step 2 — append community-uploaded photos (Hero Carousel CR,
-    // June 2025 v2.0.20). Photographers want to see EVERY angle of a
-    // location in the hero pager, not just the owner's two shots.
-    // We dedupe against the primary URLs so the same photo doesn't
-    // appear twice if a community upload happens to be the same URL
-    // as a primary image (rare but possible after admin re-imports).
-    const seen = new Set<string>(
-      primary.map((im: any) => im?.image_url).filter((u: any) => typeof u === 'string'),
-    );
-    const community = (Array.isArray(communityUploads) ? communityUploads : [])
-      .filter((u: any) => u && typeof u.image_url === 'string' && !seen.has(u.image_url))
-      .map((u: any) => ({
-        image_url: u.image_url,
-        source: 'community_upload',
-        upload_id: u.upload_id,
-        contributor: u.contributor,
-      }));
-
-    return [...primary, ...community];
-  }, [spot, spot?.images, spot?.hero_cover_image_url, spot?.cover_image_url, communityUploads, initialCoverUrl]);
-
-  // Clamp the active gallery index whenever the ordered array changes
-  // so swiping never lands on a phantom slide after the cover is
-  // re-selected.
-  useEffect(() => {
-    if (galleryIdx >= orderedImages.length) {
-      setGalleryIdx(0);
-    }
-  }, [orderedImages.length]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // BATCH 2 polish (Apr 2026): re-fetch whenever the screen regains
-  // focus. This is the fix for "I changed the cover photo but the
-  // detail page still shows the old one" — previously the screen only
-  // loaded once on mount, so returning from the cover editor showed a
-  // stale hero. Same fix also helps when admins approve edit requests
-  // and then swipe back to see the change live.
-  useFocusEffect(
-    useCallback(() => {
-      if (id) {
-        load();
-      }
-      return undefined;
-    }, [id, load]),
-  );
 
   const toggleSave = async () => {
     if (!user) return router.push('/(auth)/login');
@@ -1318,382 +1134,3 @@ function SpotDetailImpl() {
     </View>
   );
 }
-
-function InfoCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
-  return (
-    <View style={styles.infoCard}>
-      {icon}
-      <Text style={styles.infoLabel}>{label}</Text>
-      <Text style={styles.infoValue}>{value}</Text>
-    </View>
-  );
-}
-
-function LogisticsRow({ icon, label, text }: { icon: React.ReactNode; label: string; text: string }) {
-  return (
-    <View style={styles.logRow}>
-      <View style={styles.logIcon}>{icon}</View>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.logLabel}>{label}</Text>
-        <Text style={styles.logText}>{text}</Text>
-      </View>
-    </View>
-  );
-}
-
-function Badge({ label }: { label: string }) {
-  return (
-    <View style={styles.badge}>
-      <Text style={styles.badgeText}>{label}</Text>
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  heroWrap: { width: W, height: W, position: 'relative', backgroundColor: colors.surface2 },
-  heroImg: { width: W, height: W },
-  heroGradTop: { position: 'absolute', top: 0, left: 0, right: 0, height: 140 },
-  heroGradBottom: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 120 },
-  heroHead: {
-    position: 'absolute', top: 0, left: 0, right: 0,
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingHorizontal: space.xl, paddingTop: space.sm,
-  },
-  headBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center',
-  },
-  headBtnAdmin: {
-    backgroundColor: colors.primary,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.25)',
-  },
-  dots: {
-    position: 'absolute', bottom: space.md, alignSelf: 'center',
-    flexDirection: 'row', gap: 4,
-  },
-  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.4)' },
-  dotActive: { width: 20, backgroundColor: colors.primary },
-  // CR #1 Item 2 (June 2025): minimal "2 / 6" hero counter. Replaces
-  // the dot rail so the gallery feels premium and glanceable at a
-  // glance — no cognitive load counting dots on 10-image galleries.
-  heroCounter: {
-    position: 'absolute',
-    bottom: space.md,
-    alignSelf: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.22)',
-  },
-  heroCounterTxt: {
-    color: '#fff',
-    fontFamily: font.bodySemibold,
-    fontSize: 11,
-    letterSpacing: 0.5,
-  },
-  // Hero Carousel CR (June 2025 v2.0.20) — community attribution pill.
-  // Bottom-left corner, well clear of the admin DELETE pill (which
-  // sits at bottom: space.lg + 16, left: space.md). We position
-  // ours at bottom: space.md, left: space.md so when both happen
-  // to coexist on the same slide (community photo + admin) the
-  // attribution chip sits BELOW the delete pill. In the more common
-  // case (no admin) it sits cleanly in the bottom-left corner.
-  heroCommunityPill: {
-    position: 'absolute',
-    bottom: space.md,
-    left: space.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
-    backgroundColor: 'rgba(0,0,0,0.62)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.28)',
-    maxWidth: '70%',
-  },
-  heroCommunityPillTxt: {
-    color: '#fff',
-    fontFamily: font.bodySemibold,
-    fontSize: 11,
-    letterSpacing: 0.3,
-  },
-  // May 2026 batch #4 update #2.1 — admin photo DELETE pill.
-  //
-  // Moved from top-right to BOTTOM-LEFT (May 2026) so it never
-  // collides with the share / report / wand / bookmark buttons in
-  // the header row. Positioned above the dots indicator with an extra
-  // 12px margin so the two don't compete visually.
-  //
-  // Clean + professional: slightly smaller pill (32px high), softer
-  // red (#dc2626 at 92% alpha), tighter typography. Hairline white
-  // border + subtle drop shadow lift it off any photo.
-  photoDeletePill: {
-    position: 'absolute',
-    bottom: space.lg + 16,      // above the dots row
-    left: space.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 18,
-    backgroundColor: 'rgba(220, 38, 38, 0.92)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.55)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.35,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  photoDeletePillTxt: {
-    color: '#fff',
-    fontFamily: font.bodyBold,
-    fontSize: 11,
-    letterSpacing: 0.9,
-  },
-  // ADMIN context tag — mirrored on BOTTOM-RIGHT. Gold-tinted,
-  // informational only (non-tappable). Height matched to the pill
-  // so both sit cleanly on the same baseline above the dots row.
-  photoAdminTag: {
-    position: 'absolute',
-    bottom: space.lg + 16,
-    right: space.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 14,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(245,166,35,0.45)',
-  },
-  photoAdminTagTxt: {
-    color: colors.primary,
-    fontFamily: font.bodyBold,
-    fontSize: 10.5,
-    letterSpacing: 0.6,
-  },
-  content: { padding: space.xl, gap: 6 },
-  title: { color: colors.text, fontFamily: font.display, fontSize: 32, letterSpacing: -0.5, lineHeight: 38 },
-  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
-  meta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13 },
-  onSiteBadge: {
-    alignSelf: 'flex-start', marginTop: 6,
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: 8, paddingVertical: 4,
-    borderRadius: radii.sm,
-    backgroundColor: '#16a34a',
-  },
-  onSiteBadgeTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.4 },
-  tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.md },
-  tag: { backgroundColor: colors.surface2, paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.pill },
-  tagText: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.3 },
-  // PRD #3 Golden-hour window
-  goldenWindow: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    marginTop: space.md,
-    paddingHorizontal: space.md, paddingVertical: 12,
-    backgroundColor: 'rgba(245,166,35,0.08)',
-    borderColor: 'rgba(245,166,35,0.38)', borderWidth: 1,
-    borderRadius: radii.md,
-  },
-  goldenIcon: {
-    width: 34, height: 34, borderRadius: 17,
-    backgroundColor: 'rgba(245,166,35,0.18)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  goldenTitle: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 15, letterSpacing: 0.2 },
-  goldenSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, marginTop: 2 },
-  // May 2026 — Best light notes card (primary: shown when `best_light_notes`
-  // exists). Intentionally softer than the golden-hour window: this is
-  // uploader-authored prose about *how the light behaves at this spot*
-  // (e.g. "Sidelight from 8-10am hits the east cliff face; shadow falls
-  // after noon"), so we use a neutral info-card treatment rather than the
-  // high-contrast amber of the daily golden-hour computation.
-  bestLightCard: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
-    marginTop: space.md,
-    paddingHorizontal: space.md, paddingVertical: 12,
-    backgroundColor: colors.surface1,
-    borderColor: colors.border, borderWidth: 1,
-    borderRadius: radii.md,
-  },
-  bestLightIcon: {
-    width: 28, height: 28, borderRadius: 14,
-    backgroundColor: 'rgba(245,166,35,0.14)',
-    alignItems: 'center', justifyContent: 'center',
-    marginTop: 1,
-  },
-  bestLightLabel: {
-    color: colors.textSecondary, fontFamily: font.bodyMedium,
-    fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.6,
-  },
-  bestLightBody: {
-    color: colors.text, fontFamily: font.body,
-    fontSize: 14, lineHeight: 20, marginTop: 3,
-  },
-  // Legacy fallback chip — shown only when `best_light_notes` is absent.
-  bestTimeChipRow: {
-    flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.md,
-  },
-  bestTimeChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: 10, paddingVertical: 5,
-    borderRadius: radii.pill,
-    backgroundColor: 'rgba(245,166,35,0.12)',
-    borderWidth: 1, borderColor: 'rgba(245,166,35,0.35)',
-  },
-  bestTimeChipTxt: {
-    color: colors.primary, fontFamily: font.bodyMedium,
-    fontSize: 11, letterSpacing: 0.3, textTransform: 'capitalize',
-  },
-  ownerRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    marginTop: space.xl, padding: space.md,
-    backgroundColor: colors.surface1, borderRadius: radii.md,
-    borderColor: colors.border, borderWidth: 1,
-  },
-  ownerAvatar: { width: 40, height: 40, borderRadius: 20 },
-  desc: { color: colors.textSecondary, fontFamily: font.body, fontSize: 15, lineHeight: 22, marginTop: space.lg },
-  privacyNote: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: space.md,
-    padding: space.md, backgroundColor: 'rgba(96,165,250,0.1)',
-    borderColor: 'rgba(96,165,250,0.3)', borderWidth: 1, borderRadius: radii.md,
-  },
-  privacyNoteTxt: { color: colors.info, fontFamily: font.bodyMedium, fontSize: 12, flex: 1, lineHeight: 16 },
-  directionsBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    marginTop: space.md, paddingHorizontal: space.md, paddingVertical: 12,
-    backgroundColor: colors.primary, borderRadius: radii.md,
-  },
-  directionsBtnTitle: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 },
-  directionsBtnSub: { color: 'rgba(255,255,255,0.82)', fontFamily: font.bodyMedium, fontSize: 11, marginTop: 2 },
-  aiBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    marginTop: space.sm, paddingHorizontal: space.md, paddingVertical: 12,
-    backgroundColor: colors.surface1, borderRadius: radii.md,
-    borderWidth: 1, borderColor: 'rgba(245,166,35,0.35)',
-  },
-  aiIconBubble: {
-    width: 32, height: 32, borderRadius: 16,
-    backgroundColor: 'rgba(245,166,35,0.15)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  aiBtnTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
-  aiBtnSub: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, marginTop: 2 },
-  sectionH: { color: colors.text, fontFamily: font.display, fontSize: 20, marginTop: space.xl, letterSpacing: -0.2 },
-  sectionHeadRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginTop: space.xl },
-  sectionHsub: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
-  // Community CTAs (Feature 9) — primary photo upload + secondary text update.
-  communityCtaRow: { flexDirection: 'row', gap: 8, marginTop: space.md, marginBottom: space.sm },
-  communityCtaPrimary: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderRadius: radii.md, backgroundColor: colors.primary },
-  communityCtaPrimaryTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 13 },
-  communityCtaSecondary: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderRadius: radii.md, backgroundColor: colors.surface1, borderWidth: 1, borderColor: 'rgba(245,166,35,0.4)' },
-  communityCtaSecondaryTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 13 },
-  scoreGrid: {
-    flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: space.md,
-    padding: space.lg, backgroundColor: colors.surface1, borderRadius: radii.lg,
-    borderColor: colors.border, borderWidth: 1, justifyContent: 'space-between',
-  },
-  infoRow: { flexDirection: 'row', gap: 8, marginTop: space.md, flexWrap: 'wrap' },
-  infoCard: {
-    flex: 1, minWidth: '22%', backgroundColor: colors.surface1,
-    borderColor: colors.border, borderWidth: 1, padding: space.md,
-    borderRadius: radii.md, gap: 4, alignItems: 'flex-start',
-  },
-  infoLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.6 },
-  infoValue: { color: colors.text, fontFamily: font.bodyBold, fontSize: 15 },
-  logRow: {
-    flexDirection: 'row', gap: 12, alignItems: 'flex-start',
-    padding: space.md, backgroundColor: colors.surface1,
-    borderColor: colors.border, borderWidth: 1, borderRadius: radii.md,
-  },
-  logIcon: {
-    width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(245,166,35,0.12)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  logLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 },
-  logText: { color: colors.text, fontFamily: font.body, fontSize: 13, lineHeight: 18, marginTop: 2 },
-  badgesRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.md },
-  badge: {
-    backgroundColor: 'rgba(16,185,129,0.15)',
-    paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.pill,
-    borderColor: 'rgba(16,185,129,0.4)', borderWidth: 1,
-  },
-  badgeText: { color: colors.success, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.3 },
-  reviewCard: {
-    padding: space.md, backgroundColor: colors.surface1,
-    borderColor: colors.border, borderWidth: 1, borderRadius: radii.md,
-  },
-  actionBar: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    flexDirection: 'row', gap: 8,
-    paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.xl,
-    backgroundColor: 'rgba(10,10,10,0.95)',
-    borderTopWidth: 1, borderTopColor: colors.border,
-  },
-  actBtn: {
-    flex: 1, flexDirection: 'row', gap: 6, alignItems: 'center', justifyContent: 'center',
-    paddingVertical: 12, borderRadius: radii.md,
-    backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border,
-  },
-  actBtnPrimary: { backgroundColor: colors.primary, borderColor: colors.primary, flex: 1.4 },
-  actTxt: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
-  pendingBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    padding: space.md, borderRadius: radii.md,
-    backgroundColor: 'rgba(245,166,35,0.08)',
-    borderColor: colors.primary, borderWidth: 1,
-    marginBottom: space.md,
-  },
-  pendingDot: {
-    width: 10, height: 10, borderRadius: 5, backgroundColor: colors.primary,
-    marginLeft: 4,
-  },
-  pendingTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
-  pendingBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17, marginTop: 2 },
-  requestEditBtn: { alignSelf: 'flex-start', marginTop: 10, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radii.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface1 },
-  requestEditTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 13 },
-});
-
-const sadStyles = StyleSheet.create({
-  dangerZone: {
-    marginTop: space.xl,
-    backgroundColor: 'rgba(255,64,90,0.06)',
-    borderWidth: 1, borderColor: 'rgba(255,64,90,0.35)',
-    borderRadius: radii.lg,
-    padding: space.md,
-    gap: space.sm,
-  },
-  dangerHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  dangerTitle: { color: colors.secondary, fontFamily: font.bodyBold, fontSize: 12, letterSpacing: 0.4, textTransform: 'uppercase' },
-  dangerBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17 },
-  dangerBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    backgroundColor: colors.secondary, paddingVertical: 12, borderRadius: radii.md,
-    alignSelf: 'flex-start', paddingHorizontal: 14,
-  },
-  dangerBtnTxt: { color: '#fff', fontFamily: font.bodyBold, fontSize: 13 },
-  photoMgrCard: {
-    marginTop: space.xl,
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: colors.surface1,
-    borderWidth: 1, borderColor: 'rgba(245,166,35,0.35)',
-    borderRadius: radii.lg,
-    padding: space.md,
-  },
-  photoMgrIcon: {
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: 'rgba(245,166,35,0.14)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  photoMgrTitle: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 14 },
-  photoMgrSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2, lineHeight: 16 },
-});
