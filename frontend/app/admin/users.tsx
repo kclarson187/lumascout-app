@@ -9,7 +9,7 @@ import { isAdmin } from '../../src/utils/entitlements';
 import { colors, font, space, radii } from '../../src/theme';
 import VerifiedBadge from '../../src/components/VerifiedBadge';
 
-const ROLE_FILTERS = ['all', 'user', 'moderator', 'admin', 'super_admin'];
+const ROLE_FILTERS = ['all', 'user', 'founding_scout', 'moderator', 'support', 'admin', 'super_admin'];
 const PLAN_FILTERS = ['all', 'free', 'pro', 'elite', 'comp_pro', 'comp_elite'];
 const STATUS_FILTERS = ['all', 'active', 'suspended'];
 
