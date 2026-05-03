@@ -8,79 +8,18 @@ import { useAuth } from '../../../src/auth';
 import { colors, font, space, radii } from '../../../src/theme';
 import VerifiedBadge from '../../../src/components/VerifiedBadge';
 import DeleteConfirmSheet, { USER_DELETE_PRESETS } from '../../../src/components/DeleteConfirmSheet';
+import FoundingScoutBadge from '../../../src/components/FoundingScoutBadge';
+import { ROLE_OPTIONS, ROLE_DEFS, canAssignRole } from '../../../src/utils/roles';
 
 const PLAN_OPTIONS = ['free', 'pro', 'elite', 'comp_pro', 'comp_elite', 'trial_pro', 'trial_elite'];
-const ROLE_OPTIONS = ['user', 'moderator', 'support', 'admin', 'super_admin'];
 
 /**
- * Canonical role definitions — single source of truth for UI copy.
- * Mirror the backend `ROLE_LEVELS` hierarchy (user:0, moderator/support:1,
- * admin:3, super_admin:4). Keep descriptions short enough for mobile chips.
+ * Role metadata (copy, colors, hierarchy) lives in `src/utils/roles.ts`
+ * as the single source of truth — imported as ROLE_DEFS / ROLE_OPTIONS
+ * above. Founding Scout sits between User and Moderator, admin and
+ * super_admin can both assign it, and the badge UI renders the
+ * uploaded honorary artwork (see FoundingScoutBadge).
  */
-const ROLE_DEFS: Record<string, { label: string; emoji: string; tagline: string; powers: string[]; color: string }> = {
-  user: {
-    label: 'User',
-    emoji: '👤',
-    tagline: 'Standard photographer account',
-    color: '#6b7280',
-    powers: [
-      'Post, comment, save spots, message other users',
-      'Report content for moderation review',
-      'No access to admin tools',
-    ],
-  },
-  moderator: {
-    label: 'Moderator',
-    emoji: '🛡️',
-    tagline: 'Content policeperson — keeps the feed clean',
-    color: '#3b82f6',
-    powers: [
-      'Hide / restore / pin / feature / lock posts',
-      'Mark content as spam + resolve community reports',
-      'Approve or reject spots and community uploads',
-      'Cannot ban users, cannot hard-delete, cannot change roles',
-    ],
-  },
-  support: {
-    label: 'Support',
-    emoji: '🎧',
-    tagline: 'Read-heavy staff — helps users, rarely moderates',
-    color: '#14b8a6',
-    powers: [
-      'View user profiles + tickets + audit trails',
-      'Respond to support requests',
-      'Same moderation read-access as moderator, limited write',
-      'Cannot ban users or change roles',
-    ],
-  },
-  admin: {
-    label: 'Admin',
-    emoji: '⚙️',
-    tagline: 'Operational lead — manages staff + bulk actions',
-    color: '#f59e0b',
-    powers: [
-      'Everything moderators can do',
-      'Warn or suspend users (up to 365 days)',
-      'Bulk-moderate posts (up to 200 at a time)',
-      'Soft-delete posts + restore deleted content',
-      'Cannot ban or hard-delete — only super_admin',
-    ],
-  },
-  super_admin: {
-    label: 'Super Admin',
-    emoji: '👑',
-    tagline: 'Owner-tier — unrestricted, destructive powers',
-    color: '#ef4444',
-    powers: [
-      'Everything admins can do',
-      'Permanently ban user accounts',
-      'Hard-delete posts (physical deletion — unrecoverable)',
-      'Change user roles (promote / demote staff)',
-      'Edit platform settings, pricing, seed content',
-      'Only role that can grant or revoke admin/super_admin',
-    ],
-  },
-};
 
 export default function AdminUserDetail() {
   const { user: me } = useAuth();
@@ -265,6 +204,14 @@ export default function AdminUserDetail() {
 
         {/* Plan controls */}
         <Section title="Subscription plan">
+          {u.role === 'founding_scout' ? (
+            <View style={styles.fsCompBanner}>
+              <FoundingScoutBadge size={22} />
+              <Text style={styles.fsCompBannerTxt}>
+                Elite Access: Free via Founding Scout
+              </Text>
+            </View>
+          ) : null}
           <View style={styles.chipGrid}>
             {PLAN_OPTIONS.map((p) => (
               <TouchableOpacity
@@ -321,10 +268,11 @@ export default function AdminUserDetail() {
           </View>
         </Section>
 
-        {/* Role controls — super admin only */}
+        {/* Role controls — super admin full control; admin can assign
+            the honorary Founding Scout role only. */}
         <Section
           title="Role"
-          right={isSuperAdmin ? undefined : <Text style={styles.lockTxt}>super_admin only</Text>}
+          right={isSuperAdmin ? undefined : <Text style={styles.lockTxt}>admin = founding_scout · super_admin = all</Text>}
         >
           <Text style={styles.roleHelper}>
             Roles form a hierarchy — each level inherits the powers below it.
@@ -333,6 +281,11 @@ export default function AdminUserDetail() {
           <View style={styles.chipGrid}>
             {ROLE_OPTIONS.map((r) => {
               const def = ROLE_DEFS[r];
+              // Per-role authorization matches backend exactly:
+              // admin can flip user ↔ founding_scout; only super_admin
+              // can touch moderator/support/admin/super_admin.
+              const isAllowed = canAssignRole(me?.role, r);
+              const disabled = !isAllowed || isSelf;
               return (
                 <TouchableOpacity
                   key={r}
@@ -340,13 +293,16 @@ export default function AdminUserDetail() {
                   style={[
                     styles.optChip,
                     u.role === r && styles.optChipActive,
-                    (!isSuperAdmin || isSelf) && { opacity: 0.5 },
+                    disabled && { opacity: 0.5 },
                   ]}
-                  disabled={!isSuperAdmin || isSelf}
+                  disabled={disabled}
                   testID={`role-${r}`}
                 >
+                  {r === 'founding_scout' ? (
+                    <FoundingScoutBadge size={16} style={{ marginRight: 4 }} />
+                  ) : null}
                   <Text style={[styles.optChipTxt, u.role === r && styles.optChipTxtActive]}>
-                    {def?.emoji}  {def?.label || r}
+                    {r === 'founding_scout' ? '' : `${def?.emoji}  `}{def?.label || r}
                   </Text>
                 </TouchableOpacity>
               );
@@ -359,12 +315,17 @@ export default function AdminUserDetail() {
               const def = ROLE_DEFS[r];
               if (!def) return null;
               const isCurrent = u.role === r;
+              const isFS = r === 'founding_scout';
               return (
                 <View key={r} style={[styles.roleDefCard, isCurrent && styles.roleDefCardCurrent]}>
                   <View style={styles.roleDefHead}>
-                    <View style={[styles.roleDefDot, { backgroundColor: def.color }]} />
+                    {isFS ? (
+                      <FoundingScoutBadge size={28} style={{ marginRight: 6 }} />
+                    ) : (
+                      <View style={[styles.roleDefDot, { backgroundColor: def.color }]} />
+                    )}
                     <Text style={styles.roleDefLabel}>
-                      {def.emoji}  {def.label}
+                      {isFS ? '' : `${def.emoji}  `}{def.label}
                     </Text>
                     {isCurrent ? (
                       <View style={styles.roleDefCurrentPill}>
@@ -379,6 +340,13 @@ export default function AdminUserDetail() {
                       <Text style={styles.roleDefTxt}>{p}</Text>
                     </View>
                   ))}
+                  {isFS && isCurrent ? (
+                    <View style={styles.fsCompedRow}>
+                      <Text style={styles.fsCompedTxt}>
+                        Elite Access: Free via Founding Scout
+                      </Text>
+                    </View>
+                  ) : null}
                 </View>
               );
             })}
@@ -610,6 +578,38 @@ const styles = StyleSheet.create({
   roleDefRow: { flexDirection: 'row', gap: 6, alignItems: 'flex-start' },
   roleDefBullet: { color: colors.textTertiary, fontFamily: font.body, fontSize: 12, lineHeight: 17 },
   roleDefTxt: { flex: 1, color: colors.text, fontFamily: font.body, fontSize: 12, lineHeight: 17 },
+  fsCompedRow: {
+    marginTop: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: radii.sm,
+    backgroundColor: 'rgba(245,166,35,0.10)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.primary,
+  },
+  fsCompedTxt: {
+    color: colors.primary,
+    fontFamily: font.bodyBold,
+    fontSize: 11,
+    letterSpacing: 0.3,
+  },
+  fsCompBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: radii.md,
+    backgroundColor: 'rgba(245,166,35,0.10)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.primary,
+    marginBottom: space.sm,
+  },
+  fsCompBannerTxt: {
+    color: colors.primary,
+    fontFamily: font.bodyBold,
+    fontSize: 13,
+  },
   actBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 10, borderRadius: radii.md },
   actTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 13 },
   noteInputRow: { flexDirection: 'row', gap: 8 },

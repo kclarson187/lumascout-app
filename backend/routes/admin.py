@@ -1505,6 +1505,24 @@ async def admin_update_user(
             raise HTTPException(status_code=403, detail="Cannot modify a super_admin")
         if target.get("user_id") == me.get("user_id") and body.role != me.get("role"):
             raise HTTPException(status_code=400, detail="Admins cannot change their own role")
+        # Founding Scout honorary role — admin + super_admin can
+        # assign / remove (the require_role("admin") dep already enforces
+        # at least admin). Moderators and support cannot reach this
+        # endpoint because require_role("admin") rejects them at 403
+        # before we get here. Extra guard is defensive-in-depth in case
+        # the dep ever loosens.
+        if body.role == "founding_scout" and me.get("role") not in ("admin", "super_admin"):
+            raise HTTPException(
+                status_code=403,
+                detail="Only admin or super_admin can assign the Founding Scout role",
+            )
+        if target.get("role") == "founding_scout" and body.role != "founding_scout":
+            # Removing founding_scout from a user — same authorization.
+            if me.get("role") not in ("admin", "super_admin"):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only admin or super_admin can remove the Founding Scout role",
+                )
 
     if body.plan is not None and body.plan not in VALID_PLANS:
         raise HTTPException(status_code=400, detail=f"Invalid plan. Expected one of {sorted(VALID_PLANS)}")
@@ -1538,6 +1556,44 @@ async def admin_update_user(
 
     if not updates:
         return {"ok": True, "no_changes": True}
+
+    # Founding Scout comp-Elite side-effects (May 2026):
+    #   • Assigning `founding_scout` → if the target doesn't already
+    #     have a paid Elite plan, set plan to `comp_elite` and stamp
+    #     `comped_reason / comped_by / comped_started_at` so ops can
+    #     trace why Elite is active.
+    #   • Removing `founding_scout` → if current plan is comp_elite
+    #     AND comped_reason == "founding_scout" (i.e., WE granted it),
+    #     revert plan to `free` and clear the comp markers. Users with
+    #     a paid `elite` subscription or a separately-comped Elite
+    #     (e.g., reviewer comp) are left untouched.
+    if "role" in after:
+        new_role = after["role"]
+        prev_role = before.get("role")
+        if new_role == "founding_scout" and prev_role != "founding_scout":
+            # Grant comp Elite unless they already have a real Elite.
+            current_plan = target.get("plan") or "free"
+            if current_plan not in ("elite", "comp_elite"):
+                updates["plan"] = "comp_elite"
+                updates["comped_tier"] = "elite"
+                updates["comped_reason"] = "founding_scout"
+                updates["comped_by"] = me["user_id"]
+                updates["comped_started_at"] = utcnow()
+                # Keep `comp_expiration` untouched — Founding Scout is
+                # indefinite; plan_of() returns comp_elite for the role
+                # regardless of comp_expiration.
+                before.setdefault("plan", current_plan)
+                after["plan"] = "comp_elite"
+        elif prev_role == "founding_scout" and new_role != "founding_scout":
+            # Revoke comp only if WE granted it.
+            if target.get("plan") == "comp_elite" and target.get("comped_reason") == "founding_scout":
+                updates["plan"] = "free"
+                updates["comped_tier"] = None
+                updates["comped_reason"] = None
+                updates["comped_by"] = None
+                updates["comped_started_at"] = None
+                before.setdefault("plan", "comp_elite")
+                after["plan"] = "free"
 
     updates["updated_at"] = utcnow()
     updates["updated_by"] = me["user_id"]
