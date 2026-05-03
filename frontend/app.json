@@ -7,7 +7,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "lumascout",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": false,
+    "newArchEnabled": true,
     "runtimeVersion": "1.0.0",
     "updates": {
       "enabled": false,
@@ -18,6 +18,7 @@
       "bundleIdentifier": "app.emergent.photofinder60669d6fa1",
       "buildNumber": "2.0.24",
       "appleTeamId": "23H3KJ9VVC",
+      "newArchEnabled": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Show nearby photoshoot spots and save locations.",
         "NSPhotoLibraryUsageDescription": "Upload photos for your photoshoot spots.",
@@ -30,6 +31,7 @@
     "android": {
       "package": "com.lumascout.app",
       "versionCode": 1,
+      "newArchEnabled": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#0A0A0A"
