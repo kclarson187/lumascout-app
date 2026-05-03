@@ -156,9 +156,21 @@ def plan_of(user: dict) -> str:
             if exp_dt.tzinfo is None:
                 exp_dt = exp_dt.replace(tzinfo=timezone.utc)
             if exp_dt < datetime.now(timezone.utc):
+                # Founding Scouts keep Elite even if their own comp_expiration
+                # lapses — the role itself is the entitlement (see note below).
+                if (user or {}).get("role") == "founding_scout":
+                    return "comp_elite"
                 return "free"
         except Exception:
             pass
+    # Founding Scout honorary role — auto-comped Elite access. If the user
+    # already has a PAID Elite subscription ("elite") or an explicit comp
+    # override, leave that alone (truthful billing state); otherwise treat
+    # them as comp_elite so Elite-gated features unlock without ever
+    # hitting Stripe. Removing the role reverts them back to whatever
+    # `plan` field says (typically "free"), enforced in admin_update_user.
+    if (user or {}).get("role") == "founding_scout" and raw in ("free", None, "", "trial_pro", "comp_pro", "trial_elite"):
+        return "comp_elite"
     return raw
 
 
@@ -3202,6 +3214,13 @@ async def me_billing(user: dict = Depends(get_current_user)):
 # endpoints. Treat 'admin' on existing accounts as level 3 for BC.
 ROLE_LEVELS = {
     "user": 0,
+    # Founding Scout — honorary early-member role. Permission level 0
+    # (same as user) because it grants zero moderation/admin powers;
+    # its only functional effect is auto-comped Elite access (see
+    # plan_of() below). We still keep it as a distinct role key so
+    # `role == "founding_scout"` checks everywhere light up the
+    # dedicated badge + free-Elite entitlement UI.
+    "founding_scout": 0,
     "moderator": 1,
     "support": 1,        # read-heavy staff role
     "admin": 3,
@@ -3535,7 +3554,7 @@ class AdminUserPatch(BaseModel):
 
 
 VALID_PLANS = {"free", "pro", "elite", "comp_pro", "comp_elite", "trial_pro", "trial_elite", "suspended"}
-VALID_ROLES = {"user", "moderator", "support", "admin", "super_admin"}
+VALID_ROLES = {"user", "founding_scout", "moderator", "support", "admin", "super_admin"}
 VALID_STATUSES = {"active", "suspended"}
 
 

@@ -4,18 +4,19 @@
  * Priority (highest first):
  *   1. role === 'super_admin'                → Founder.png (LumaScout founder)
  *   2. role === 'admin' || 'moderator'       → Moderator.png
- *   3. plan elite (incl. comp_elite/trial)   → Elite gold compass PNG (animated pulse)
- *   4. plan pro (incl. comp_pro/trial_pro)   → Pro silver compass PNG (static)
- *   5. otherwise                              → null (no badge)
+ *   3. role === 'founding_scout'             → Founding Scout PNG (honorary)
+ *   4. plan elite (incl. comp_elite/trial)   → Elite gold compass PNG (animated pulse)
+ *   5. plan pro (incl. comp_pro/trial_pro)   → Pro silver compass PNG (static)
+ *   6. otherwise                              → null (no badge)
  *
  * Variants:
  *   - 'inline'   : tightest size, inline next to a username (default 14)
  *   - 'compact'  : ~16, used on followers/inbox rows
  *   - 'header'   : ~22, used on profile headers
  *
- * All four membership badges (Founder / Moderator / Elite / Pro) are
- * rendered as transparent PNGs at the same dimensions for visual rhythm,
- * with `resizeMode="contain"` and no background fill so transparency holds.
+ * All membership badges are rendered as transparent PNGs at the same
+ * dimensions for visual rhythm, with `resizeMode="contain"` and no
+ * background fill so transparency holds on any surface.
  *
  * Elite badge gets a subtle scale + glow pulse via reanimated; Pro stays
  * crisp & static for a "premium but earned" feel.
@@ -41,6 +42,7 @@ type Variant = 'inline' | 'compact' | 'header';
 
 const FOUNDER_SRC = require('../../assets/brand/founder.png');
 const MOD_SRC = require('../../assets/brand/moderator.png');
+const FS_SRC = require('../../assets/badges/founding_scout.png');
 const ELITE_SRC = require('../../assets/badges/elite-badge.png');
 const PRO_SRC = require('../../assets/badges/pro-badge.png');
 
@@ -96,6 +98,23 @@ export default function UserBadge({
         accessibilityLabel="LumaScout Moderator"
         testID={testID || 'badge-moderator'}
         source={MOD_SRC}
+        style={{ width: size, height: size }}
+        resizeMode="contain"
+      />
+    );
+  }
+
+  // Priority 3: Founding Scout — honorary early-member badge.
+  // Rendered with `resizeMode="contain"` at the variant size so the
+  // drop-shadow baked into the artwork doesn't clip on tight surfaces
+  // (comment author rows, follower list chips, etc.).
+  if (role === 'founding_scout') {
+    return (
+      <Image
+        accessible
+        accessibilityLabel="Founding Scout"
+        testID={testID || 'badge-founding-scout'}
+        source={FS_SRC}
         style={{ width: size, height: size }}
         resizeMode="contain"
       />
