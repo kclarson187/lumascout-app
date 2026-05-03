@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import SafeImage from './SafeImage';
 import { router } from 'expo-router';
@@ -31,6 +31,11 @@ export default function SpotCardCompact({
   // cache. The shared helper already handles absolutization + resize.
   const cover = resolveSpotCoverForMapThumb(spot);
   const [imgError, setImgError] = useState(false);
+  // v2.1.0 (May 2026) — recycling flash-fix (same pattern as SpotCard):
+  // if this row gets recycled for a different spot the stale error
+  // state would persist and force a fallback on the new thumbnail even
+  // when the new URL is perfectly valid. Reset on every cover change.
+  useEffect(() => { setImgError(false); }, [cover]);
   const go = () => router.push(`/spot/${spot.spot_id}`);
   const gLabel = goldenHourLabel(spot.latitude, spot.longitude);
 

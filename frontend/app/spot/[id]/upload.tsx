@@ -343,8 +343,19 @@ export default function UploadScreen() {
     try {
       const res = await promise;
       try {
+        // Invalidate ALL caches that could hold a stale version of this
+        // spot's photos — so the Explore list, Saved list, Groups feeds,
+        // and anywhere else that reads the `explore.list:v1` prefix
+        // re-fetches with the fresh photo after the user returns.
+        // Map markers are uncached (fetched on every map view load), so
+        // the new thumb/cover appears the moment the user opens Map.
         const { invalidateCachePrefix } = await import('../../../src/utils/swrCache');
-        await invalidateCachePrefix('explore.list:v1');
+        await Promise.all([
+          invalidateCachePrefix('explore.list:v1'),
+          invalidateCachePrefix('saved:v1'),
+          invalidateCachePrefix('groups:v1'),
+          invalidateCachePrefix(`spot:${spotId}`),
+        ]);
       } catch {}
       Alert.alert(
         res?.auto_approved ? 'Posted!' : 'Submitted for review',
