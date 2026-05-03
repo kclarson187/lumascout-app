@@ -40,6 +40,14 @@ JWT_SECRET = os.environ["JWT_SECRET"]
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@lumascout.app")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 
+# APP_URL — canonical public origin for user-facing links emitted by the
+# backend (password reset emails, email-change verification links, Stripe
+# billing portal return URLs, etc.). Defaults to the production domain so
+# production deploys work without extra config; preview/staging can
+# override via supervisor environment= block or .env. (Deploy audit fix,
+# v2.0.25: was previously hardcoded in 3 places.)
+APP_URL = os.environ.get("APP_URL", "https://lumascout.app").rstrip("/")
+
 # FIX(Commit 7b / 2026-04): Reserved handles. These literals are blocked from
 # new registration so they can't be squatted by end-users. `admin` is reserved
 # because we used to assign it to the super-admin account — that account is
@@ -726,7 +734,10 @@ async def send_password_reset_email(email: str, reset_link: str) -> None:
     """
     try:
         from email_service import send_email, SENDER_NOREPLY
-        full_link = f"https://lumascout.app{reset_link}"
+        # Deploy audit fix (v2.0.25): use APP_URL constant instead of
+        # hardcoded "https://lumascout.app". Lets preview / staging
+        # environments point reset emails at the right host.
+        full_link = f"{APP_URL}{reset_link}"
         await send_email(
             to=email,
             subject="Reset your LumaScout password",
@@ -1054,7 +1065,10 @@ async def request_email_change(body: EmailChangeRequestIn, user: dict = Depends(
     }
     await db.email_changes.insert_one(doc)
 
-    verify_link = f"https://lumascout.app/verify-email?token={token}"
+    # Deploy audit fix (v2.0.25): previously hardcoded "https://lumascout.app"
+    # — now routed through APP_URL constant so preview / staging can
+    # override. Falls back to lumascout.app in production.
+    verify_link = f"{APP_URL}/verify-email?token={token}"
     try:
         from email_service import send_email, SENDER_NOREPLY
         await send_email(
@@ -5404,7 +5418,11 @@ async def billing_portal(user: dict = Depends(get_current_user)):
     try:
         session = _stripe.billing_portal.Session.create(
             customer=customer_id,
-            return_url="https://lumascout.app/billing",
+            # Deploy audit fix (v2.0.25): previously hardcoded
+            # "https://lumascout.app/billing" — now uses APP_URL so the
+            # Stripe portal returns users back to the right origin in
+            # preview vs staging vs production.
+            return_url=f"{APP_URL}/billing",
         )
     except _stripe.error.StripeError as e:  # type: ignore
         raise HTTPException(status_code=400, detail=f"Stripe error: {e.user_message or str(e)}")
