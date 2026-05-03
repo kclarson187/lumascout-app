@@ -7,6 +7,7 @@ import { colors, radii, space, font } from '../theme';
 import { formatDistance } from '../utils/distance';
 import VerifiedBadge from './VerifiedBadge';
 import SpotImageFallback from './SpotImageFallback';
+import { resolveSpotCoverForMapThumb } from '../utils/spot-cover';
 import { goldenHourLabel } from '../utils/sun';
 
 /**
@@ -24,8 +25,11 @@ export default function SpotCardCompact({
   testID?: string;
   emphasis?: 'fresh' | 'distance' | 'golden' | 'score' | 'seasonal';
 }) {
-  const rawCover = (spot.images && (spot.images.find((i: any) => i.is_cover) || spot.images[0]))?.image_url;
-  const cover = rawCover && typeof rawCover === 'string' && rawCover.trim() !== '' ? rawCover : null;
+  // v2.1.0 (May 2026) — single source of truth for cover resolution.
+  // SpotCardCompact is a tiny row (thumb ≈ 56×56pt), so MAP_THUMB=280
+  // is the right preset — /api/img proxy will 280-wide-thumb it and
+  // cache. The shared helper already handles absolutization + resize.
+  const cover = resolveSpotCoverForMapThumb(spot);
   const [imgError, setImgError] = useState(false);
   const go = () => router.push(`/spot/${spot.spot_id}`);
   const gLabel = goldenHourLabel(spot.latitude, spot.longitude);

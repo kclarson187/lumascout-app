@@ -179,13 +179,29 @@ function pickVariant(img: any): string | null {
  * so the resize rewriter can produce the right-sized thumbnail per
  * surface. Callers pass `IMG_PRESETS.LIST_CARD` (560) or
  * `IMG_PRESETS.HERO` (1080) when they need larger variants.
+ *
+ * v2.1.0 (May 2026) — the cascade now mirrors the backend's
+ * `cover_image_url` computation in spots.py exactly, so the map
+ * preview thumbnail, Explore list, and detail hero can NEVER disagree.
+ * The final fallback is the first approved community upload, which
+ * lets brand-new spots without owner uploads still show a real photo
+ * instead of the generic gradient placeholder.
+ *
+ * Cascade (first non-null wins):
+ *   1. spot.hero_cover_image_url         (admin-pinned / rotation)
+ *   2. spot.cover_image_url              (legacy override)
+ *   3. spot.card_url                     (legacy variant)
+ *   4. spot.image_url                    (legacy single-image spots)
+ *   5. spot.thumb_url                    (/api/spots/markers payload)
+ *   6. images[is_cover=true]             (explicit cover in images[])
+ *   7. images[0]                         (first non-cover image)
+ *   8. community_uploads[0]              (oldest approved community photo)
+ *   9. null                              (caller renders SpotImageFallback)
  */
 export function resolveSpotCover(spot: any, width: number = IMG_PRESETS.MAP_THUMB): string | null {
   if (!spot || typeof spot !== 'object') return null;
 
-  // 1. Admin-pinned / rotation cover
-  // 2. Legacy top-level overrides
-  // 3. Markers endpoint top-level thumb
+  // 1-5. Admin-pinned / rotation / legacy top-level / markers thumb
   const topLevel =
     (typeof spot.hero_cover_image_url === 'string' && spot.hero_cover_image_url) ||
     (typeof spot.cover_image_url === 'string' && spot.cover_image_url) ||
@@ -195,7 +211,7 @@ export function resolveSpotCover(spot: any, width: number = IMG_PRESETS.MAP_THUM
     null;
   if (topLevel) return resizeImageUrl(absolutizeImageUrl(topLevel), width);
 
-  // 4. Explicit cover in images[]
+  // 6. Explicit cover in images[]
   const images = Array.isArray(spot.images) ? spot.images : null;
   if (images && images.length) {
     const cover = images.find(
@@ -204,9 +220,23 @@ export function resolveSpotCover(spot: any, width: number = IMG_PRESETS.MAP_THUM
     const fromCover = pickVariant(cover);
     if (fromCover) return resizeImageUrl(absolutizeImageUrl(fromCover), width);
 
-    // 5. First image fallback
+    // 7. First image fallback
     const fromFirst = pickVariant(images[0]);
     if (fromFirst) return resizeImageUrl(absolutizeImageUrl(fromFirst), width);
+  }
+
+  // 8. First approved community upload — parity with backend cascade
+  //    so brand-new spots without owner images still show a real photo.
+  //    Accepts EITHER `spot.community_uploads` (spot-detail payload) OR
+  //    `spot.community_upload_previews` (list-endpoint denormalization)
+  //    OR bare top-level arrays that some admin feeds include.
+  const community: any[] =
+    (Array.isArray(spot.community_uploads) && spot.community_uploads) ||
+    (Array.isArray(spot.community_upload_previews) && spot.community_upload_previews) ||
+    [];
+  for (const u of community) {
+    const url = pickVariant(u);
+    if (url) return resizeImageUrl(absolutizeImageUrl(url), width);
   }
 
   return null;
@@ -216,4 +246,24 @@ export function resolveSpotCover(spot: any, width: number = IMG_PRESETS.MAP_THUM
 export function resolveSpotCoverSource(spot: any, width: number = IMG_PRESETS.MAP_THUMB) {
   const u = resolveSpotCover(spot, width);
   return u ? { uri: u } : undefined;
+}
+
+/**
+ * Width-preset convenience variants. Pass the spot in, get a correctly-
+ * sized URL out — zero callsite arithmetic. Prefer these over calling
+ * `resolveSpotCover(spot, 280)` so the presets stay the single source
+ * of truth if we ever tune them.
+ *
+ *   resolveSpotCoverForMapThumb  → 280 px  (marker preview / pin thumb)
+ *   resolveSpotCoverForListCard  → 560 px  (Explore list / saved / groups)
+ *   resolveSpotCoverForHero      → 1080 px (Location Detail hero carousel)
+ */
+export function resolveSpotCoverForMapThumb(spot: any): string | null {
+  return resolveSpotCover(spot, IMG_PRESETS.MAP_THUMB);
+}
+export function resolveSpotCoverForListCard(spot: any): string | null {
+  return resolveSpotCover(spot, IMG_PRESETS.LIST_CARD);
+}
+export function resolveSpotCoverForHero(spot: any): string | null {
+  return resolveSpotCover(spot, IMG_PRESETS.HERO);
 }
