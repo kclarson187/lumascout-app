@@ -19,10 +19,30 @@
  * Expo CLI prefers a dynamic config (this file) over the static
  * app.json when both exist. The static file stays as the source of
  * truth for stable fields (name, version, plugins, splash, icons,
- * permissions) — this module reads it and then re-injects the two
- * deep-link blocks that the rewriter strips. Result: deep links are
- * guaranteed to be present in the final bundled config no matter what
- * the pre-bundle rewriter does to app.json.
+ * permissions) — this module receives the merged base config from
+ * Expo and re-injects the two deep-link blocks that the rewriter
+ * strips. Result: deep links are guaranteed to be present in the
+ * final bundled config no matter what the pre-bundle rewriter does
+ * to app.json.
+ *
+ * V2 (2026-05-03) — EAS deploy fix
+ * ---------------------------------
+ * Previous version manually read `app.json` with fs.readFileSync and
+ * returned a fresh object. This triggered `expo-doctor`'s
+ *   "Check Expo config for common issues"
+ * failure on the EAS build server: "You have an app.json file in your
+ * project, but your app.config.js is not using the values from it."
+ *
+ * Expo's expected pattern for dynamic configs is to accept `{ config }`
+ * as the first argument of the exported function — Expo internally
+ * loads app.json, merges it with any base config, and passes the
+ * result in. Manually reading app.json bypasses that pipeline and
+ * confuses doctor's static analysis even though the runtime result
+ * is identical.
+ *
+ * Rewriting to the `({ config }) => ({ ...config, ios: ..., android: ... })`
+ * pattern keeps the exact same runtime behaviour (deep links injected
+ * after Expo loads app.json) while passing expo-doctor.
  *
  * HOSTS
  * -----
@@ -34,10 +54,6 @@
  *   /community/{id}    · community post
  *   /marketplace/{id}  · marketplace listing
  */
-const fs = require('fs');
-const path = require('path');
-
-const APP_JSON_PATH = path.join(__dirname, 'app.json');
 
 // Pulls Universal Links / App Links config out into one place so
 // the iOS and Android sides stay in sync.
@@ -66,17 +82,19 @@ function buildIosAssociatedDomains() {
   return [`applinks:${LUMASCOUT_HOST}`];
 }
 
-module.exports = () => {
-  const base = JSON.parse(fs.readFileSync(APP_JSON_PATH, 'utf8')).expo;
-
+module.exports = ({ config }) => {
+  // `config` here is Expo's merged result: app.json → expo.* fields
+  // auto-loaded by the CLI, plus any base we might receive from a
+  // parent config tool. We spread it and overlay only the two blocks
+  // that the Emergent rewriter strips (see module header).
   return {
-    ...base,
+    ...config,
     ios: {
-      ...(base.ios || {}),
+      ...(config.ios || {}),
       associatedDomains: buildIosAssociatedDomains(),
     },
     android: {
-      ...(base.android || {}),
+      ...(config.android || {}),
       intentFilters: buildAndroidIntentFilters(),
     },
   };
