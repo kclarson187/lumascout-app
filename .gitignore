@@ -96,3 +96,4 @@ credentials.json
 # Apple ASC API Key + secrets
 secrets/
 *.p8
+credentials*.disabled-*
