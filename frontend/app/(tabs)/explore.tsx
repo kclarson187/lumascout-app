@@ -28,6 +28,7 @@ import { PremiumMapPin, PremiumMapCluster } from '../../src/components/PremiumMa
 import ExploreErrorBoundary from '../../src/components/ExploreErrorBoundary';
 import SectionErrorBoundary from '../../src/components/SectionErrorBoundary';
 import SpotImageFallback from '../../src/components/SpotImageFallback';
+import CachedImage from '../../src/components/CachedImage';
 import { resolveSpotCover } from '../../src/utils/spot-cover';
 import { BrandedRefreshControl, useBrandedRefresh } from '../../src/theme/refresh';
 import {
@@ -1660,21 +1661,27 @@ function PinPreview({
             />
           </View>
           {cover && !imgFailed ? (
-            <Image
+            // v2.0.25 — swapped RN <Image> for <CachedImage> (expo-image
+            // under the hood). Rationale: Cloudflare rewrites our
+            // `Cache-Control: public, max-age=604800, immutable` to
+            // `no-store, no-cache` at the edge (cf-cache-status: DYNAMIC).
+            // Native iOS URLCache honors no-store strictly, so every
+            // pan-zoom re-rendered pins would re-download thumbnails.
+            // expo-image maintains its own memory+disk cache keyed by
+            // URL, independent of HTTP cache semantics — finally lets
+            // the /api/img proxy investment pay off on cellular.
+            <CachedImage
               source={{ uri: cover }}
               style={styles.sheetHero}
-              onError={(e) => {
-                // v2.0.20 diagnostic — log the exact URL + nativeError
-                // so we can see in device logs / Xcode console why an
-                // image failed on a user's device. Also surfaces the
-                // gradient fallback via imgFailed state flip.
+              contentFit="cover"
+              onError={(e: any) => {
                 try {
                   // eslint-disable-next-line no-console
                   console.warn('[map-preview] image_load_failed', {
                     spot_id: spot?.spot_id,
                     title: spot?.title,
                     url: cover,
-                    nativeEvent: e?.nativeEvent,
+                    error: e?.error || e?.nativeEvent,
                   });
                 } catch {}
                 setImgFailed(true);

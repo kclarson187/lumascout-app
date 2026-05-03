@@ -28,6 +28,7 @@ import { colors, font, space, radii } from '../../src/theme';
 import { formatDistance } from '../../src/utils/distance';
 import { resolveImageUrl, IMG_SIZES } from '../../src/utils/image-url';
 import SafeImage from '../../src/components/SafeImage';
+import CachedImage from '../../src/components/CachedImage';
 import { useLightbox } from '../../src/components/ImageLightbox';
 import ScoreRing from '../../src/components/ScoreRing';
 import SpotCard from '../../src/components/SpotCard';
@@ -665,11 +666,18 @@ function SpotDetailImpl() {
                 onPress={() => openLightbox(resolveImageUrl(img.image_url, IMG_SIZES.HERO))}
                 testID={`spot-hero-image-${i}`}
               >
-                <SafeImage
+                <CachedImage
                   source={{ uri: resolveImageUrl(img.image_url, IMG_SIZES.HERO) }}
                   style={styles.heroImg}
-                  resizeMode="cover"
+                  contentFit="cover"
                 />
+                {/* v2.0.25 — hero carousel now uses expo-image-backed
+                    CachedImage. Cloudflare strips our Cache-Control
+                    header to no-store at the edge, so the native RN
+                    <Image> (URLCache / OkHttp) was re-downloading full
+                    HERO-width JPEGs on every back-navigation. expo-image
+                    maintains its own disk cache keyed by URL so this is
+                    finally a one-shot load per spot per install. */}
               </TouchableOpacity>
             ))}
           </ScrollView>
