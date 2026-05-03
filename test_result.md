@@ -12,6 +12,58 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Shared image-resolution helper + Explore list image-sizing flash fix (Tracks #2 + #1)"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/src/utils/spot-cover.ts (upgraded: cascade now matches backend's cover_image_url computation in spots.py exactly — hero_cover → cover → card → image → thumb → images[is_cover] → images[0] → community_uploads[0] — and added resolveSpotCoverForMapThumb/ForListCard/ForHero width-preset convenience wrappers),
+      /app/frontend/src/components/SpotCard.tsx (replaced inline cover cascade with resolveSpotCoverForListCard; added useEffect(() => {setImgLoaded(false); setImgError(false);}, [cover]) so FlashList-recycled cells reshow the shimmer during image swap instead of flashing the previous cell's image),
+      /app/frontend/src/components/SpotCardCompact.tsx (replaced inline cover cascade with resolveSpotCoverForMapThumb for the 56×56pt row thumbs)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Track #2 (shared image-resolution helper) — DONE
+          • Single source of truth `resolveSpotCoverForListCard(spot)` /
+            `ForMapThumb` / `ForHero` that every surface calls.
+          • Cascade now matches the server's spots.py exactly, so map
+            marker preview, Explore list tile, and Location Detail hero
+            always resolve to the SAME photo. Previously each surface
+            had its own inline priority order — could drift when an
+            admin pinned a cover but a spot also had community uploads.
+          • New terminal step: if no owner image exists at all, fall
+            back to the first approved community upload (same as
+            backend). Brand-new spots no longer land on the gradient
+            placeholder when someone has contributed a photo.
+          • Call sites cleaned up: SpotCard.tsx (feed tile) and
+            SpotCardCompact.tsx (row thumb) both replaced their
+            ~20-line inline cascades with a single helper call.
+          
+          Track #1 (Explore list image-sizing flash) — DONE
+          • Root cause (diagnosed by reading the render loop): FlashList
+            recycles cells. When a cell got reused for a different
+            spot, the new `cover` URL started loading but `imgLoaded`
+            state was still `true` from the PREVIOUS spot, so the
+            skeleton shimmer never re-showed, and expo-image's 160 ms
+            crossfade visually "flashed" the old image into the new.
+          • Fix: single useEffect that resets `imgLoaded` and
+            `imgError` whenever `cover` changes. Recycled cells now
+            show the shimmer (matching card background) during the
+            swap — perceived as a smooth fade-in rather than a
+            stale-image-flash.
+          
+          VERIFICATION
+          • Metro bundled cleanly after both edits.
+          • ESLint: 0 new errors/warnings (only pre-existing unused-
+            import warnings remain in SpotCard.tsx).
+          • App home screen still renders (screenshot taken).
+          • No backend changes.
+
+
+
   - task: "Track C — EXIF orientation preservation: stop sideways photos in upload preview + ensure consistency end-to-end"
     implemented: true
     working: "NA"

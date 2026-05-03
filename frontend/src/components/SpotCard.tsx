@@ -11,6 +11,7 @@ import FreshnessBadge from './FreshnessBadge';
 import VerifiedBadge from './VerifiedBadge';
 import AdminSpotMenu from './AdminSpotMenu';
 import SpotImageFallback from './SpotImageFallback';
+import { resolveSpotCoverForListCard } from '../utils/spot-cover';
 import { goldenHourLabel as _unusedGoldenHourLabel } from '../utils/sun'; // kept for other consumers; eslint-disable-line
 
 export type Spot = any;
@@ -46,6 +47,18 @@ function SpotCardImpl({
   // #8: track whether the hero image has painted yet so we can fade in
   // and keep a shimmer placeholder until the pixels arrive.
   const [imgLoaded, setImgLoaded] = useState(false);
+  // v2.1.0 (May 2026) — image-sizing-flash fix. FlashList recycles
+  // cells: when a cell is reused for a different spot, the NEW `cover`
+  // URL starts loading but `imgLoaded` is still `true` from the old
+  // spot, so the skeleton never re-shows and the PREVIOUS spot's
+  // image stays on-screen until expo-image's 160 ms fade finishes.
+  // Resetting on every cover change means recycled cells show the
+  // shimmer (same neutral tone as the card background) during the
+  // swap — no "old image flashing into new image" anymore.
+  useEffect(() => {
+    setImgLoaded(false);
+    setImgError(false);
+  }, [cover]);
   const shimmer = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     const loop = Animated.loop(
@@ -61,44 +74,14 @@ function SpotCardImpl({
   }, [shimmer]);
   const shimmerOpacity = shimmer.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.9] });
 
-  // Cover priority (Explore Speed CR — Batch 2, June 2025):
-  //   1. hero_cover_image_url (admin-pinned cover wins)
-  //   2. images[].is_cover === true → smallest available variant
-  //   3. images[0]                  → smallest available variant
-  //
-  // For variants we cascade thumb_url → card_url → image_url so the
-  // list pulls a small thumbnail when the backend has shipped one,
-  // and falls back safely to the original URL otherwise. We do NOT
-  // build a new image-processing pipeline yet — that's a separate CR
-  // — so for spots that lack pre-rendered variants the original URL
-  // is still served and the network/CDN bears the cost.
-  const _pickVariant = (img: any): string | null => {
-    if (!img || typeof img !== 'object') return null;
-    return (
-      img.thumb_url
-      || img.card_url
-      || img.image_url
-      || null
-    );
-  };
-  const _coverImg = (spot.images || []).find((i: any) => i?.is_cover) || (spot.images || [])[0];
-  const rawCover =
-    spot.hero_cover_image_url
-    || _pickVariant(_coverImg);
-  // Resolve relative `/api/uploads/...` paths to absolute URLs — on
-  // native iOS / Android React Native <Image> cannot resolve relative
-  // URLs and would render blank tiles for freshly-uploaded spots.
-  const resolvedCover = (() => {
-    if (!rawCover || typeof rawCover !== 'string' || !rawCover.trim()) return null;
-    if (/^https?:\/\//i.test(rawCover)) return rawCover;
-    if (rawCover.startsWith('data:')) return rawCover;
-    if (rawCover.startsWith('/')) {
-      const base = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/+$/, '');
-      return base ? `${base}${rawCover}` : rawCover;
-    }
-    return rawCover;
-  })();
-  const cover = resolvedCover;
+  // Cover priority (v2.1.0, May 2026): single source of truth via
+  // `resolveSpotCoverForListCard(spot)` — same cascade and resize
+  // preset as the Map preview and Location Detail so the list
+  // thumbnail, pin thumbnail, and detail hero all render the
+  // IDENTICAL photo (previously drifted because each surface had
+  // its own inline cascade). LIST_CARD preset = 560 px, which is
+  // 280pt @ 2x DPR — the right size for feed tiles.
+  const cover = resolveSpotCoverForListCard(spot);
   const isPremium = spot.privacy_mode === 'premium';
   const isHydrated = !!spot?.title;
 
