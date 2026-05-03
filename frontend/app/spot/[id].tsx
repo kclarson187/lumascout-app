@@ -61,7 +61,23 @@ export default function SpotDetail() {
 }
 
 function SpotDetailImpl() {
-  const params = useLocalSearchParams<{ id: string }>();
+  const params = useLocalSearchParams<{ id: string; initialCover?: string }>();
+  // Cover Source-of-Truth CR (v2.0.24) — decode the map-preview cover
+  // URL passed through the route param. When the user taps "View
+  // Details" we can render THIS URL as the first hero slide IMMEDIATELY
+  // while /spots/:id is still in-flight — eliminating the flash between
+  // the map preview thumbnail and the fully-loaded detail hero. Once
+  // the spot fetch completes, `orderedImages` takes over using the
+  // canonical `cover_image_url` from the detail payload.
+  const initialCoverUrl = useMemo(() => {
+    try {
+      const raw = params?.initialCover;
+      if (!raw || typeof raw !== 'string') return null;
+      return decodeURIComponent(raw);
+    } catch {
+      return null;
+    }
+  }, [params?.initialCover]);
   // Batch #8 — hero carousel opens a pinch-zoom lightbox on tap.
   const { open: openLightbox, Lightbox } = useLightbox();
   // May 2026 stability fix — defensively read the id param. Expo Router
@@ -207,8 +223,22 @@ function SpotDetailImpl() {
   // a UGC upload not yet in the gallery array) — in that case we
   // PREPEND a synthetic image object so the cover still renders first.
   const orderedImages = useMemo(() => {
+    // Cover Source-of-Truth CR (v2.0.24) — during the <1s window while
+    // /spots/:id is still fetching, render the map-preview cover URL
+    // from the route param so the hero carousel's first slide appears
+    // instantly. This is replaced by the canonical server response as
+    // soon as it lands.
+    if (!spot && initialCoverUrl) {
+      return [{ image_url: initialCoverUrl, source: 'initial_cover_from_map' }];
+    }
     const all: any[] = Array.isArray(spot?.images) ? spot.images : [];
-    const coverUrl: string | null = spot?.hero_cover_image_url || null;
+    // v2.0.24 Cover Source-of-Truth CR — prefer the canonical
+    // `cover_image_url` field that matches /api/spots/markers exactly.
+    // Fall back to the legacy hero_cover_image_url when the older
+    // field path returned a value. This ensures the hero carousel's
+    // slide 0 is the SAME photo the user just saw in the map preview.
+    const coverUrl: string | null =
+      spot?.cover_image_url || spot?.hero_cover_image_url || null;
 
     // Step 1 — order primary owner-uploaded images with cover-first.
     let primary: any[] = all;
@@ -216,8 +246,14 @@ function SpotDetailImpl() {
       const match = all.find((im: any) => im?.image_url === coverUrl);
       if (match) {
         primary = [match, ...all.filter((im: any) => im?.image_url !== coverUrl)];
-      } else {
+      } else if (all.length > 0) {
+        // Cover lives outside images[] (e.g. pulled from community
+        // uploads by the backend rotation logic). Prepend a synthetic
+        // entry so the hero pager still starts on the map-preview image.
         primary = [{ image_url: coverUrl, source: 'cover_override' }, ...all];
+      } else {
+        // No primary images at all — the cover IS our only primary.
+        primary = [{ image_url: coverUrl, source: 'cover_override' }];
       }
     }
 
@@ -240,7 +276,7 @@ function SpotDetailImpl() {
       }));
 
     return [...primary, ...community];
-  }, [spot?.images, spot?.hero_cover_image_url, communityUploads]);
+  }, [spot, spot?.images, spot?.hero_cover_image_url, spot?.cover_image_url, communityUploads, initialCoverUrl]);
 
   // Clamp the active gallery index whenever the ordered array changes
   // so swiping never lands on a phantom slide after the cover is

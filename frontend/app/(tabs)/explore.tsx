@@ -45,6 +45,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { readCache, writeCache } from '../../src/utils/swrCache';
 import { useAuth } from '../../src/auth';
+import { IMG_SIZES } from '../../src/utils/image-url';
 
 // June 2025 stability fix — Expo Go runtime detection.
 // In Expo Go the react-native-maps + react-native-map-clustering bridge
@@ -1811,7 +1812,39 @@ function PinPreview({
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.previewBtn, styles.previewBtnSecondary, { flex: 1 }]}
-          onPress={() => router.push(`/spot/${spot.spot_id}` as any)}
+          onPress={() => {
+            // Cover Source-of-Truth CR (v2.0.24) — visual continuity
+            // between map preview and detail hero.
+            //
+            // 1. Preload the HERO-sized variant of the same cover image
+            //    via Image.prefetch so iOS URLCache has it warm by the
+            //    time the detail page mounts. No flash from thumbnail
+            //    to hero, no spinner on the first carousel slide.
+            //
+            // 2. Pass `initialCover` as a route param so the detail
+            //    page can render that exact URL as the first slide
+            //    IMMEDIATELY while the /spots/:id fetch is in-flight,
+            //    eliminating the perceptual gap entirely.
+            try {
+              if (cover) {
+                // `cover` here is the map-preview 280w URL. Derive the
+                // HERO (1080w) variant by rewriting the w= param on
+                // the /api/img proxy URL so the preload hits the same
+                // cache key the detail page will.
+                let heroUrl = cover;
+                try {
+                  heroUrl = cover.replace(/([?&])w=\d+/, `$1w=${IMG_SIZES.HERO}`);
+                } catch {}
+                Image.prefetch(heroUrl).catch(() => {});
+              }
+            } catch {}
+            router.push({
+              pathname: `/spot/${spot.spot_id}` as any,
+              params: cover
+                ? { initialCover: encodeURIComponent(cover) }
+                : undefined,
+            });
+          }}
           activeOpacity={0.85}
           testID="pin-preview-details"
         >

@@ -14027,3 +14027,61 @@ agent_communication:
       than measured in-process. NOT blocking for backend merge.
 
       🟢 v2.0.24 IMAGE-RESIZE PIPELINE BACKEND READY.
+
+
+    -agent: "testing"
+    -message: |
+      v2.0.24 COVER SOURCE-OF-TRUTH REGRESSION — 7/7 GREEN against
+      http://localhost:8001 (per review-request explicit target).
+      Harness: /app/backend_test_cover_parity.py
+              + /app/backend_test_cover_parity_deep.py (full-population audit).
+
+      ── TEST 1: Markers ↔ Detail cover parity ──────────────────────
+      ✅ 10/10 randomly-sampled spots have identical cover URL between
+         /api/spots/markers (after unwrapping /api/img?u=<src>&w=&q=
+         proxy wrap) and GET /api/spots/{id}.cover_image_url.
+      ✅ 0 drift cases. parity_ok=10, both_null=0.
+
+      ── TEST 2: Community-upload fallback on markers ───────────────
+      Audited ALL 38 spots in DB:
+        • 36 have a primary cover (legacy field or images[]) → thumb
+          populated, parity verified.
+        • 2 are QA-stub spots ("QA Stability Pass Spot 1777661664" /
+          1777661705) with NO primary cover AND NO approved community
+          uploads → thumb_url=null is CORRECT (no fallback source).
+        • 0 spots match the {no primary + has approved CU} profile,
+          so the fallback aggregate query returned no rows in this
+          environment (logic ran cleanly — no exceptions, non-fatal
+          try/except around the aggregate at routes/spots.py:466-495
+          is intact).
+      ✅ Per review-request spec: "If you can't find such a spot in the
+         DB as-is, just verify that the logic runs without error... OR
+         confirm that all spots currently either have a primary cover
+         or have no community uploads (which is fine)" — confirmed.
+         All 38 spots fall into one of the two acceptable buckets.
+
+      ── TEST 3: cover_image_url field shape on detail endpoint ─────
+      ✅ 15 random spot-detail responses inspected. cover_image_url
+         present as top-level field on every response. 14 are
+         well-formed absolute URLs (starting with http:// or https://),
+         1 is null (correct for spots with no cover source). ZERO
+         malformed cases — no empty strings, no relative /api/uploads
+         paths, no data: URIs.
+
+      ── TEST 4: Light spot-checks (no regression) ─────────────────
+      ✅ GET /api/spots?paginated=1&limit=5 → 200
+      ✅ GET /api/img?u=<pexels>&w=280&q=70 → 200 image/jpeg, 9.4 KB,
+         X-Img-Cache=miss (cold) — proxy still healthy.
+      ✅ GET /api/img with disallowed host → 400 (host_not_allowed).
+      ✅ GET /api/img/stats → 200.
+
+      ── Backend log scan ──────────────────────────────────────────
+      No 5xx in /var/log/supervisor/backend.out.log during the run.
+      All /api/spots/{id} and /api/spots/markers calls 200.
+
+      🟢 v2.0.24 COVER SOURCE-OF-TRUTH CR — BACKEND READY.
+      Markers and Detail expose the SAME cover URL via the SAME
+      cascade. Community-upload fallback wired correctly (no
+      exceptions, returns no rows when no candidate spot exists).
+      cover_image_url field shape is locked down (string|null,
+      never empty / relative / data-URI).
