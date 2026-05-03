@@ -1,87 +1,295 @@
-import React, { useState, useRef } from 'react';
+/**
+ * Add Recent Photos — queue-based upload flow (Track B rebuild, May 2026).
+ *
+ * Why this was rebuilt (PRD):
+ *   • Users were seeing "server snag" errors that were actually client-side
+ *     network drops during parallel (concurrency=3) fetch uploads. Backend
+ *     stress test (27/27) proved /api/uploads/image is rock-solid.
+ *   • The old UX collapsed all selected photos into a single "Uploading…"
+ *     tile with no per-photo progress, no individual retry, and no way to
+ *     reorder or remove once the picker closed.
+ *
+ * New UX:
+ *   • Max 5 photos per submission (tighter cap → better finish rate).
+ *   • Sequential upload — one at a time — with a real progress bar via
+ *     XMLHttpRequest upload events.
+ *   • Per-photo states: queued → uploading → success | failed.
+ *   • Auto-retry once on transient failure (Network/Timeout/Server/RateLimit)
+ *     before surfacing a manual Retry button.
+ *   • Remove or reorder photos while they're still queued (pending).
+ *   • Cancel an in-flight upload (AbortController wired into XHR).
+ *   • Global progress line: "Uploading photo 2 of 5…".
+ *
+ * Design principles:
+ *   • Queue cards use LumaScout's surface1/border tokens, 72×72 thumbs,
+ *     status chip on the right, retry button inline on failure.
+ *   • All interactive elements respect the 44×44 minimum touch target.
+ *   • Reanimated Layout + FadeIn/FadeOut for subtle status transitions
+ *     (entering queue, success chip fade, removal).
+ */
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Alert, ActivityIndicator, Pressable, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ChevronLeft, ImagePlus, X, Camera } from 'lucide-react-native';
+import { ChevronLeft, ImagePlus, X, Camera, RotateCw, Check, AlertCircle, ChevronUp, ChevronDown, Clock } from 'lucide-react-native';
+import Animated, { FadeIn, FadeOut, Layout } from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
 import { api } from '../../../src/api';
-import { uploadImageAssets } from '../../../src/utils/upload-image';
-import { resolveImageUrl } from '../../../src/utils/image-url';
+import { uploadImageAssetWithProgress, UploadedImage } from '../../../src/utils/upload-image';
 import { colors, font, space, radii } from '../../../src/theme';
 import { CONDITION_TAGS } from '../../../src/components/FreshnessBits';
 import KeyboardSafe from '../../../src/components/KeyboardSafe';
 
+const MAX_PHOTOS = 5;
+// Auto-retry once before showing manual retry — covers transient network
+// blips on cellular / flakey wifi without making the user tap anything.
+const AUTO_RETRY_LIMIT = 1;
+// Only categorize these as "transient" and auto-retry them. Payload / format
+// / auth errors are permanent and need user intervention.
+const TRANSIENT_ERRORS = new Set(['NetworkError', 'TimeoutError', 'ServerError', 'RateLimitError']);
+
+type QStatus = 'pending' | 'uploading' | 'success' | 'failed';
+type QItem = {
+  id: string;
+  localUri: string;
+  mimeType?: string | null;
+  fileName?: string | null;
+  status: QStatus;
+  progress: number; // 0..1 — only meaningful while uploading
+  hostedUrl?: string;
+  error?: string;
+  errorName?: string;
+  attempts: number; // how many upload attempts we've made so far
+};
+
+function newId(): string {
+  return `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export default function UploadScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const spotId = String(id || '');
-  const [photos, setPhotos] = useState<string[]>([]);
+
+  const [queue, setQueue] = useState<QItem[]>([]);
   const [caption, setCaption] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [visibility, setVisibility] = useState<'public' | 'followers'>('public');
-  const [uploading, setUploading] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const pickPhotos = async () => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (perm.status !== 'granted') {
-      Alert.alert('Permission needed', 'Allow photo library access to share photos of this spot.');
-      return;
-    }
-    const r = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsMultipleSelection: true,
-      // CRITICAL (Apr 2026): base64=false — we now upload the picked
-      // file via multipart to /api/uploads/image and store only the
-      // short hosted URL in Mongo. This single change shrinks spot
-      // documents by ~3-5 MB per image and unblocks the cover editor
-      // which was timing out on base64-heavy payloads.
-      base64: false,
-      quality: 0.85,
-      selectionLimit: Math.max(1, 12 - photos.length),
-    });
-    if (r.canceled || !r.assets?.length) return;
-    setUploading(true);
+  // --- Queue ref + uploader coordination -----------------------------------
+  // Keep a ref in sync with queue so the async uploader loop can read the
+  // latest state without re-capturing stale closures.
+  const queueRef = useRef<QItem[]>([]);
+  useEffect(() => { queueRef.current = queue; }, [queue]);
+
+  // The AbortController that governs the CURRENT in-flight upload. We
+  // nullify it between items. Kept in a ref because setting state from
+  // inside the uploader loop would fight our sequential guarantee.
+  const activeAbortRef = useRef<AbortController | null>(null);
+  // Prevents two uploader loops running at once.
+  const uploaderRunningRef = useRef(false);
+  // Set when the screen unmounts so in-flight continuations bail out.
+  const unmountedRef = useRef(false);
+
+  const updateItem = useCallback((id: string, patch: Partial<QItem>) => {
+    setQueue((prev) => prev.map((q) => (q.id === id ? { ...q, ...patch } : q)));
+  }, []);
+
+  // --- Sequential uploader loop --------------------------------------------
+  const runUploader = useCallback(async () => {
+    if (uploaderRunningRef.current) return;
+    uploaderRunningRef.current = true;
     try {
-      const uploaded = await uploadImageAssets(
-        r.assets.map((a) => ({ uri: a.uri, mimeType: a.mimeType, fileName: a.fileName })),
-      );
-      const urls = uploaded.map((u) => u.image_url);
-      setPhotos((prev) => [...prev, ...urls].slice(0, 12));
-    } catch (e: any) {
-      // Map upload-image.ts error categories to specific user-facing
-      // titles + bodies. The previous "Upload failed / Upload failed"
-      // duplicate alert is replaced with category-aware messaging that
-      // tells the user WHAT went wrong and HOW to fix it.
-      const name = e?.name || '';
-      const body = e?.message || 'Could not upload one or more photos. Please try again.';
-      let title = 'Photo upload issue';
-      if (name === 'TimeoutError') title = 'Upload timed out';
-      else if (name === 'NetworkError') title = 'No connection';
-      else if (name === 'AuthError') title = 'Session expired';
-      else if (name === 'PayloadTooLargeError') title = 'Photo too large';
-      else if (name === 'UnsupportedMediaError') title = 'Format not supported';
-      else if (name === 'RateLimitError') title = 'Slow down a moment';
-        else if (name === 'ServerError') title = "Couldn't upload photos";
-      Alert.alert(title, body);
+       
+      while (true) {
+        if (unmountedRef.current) break;
+        const current = queueRef.current.find((q) => q.status === 'pending');
+        if (!current) break;
+
+        // Mark as uploading and reset progress.
+        updateItem(current.id, { status: 'uploading', progress: 0, error: undefined, errorName: undefined });
+        const controller = new AbortController();
+        activeAbortRef.current = controller;
+        const attemptNumber = current.attempts + 1;
+
+        try {
+          const result: UploadedImage = await uploadImageAssetWithProgress(
+            { uri: current.localUri, mimeType: current.mimeType, fileName: current.fileName },
+            {
+              signal: controller.signal,
+              onProgress: (p) => {
+                if (unmountedRef.current) return;
+                // Progress ticks can fire very fast — only write when the
+                // value actually changes by a meaningful delta to reduce
+                // re-renders on long uploads.
+                setQueue((prev) => prev.map((q) =>
+                  q.id === current.id && Math.abs((q.progress || 0) - p) >= 0.01
+                    ? { ...q, progress: p }
+                    : q,
+                ));
+              },
+            },
+          );
+          if (unmountedRef.current) break;
+          updateItem(current.id, {
+            status: 'success',
+            progress: 1,
+            hostedUrl: result.image_url,
+            attempts: attemptNumber,
+            error: undefined,
+            errorName: undefined,
+          });
+        } catch (e: any) {
+          if (unmountedRef.current) break;
+          const errName = e?.name || 'UnknownError';
+          if (errName === 'AbortError') {
+            // User canceled (remove / unmount). Leave status as-is; if the
+            // item still exists and wasn't removed, put it back to pending
+            // so the user can retry from the tap.
+            const stillThere = queueRef.current.find((q) => q.id === current.id);
+            if (stillThere) {
+              updateItem(current.id, { status: 'pending', progress: 0, attempts: attemptNumber });
+            }
+          } else if (TRANSIENT_ERRORS.has(errName) && attemptNumber <= AUTO_RETRY_LIMIT) {
+            // Auto-retry: bump attempts, leave status as pending so the
+            // while-loop picks this same item up next iteration.
+            updateItem(current.id, {
+              status: 'pending',
+              progress: 0,
+              attempts: attemptNumber,
+              error: undefined,
+              errorName: undefined,
+            });
+            // Small delay before the retry kicks in — feels intentional,
+            // not jittery.
+            await new Promise((r) => setTimeout(r, 650));
+          } else {
+            updateItem(current.id, {
+              status: 'failed',
+              progress: 0,
+              attempts: attemptNumber,
+              error: e?.message || "We couldn't upload this photo.",
+              errorName: errName,
+            });
+          }
+        } finally {
+          activeAbortRef.current = null;
+        }
+      }
     } finally {
-      setUploading(false);
+      uploaderRunningRef.current = false;
+    }
+  }, [updateItem]);
+
+  // Kick off uploader whenever a pending item appears.
+  useEffect(() => {
+    const hasPending = queue.some((q) => q.status === 'pending');
+    if (hasPending && !uploaderRunningRef.current) {
+      runUploader();
+    }
+  }, [queue, runUploader]);
+
+  // Cleanup on unmount — abort in-flight XHR so we don't set state on a
+  // gone component.
+  useEffect(() => {
+    return () => {
+      unmountedRef.current = true;
+      try { activeAbortRef.current?.abort(); } catch {}
+    };
+  }, []);
+
+  // --- Pickers -------------------------------------------------------------
+  const remainingSlots = Math.max(0, MAX_PHOTOS - queue.length);
+
+  const pickPhotos = async () => {
+    if (remainingSlots === 0) return;
+    setPicking(true);
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (perm.status !== 'granted') {
+        Alert.alert('Permission needed', 'Allow photo library access to share photos of this spot.');
+        return;
+      }
+      const r = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsMultipleSelection: remainingSlots > 1,
+        base64: false,
+        quality: 0.85,
+        selectionLimit: remainingSlots,
+      });
+      if (r.canceled || !r.assets?.length) return;
+      const now = Date.now();
+      const toAdd: QItem[] = r.assets.slice(0, remainingSlots).map((a, idx) => ({
+        id: `${newId()}_${idx}`,
+        localUri: a.uri,
+        mimeType: a.mimeType,
+        fileName: a.fileName,
+        status: 'pending',
+        progress: 0,
+        attempts: 0,
+      }));
+      setQueue((prev) => [...prev, ...toAdd].slice(0, MAX_PHOTOS));
+      // Analytics-ish client log for ops grep.
+      try {
+         
+        console.log('[spot-upload] queue_add', { count: toAdd.length, totalNow: queue.length + toAdd.length, ts: now });
+      } catch {}
+    } finally {
+      setPicking(false);
     }
   };
 
-  const toggleTag = (k: string) => {
-    setTags((prev) => {
-      if (prev.includes(k)) return prev.filter((t) => t !== k);
-      if (prev.length >= 6) return prev; // cap matches backend
-      return [...prev, k];
+  // --- Queue actions -------------------------------------------------------
+  const removeItem = useCallback((id: string) => {
+    setQueue((prev) => prev.filter((q) => q.id !== id));
+    // If the removed item is the one currently uploading, abort it so the
+    // uploader loop can move on.
+    const item = queueRef.current.find((q) => q.id === id);
+    if (item?.status === 'uploading') {
+      try { activeAbortRef.current?.abort(); } catch {}
+    }
+  }, []);
+
+  const retryItem = useCallback((id: string) => {
+    setQueue((prev) => prev.map((q) =>
+      q.id === id
+        ? { ...q, status: 'pending', progress: 0, error: undefined, errorName: undefined, attempts: 0 }
+        : q,
+    ));
+  }, []);
+
+  const moveItem = useCallback((id: string, direction: -1 | 1) => {
+    setQueue((prev) => {
+      const idx = prev.findIndex((q) => q.id === id);
+      if (idx < 0) return prev;
+      const target = idx + direction;
+      if (target < 0 || target >= prev.length) return prev;
+      // Only allow reordering when BOTH items are pending — avoid yanking
+      // the in-flight uploader's cursor.
+      if (prev[idx].status !== 'pending' || prev[target].status !== 'pending') return prev;
+      const copy = prev.slice();
+      const [item] = copy.splice(idx, 1);
+      copy.splice(target, 0, item);
+      return copy;
     });
-  };
+  }, []);
 
-  const removePhoto = (idx: number) => setPhotos((prev) => prev.filter((_, i) => i !== idx));
+  // --- Derived / guards ----------------------------------------------------
+  const stats = useMemo(() => {
+    const total = queue.length;
+    const succeeded = queue.filter((q) => q.status === 'success').length;
+    const failed = queue.filter((q) => q.status === 'failed').length;
+    const inFlight = queue.filter((q) => q.status === 'uploading').length;
+    const pending = queue.filter((q) => q.status === 'pending').length;
+    // 1-based "photo N of M" where N counts all non-queued items.
+    const processing = total > 0 ? total - pending : 0;
+    return { total, succeeded, failed, inFlight, pending, processing };
+  }, [queue]);
 
-  const canSubmit = photos.length > 0 && !submitting && !uploading;
+  const isQueueSettled = stats.inFlight === 0 && stats.pending === 0;
+  const canSubmit = stats.succeeded > 0 && isQueueSettled && !submitting;
 
-  // Tap-spam guard — multiple rapid Post-photos taps share a single
-  // in-flight POST so we never insert duplicate batches.
   const submitInflightRef = useRef<Promise<any> | null>(null);
 
   const submit = async () => {
@@ -90,9 +298,28 @@ export default function UploadScreen() {
       try { await submitInflightRef.current; } catch {}
       return;
     }
+    const successful = queue.filter((q) => q.status === 'success' && q.hostedUrl);
+    if (successful.length === 0) return;
+
+    // If any failures remain, double-check with the user.
+    if (stats.failed > 0) {
+      const confirmed = await new Promise<boolean>((resolve) => {
+        Alert.alert(
+          `Post ${successful.length} of ${queue.length}?`,
+          `${stats.failed} photo${stats.failed === 1 ? '' : 's'} couldn't upload. You can post the successful ones now or retry the failed ones first.`,
+          [
+            { text: 'Retry failed', style: 'cancel', onPress: () => resolve(false) },
+            { text: `Post ${successful.length}`, onPress: () => resolve(true) },
+          ],
+          { cancelable: true, onDismiss: () => resolve(false) },
+        );
+      });
+      if (!confirmed) return;
+    }
+
     setSubmitting(true);
     const promise = api.post(`/spots/${spotId}/uploads`, {
-      images: photos.map((u) => ({ image_url: u, caption: null })),
+      images: successful.map((q) => ({ image_url: q.hostedUrl!, caption: null })),
       caption: caption.trim() || null,
       condition_tags: tags,
       visibility,
@@ -100,9 +327,6 @@ export default function UploadScreen() {
     submitInflightRef.current = promise;
     try {
       const res = await promise;
-      // Invalidate Explore list cache so freshness ranking re-fetches
-      // on next visit (this spot just got fresh photos which may bump
-      // its score / position).
       try {
         const { invalidateCachePrefix } = await import('../../../src/utils/swrCache');
         await invalidateCachePrefix('explore.list:v1');
@@ -113,35 +337,18 @@ export default function UploadScreen() {
         [{ text: 'OK', onPress: () => router.back() }]
       );
     } catch (e: any) {
-      // Categorize submission errors. Per spec, do NOT log the user
-      // out for upload timeout/failure/4xx/5xx — only confirmed 401/403
-      // (which the api.ts axios interceptor already owns) clears auth.
       const status = Number(e?.response?.status || e?.status || 0);
       const isTimeout = e?.code === 'ECONNABORTED' || /timeout/i.test(e?.message || '');
-      let title = 'Couldn\'t post photos';
+      let title = "Couldn't post photos";
       let body = e?.response?.data?.detail || e?.message || 'Please try again.';
-      if (isTimeout) {
-        title = 'Taking longer than usual';
-        body = 'Photo post timed out. Please try again.';
-      } else if (status === 401 || status === 403) {
-        title = 'Session expired';
-        body = 'Please log in again to post photos.';
-      } else if (status === 404) {
-        title = 'Spot no longer available';
-        body = 'This location has been removed and can\'t accept new photos.';
-      } else if (status === 410) {
-        title = 'Spot deleted';
-        body = 'This location no longer exists.';
-      } else if (status === 413) {
-        title = 'Too many or too large';
-        body = 'Try fewer photos or smaller images.';
-      } else if (status >= 500) {
-        title = "Couldn't post photos";
-        body = 'Check your connection and try again.';
-      }
-      // Structured client log for production grep.
+      if (isTimeout) { title = 'Taking longer than usual'; body = 'Photo post timed out. Please try again.'; }
+      else if (status === 401 || status === 403) { title = 'Session expired'; body = 'Please log in again to post photos.'; }
+      else if (status === 404) { title = 'Spot no longer available'; body = "This location has been removed and can't accept new photos."; }
+      else if (status === 410) { title = 'Spot deleted'; body = 'This location no longer exists.'; }
+      else if (status === 413) { title = 'Too many or too large'; body = 'Try fewer photos or smaller images.'; }
+      else if (status >= 500) { title = "Couldn't post photos"; body = 'Check your connection and try again.'; }
       try {
-        // eslint-disable-next-line no-console
+         
         console.warn('[spot-upload]', { status, name: e?.name, message: e?.message });
       } catch {}
       Alert.alert(title, body);
@@ -151,10 +358,38 @@ export default function UploadScreen() {
     }
   };
 
+  const toggleTag = (k: string) => {
+    setTags((prev) => {
+      if (prev.includes(k)) return prev.filter((t) => t !== k);
+      if (prev.length >= 6) return prev;
+      return [...prev, k];
+    });
+  };
+
+  // Warn if user tries to leave while uploads are in-flight.
+  // (Kept lightweight — Alert.alert on back press)
+  const onBack = () => {
+    if (stats.inFlight > 0 || stats.pending > 0) {
+      Alert.alert(
+        'Uploads in progress',
+        'Photos are still uploading. If you leave now, unfinished uploads will be canceled.',
+        [
+          { text: 'Stay', style: 'cancel' },
+          { text: 'Leave', style: 'destructive', onPress: () => {
+            try { activeAbortRef.current?.abort(); } catch {}
+            router.back();
+          } },
+        ],
+      );
+      return;
+    }
+    router.back();
+  };
+
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} testID="upload-back">
+        <TouchableOpacity onPress={onBack} style={styles.backBtn} testID="upload-back" hitSlop={8}>
           <ChevronLeft size={22} color={colors.text} />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
@@ -164,30 +399,76 @@ export default function UploadScreen() {
       </View>
       <KeyboardSafe style={{ flex: 1 }}>
         <ScrollView
-          contentContainerStyle={{ paddingBottom: space.xxxl + 40, paddingHorizontal: space.xl, gap: space.lg }}
+          contentContainerStyle={{ paddingBottom: space.xxxl + 80, paddingHorizontal: space.xl, gap: space.lg }}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Photo picker */}
+          {/* Queue header with global progress status */}
           <View style={{ gap: space.sm }}>
-            <Text style={styles.sectionTitle}>Photos <Text style={styles.req}>·  up to 12</Text></Text>
-            <View style={styles.gridWrap}>
-              {photos.map((uri, i) => (
-                <View key={uri + i} style={styles.tileWrap}>
-                  <Image source={{ uri: resolveImageUrl(uri) }} style={styles.tileImg} />
-                  <TouchableOpacity onPress={() => removePhoto(i)} style={styles.tileClose} testID={`remove-photo-${i}`}>
-                    <X size={14} color={colors.textInverse} />
-                  </TouchableOpacity>
-                </View>
-              ))}
-              {photos.length < 12 ? (
-                <TouchableOpacity onPress={pickPhotos} disabled={uploading} style={[styles.tileAdd, uploading && { opacity: 0.6 }]} testID="pick-photos">
-                  {uploading ? <ActivityIndicator color={colors.primary} /> : <ImagePlus size={22} color={colors.primary} />}
-                  <Text style={styles.tileAddTxt}>
-                    {uploading ? 'Uploading…' : (photos.length === 0 ? 'Select photos' : 'Add more')}
-                  </Text>
-                </TouchableOpacity>
-              ) : null}
+            <View style={styles.queueHeaderRow}>
+              <Text style={styles.sectionTitle}>
+                Photos <Text style={styles.req}>· up to {MAX_PHOTOS}</Text>
+              </Text>
+              <Text style={styles.countChip}>
+                {queue.length}/{MAX_PHOTOS}
+              </Text>
             </View>
+
+            {stats.inFlight > 0 ? (
+              <Animated.View entering={FadeIn.duration(180)} style={styles.globalStatus}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <Text style={styles.globalStatusText}>
+                  Uploading photo {Math.min(stats.processing, stats.total)} of {stats.total}…
+                </Text>
+              </Animated.View>
+            ) : stats.pending > 0 ? (
+              <Animated.View entering={FadeIn.duration(180)} style={styles.globalStatus}>
+                <Clock size={14} color={colors.textSecondary} />
+                <Text style={styles.globalStatusText}>
+                  {stats.pending} photo{stats.pending === 1 ? '' : 's'} queued…
+                </Text>
+              </Animated.View>
+            ) : null}
+
+            {/* Queue cards */}
+            {queue.map((item, idx) => (
+              <QueueCard
+                key={item.id}
+                item={item}
+                index={idx}
+                total={queue.length}
+                onRemove={() => removeItem(item.id)}
+                onRetry={() => retryItem(item.id)}
+                onMoveUp={() => moveItem(item.id, -1)}
+                onMoveDown={() => moveItem(item.id, +1)}
+              />
+            ))}
+
+            {queue.length < MAX_PHOTOS ? (
+              <TouchableOpacity
+                onPress={pickPhotos}
+                disabled={picking}
+                style={[styles.addBtn, picking && { opacity: 0.6 }]}
+                testID="pick-photos"
+                accessibilityLabel="Select photos"
+              >
+                {picking ? (
+                  <ActivityIndicator color={colors.primary} />
+                ) : (
+                  <>
+                    <ImagePlus size={18} color={colors.primary} />
+                    <Text style={styles.addBtnTxt}>
+                      {queue.length === 0
+                        ? 'Select photos'
+                        : `Add photos (${remainingSlots} remaining)`}
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.maxNotice}>
+                <Text style={styles.maxNoticeText}>Maximum {MAX_PHOTOS} photos per post. Remove one to add another.</Text>
+              </View>
+            )}
           </View>
 
           {/* Caption */}
@@ -229,6 +510,8 @@ export default function UploadScreen() {
               })}
             </View>
           </View>
+
+          {/* Visibility */}
           <View style={{ gap: space.sm }}>
             <Text style={styles.sectionTitle}>Who can see this?</Text>
             <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -258,11 +541,18 @@ export default function UploadScreen() {
             onPress={submit}
             style={[styles.submitBtn, !canSubmit && styles.submitBtnDisabled]}
             testID="upload-submit"
+            accessibilityLabel="Post photos"
           >
             {submitting ? <ActivityIndicator color={colors.textInverse} /> : (
               <>
                 <Camera size={16} color={colors.textInverse} />
-                <Text style={styles.submitBtnTxt}>Post {photos.length > 0 ? `${photos.length} photo${photos.length > 1 ? 's' : ''}` : 'photos'}</Text>
+                <Text style={styles.submitBtnTxt}>
+                  {stats.succeeded > 0
+                    ? `Post ${stats.succeeded} photo${stats.succeeded > 1 ? 's' : ''}`
+                    : stats.inFlight > 0 || stats.pending > 0
+                    ? 'Uploading…'
+                    : 'Post photos'}
+                </Text>
               </>
             )}
           </TouchableOpacity>
@@ -272,32 +562,300 @@ export default function UploadScreen() {
   );
 }
 
+// ----------------------------------------------------------------------------
+// <QueueCard /> — one row per queued / uploading / success / failed photo.
+// ----------------------------------------------------------------------------
+function QueueCard({
+  item,
+  index,
+  total,
+  onRemove,
+  onRetry,
+  onMoveUp,
+  onMoveDown,
+}: {
+  item: QItem;
+  index: number;
+  total: number;
+  onRemove: () => void;
+  onRetry: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+}) {
+  const { status, progress, error } = item;
+  const pct = Math.round(Math.min(1, Math.max(0, progress)) * 100);
+  const isPending = status === 'pending';
+  const isUploading = status === 'uploading';
+  const isSuccess = status === 'success';
+  const isFailed = status === 'failed';
+  const canMoveUp = isPending && index > 0;
+  const canMoveDown = isPending && index < total - 1;
+
+  return (
+    <Animated.View
+      entering={FadeIn.duration(180)}
+      exiting={FadeOut.duration(160)}
+      layout={Layout.springify().damping(18)}
+      style={[
+        styles.card,
+        isSuccess && styles.cardSuccess,
+        isFailed && styles.cardFailed,
+      ]}
+    >
+      <Image source={{ uri: item.localUri }} style={styles.cardThumb} />
+      <View style={styles.cardBody}>
+        <View style={styles.cardRow}>
+          <StatusChip status={status} />
+          <View style={{ flex: 1 }} />
+          {canMoveUp ? (
+            <TouchableOpacity
+              onPress={onMoveUp}
+              style={styles.iconBtn}
+              hitSlop={6}
+              accessibilityLabel="Move up"
+              testID={`queue-moveup-${index}`}
+            >
+              <ChevronUp size={16} color={colors.textSecondary} />
+            </TouchableOpacity>
+          ) : null}
+          {canMoveDown ? (
+            <TouchableOpacity
+              onPress={onMoveDown}
+              style={styles.iconBtn}
+              hitSlop={6}
+              accessibilityLabel="Move down"
+              testID={`queue-movedown-${index}`}
+            >
+              <ChevronDown size={16} color={colors.textSecondary} />
+            </TouchableOpacity>
+          ) : null}
+          {isFailed ? (
+            <TouchableOpacity
+              onPress={onRetry}
+              style={styles.retryBtn}
+              hitSlop={4}
+              accessibilityLabel="Retry upload"
+              testID={`queue-retry-${index}`}
+            >
+              <RotateCw size={14} color={colors.primary} />
+              <Text style={styles.retryBtnTxt}>Retry</Text>
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity
+            onPress={onRemove}
+            style={styles.iconBtn}
+            hitSlop={6}
+            accessibilityLabel="Remove photo"
+            testID={`queue-remove-${index}`}
+          >
+            <X size={16} color={colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
+
+        {isUploading ? (
+          <View style={styles.progressOuter}>
+            <View style={[styles.progressInner, { width: `${Math.max(4, pct)}%` }]} />
+          </View>
+        ) : null}
+        {isFailed && error ? (
+          <Text style={styles.errorText} numberOfLines={2}>
+            {error}
+          </Text>
+        ) : null}
+        {isSuccess ? (
+          <Animated.Text entering={FadeIn.duration(260)} style={styles.doneText}>
+            Ready to post
+          </Animated.Text>
+        ) : null}
+        {isPending ? (
+          <Text style={styles.pendingText}>
+            {item.attempts > 0 ? `Retrying (attempt ${item.attempts + 1})…` : 'Waiting…'}
+          </Text>
+        ) : null}
+      </View>
+    </Animated.View>
+  );
+}
+
+function StatusChip({ status }: { status: QStatus }) {
+  if (status === 'pending') {
+    return (
+      <View style={[styles.chip, styles.chipPending]}>
+        <Clock size={11} color={colors.textSecondary} />
+        <Text style={styles.chipTxt}>Queued</Text>
+      </View>
+    );
+  }
+  if (status === 'uploading') {
+    return (
+      <View style={[styles.chip, styles.chipUploading]}>
+        <ActivityIndicator size="small" color={colors.primary} />
+        <Text style={[styles.chipTxt, { color: colors.primary }]}>Uploading</Text>
+      </View>
+    );
+  }
+  if (status === 'success') {
+    return (
+      <View style={[styles.chip, styles.chipSuccess]}>
+        <Check size={12} color={colors.success} />
+        <Text style={[styles.chipTxt, { color: colors.success }]}>Uploaded</Text>
+      </View>
+    );
+  }
+  // failed
+  return (
+    <View style={[styles.chip, styles.chipFailed]}>
+      <AlertCircle size={12} color={colors.secondary} />
+      <Text style={[styles.chipTxt, { color: colors.secondary }]}>Failed</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   header: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingHorizontal: space.md, paddingBottom: space.sm },
-  backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  backBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   kicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase' },
   title: { color: colors.text, fontFamily: font.display, fontSize: 20 },
   sectionTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
   req: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
   optional: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
-  gridWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  tileWrap: { width: 92, height: 92, borderRadius: radii.md, overflow: 'hidden', backgroundColor: colors.surface1, position: 'relative' },
-  tileImg: { width: '100%', height: '100%' },
-  tileClose: { position: 'absolute', top: 4, right: 4, width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(0,0,0,0.7)', alignItems: 'center', justifyContent: 'center' },
-  tileAdd: { width: 92, height: 92, borderRadius: radii.md, alignItems: 'center', justifyContent: 'center', gap: 4, borderWidth: 1, borderStyle: 'dashed', borderColor: colors.primary, backgroundColor: 'rgba(245,166,35,0.06)' },
-  tileAddTxt: { color: colors.primary, fontFamily: font.bodyMedium, fontSize: 10, textAlign: 'center', paddingHorizontal: 4 },
+
+  // Queue header row
+  queueHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  countChip: {
+    color: colors.textSecondary,
+    fontFamily: font.bodyMedium,
+    fontSize: 11,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radii.pill,
+    backgroundColor: colors.surface1,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    overflow: 'hidden',
+  },
+  globalStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: radii.md,
+    backgroundColor: 'rgba(245,166,35,0.08)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.primary,
+  },
+  globalStatusText: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 13 },
+
+  // Queue card
+  card: {
+    flexDirection: 'row',
+    gap: 12,
+    padding: 10,
+    borderRadius: radii.md,
+    backgroundColor: colors.surface1,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    alignItems: 'center',
+  },
+  cardSuccess: { borderColor: colors.success + '66' },
+  cardFailed: { borderColor: colors.secondary + '66' },
+  cardThumb: {
+    width: 64,
+    height: 64,
+    borderRadius: radii.sm,
+    backgroundColor: colors.surface2,
+  },
+  cardBody: { flex: 1, gap: 6 },
+  cardRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  iconBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radii.sm,
+  },
+  retryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+    backgroundColor: 'rgba(245,166,35,0.10)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.primary,
+  },
+  retryBtnTxt: { color: colors.primary, fontFamily: font.bodySemibold, fontSize: 11 },
+
+  // Status chips
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radii.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  chipPending: { backgroundColor: colors.surface2, borderColor: colors.border },
+  chipUploading: { backgroundColor: 'rgba(245,166,35,0.10)', borderColor: colors.primary + '66' },
+  chipSuccess: { backgroundColor: colors.success + '1A', borderColor: colors.success + '66' },
+  chipFailed: { backgroundColor: colors.secondary + '1A', borderColor: colors.secondary + '66' },
+  chipTxt: { color: colors.textSecondary, fontFamily: font.bodySemibold, fontSize: 10, letterSpacing: 0.3 },
+
+  // Progress bar
+  progressOuter: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.surface2,
+    overflow: 'hidden',
+  },
+  progressInner: { height: '100%', backgroundColor: colors.primary, borderRadius: 2 },
+
+  errorText: { color: colors.secondary, fontFamily: font.body, fontSize: 11 },
+  doneText: { color: colors.success, fontFamily: font.bodyMedium, fontSize: 11 },
+  pendingText: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
+
+  // Add photos CTA
+  addBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.primary,
+    backgroundColor: 'rgba(245,166,35,0.06)',
+  },
+  addBtnTxt: { color: colors.primary, fontFamily: font.bodySemibold, fontSize: 13 },
+
+  maxNotice: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: radii.md,
+    backgroundColor: colors.surface1,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  maxNoticeText: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12 },
+
+  // Caption + tags + visibility
   captionInput: { minHeight: 80, padding: 12, borderRadius: radii.md, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, color: colors.text, fontFamily: font.body, fontSize: 14, textAlignVertical: 'top' },
   tagsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   tagChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
   tagChipTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
-  // Visibility toggle (Phase 2) — lightweight public/followers split.
   visOpt: { flex: 1, padding: 12, borderRadius: radii.md, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, gap: 4 },
   visOptActive: { backgroundColor: 'rgba(245,166,35,0.10)', borderColor: colors.primary },
   visTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
   visSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11 },
+
+  // Submit bar
   submitBar: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: space.lg, paddingBottom: Platform.OS === 'ios' ? space.xl : space.lg, backgroundColor: colors.bg, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
-  submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: radii.md, backgroundColor: colors.primary },
+  submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: radii.md, backgroundColor: colors.primary, minHeight: 48 },
   submitBtnDisabled: { backgroundColor: colors.surface2 },
   submitBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 },
 });

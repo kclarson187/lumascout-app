@@ -12,6 +12,61 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Track B — Upload UI rebuild (Add Recent Photos): sequential uploads, per-photo progress, auto-retry + manual retry, reorder, cancel"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app/spot/[id]/upload.tsx (full rewrite — queue model with pending/uploading/success/failed states, sequential uploader loop, per-photo progress bar from XHR, auto-retry transient errors once, manual Retry button on failure, ↑/↓ reorder for pending items, remove/cancel any item, global "Uploading photo N of M" status, pre-exit warning if uploads in flight),
+      /app/frontend/src/utils/upload-image.ts (added uploadImageAssetWithProgress: XHR-based single-asset upload exposing onProgress + external AbortSignal while preserving the error categorization contract)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Rebuilt the Add Recent Photos flow to address the user-reported
+          "5xx snag" which Track A proved was actually client-side network
+          drops masquerading as server errors. Change summary:
+          
+          • Max photos reduced 12 → 5 (tighter cap → better finish rate).
+          • Sequential uploader — one XHR at a time — governed by a
+            `uploaderRunningRef` guard so double-mount won't spawn two
+            loops. Each in-flight upload holds a fresh AbortController in
+            `activeAbortRef` so removal / navigation can cancel cleanly.
+          • Per-photo state: pending → uploading → success | failed.
+            Progress ticks are throttled (writes only on ≥1% delta) to
+            keep re-renders cheap on long uploads.
+          • Auto-retry once on transient categories (Network / Timeout /
+            Server / RateLimit) — other categories (Auth, PayloadTooLarge,
+            UnsupportedMedia) are surfaced immediately with a manual
+            Retry button for user intervention.
+          • Reorder via ↑/↓ chevrons (only enabled while both items are
+            still pending) and remove via ✕ on any item. Canceled uploads
+            revert their row to `pending` so the user can retry from tap.
+          • Submit button only enables when the queue is settled (no
+            uploading/pending) AND at least one success exists; if some
+            failed, a confirm dialog offers "Retry failed" or
+            "Post N of M".
+          • Back-press guard: if uploads are in flight or queued, user
+            gets "Uploads in progress" alert before navigating away.
+          • Subtle Reanimated Layout + FadeIn/FadeOut on queue rows and
+            success chip for a premium feel without distraction.
+          • Styling uses existing LumaScout tokens (colors.primary for
+            active state, colors.success for done, colors.secondary for
+            failed — no new palette additions).
+          • Lint: expo ESLint reports 0 errors, 0 warnings on both files.
+          • Bundle: Metro bundled 3289 modules without error after the
+            rewrite.
+          • NO BACKEND CHANGES — Track A already proved
+            /api/uploads/image and /api/spots/{id}/uploads are stable.
+          
+          Testing required: frontend (user-driven or testing agent) —
+          queue behavior, progress rendering, retry/cancel interactions,
+          submit button state machine.
+
+
+
   - task: "Track A — Upload reliability investigation: hunt intermittent 5xx on /api/uploads/image and /api/spots/{id}/uploads"
     implemented: true
     working: true
