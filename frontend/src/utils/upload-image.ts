@@ -165,6 +165,117 @@ export async function uploadImageAsset(
   return { ...j, image_url: absolute };
 }
 
+/**
+ * XHR-based single-asset upload that exposes upload progress + accepts
+ * an external AbortSignal. Used by the "Add Recent Photos" queue flow
+ * where we need:
+ *   • Per-photo progress bars (fetch can't emit upload progress in RN)
+ *   • User-initiated cancel of an in-flight upload (remove / navigate back)
+ *
+ * Same error contract as `uploadImageAsset` — thrown errors carry a
+ * categorical `name` and a user-friendly `message`.
+ */
+export async function uploadImageAssetWithProgress(
+  asset: { uri: string; mimeType?: string | null; fileName?: string | null },
+  opts: { onProgress?: (fraction: number) => void; signal?: AbortSignal } = {},
+): Promise<UploadedImage> {
+  const token = (await authHeader()).Authorization?.replace(/^Bearer\s+/i, '') || '';
+  const url = `${backendBaseUrl()}/api/uploads/image`;
+  const form = new FormData();
+  const filename = asset.fileName || `upload_${Date.now()}.jpg`;
+  const mime = asset.mimeType || 'image/jpeg';
+  form.append('file', {
+    // @ts-expect-error RN FormData accepts this shape; DOM's doesn't.
+    uri: asset.uri,
+    name: filename,
+    type: mime,
+  });
+  return await new Promise<UploadedImage>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    xhr.timeout = 60000;
+    xhr.setRequestHeader('Accept', 'application/json');
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    // NOTE: do NOT set Content-Type — RN adds multipart boundary.
+
+    if (opts.onProgress && xhr.upload) {
+      xhr.upload.onprogress = (ev: ProgressEvent) => {
+        if (ev.lengthComputable && ev.total > 0) {
+          try { opts.onProgress?.(Math.min(1, ev.loaded / ev.total)); } catch {}
+        }
+      };
+    }
+    xhr.ontimeout = () => {
+      const err = new Error('Photo upload timed out. Please check your connection and try again.');
+      err.name = 'TimeoutError';
+      reject(err);
+    };
+    xhr.onerror = () => {
+      const err = new Error("We couldn't reach the server. Please check your internet and try again.");
+      err.name = 'NetworkError';
+      reject(err);
+    };
+    xhr.onabort = () => {
+      const err = new Error('Upload canceled');
+      err.name = 'AbortError';
+      reject(err);
+    };
+    xhr.onload = () => {
+      const status = xhr.status;
+      if (status >= 200 && status < 300) {
+        try {
+          const j = JSON.parse(xhr.responseText) as UploadedImage;
+          const absolute = j.image_url && j.image_url.startsWith('/')
+            ? `${backendBaseUrl()}${j.image_url}`
+            : j.image_url;
+          resolve({ ...j, image_url: absolute });
+        } catch {
+          const err = new Error('Invalid server response. Please try again.');
+          err.name = 'ServerError';
+          reject(err);
+        }
+        return;
+      }
+      // Mirror uploadImageAsset's categorization.
+      let detail = '';
+      try { detail = (JSON.parse(xhr.responseText)?.detail || '').toString().trim(); } catch {}
+      let name = 'UnknownError';
+      let fallback = "We couldn't upload this photo. Please try again.";
+      if (status === 401 || status === 403) { name = 'AuthError'; fallback = 'Your session has expired. Please log in again.'; }
+      else if (status === 408) { name = 'TimeoutError'; fallback = 'Photo upload timed out. Please try again.'; }
+      else if (status === 413) { name = 'PayloadTooLargeError'; fallback = 'This photo is too large. Please choose a smaller image.'; }
+      else if (status === 415) { name = 'UnsupportedMediaError'; fallback = "This image format isn't supported. Please pick a JPEG, PNG, or HEIC photo."; }
+      else if (status === 429) { name = 'RateLimitError'; fallback = 'Slow down a moment — please wait a few seconds and try again.'; }
+      else if (status >= 500) { name = 'ServerError'; fallback = 'Our server hit a snag. Please try again in a moment.'; }
+      else if (status >= 400) { name = 'ClientError'; }
+      const err = new Error(detail || fallback);
+      err.name = name;
+      reject(err);
+    };
+
+    if (opts.signal) {
+      if (opts.signal.aborted) {
+        try { xhr.abort(); } catch {}
+        const err = new Error('Upload canceled');
+        err.name = 'AbortError';
+        reject(err);
+        return;
+      }
+      opts.signal.addEventListener('abort', () => {
+        try { xhr.abort(); } catch {}
+      });
+    }
+
+    try {
+      xhr.send(form as any);
+    } catch {
+      const err = new Error("We couldn't reach the server. Please check your internet and try again.");
+      err.name = 'NetworkError';
+      reject(err);
+    }
+  });
+}
+
 /** Upload many picked assets in parallel with a sane concurrency cap. */
 export async function uploadImageAssets(
   assets: Array<{ uri: string; mimeType?: string | null; fileName?: string | null }>,
