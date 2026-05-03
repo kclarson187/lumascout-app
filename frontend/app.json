@@ -17,6 +17,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "app.emergent.photofinder60669d6fa1",
       "buildNumber": "2.0.24",
+      "appleTeamId": "23H3KJ9VVC",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Show nearby photoshoot spots and save locations.",
         "NSPhotoLibraryUsageDescription": "Upload photos for your photoshoot spots.",
