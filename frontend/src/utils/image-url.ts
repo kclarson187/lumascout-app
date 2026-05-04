@@ -21,14 +21,15 @@
  *   • everything else — pass through untouched
  * Target footprint per session: <15 MB.
  */
-import Constants from 'expo-constants';
+import { resolveBackendUrl } from '../constants/config';
 
+// V3 (May 2026 — production fix 2): triple-layered fallback via the
+// shared helper — env var → Constants.expoConfig.extra → hardcoded
+// production URL. Survives both gitignored `.env` on the EAS build
+// server AND iOS caching Constants.expoConfig.extra across upgrades
+// (Expo SDK 50–54 known bug, expo/expo#33692).
 function backendBaseUrl(): string {
-  const raw =
-    (process.env.EXPO_PUBLIC_BACKEND_URL as string | undefined) ||
-    (Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL as string | undefined) ||
-    '';
-  return raw.replace(/\/+$/, '');
+  return resolveBackendUrl();
 }
 
 /**

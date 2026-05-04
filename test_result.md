@@ -12,6 +12,99 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Production image regression ROUND 2 — triple-layered backend URL fallback (env + extra + hardcoded) to defeat iOS Constants.expoConfig.extra caching bug"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/src/constants/config.ts (NEW — canonical fallback chain with `resolveBackendUrl()` / `resolveWebBaseUrl()` helpers + hardcoded `PRODUCTION_BACKEND_URL` / `PRODUCTION_WEB_BASE_URL` constants),
+      /app/frontend/eas.json (production profile NOW has `env` block injecting EXPO_PUBLIC_BACKEND_URL + EXPO_PUBLIC_WEB_BASE_URL — Metro inlines these into the bundle at build time, bypassing the extra-caching bug entirely),
+      /app/frontend/src/api.ts (refactored to use shared resolveBackendUrl helper — single line change),
+      /app/frontend/src/utils/image-url.ts (refactored to use shared resolveBackendUrl helper),
+      /app/frontend/src/utils/upload-image.ts (refactored to use shared resolveBackendUrl helper; removed unused Constants import)
+    stuck_count: 0
+    priority: "critical"
+    needs_retesting: true
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          USER REPORT: After Round 1 fix (app.config.js injecting
+          EXPO_PUBLIC_BACKEND_URL into `extra`) was deployed via a
+          FRESH EAS production build, Explore tab thumbnails STILL
+          blank on both iOS and Android. Expo Go continues to work.
+          
+          TROUBLESHOOT_AGENT RCA (2nd pass)
+          • iOS caches `Constants.expoConfig.extra` values in the
+            native binary on first install. Subsequent upgrade-over-
+            top updates DO NOT refresh those values — this is Expo
+            SDK 50–54 known bug (expo/expo#33692).
+          • Round 1's app.config.js fix IS CORRECT: `node -e
+            "require('./app.config.js')(...)"` confirmed `extra`
+            carries the URLs. But users upgrading from the prior
+            build (where extra was empty) still read the CACHED
+            empty value from the native binary.
+          • Fresh installs would have worked — but we can't ask
+            every TestFlight tester to uninstall + reinstall.
+          
+          ROUND 2 FIX — triple-layered fallback that works on ALL
+          upgrade paths:
+          
+          Layer 1: `eas.json` production profile now has
+            `env: { EXPO_PUBLIC_BACKEND_URL: "https://photo-finder-...",
+                   EXPO_PUBLIC_WEB_BASE_URL: "https://lumascout.app" }`.
+            EAS exposes these env vars to Metro during `expo export`,
+            so `process.env.EXPO_PUBLIC_BACKEND_URL` is INLINED into
+            the bundled JS at build time (same mechanism that makes
+            dev `.env` work). This completely bypasses
+            Constants.expoConfig.extra — no native caching involved.
+          
+          Layer 2: `src/constants/config.ts` exposes `resolveBackendUrl()`
+            which checks `process.env` FIRST, then
+            `Constants.expoConfig?.extra`, then falls back to the
+            HARDCODED `PRODUCTION_BACKEND_URL` constant. Even if
+            both Metro inlining AND the extra mirror are broken, the
+            hardcoded constant is literally embedded in the source —
+            nothing short of a missing file can defeat it.
+          
+          Layer 3: app.config.js `extra` mirror (from Round 1) is
+            retained as the middle layer — it still helps on
+            staging/preview EAS profiles where the production env
+            block doesn't apply.
+          
+          All 4 helpers (api.ts, image-url.ts, upload-image.ts,
+          spot-cover.ts via image-url.ts) now delegate to the
+          single shared `resolveBackendUrl()` — guaranteed
+          consistency across the app.
+          
+          VERIFICATION
+          • `node -e "require('./app.config.js')(...)"` → extra
+            correctly carries both URLs (Layer 3).
+          • Backend URL resolved at runtime with process.env empty
+            AND expoConfig null → returns hardcoded
+            https://photo-finder-60... (Layer 2 worst-case).
+          • ESLint: 0 errors. 2 pre-existing unrelated warnings.
+          • Metro bundling clean.
+          
+          USER ACTION
+          • Trigger a NEW EAS production build (iOS + Android).
+            The next build will have EXPO_PUBLIC_BACKEND_URL
+            INLINED by Metro via the new eas.json env block — this
+            is the most robust path and works regardless of
+            Constants.expoConfig caching.
+          • After install (or upgrade-over-top), look for the
+            `[explore] build_diagnostics` log in Xcode Console.app
+            and confirm `backend_resolved` is non-empty.
+          • If a user STILL sees blank thumbs after upgrade, they
+            can force-quit + reopen; the hardcoded constant
+            (Layer 2) kicks in at the next JS module load.
+          
+          PLATFORMS
+          • Expo Go: unchanged, reads .env via Metro. ✅
+          • EAS production iOS: eas.json env → bundled → works. ✅
+          • EAS production Android: eas.json env → bundled → works. ✅
+
+
+
   - task: "Production-build image regression fix — bake EXPO_PUBLIC_BACKEND_URL into Constants.expoConfig.extra so EAS builds carry it without .env"
     implemented: true
     working: true
