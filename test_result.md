@@ -12,6 +12,104 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Production image regression ROUND 3 — defensive URL absolutization at the rendering layer + visible in-app diagnostic"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/src/components/SafeImage.tsx (added `_absolutize()` guard inside extractUri so any relative `/api/...` URI passed to <SafeImage> gets prefixed with resolveBackendUrl() at render time — protects every screen that bypasses image-url.ts and passes URLs directly from API responses to the image component),
+      /app/frontend/src/components/CachedImage.tsx (same `_absolutize()` guard mirrored — both image components now defensively absolutize before <ExpoImage> sees the URI),
+      /app/frontend/app/admin/diagnostics.tsx (NEW — admin-only debug screen rendering the resolved backend URL, all three fallback layers, runtime context (newArchEnabled, executionEnvironment, bundleId, runtimeVersion), and a live <Image> rendering a sample /api/img round-trip — gives admin/super_admin a visual confirmation on-device of which fallback layer is firing without needing Xcode console),
+      /app/frontend/app/admin/index.tsx (Diagnostics card linked from admin overview)
+    stuck_count: 0
+    priority: "critical"
+    needs_retesting: true
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          USER REPORT (Round 3): Despite Round 2 fix (eas.json env block
+          + app.config.js extra mirror + hardcoded constant fallback)
+          AND a fresh delete/reinstall + new EAS production build, the
+          Explore tab still shows blank thumbnails. Expo Go works fine.
+          
+          DIAGNOSIS — what we KNOW
+          • Layer 3 (hardcoded `PRODUCTION_BACKEND_URL` in
+            src/constants/config.ts) is LITERALLY a string in the
+            source. It cannot fail to be present in the bundle short
+            of the file being deleted.
+          • If layer 3 is in the bundle and `resolveBackendUrl()` is
+            called, it CANNOT return empty.
+          • If `resolveBackendUrl()` returns the correct URL but
+            images still don't render, the rendering layer itself
+            must be receiving a relative URL or non-https scheme.
+          
+          ROOT CAUSE THEORY (multiple call sites bypass the helper)
+          • Many components pass URLs from API responses directly to
+            <Image> without routing through the resolver:
+              - app/(tabs)/index.tsx:325  user.avatar_url
+              - app/spot/[id].tsx:737     attachment URLs
+              - app/inbox/[id].tsx:190    cover_image_url
+              - app/(tabs)/community.tsx:150 avatar_url
+            Each of these would silently fail in production if the
+            backend ever returns a relative URL in those fields.
+          • Backend `/api/spots/markers` already returns thumb_url as
+            relative `/api/img?u=...` — verified via curl in prior
+            audit. Other endpoints likely do too.
+          • iOS native <Image> rejects relative URIs → silent blank
+            (no error UI, no alert).
+          
+          FIX — defense in depth at the rendering layer
+          • SafeImage and CachedImage now run a `_absolutize()` guard
+            inside `extractUri` that prefixes any "/path" URL with
+            `resolveBackendUrl()` at render time. This means EVERY
+            consumer is protected regardless of which helper it
+            forgot to call. Absolute URLs (http://, https://, data:,
+            blob:, //) pass through unchanged. Local require()
+            assets are untouched.
+          • The extracted absolutized URI is propagated back to
+            the underlying <Image source={...}> so the native
+            loader receives a fully-qualified URL.
+          
+          DIAGNOSTIC — break the "I redeployed but it's still broken" loop
+          • New /admin/diagnostics screen exposes ALL the diagnostic
+            information that was previously trapped in a console.log:
+              - resolved backend URL (bright-green if present)
+              - process.env value (Layer 1)
+              - Constants.expoConfig.extra value (Layer 2)
+              - hardcoded constant (Layer 3)
+              - runtime context: newArchEnabled, executionEnvironment,
+                appOwnership, bundleId, version, runtimeVersion
+              - sample <Image> rendering a Pexels photo through the
+                /api/img proxy at the resolved backend URL
+            If the sample image renders, the runtime URL is correct
+            and any other blanks are data-side. If the sample image
+            is blank, the user can read the env/extra/hardcoded
+            values directly off the screen and we know which layer
+            is failing.
+          • Admin + super_admin only — regular users won't see it.
+          • Linked from /admin/ overview as "🔧 Diagnostics".
+          
+          BUILD / LINT
+          • Metro bundling clean (file-map and haste-map caches
+            cleared, restart complete).
+          • ESLint: 0 errors. 3 pre-existing warnings.
+          • All four image-resolution helpers now delegate to the
+            single shared `resolveBackendUrl()`.
+          
+          USER ACTION
+          • Trigger a NEW EAS production build with these changes.
+          • After install, log in as Super Admin → tap Profile →
+            Admin → "🔧 Diagnostics" card.
+          • Read the values off the screen and report them to me.
+            We'll know definitively which layer is firing and where
+            the URL resolution is breaking, if it is.
+          • Even WITHOUT the diagnostic, the absolutize guard at
+            the render layer should fix the blank thumbnails since
+            it absolutizes ANY relative URL right before the image
+            loader.
+
+
+
   - task: "Production image regression ROUND 2 — triple-layered backend URL fallback (env + extra + hardcoded) to defeat iOS Constants.expoConfig.extra caching bug"
     implemented: true
     working: true

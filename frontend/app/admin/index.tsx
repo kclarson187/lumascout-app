@@ -120,6 +120,21 @@ function AdminOverviewImpl() {
         <ChevronRight size={16} color={colors.primary} style={{ position: 'absolute', top: 14, right: 14 }} />
       </TouchableOpacity>
 
+      {/* Diagnostics — admin-only debug page that shows the resolved
+          backend URL, env/extra/hardcoded fallback values, and a
+          live sample image rendered through /api/img. Use this to
+          debug "blank thumbnails in production" issues without
+          needing Xcode console access. */}
+      <TouchableOpacity
+        style={[styles.queueCard, { borderColor: colors.border }]}
+        onPress={() => router.push('/admin/diagnostics' as any)}
+        testID="overview-go-diagnostics"
+      >
+        <Text style={[styles.queueLabel, { fontFamily: font.bodyBold, marginTop: 6 }]}>🔧 Diagnostics</Text>
+        <Text style={[styles.queueLabel, { marginTop: 2 }]}>Backend URL · runtime context · sample image render</Text>
+        <ChevronRight size={16} color={colors.textSecondary} style={{ position: 'absolute', top: 14, right: 14 }} />
+      </TouchableOpacity>
+
       {data.top_contributors?.length > 0 && (
         <View style={styles.card}>
           <View style={styles.cardHead}>
