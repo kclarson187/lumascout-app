@@ -31,12 +31,19 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Alert, ActivityIndicator, Pressable, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ChevronLeft, ImagePlus, X, Camera, RotateCw, Check, AlertCircle, ChevronUp, ChevronDown, Clock } from 'lucide-react-native';
+import { ChevronLeft, ImagePlus, X, Camera, RotateCw, Check, AlertCircle, ChevronUp, ChevronDown, Clock, WifiOff } from 'lucide-react-native';
 import Animated, { FadeIn, FadeOut, Layout } from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
 import { api } from '../../../src/api';
 import { uploadImageAssetWithProgress, UploadedImage } from '../../../src/utils/upload-image';
 import { normalizePickedImages } from '../../../src/utils/normalize-image';
+import {
+  useOnline,
+  useUploadQueueStore,
+  persistPickedAsset,
+  deletePersistedAsset,
+  PersistedQueue,
+} from '../../../src/utils/upload-queue-store';
 import { colors, font, space, radii } from '../../../src/theme';
 import { CONDITION_TAGS } from '../../../src/components/FreshnessBits';
 import KeyboardSafe from '../../../src/components/KeyboardSafe';
@@ -77,6 +84,15 @@ export default function UploadScreen() {
   const [visibility, setVisibility] = useState<'public' | 'followers'>('public');
   const [picking, setPicking] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [rehydrating, setRehydrating] = useState(true);
+
+  // --- Persistence + connectivity (Track D, May 2026) -----------------------
+  // Persist queue state so force-quit / background doesn't lose photos.
+  // Pause uploader while offline; auto-resume the instant we reconnect.
+  const store = useUploadQueueStore(spotId);
+  const { online } = useOnline();
+  const onlineRef = useRef(online);
+  useEffect(() => { onlineRef.current = online; }, [online]);
 
   // --- Queue ref + uploader coordination -----------------------------------
   // Keep a ref in sync with queue so the async uploader loop can read the
@@ -105,6 +121,10 @@ export default function UploadScreen() {
        
       while (true) {
         if (unmountedRef.current) break;
+        // Track D: Pause the uploader loop while offline. The loop will
+        // be re-kicked by the effect below the moment `online` flips
+        // back to true.
+        if (!onlineRef.current) break;
         const current = queueRef.current.find((q) => q.status === 'pending');
         if (!current) break;
 
@@ -183,13 +203,110 @@ export default function UploadScreen() {
     }
   }, [updateItem]);
 
-  // Kick off uploader whenever a pending item appears.
+  // Kick off uploader whenever a pending item appears OR we reconnect
+  // after being offline.
   useEffect(() => {
     const hasPending = queue.some((q) => q.status === 'pending');
-    if (hasPending && !uploaderRunningRef.current) {
+    if (hasPending && online && !uploaderRunningRef.current) {
       runUploader();
     }
-  }, [queue, runUploader]);
+  }, [queue, online, runUploader]);
+
+  // --- Persistence: rehydrate from AsyncStorage on mount -------------------
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const persisted = await store.load();
+        if (cancelled) return;
+        if (!persisted || !persisted.items?.length) {
+          return;
+        }
+        // Offer to resume only if there are any uploadable items. Items
+        // that already successfully uploaded are kept so the user can
+        // see their prior post before submitting.
+        const resumable = persisted.items.some(
+          (i) => i.status === 'pending' || i.status === 'failed',
+        );
+        const prompt = resumable
+          ? `Resume your previous upload? ${persisted.items.length} photo${persisted.items.length === 1 ? '' : 's'} queued from your last visit to this spot.`
+          : `You have ${persisted.items.length} already-uploaded photo${persisted.items.length === 1 ? '' : 's'} from a previous session — keep or discard?`;
+        Alert.alert(
+          'Previous upload found',
+          prompt,
+          [
+            {
+              text: 'Discard',
+              style: 'destructive',
+              onPress: async () => {
+                await store.clear();
+              },
+            },
+            {
+              text: resumable ? 'Resume' : 'Keep',
+              onPress: () => {
+                if (cancelled) return;
+                setCaption(persisted.meta?.caption || '');
+                setTags(Array.isArray(persisted.meta?.tags) ? persisted.meta.tags : []);
+                setVisibility(persisted.meta?.visibility || 'public');
+                // Cast persisted items back into QItem shape — all
+                // previously in-flight items reset to pending so the
+                // uploader retries them now that we're presumably online.
+                setQueue(persisted.items.map((i) => ({
+                  id: i.id,
+                  localUri: i.localUri,
+                  mimeType: i.mimeType,
+                  fileName: i.fileName,
+                  status: i.status === 'success' ? 'success' : 'pending',
+                  progress: i.status === 'success' ? 1 : 0,
+                  hostedUrl: i.hostedUrl,
+                  error: undefined,
+                  errorName: undefined,
+                  attempts: 0,
+                })));
+              },
+            },
+          ],
+          { cancelable: false },
+        );
+      } finally {
+        if (!cancelled) setRehydrating(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spotId]);
+
+  // --- Persistence: write queue+meta to AsyncStorage whenever they change --
+  useEffect(() => {
+    if (rehydrating) return; // don't overwrite stored data during hydrate
+    // Skip writes when the queue is completely empty AND there's no text
+    // state — nothing worth persisting.
+    if (queue.length === 0 && !caption && tags.length === 0) {
+      // Also proactively clean up any stale key.
+      store.clear();
+      return;
+    }
+    const snapshot: PersistedQueue = {
+      spotId,
+      items: queue.map((q) => ({
+        id: q.id,
+        localUri: q.localUri,
+        mimeType: q.mimeType,
+        fileName: q.fileName,
+        attempts: q.attempts,
+        // Never persist the transient `uploading` status — on rehydrate
+        // it would be out of date anyway. Coerce back to pending.
+        status: q.status === 'uploading' ? 'pending' : q.status,
+        hostedUrl: q.hostedUrl,
+        error: q.error,
+        errorName: q.errorName,
+      })),
+      meta: { caption, tags, visibility, updatedAt: Date.now() },
+    };
+    store.saveDebounced(snapshot);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue, caption, tags, visibility, rehydrating]);
 
   // Cleanup on unmount — abort in-flight XHR so we don't set state on a
   // gone component.
@@ -235,15 +352,25 @@ export default function UploadScreen() {
         })),
       );
       const now = Date.now();
-      const toAdd: QItem[] = normalized.map((a, idx) => ({
-        id: `${newId()}_${idx}`,
-        localUri: a.uri,
-        mimeType: a.mimeType,
-        fileName: a.fileName,
-        status: 'pending',
-        progress: 0,
-        attempts: 0,
-      }));
+      // Track D: copy each picked asset to the persistent queue dir so
+      // the file survives force-quit / OS memory pressure. The original
+      // picker URI may be a temp ImagePicker cache file — not safe to
+      // rely on past the current session.
+      const toAdd: QItem[] = await Promise.all(
+        normalized.map(async (a, idx) => {
+          const itemId = `${newId()}_${idx}`;
+          const persistedUri = await persistPickedAsset(a.uri, itemId, a.mimeType || 'jpg');
+          return {
+            id: itemId,
+            localUri: persistedUri,
+            mimeType: a.mimeType,
+            fileName: a.fileName,
+            status: 'pending' as QStatus,
+            progress: 0,
+            attempts: 0,
+          };
+        }),
+      );
       setQueue((prev) => [...prev, ...toAdd].slice(0, MAX_PHOTOS));
       // Analytics-ish client log for ops grep.
       try {
@@ -257,12 +384,17 @@ export default function UploadScreen() {
 
   // --- Queue actions -------------------------------------------------------
   const removeItem = useCallback((id: string) => {
+    // Capture localUri before removal so we can free the persisted file.
+    const item = queueRef.current.find((q) => q.id === id);
     setQueue((prev) => prev.filter((q) => q.id !== id));
     // If the removed item is the one currently uploading, abort it so the
     // uploader loop can move on.
-    const item = queueRef.current.find((q) => q.id === id);
     if (item?.status === 'uploading') {
       try { activeAbortRef.current?.abort(); } catch {}
+    }
+    // Free the on-disk persisted copy so it doesn't leak across sessions.
+    if (item?.localUri) {
+      deletePersistedAsset(item.localUri).catch(() => {});
     }
   }, []);
 
@@ -360,7 +492,13 @@ export default function UploadScreen() {
       Alert.alert(
         res?.auto_approved ? 'Posted!' : 'Submitted for review',
         res?.message || 'Thanks for contributing — your photos help keep this spot alive.',
-        [{ text: 'OK', onPress: () => router.back() }]
+        [{ text: 'OK', onPress: async () => {
+          // Track D: clear the persisted queue + delete disk copies now
+          // that the post has succeeded. Fire-and-forget — the router
+          // navigation is what the user cares about.
+          store.clear().catch(() => {});
+          router.back();
+        } }]
       );
     } catch (e: any) {
       const status = Number(e?.response?.status || e?.status || 0);
@@ -438,6 +576,15 @@ export default function UploadScreen() {
                 {queue.length}/{MAX_PHOTOS}
               </Text>
             </View>
+
+            {!online ? (
+              <Animated.View entering={FadeIn.duration(180)} style={styles.offlineBanner}>
+                <WifiOff size={14} color={colors.secondary || '#ff9f40'} />
+                <Text style={styles.offlineBannerText}>
+                  You&apos;re offline — photos are safely queued and will upload the moment you reconnect.
+                </Text>
+              </Animated.View>
+            ) : null}
 
             {stats.inFlight > 0 ? (
               <Animated.View entering={FadeIn.duration(180)} style={styles.globalStatus}>
@@ -773,6 +920,24 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
   },
   globalStatusText: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 13 },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: radii.md,
+    backgroundColor: 'rgba(255,159,64,0.10)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.secondary || '#ff9f40',
+  },
+  offlineBannerText: {
+    flex: 1,
+    color: colors.text,
+    fontFamily: font.bodyMedium,
+    fontSize: 12,
+    lineHeight: 16,
+  },
 
   // Queue card
   card: {

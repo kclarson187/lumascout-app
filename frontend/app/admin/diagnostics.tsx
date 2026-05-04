@@ -23,18 +23,35 @@
  *   Restricted to admin + super_admin so regular users never see it.
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform, Image, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import Constants from 'expo-constants';
-import { ChevronLeft, RefreshCw, Copy } from 'lucide-react-native';
+import { ChevronLeft, RefreshCw, Copy, Send } from 'lucide-react-native';
 import { useAuth } from '../../src/auth';
+import { api } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
 import { resolveBackendUrl, resolveWebBaseUrl, PRODUCTION_BACKEND_URL, PRODUCTION_WEB_BASE_URL } from '../../src/constants/config';
+
+type ApnsStatus = {
+  configured: boolean;
+  key_id: string | null;
+  team_id_present: boolean;
+  bundle_id: string | null;
+  key_path: string | null;
+  key_readable: boolean;
+  sandbox: boolean;
+  endpoint: string;
+  registered_apns_tokens: number;
+  registered_expo_tokens: number;
+};
 
 export default function AdminDiagnosticsScreen() {
   const { user } = useAuth();
   const [refreshKey, setRefreshKey] = useState(0);
+  const [apns, setApns] = useState<ApnsStatus | null>(null);
+  const [apnsLoading, setApnsLoading] = useState(false);
+  const [testingPush, setTestingPush] = useState(false);
 
   const diagnostics = useMemo(() => {
     const fromEnv = (process.env.EXPO_PUBLIC_BACKEND_URL as string | undefined) || '';
@@ -88,6 +105,41 @@ export default function AdminDiagnosticsScreen() {
     }
   }, [user]);
 
+  // Fetch APNs configuration status from the backend.
+  useEffect(() => {
+    if (!user || !['admin', 'super_admin'].includes(user.role || '')) return;
+    let cancelled = false;
+    (async () => {
+      setApnsLoading(true);
+      try {
+        const r = await api.get<ApnsStatus>('/admin/apns/status');
+        if (!cancelled) setApns(r.data);
+      } catch {
+        if (!cancelled) setApns(null);
+      } finally {
+        if (!cancelled) setApnsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user, refreshKey]);
+
+  const sendPushTest = async () => {
+    if (testingPush) return;
+    setTestingPush(true);
+    try {
+      const r = await api.post('/me/notifications/test-apns');
+      Alert.alert(
+        'Test dispatched',
+        `Sent to ${r.data?.tokens_targeted ?? 0} registered tokens.\n` +
+        `${(r.data?.tokens || []).map((t: any) => `• ${t.type} (${t.platform})`).join('\n') || '(no tokens)'}`
+      );
+    } catch (e: any) {
+      Alert.alert('Test failed', e?.response?.data?.detail || e?.message || 'Unknown error');
+    } finally {
+      setTestingPush(false);
+    }
+  };
+
   if (!user || !['admin', 'super_admin'].includes(user.role || '')) {
     return null;
   }
@@ -129,6 +181,38 @@ export default function AdminDiagnosticsScreen() {
         <Section label="Constants.expoConfig present" value={String(diagnostics.hasExpoConfig)} />
         <Section label="Constants.manifest present" value={String(diagnostics.hasManifest)} />
         <Section label="Constants.manifest2 present" value={String(diagnostics.hasManifest2)} />
+
+        <Text style={styles.title}>Push notifications (APNs)</Text>
+        {apnsLoading ? (
+          <Text style={styles.helper}>Loading APNs status…</Text>
+        ) : apns ? (
+          <>
+            <Section
+              label="APNs configured"
+              value={apns.configured ? 'yes' : 'no'}
+              highlight={apns.configured ? 'ok' : 'fail'}
+              note={apns.configured ? '.p8 key readable + team/bundle/key-id env vars set' : 'Check APNS_* env vars in backend/.env'}
+            />
+            <Section label="Key ID" value={apns.key_id || '(none)'} />
+            <Section label="Team ID present" value={String(apns.team_id_present)} />
+            <Section label="Bundle ID" value={apns.bundle_id || '(none)'} />
+            <Section label="Environment" value={apns.sandbox ? 'sandbox (development)' : 'production'} />
+            <Section label="Endpoint" value={apns.endpoint} />
+            <Section label="Registered APNs tokens" value={String(apns.registered_apns_tokens)} note="iOS devices that have registered their native APNs token on this account" />
+            <Section label="Registered Expo tokens" value={String(apns.registered_expo_tokens)} note="All devices (Expo-routed)" />
+            <TouchableOpacity
+              onPress={sendPushTest}
+              disabled={testingPush}
+              style={styles.testPushBtn}
+              testID="diag-test-push"
+            >
+              <Send size={14} color={colors.primary} />
+              <Text style={styles.testPushBtnTxt}>{testingPush ? 'Sending…' : 'Send test push to me'}</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <Text style={styles.helper}>APNs status unavailable (admin endpoint unreachable).</Text>
+        )}
 
         <Text style={styles.title}>Sample image (proxy round-trip)</Text>
         <Text style={styles.helper}>
@@ -207,4 +291,11 @@ const styles = StyleSheet.create({
   urlBox: { padding: 10, borderRadius: radii.sm, backgroundColor: colors.surface2 },
   urlBoxTxt: { fontFamily: 'Menlo', fontSize: 10, color: colors.textSecondary },
   footer: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, textAlign: 'center', marginTop: space.lg },
+  testPushBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    paddingVertical: 12, paddingHorizontal: 16, borderRadius: radii.md,
+    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.primary,
+    marginTop: 6,
+  },
+  testPushBtnTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 13 },
 });

@@ -6,9 +6,22 @@ import { router } from 'expo-router';
 import { api } from './api';
 
 /**
- * Ensure notification permissions are granted, fetch an Expo push token, and
- * POST it to the backend. Silent on web or when permission is denied.
+ * Ensure notification permissions are granted, fetch an Expo push token,
+ * AND (iOS only, post-EAS-build) fetch the native APNs device token and
+ * POST both to the backend. Silent on web or when permission is denied.
  * Safe to call multiple times — the server upserts by (user_id, token).
+ *
+ * Why register BOTH token types on iOS:
+ *   • Expo token    → delivered via exp.host (easy path, works in Expo Go)
+ *   • APNs device   → delivered directly via api.push.apple.com (our
+ *                     backend signs a JWT with the .p8 in /app/secrets/)
+ *                     Bypasses Expo's push service entirely. Used for
+ *                     high-volume fanouts where Expo would rate-limit.
+ *
+ * `getDevicePushTokenAsync()` returns the OS-level token — on iOS this
+ * is the APNs token; on Android this would be the FCM token. FCM
+ * dispatch is not yet wired server-side, so we only register iOS
+ * native tokens for now.
  */
 export async function registerPushToken(): Promise<string | null> {
   if (Platform.OS === 'web') return null;
@@ -38,17 +51,57 @@ export async function registerPushToken(): Promise<string | null> {
       Constants.expoConfig?.extra?.eas?.projectId ||
       // @ts-ignore — classic builds
       Constants.easConfig?.projectId;
-    const tokenResp = await Notifications.getExpoPushTokenAsync(
-      projectId ? { projectId } : undefined,
-    );
-    const token = tokenResp.data;
-    if (!token) return null;
+
+    // 1) Expo-routed token (works in Expo Go + EAS builds).
+    let expoToken: string | null = null;
     try {
-      await api.post('/me/push-token', { token, platform: Platform.OS });
+      const tokenResp = await Notifications.getExpoPushTokenAsync(
+        projectId ? { projectId } : undefined,
+      );
+      expoToken = tokenResp.data || null;
     } catch {
-      // registration failure is non-fatal; try again next launch.
+      // Expo Go on a fresh install can occasionally fail the first call.
+      expoToken = null;
     }
-    return token;
+    if (expoToken) {
+      try {
+        await api.post('/me/push-token', {
+          token: expoToken,
+          token_type: 'expo',
+          platform: Platform.OS,
+        });
+      } catch {
+        // registration failure is non-fatal; try again next launch.
+      }
+    }
+
+    // 2) Native APNs device token (iOS only + EAS native builds only —
+    //    Expo Go sandboxes notifications and does NOT expose the real
+    //    APNs token). The call throws an ERR_NOTIFICATIONS_SERVER_ERROR
+    //    style rejection in Expo Go; swallow silently.
+    if (Platform.OS === 'ios') {
+      try {
+        const deviceTok = await Notifications.getDevicePushTokenAsync();
+        // deviceTok.data is a hex string on iOS (APNs token).
+        const rawApns = typeof deviceTok?.data === 'string' ? deviceTok.data : '';
+        if (rawApns) {
+          try {
+            await api.post('/me/push-token', {
+              token: rawApns,
+              token_type: 'apns',
+              platform: 'ios',
+            });
+          } catch {
+            /* non-fatal */
+          }
+        }
+      } catch {
+        // Non-fatal — the user still has the Expo path. We'll re-try
+        // on next launch once they're on an EAS build.
+      }
+    }
+
+    return expoToken;
   } catch {
     return null;
   }
