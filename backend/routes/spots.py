@@ -232,6 +232,12 @@ class CollectionAddIn(BaseModel):
 class SpotUploadImageIn(BaseModel):
     image_url: str  # base64 data URL or remote URL
     caption: Optional[str] = None
+    # May 2026: R2 object key (e.g. "uploads/2026/05/<uuid>.jpg") so we
+    # can re-sign or rewrite to a new public domain later without
+    # having to parse or regex the URL. Populated when the client
+    # uploaded via POST /api/uploads/image and R2 is configured.
+    # Legacy clients / local-disk uploads leave this null — perfectly fine.
+    storage_key: Optional[str] = None
 
 # --- SpotCommunityUploadIn (server.py:1970-2003) ---
 class SpotCommunityUploadIn(BaseModel):
@@ -1118,6 +1124,11 @@ async def post_spot_upload(
             "spot_id": spot_id,
             "user_id": user["user_id"],
             "image_url": img.image_url,
+            # Carry the R2 storage_key alongside image_url so a future
+            # rewrite of the public domain (or a periodic garbage sweep
+            # of orphaned R2 objects) can key off the stable object
+            # identity rather than parsing URLs.
+            "storage_key": img.storage_key,
             "caption": (img.caption or body.caption or "").strip() or None,
             "condition_tags": body.condition_tags,
             "visibility": body.visibility,

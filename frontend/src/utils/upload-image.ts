@@ -37,6 +37,12 @@ export type UploadedImage = {
   height: number;
   bytes: number;
   mime: string;
+  // May 2026: backend returns "storage": "r2" | "local" and a
+  // matching object key when the upload landed in Cloudflare R2.
+  // Forward both through /spots/{id}/uploads so we can persist the
+  // stable key next to the URL on the spot row.
+  storage?: 'r2' | 'local';
+  storage_key?: string | null;
 };
 
 async function authHeader(): Promise<Record<string, string>> {

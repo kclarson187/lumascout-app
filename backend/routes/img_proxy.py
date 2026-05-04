@@ -131,6 +131,22 @@ ALLOWED_HOSTS = {
     "lumascout.app",
 }
 
+# May 2026: Cloudflare R2 public host is configured per-environment via
+# R2_PUBLIC_BASE_URL (e.g. https://cdn.lumascout.app or
+# https://pub-<hash>.r2.dev). We extract its hostname and add it to the
+# allowlist at module-import time so /api/img can proxy R2-hosted
+# uploads without each deployment having to hand-edit this set.
+try:
+    _r2_public = os.environ.get("R2_PUBLIC_BASE_URL", "").strip()
+    if _r2_public:
+        _r2_host = (urlparse(_r2_public).hostname or "").lower()
+        if _r2_host:
+            ALLOWED_HOSTS.add(_r2_host)
+except Exception:
+    # Never fail module import over an env-var parse problem —
+    # the existing static allowlist still works.
+    pass
+
 # If a source URL already has `?w=...&q=...` params of its own (like
 # Pexels / Unsplash), we *overwrite* them with our requested w/q so
 # the origin does as much downscaling as possible before we touch it.

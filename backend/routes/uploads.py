@@ -62,6 +62,7 @@ except Exception:
     pass
 
 from server import get_current_user, check_rate_limit  # reuse existing hooks
+from services import storage_r2  # R2 backend with local-disk fallback (May 2026)
 
 # Structured upload logger — separate from the root logger so prod
 # observability tooling can pin "uploads.image" to a specific
@@ -203,9 +204,53 @@ async def upload_image(
     encoded = out.getvalue()
 
     now = datetime.now(timezone.utc)
+    name = f"{uuid.uuid4().hex}.{ext}"
+
+    # ─── May 2026: route to Cloudflare R2 when configured ──────────────
+    # /app/backend/uploads lives on the container's ephemeral local
+    # disk. Every pod restart on prod silently wipes user photos while
+    # MongoDB keeps the rows. R2 (S3-compatible) gives us a durable
+    # object store + CDN delivery in one. When R2 env vars are absent
+    # (dev / Expo Go), we fall back to the legacy on-disk path below.
+    if storage_r2.r2_configured():
+        try:
+            r2_res = storage_r2.put_object(
+                key_prefix=f"uploads/{now.year:04d}/{now.month:02d}",
+                data=encoded,
+                extension=ext,
+                content_type="image/jpeg",
+            )
+        except Exception as e:
+            _upload_log.error(
+                "upload_image.r2_put_fail user_id=%s filename=%r err=%r",
+                user_id, fname, e,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Couldn't save the photo on our side. Please try again in a moment.",
+            )
+
+        rel_url = r2_res["public_url"]
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        _upload_log.info(
+            "upload_image.r2_ok user_id=%s filename=%r in_bytes=%d in_mime=%r "
+            "out_bytes=%d out_dim=%dx%d key=%s url=%s elapsed_ms=%d",
+            user_id, fname, size_in, ct_in, len(encoded),
+            img.size[0], img.size[1], r2_res["key"], rel_url, elapsed_ms,
+        )
+        return {
+            "image_url": rel_url,
+            "storage": "r2",
+            "storage_key": r2_res["key"],
+            "width": img.size[0],
+            "height": img.size[1],
+            "bytes": len(encoded),
+            "mime": "image/jpeg",
+        }
+
+    # ─── Local-disk fallback (dev / Expo Go / R2 unconfigured) ─────────
     sub = UPLOADS_ROOT / f"{now.year:04d}" / f"{now.month:02d}"
     sub.mkdir(parents=True, exist_ok=True)
-    name = f"{uuid.uuid4().hex}.{ext}"
     path = sub / name
     try:
         path.write_bytes(encoded)
@@ -229,6 +274,8 @@ async def upload_image(
     )
     return {
         "image_url": rel_url,
+        "storage": "local",
+        "storage_key": None,
         "width": img.size[0],
         "height": img.size[1],
         "bytes": len(encoded),
