@@ -146,8 +146,41 @@ def _effective_plan(plan: str) -> str:
     return plan
 
 
+# ─── Comped Elite Roles (May 2026) ──────────────────────────────────────
+# Roles in this set automatically resolve to `comp_elite` for ENTITLEMENT
+# purposes. This is purely about subscription access (Elite-gated features,
+# saves limits, weather overlays, forecast tools, etc.) — it has NO effect
+# on permission boundaries (who can moderate, who can hit /admin/* routes,
+# etc.). Permission gating uses a different system: ROLE_LEVELS + the
+# require_role() dependency in routes/, neither of which read this set.
+#
+# Why it lives here and not in the user document
+#   • Single source of truth — every entitlement check (`plan_of()` is
+#     the ONE helper used by paywalls, gates, and limits_for()) sees
+#     this without a Mongo write per role grant.
+#   • No back-write to the `plan` field — a moderator stripped of their
+#     role tomorrow reverts to whatever Stripe says they actually pay
+#     for, automatically. No DB cleanup script needed.
+#   • Idempotent — adding/removing a role doesn't have to run a "now
+#     comp them / now uncomp them" migration. The role IS the comp.
+#
+# What this does NOT do
+#   • Grant moderation tools to founding_scout.
+#   • Grant admin tools to moderator/support.
+#   • Grant super_admin tools to admin.
+# Permission checks (require_role, ROLE_LEVELS) remain authoritative.
+ELITE_COMP_ROLES = frozenset({
+    "founding_scout",  # honorary scout role
+    "moderator",       # community moderation staff
+    "support",         # customer-support staff
+    "admin",           # platform admin
+    "super_admin",     # superuser (founders, ops)
+})
+
+
 def plan_of(user: dict) -> str:
     raw = (user or {}).get("plan") or "free"
+    role = (user or {}).get("role") or ""
     # Expired comp plans silently revert to 'free'.
     expiry = (user or {}).get("comp_expiration")
     if expiry and raw in ("comp_pro", "comp_elite", "trial_pro", "trial_elite"):
@@ -156,20 +189,21 @@ def plan_of(user: dict) -> str:
             if exp_dt.tzinfo is None:
                 exp_dt = exp_dt.replace(tzinfo=timezone.utc)
             if exp_dt < datetime.now(timezone.utc):
-                # Founding Scouts keep Elite even if their own comp_expiration
-                # lapses — the role itself is the entitlement (see note below).
-                if (user or {}).get("role") == "founding_scout":
+                # Comped-role users keep Elite even if their own
+                # comp_expiration lapses — the role itself is the
+                # entitlement, so a stale `comp_expiration` field
+                # left over from a previous grant doesn't matter.
+                if role in ELITE_COMP_ROLES:
                     return "comp_elite"
                 return "free"
         except Exception:
             pass
-    # Founding Scout honorary role — auto-comped Elite access. If the user
-    # already has a PAID Elite subscription ("elite") or an explicit comp
-    # override, leave that alone (truthful billing state); otherwise treat
-    # them as comp_elite so Elite-gated features unlock without ever
-    # hitting Stripe. Removing the role reverts them back to whatever
-    # `plan` field says (typically "free"), enforced in admin_update_user.
-    if (user or {}).get("role") == "founding_scout" and raw in ("free", None, "", "trial_pro", "comp_pro", "trial_elite"):
+    # Comped-role auto-Elite. If the user already has a paid Elite
+    # subscription (`raw == "elite"`), leave that alone — the billing
+    # state is truthful and switching them to comp_elite would muddy
+    # revenue reporting. Same logic for explicit higher-priority comp
+    # overrides ("comp_elite" already, "trial_elite" still active).
+    if role in ELITE_COMP_ROLES and raw in ("free", None, "", "trial_pro", "comp_pro", "trial_elite"):
         return "comp_elite"
     return raw
 

@@ -14,6 +14,88 @@
 
 
 
+  - task: "Phase A — Elite for special roles (founding_scout / moderator / support / admin / super_admin)"
+    implemented: true
+    working: true
+    file: |
+      /app/backend/server.py (introduced ELITE_COMP_ROLES constant; refactored plan_of() to consult it; expired-comp branch generalized to honor any of the 5 roles. Permission boundaries — ROLE_LEVELS, VALID_ROLES, every require_role(...) — are 100% untouched.)
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Centralized entitlement helper plan_of(user) now resolves all
+          5 special roles to comp_elite for ENTITLEMENT only. Permission
+          gating uses a separate system (ROLE_LEVELS + require_role)
+          which was deliberately left untouched. 11/11 isolated unit
+          tests pass.
+
+  - task: "Phase B — R2 orphan + Mongo image-ref cleanup scripts (preview-safe by default)"
+    implemented: true
+    working: true
+    file: |
+      /app/backend/scripts/r2_orphan_cleanup.py (NEW — long-term hygiene; preview by default; --confirm required; uploads/ prefix allowlist; re-validates Mongo refs at delete time)
+      /app/backend/scripts/mongo_image_ref_cleanup.py (NEW — fixes today's user-visible 404s by nulling dead URLs and promoting next surviving image to cover; preview by default; --confirm required; consumes /app/backend/cache/orphan_report.json; only acts on 404/410 statuses)
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Both scripts run cleanly in --preview mode in this container.
+          R2 found 10 orphans (smoke-test JPEGs from this session), Mongo
+          script found 7 spots in this DB to clean (3 prod-only spots
+          McAllister/Bullis/Bluebonnet correctly skipped as not_in_db
+          since this is the preview DB).
+
+  - task: "Phase C — Messaging Delivered/Read UI cleanup"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/src/components/ReadReceipt.tsx (rewrote — dropped Sent state, dropped timestamps, renamed Seen → Read; backend delivered_at/seen_at fields untouched; mark-read still triggered ONLY on thread-screen mount in /app/frontend/app/inbox/[id].tsx:68)
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Verified mark-read isn't called from inbox preview, push
+          handlers, badge polls, or background refresh. Only thread
+          mount triggers it. UI now shows '✓✓ Delivered' or '✓✓ Read',
+          no timestamps, no Sent state.
+
+  - task: "Phase D — Explore list image resize bug fix"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/src/components/SpotCard.tsx (added Dimensions import; computed pixel-based fallbackImgHeight when width prop is undefined; concrete pixel height eliminates the intrinsic-image-size fallback that caused the 5-7s oversized flash on Explore list cards.)
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Root cause: width:'100%' + aspectRatio:4/5 left wrapper unsized
+          on first paint when ScrollView width was indeterminate; RN
+          fell back to satisfying aspectRatio against intrinsic
+          1200x1500 image dimensions. Fix: compute height in pixels
+          from window width on render, only when no explicit width
+          prop is passed (Home Saved-Spots rail still uses aspectRatio
+          via its explicit width={260}).
+
+  - task: "Phase E — Explore map marker timing diagnostics"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/app/(tabs)/explore.tsx (added mapOpenAt ref stamped on view-toggle; added 4 timeline log points: view→map, onMapReady, /spots/markers HTTP start + done, and setMapMarkers committed. All times in ms relative to mapOpenAt so we can attribute the user-reported 5s delay to the right step on a real device.)
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          DIAGNOSTICS-ONLY pass. No marker fetch logic / mapNativeReady
+          / GPS gating changed — preserves the Mac Catalyst crash fix
+          shipped earlier. User next runs the diagnostic build, taps
+          Map view, and reports back the timeline log line: ms_since_map_open
+          values for {map_native_ready, markers_fetch_start, markers_http_done,
+          markers_state_committed}. Targeted optimization will follow
+          based on whichever step is the actual bottleneck.
+
+
+
+
   - task: "Mac Catalyst Explore-tab crash hardening — react-native-maps bump + onMapReady-gated marker mount"
     implemented: true
     working: true

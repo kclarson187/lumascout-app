@@ -1,65 +1,85 @@
 /**
- * ReadReceipt — renders the per-message read state beneath outbound
- * bubbles. Three visual states per the UX spec:
+ * ReadReceipt — renders the per-message delivery / read state beneath
+ * outbound bubbles.
  *
- *   ✓        → Sent (delivered_at is null — the message hasn't hit the
- *                recipient's device; in practice rare because we stamp
- *                delivered_at at insert time alongside the push dispatch).
- *   ✓✓       → Delivered (delivered_at stamped, seen_at still null).
- *   Seen <t> → seen_at stamped. Ticks become blue-ish accent.
+ * UX spec (May 2026 update — simplification pass)
+ * ───────────────────────────────────────────────
+ * Two visible states only, no timestamps:
  *
- * Renders the timestamp on the Seen state only (per PRD: "Seen 2:14 PM").
- * Other states fall back to the bubble's created_at timestamp handled
- * outside this component.
+ *   ✓✓  Delivered → message reached the recipient's device(s).
+ *                   `delivered_at` is stamped at insert time alongside
+ *                   the push dispatch in /api/dm/threads/{id}/messages.
  *
- * Tier 1 Messaging Upgrade (2026-04).
+ *   ✓✓  Read     → recipient OPENED THE THREAD that contains this
+ *                   message. `seen_at` is stamped server-side by
+ *                   /api/dm/threads/{id}/mark-read, which is called
+ *                   only from the thread-detail screen's mount effect
+ *                   (NOT from inbox preview, push-preview, badge poll,
+ *                   background refresh, or any passive fetch path).
+ *
+ * What we deliberately removed in May 2026
+ * ────────────────────────────────────────
+ *   • The "Sent" (single ✓) state. UX feedback was that it surfaced
+ *     a transient internal-state distinction users don't care about
+ *     — every successful send instantly stamps `delivered_at` server-
+ *     side, so the gap between "sent" and "delivered" is sub-second.
+ *     If a true unsent state ever exists (network failure → retry),
+ *     the bubble already shows a separate retry chip elsewhere.
+ *
+ *   • Visible timestamps on Delivered / Read. The bubble itself
+ *     already shows `created_at` per the chat layout; surfacing a
+ *     SECOND timestamp underneath made the receipt area noisy and
+ *     inconsistent with how the rest of the conversation reads.
+ *     The timestamps still exist server-side (`delivered_at`,
+ *     `seen_at`) so any analytics / debugging that needs them is
+ *     unaffected — only the visible bubble is simplified.
+ *
+ * Backend fields consumed
+ * ───────────────────────
+ *   deliveredAt → first device receipt; populated by
+ *     /api/dm/threads/{id}/messages on insert.
+ *   seenAt      → recipient opened the thread; populated by
+ *     /api/dm/threads/{id}/mark-read which runs ONCE per thread open.
+ *
+ * Tier 1 Messaging Upgrade (2026-04). Simplification pass (2026-05).
  */
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { Check, CheckCheck } from 'lucide-react-native';
+import { CheckCheck } from 'lucide-react-native';
 import { font } from '../theme';
-
-function fmtClock(iso?: string | null): string {
-  if (!iso) return '';
-  try {
-    const d = new Date(iso);
-    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  } catch {
-    return '';
-  }
-}
 
 export default function ReadReceipt({
   deliveredAt,
   seenAt,
   mine,
-  onTint = 'rgba(255,255,255,0.85)',
+  // Tints kept as props so the chat screen can theme the receipts to
+  // match the bubble color scheme without forking this component.
   mutedTint = 'rgba(255,255,255,0.55)',
   seenTint = '#7dd3fc', // soft sky blue — reads as "activated" on amber bubbles
-  showSeenTimestamp = true,
 }: {
   deliveredAt?: string | null;
   seenAt?: string | null;
   mine: boolean;
-  onTint?: string;
   mutedTint?: string;
   seenTint?: string;
-  showSeenTimestamp?: boolean;
 }) {
-  if (!mine) return null; // read receipts only shown on outbound messages
+  // Receipts only show on outbound messages — there's nothing the
+  // recipient can learn from seeing their own message marked Read.
+  if (!mine) return null;
+
   const isSeen = !!seenAt;
   const isDelivered = !!deliveredAt;
 
+  // Read state — recipient has opened the thread.
   if (isSeen) {
     return (
       <View style={styles.row}>
         <CheckCheck size={11} color={seenTint} strokeWidth={2.5} />
-        <Text style={[styles.txt, { color: seenTint }]}>
-          {showSeenTimestamp ? `Seen ${fmtClock(seenAt)}` : 'Seen'}
-        </Text>
+        <Text style={[styles.txt, { color: seenTint }]}>Read</Text>
       </View>
     );
   }
+  // Delivered state — message hit the recipient's device(s).
   if (isDelivered) {
     return (
       <View style={styles.row}>
@@ -68,12 +88,12 @@ export default function ReadReceipt({
       </View>
     );
   }
-  return (
-    <View style={styles.row}>
-      <Check size={11} color={mutedTint} strokeWidth={2} />
-      <Text style={[styles.txt, { color: mutedTint }]}>Sent</Text>
-    </View>
-  );
+  // Pre-delivery state — by spec we render NOTHING here. The bubble's
+  // own retry/error UI (handled at the message level) covers any rare
+  // case where delivery fails outright. Showing a "Sent" placeholder
+  // here would just add visual noise for the sub-second window before
+  // delivered_at gets stamped.
+  return null;
 }
 
 const styles = StyleSheet.create({

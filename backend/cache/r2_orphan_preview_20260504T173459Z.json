@@ -1,0 +1,61 @@
+{
+  "generated_at": "2026-05-04T17:34:59.550816+00:00",
+  "mode": "PREVIEW (read-only)",
+  "prefix": "uploads/",
+  "bucket_objects": 10,
+  "mongo_referenced": 0,
+  "orphan_count": 10,
+  "orphan_bytes_total": 2799451,
+  "orphans": [
+    {
+      "key": "uploads/2026/05/265dbb904e26445ba92b99b5a7f866d1.jpg",
+      "size": 136751,
+      "last_modified": "2026-05-04T06:06:42.411000+00:00"
+    },
+    {
+      "key": "uploads/2026/05/2eca3263fd2242b296676885c1707892.jpg",
+      "size": 297615,
+      "last_modified": "2026-05-04T13:53:01.302000+00:00"
+    },
+    {
+      "key": "uploads/2026/05/3296d46bfa1c46fdbe2e6ea7fd471428.jpg",
+      "size": 330995,
+      "last_modified": "2026-05-04T06:25:17.379000+00:00"
+    },
+    {
+      "key": "uploads/2026/05/3998f3a35b3e4ab6b5f02d6f9d154941.jpg",
+      "size": 305699,
+      "last_modified": "2026-05-04T13:53:21.697000+00:00"
+    },
+    {
+      "key": "uploads/2026/05/526ef877bc2c4bec81a4a3112063fdb5.jpg",
+      "size": 135021,
+      "last_modified": "2026-05-04T06:06:43.292000+00:00"
+    },
+    {
+      "key": "uploads/2026/05/85fbcf5b7bcd4453916679936a07f399.jpg",
+      "size": 457264,
+      "last_modified": "2026-05-04T06:25:19.018000+00:00"
+    },
+    {
+      "key": "uploads/2026/05/a5b12437706c478aa915824f856e7b57.jpg",
+      "size": 332602,
+      "last_modified": "2026-05-04T06:25:20.073000+00:00"
+    },
+    {
+      "key": "uploads/2026/05/b55976bddf324b6dbc05ba90009200cf.jpg",
+      "size": 244682,
+      "last_modified": "2026-05-04T13:53:15.186000+00:00"
+    },
+    {
+      "key": "uploads/2026/05/bb0f264f5cc643c48cd415e2cd823dfb.jpg",
+      "size": 205589,
+      "last_modified": "2026-05-04T06:25:18.051000+00:00"
+    },
+    {
+      "key": "uploads/2026/05/f82cebeb055a443aba970682a22a687b.jpg",
+      "size": 353233,
+      "last_modified": "2026-05-04T13:53:09.020000+00:00"
+    }
+  ]
+}
