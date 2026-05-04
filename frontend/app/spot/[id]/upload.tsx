@@ -28,8 +28,8 @@
  *     (entering queue, success chip fade, removal).
  */
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Alert, ActivityIndicator, Pressable, Platform } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Alert, ActivityIndicator, Pressable, Platform, DeviceEventEmitter } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ChevronLeft, ImagePlus, X, Camera, RotateCw, Check, AlertCircle, ChevronUp, ChevronDown, Clock, WifiOff } from 'lucide-react-native';
 import Animated, { FadeIn, FadeOut, Layout } from 'react-native-reanimated';
@@ -499,6 +499,26 @@ export default function UploadScreen() {
           invalidateCachePrefix(`spot:${spotId}`),
         ]);
       } catch {}
+      // ─── May 2026 — belt-and-suspenders refresh signal ──────────────
+      // The SWR cache invalidation above handles the data layer, but
+      // the spot-detail screen's hero image is rendered through
+      // `expo-image`, which keeps its OWN url-keyed memory + disk
+      // cache independent of SWR. If the backend rotated the cover
+      // such that the URL changed but the new URL was previously
+      // served (e.g. a re-promoted older photo), expo-image's cache
+      // would return stale bytes and the user would see "no change"
+      // until the app is force-quit. Emitting this event lets the
+      // spot-detail screen drop its in-memory image cache AND force
+      // a fresh `/api/spots/:id` fetch the moment the user returns,
+      // without relying on useFocusEffect's microtask timing.
+      try {
+        DeviceEventEmitter.emit('spot:photos:posted', {
+          spotId,
+          autoApproved: !!res?.auto_approved,
+        });
+      } catch {
+        /* fire-and-forget */
+      }
       Alert.alert(
         res?.auto_approved ? 'Posted!' : 'Submitted for review',
         res?.message || 'Thanks for contributing — your photos help keep this spot alive.',
