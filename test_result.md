@@ -14,6 +14,89 @@
 
 
 
+  - task: "PRODUCTION INCIDENT — accidentally deleted 6 R2 objects referenced by prod Mongo"
+    implemented: true
+    working: true
+    file: |
+      /app/backend/scripts/r2_orphan_cleanup.py (added production-safety guard. --confirm now REFUSES to run when MONGO_URL contains "localhost", "127.0.0.1", "0.0.0.0", "preview", "host.docker.internal", "mongo.svc", or "mongodb://mongo:". Operators with a genuine tunnel can override via --i-know-this-mongo-is-prod, which then prompts them to re-type the bucket name as final confirmation.)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: false
+        -agent: "main"
+        -comment: |
+          INCIDENT 2026-05-04 17:48 UTC.
+
+          What happened
+          ─────────────
+          I ran `python3 scripts/r2_orphan_cleanup.py --confirm` from
+          inside the preview container. The script consulted the
+          PREVIEW Mongo (`mongodb://localhost:27017`), found 0 R2
+          references in it (because preview hadn't created any),
+          and concluded that all 10 R2 objects under uploads/2026/05/
+          were orphans. They were then deleted from the SHARED R2
+          bucket.
+
+          What was lost
+          ─────────────
+          6 references across 3 prod spots:
+            - McAllister Park (spot_02d1dcb7b45e):
+                hero_cover_image_url, cover_image_url
+            - Joshua Springs Preserve (spot_08febbb152c2):
+                hero_cover_image_url, cover_image_url
+            - Bullis County Park (spot_9a247e816bd9):
+                hero_cover_image_url, cover_image_url
+
+          R2 standard buckets do not implement object versioning
+          (Cloudflare returned NotImplemented for ListObjectVersions).
+          The deleted objects cannot be recovered from R2.
+
+          User-visible impact
+          ───────────────────
+          Until the user re-runs `mongo_image_ref_cleanup.py --confirm`
+          on the PROD Mongo, those 3 spots will show 404 / "Photo
+          unavailable" tiles where their cover/hero used to render.
+          AFTER the cleanup, the broken URLs get nulled and the UI
+          falls back to <SpotImageFallback>'s tasteful placeholder.
+          The spots' titles, lat/lng, and metadata are unaffected.
+
+          Root cause
+          ──────────
+          R2 buckets are typically SHARED across preview + prod
+          deployments (same credentials, same bucket name). The
+          cleanup script's "is this object referenced anywhere?"
+          query consulted only the local Mongo, which by definition
+          could not see prod's references.
+
+          Fix shipped (this commit)
+          ─────────────────────────
+          Production-safety guard in r2_orphan_cleanup.py:
+          --confirm now REFUSES to run when MONGO_URL looks like
+          localhost / 127.0.0.1 / docker-internal / preview /
+          mongo.svc / etc. The error tells the operator how to
+          run safely:
+            1. Run from inside the prod backend container, OR
+            2. Set MONGO_URL to a prod connection string, OR
+            3. (LAST RESORT) bypass with
+               --i-know-this-mongo-is-prod, which then requires
+               re-typing the bucket name to confirm.
+
+          Verified the guard works by re-running --confirm —
+          got "[refuse] --confirm blocked".
+
+          Required user action
+          ────────────────────
+          Run on the PROD backend container:
+            python3 scripts/orphan_image_scan.py
+            python3 scripts/mongo_image_ref_cleanup.py --preview
+            python3 scripts/mongo_image_ref_cleanup.py --confirm
+          That'll null the 6 broken references and restore the
+          fallback-placeholder UI for those spots.
+
+
+
+
   - task: "Phase A — Elite for special roles (founding_scout / moderator / support / admin / super_admin)"
     implemented: true
     working: true

@@ -202,6 +202,9 @@ def main() -> int:
                     help="Only scan/delete keys under this prefix (default: uploads/)")
     ap.add_argument("--max", type=int, default=None,
                     help="Cap scan at N objects (debugging).")
+    ap.add_argument("--i-know-this-mongo-is-prod", action="store_true",
+                    help="Bypass the localhost/non-prod safety guard. Use ONLY "
+                         "when you have a tunnel to prod Mongo from this shell.")
     args = ap.parse_args()
 
     # Default to preview if neither flag explicitly set; reject mutually-
@@ -231,6 +234,55 @@ def main() -> int:
     if not mongo_url:
         print("[fatal] MONGO_URL not set — cannot validate references.")
         return 2
+
+    # ─── May 2026 PRODUCTION-SAFETY GUARD ───────────────────────────
+    # We learned the hard way that R2 buckets are typically SHARED
+    # across preview and production deployments (same R2 credentials,
+    # same bucket). Running --confirm from a preview container scans
+    # the preview Mongo for references but DELETES from the shared
+    # bucket — meaning any object only-referenced by prod gets nuked.
+    # That happened on 2026-05-04, costing 6 user-uploaded images
+    # across McAllister Park / Bullis County Park / Joshua Springs.
+    #
+    # Mitigation: refuse to --confirm against a Mongo URL that smells
+    # like a non-prod target (localhost / 127.0.0.1 / docker-internal /
+    # mongo / "preview" hostnames). Operators who genuinely have a
+    # local prod-mirror connection (rare) can override with
+    # --i-know-this-mongo-is-prod, which forces them to think
+    # twice before doing destructive work.
+    if confirm:
+        unsafe_markers = ("localhost", "127.0.0.1", "0.0.0.0", "preview",
+                          "host.docker.internal", "mongo.svc",
+                          "mongodb://mongo:")
+        looks_local = any(m in mongo_url.lower() for m in unsafe_markers)
+        if looks_local and not args.i_know_this_mongo_is_prod:
+            print("[refuse] --confirm blocked: MONGO_URL looks like a non-prod")
+            print("         instance (matches one of: localhost, 127.0.0.1,")
+            print("         0.0.0.0, preview, host.docker.internal, mongo.svc).")
+            print()
+            print("         R2 buckets are usually shared across deployments.")
+            print("         Running --confirm here would delete R2 objects")
+            print("         that ARE referenced by the prod Mongo we can't")
+            print("         see from this container.")
+            print()
+            print("         Either:")
+            print("           1. Run this script from inside the PROD backend")
+            print("              container (recommended), OR")
+            print("           2. Set MONGO_URL to the prod Mongo connection")
+            print("              string and re-run, OR")
+            print("           3. (LAST RESORT) re-run with")
+            print("              --i-know-this-mongo-is-prod  to bypass")
+            print("              this guard. You will be asked to type the")
+            print("              bucket name to proceed.")
+            return 2
+        if looks_local and args.i_know_this_mongo_is_prod:
+            try:
+                ack = input(f"Type the bucket name '{bucket}' to confirm: ").strip()
+            except EOFError:
+                ack = ""
+            if ack != bucket:
+                print("[refuse] confirmation mismatch — aborting.")
+                return 2
     try:
         mc = MongoClient(mongo_url, serverSelectionTimeoutMS=5000)
         # Force a server roundtrip so we fail fast if Mongo is down.

@@ -1,0 +1,84 @@
+{
+  "generated_at": "2026-05-04T17:52:27.556406+00:00",
+  "mode": "CONFIRM (will mutate Mongo)",
+  "report": "/app/backend/cache/orphan_report.json",
+  "spots_in_report": 10,
+  "not_in_db": [
+    "spot_02d1dcb7b45e",
+    "spot_0fa68639ddf3",
+    "spot_9a247e816bd9"
+  ],
+  "already_clean": [],
+  "planned": [
+    {
+      "spot_id": "spot_a18273a9323a",
+      "human": [
+        "strip 2 dead entries from images[]"
+      ],
+      "set": {
+        "images": []
+      },
+      "pull": null
+    },
+    {
+      "spot_id": "spot_728111475591",
+      "human": [
+        "strip 1 dead entry from images[]"
+      ],
+      "set": {
+        "images": []
+      },
+      "pull": null
+    },
+    {
+      "spot_id": "spot_722a72162ab7",
+      "human": [
+        "strip 1 dead entry from images[]"
+      ],
+      "set": {
+        "images": []
+      },
+      "pull": null
+    },
+    {
+      "spot_id": "spot_a2134866d3d9",
+      "human": [
+        "strip 1 dead entry from images[]"
+      ],
+      "set": {
+        "images": []
+      },
+      "pull": null
+    },
+    {
+      "spot_id": "spot_6721d38c9fd8",
+      "human": [
+        "strip 1 dead entry from images[]"
+      ],
+      "set": {
+        "images": []
+      },
+      "pull": null
+    },
+    {
+      "spot_id": "spot_c13725df39ce",
+      "human": [
+        "strip 1 dead entry from images[]"
+      ],
+      "set": {
+        "images": []
+      },
+      "pull": null
+    },
+    {
+      "spot_id": "spot_61f1a1d4e03b",
+      "human": [
+        "strip 1 dead entry from images[]"
+      ],
+      "set": {
+        "images": []
+      },
+      "pull": null
+    }
+  ]
+}
