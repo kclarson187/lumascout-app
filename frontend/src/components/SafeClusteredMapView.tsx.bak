@@ -211,13 +211,10 @@ const SafeClusteredMapView = forwardRef<any, SafeClusteredMapViewProps>(
     // crashes on rapid pan/zoom in the Expo Go sandbox. PlainMapView
     // works reliably in Expo Go. Production builds (EAS) keep
     // clustering — the detection is per-runtime, not per-platform.
-    // CRASH FIX (2026-05): Force PlainMapView in all runtimes.
-    // react-native-map-clustering crashes under New Architecture (Fabric)
-    // on rapid pan/zoom — its native bridge mutates child views during a
-    // mounting transaction, throwing an NSMutableArray insertObject:atIndex:
-    // exception in -[RCTLegacyViewManagerInteropComponentView finalizeUpdates:].
-    // PlainMapView (react-native-maps) avoids that interop path entirely.
-    const Inner = PlainMapView;
+    const Inner =
+      Platform.OS === 'web' || !ClusteredMapView || IS_EXPO_GO
+        ? PlainMapView
+        : ClusteredMapView;
 
     // Compose clusteringEnabled — prop override still wins, but we
     // default to the zoom-based toggle ref.
