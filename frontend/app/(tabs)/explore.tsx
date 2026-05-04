@@ -1544,8 +1544,11 @@ function PinPreview({
     try {
       // Canonical URL resolution — same priority order as spot detail:
       // WEB_BASE_URL > BACKEND_URL > scheme-based deep link.
-      const webBase = (process.env.EXPO_PUBLIC_WEB_BASE_URL || '').replace(/\/+$/, '');
-      const backendBase = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/+$/, '');
+      // V4 (May 2026) — use shared resolvers for triple-layered fallback.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { resolveBackendUrl, resolveWebBaseUrl } = require('../../src/constants/config');
+      const webBase = resolveWebBaseUrl();
+      const backendBase = resolveBackendUrl();
       const base = webBase || backendBase;
       const spotUrl = base
         ? `${base}/spot/${spot.spot_id}`

@@ -151,7 +151,10 @@ function SpotDetailImpl() {
     // which returns Open Graph metadata + UA-driven App Store / Play
     // Store / web routing. Replaces the previous web-base direct URL
     // that produced bare links with no preview card.
-    const backendBase = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/+$/, '');
+    // V4 (May 2026) — use shared resolver with triple-layered fallback.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { resolveBackendUrl } = require('../../src/constants/config');
+    const backendBase = resolveBackendUrl();
     if (backendBase) return `${backendBase}/api/share/spot/${id}`;
     try {
       return ExpoLinking.createURL(`/spot/${id}`);

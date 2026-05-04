@@ -26,15 +26,14 @@
  * Android. Desktop users see a "Continue on the web" CTA.
  */
 import { Platform, Share } from 'react-native';
-import Constants from 'expo-constants';
 import * as Haptics from 'expo-haptics';
+import { resolveBackendUrl } from '../constants/config';
 
 function backendBase(): string {
-  const raw =
-    (process.env.EXPO_PUBLIC_BACKEND_URL as string | undefined) ||
-    (Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL as string | undefined) ||
-    '';
-  return raw.replace(/\/+$/, '');
+  // V4 (May 2026) — delegate to shared resolver with triple-layered
+  // fallback (env → expoConfig.extra → hardcoded). See
+  // `src/constants/config.ts` for full RCA of the production bug.
+  return resolveBackendUrl();
 }
 
 function smartLink(kind: 'spot' | 'user' | 'post' | 'app', id?: string): string {

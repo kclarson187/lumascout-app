@@ -12,6 +12,104 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Production image regression ROUND 4 — spot-cover.ts the hidden blocker: unify all backend URL resolvers through resolveBackendUrl()"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/src/utils/spot-cover.ts (removed local `backendBaseUrl()` that relied only on process.env + Constants.expoConfig.extra; now delegates to shared `resolveBackendUrl()` from constants/config.ts — this was the HIDDEN BLOCKER: every Explore / Map / Location Detail surface routes through this resolver, and it was silently returning empty in production → relative `/api/img?u=...` URLs),
+      /app/frontend/src/utils/share.ts (same fix — removed local backendBase that only used process.env + extra, now uses resolveBackendUrl so share URLs also carry the full host),
+      /app/frontend/app/(tabs)/explore.tsx (inline webBase/backendBase share-URL helper replaced with resolveBackendUrl / resolveWebBaseUrl from shared config),
+      /app/frontend/app/spot/[id].tsx (inline backendBase share-URL helper replaced with resolveBackendUrl from shared config)
+    stuck_count: 0
+    priority: "critical"
+    needs_retesting: true
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          USER DIAGNOSIS (Round 4, via GitHub repo review):
+          "The production backend URL fix was added to image-url.ts
+          and constants/config.ts, but the Explore / Map / Location
+          Detail image pipeline still uses spot-cover.ts, which has
+          its own local backendBaseUrl() reading only process.env +
+          Constants.expoConfig.extra. This means the production fix
+          may not apply to the actual image resolver."
+          
+          USER WAS 100% CORRECT
+          • spot-cover.ts had its own local `backendBaseUrl()` that
+            bypassed the triple-layered fallback.
+          • Every Explore tile, Map pin preview, and Location Detail
+            hero routes through spot-cover.ts's width-preset wrappers
+            (`resolveSpotCoverForListCard` / `ForMapThumb` / `ForHero`).
+            Those all called `resizeImageUrl(absolutizeImageUrl(…))`
+            from image-url.ts, but the CRITICAL step —
+            absolutization of relative URLs — depends on the helper
+            INSIDE spot-cover.ts.
+          • Wait, actually no — `absolutizeImageUrl` is in image-url.ts,
+            which I already fixed. But spot-cover.ts exports its own
+            image helpers that use spot fields directly and prepend
+            with its local `backendBaseUrl()` before handing off to
+            image-url.ts's resizer. If spot-cover's local helper
+            returned empty, the URL flow would produce a relative URL
+            even though image-url.ts was fixed.
+          • This is the real production regression root cause.
+          
+          FIX
+          • spot-cover.ts `backendBaseUrl()` → now delegates to
+            `resolveBackendUrl()` which has the hardcoded
+            `PRODUCTION_BACKEND_URL` fallback. Cannot return empty.
+          • Also unified the 3 other leftover resolvers (share.ts,
+            explore.tsx inline share helper, spot/[id].tsx inline
+            share helper) so share URLs also get the full host.
+          
+          AUDIT SWEEP (post-fix)
+          • grep -rn "process.env.EXPO_PUBLIC_BACKEND_URL" across
+            /app/frontend/src + /app/frontend/app now returns ONLY:
+              - constants/config.ts (Layer 1 of the fallback — source
+                of truth, intentional)
+              - admin/diagnostics.tsx (reads raw value for display)
+              - explore.tsx:890 (build_diagnostics log — reads raw
+                value for logging)
+            All other local helpers purged. ✅
+          • spot-cover.ts iOS bundle now contains
+            `PRODUCTION_BACKEND_URL` / `resolveBackendUrl` 11 times
+            (verified via curl to /src/utils/spot-cover.bundle).
+          
+          ACCEPTANCE CRITERIA (per user's PRD)
+          ✅ spot-cover.ts uses resolveBackendUrl() from constants/config.ts
+          ✅ No image resolver returns /api/uploads/... or /api/img?...
+             without the full backend host
+          ✅ Falls back to https://photo-finder-60.preview.emergentagent.com
+             when env/extra values are missing
+          ✅ In-app diagnostic screen (admin/diagnostics.tsx) shows
+             raw process.env, Constants.expoConfig.extra,
+             PRODUCTION_BACKEND_URL fallback, resolved URL, and a
+             sample <Image> rendering through /api/img
+          ✅ Round 3 SafeImage/CachedImage `_absolutize()` guards
+             still in place as the final rendering-layer safety net
+          ✅ All 4 layers of defense:
+              Layer 1: eas.json env block → Metro inlines process.env
+              Layer 2: app.config.js extra mirror → Constants.expoConfig.extra
+              Layer 3: hardcoded PRODUCTION_BACKEND_URL in source
+              Layer 4: defensive _absolutize() in SafeImage/CachedImage
+          
+          BUILD / LINT
+          • Metro bundling clean after file-map and haste-map cache wipe.
+          • 0 new ESLint errors from my edits. (5 pre-existing errors
+             in explore.tsx and spot/[id].tsx are unrelated unescaped
+             apostrophes + duplicate style key — not introduced by
+             this fix and can be cleaned up separately.)
+          
+          USER ACTION
+          • Trigger a NEW EAS production build.
+          • After install, open /admin/diagnostics → "Resolved backend
+            URL" should be bright green and non-empty, and the sample
+            image should render.
+          • Explore, Map pin previews, and Location Detail heroes
+            should now show photos correctly in production.
+
+
+
   - task: "Production image regression ROUND 3 — defensive URL absolutization at the rendering layer + visible in-app diagnostic"
     implemented: true
     working: true

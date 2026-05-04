@@ -35,15 +35,30 @@
  * backend endpoint payloads. Backend already surfaces enough data;
  * we just need to read it from all the right places.
  */
-import Constants from 'expo-constants';
+import { resolveBackendUrl } from '../constants/config';
 
-/** Returns the backend origin (no trailing slash). Empty string if unset. */
+/**
+ * Returns the backend origin (no trailing slash).
+ *
+ * V4 (May 2026 — production fix round 4, user-flagged): this helper
+ * PREVIOUSLY had its own local cascade reading `process.env` +
+ * `Constants.expoConfig.extra` — BOTH of which are empty in EAS
+ * production builds (the `.env` isn't on the build server and
+ * Constants.expoConfig.extra is cached natively on iOS upgrades).
+ *
+ * That made `spot-cover.ts` the HIDDEN BLOCKER for the Explore tab
+ * image regression: every Explore / Map / Location Detail surface
+ * routes through this file, and it was silently returning empty
+ * strings in production → relative `/api/img?u=...` URLs → blank
+ * thumbnails.
+ *
+ * Now it delegates to the shared `resolveBackendUrl()` which has the
+ * triple-layered fallback (env → expoConfig.extra → hardcoded
+ * PRODUCTION_BACKEND_URL). The hardcoded constant is literally a
+ * string in the source so it CANNOT return empty.
+ */
 function backendBaseUrl(): string {
-  const raw =
-    (process.env.EXPO_PUBLIC_BACKEND_URL as string | undefined) ||
-    (Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL as string | undefined) ||
-    '';
-  return raw.replace(/\/+$/, '');
+  return resolveBackendUrl();
 }
 
 /** Turn app-relative `/api/uploads/...` into an absolute URL. */
