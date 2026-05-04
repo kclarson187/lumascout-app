@@ -116,14 +116,18 @@ MAX_SOURCE_BYTES = 30 * 1024 * 1024
 ALLOWED_HOSTS = {
     "images.pexels.com",
     "images.unsplash.com",
-    # Our own uploads origin — same host as the preview backend.
+    # Preview / dev backend
     "photo-finder-60.preview.emergentagent.com",
-    # Production web origin. EAS production iOS/Android builds may
-    # cache or rewrite image URLs to this canonical host (the AASA /
-    # Universal Links domain) — accept it so the proxy stays
-    # symmetric between dev preview and production. Subdomains
-    # (api.lumascout.app, cdn.lumascout.app, etc.) are matched via
-    # the suffix rule in `_is_allowed_host`.
+    # Production backend (canonical Emergent host) — discovered via
+    # the /admin/diagnostics on-device readout May 2026: the
+    # production EAS build resolves process.env.EXPO_PUBLIC_BACKEND_URL
+    # to `photo-finder-60.emergent.host`, and the proxy was rejecting
+    # its OWN host with `host_not_allowed` when the app tried to load
+    # user uploads through /api/img?u=https%3A%2F%2Fphoto-finder-60
+    # .emergent.host%2Fapi%2Fuploads%2F…
+    "photo-finder-60.emergent.host",
+    # Marketing / web origin (Universal Links domain) — subdomains
+    # (api., cdn., etc.) auto-allowed via suffix rule.
     "lumascout.app",
 }
 
