@@ -60,6 +60,38 @@
 const LUMASCOUT_HOST = 'lumascout.app';
 const DEEP_LINK_PATHS = ['/spot', '/user', '/collection', '/community', '/marketplace'];
 
+// V3 (May 2026) — production-build BACKEND URL injection.
+//
+// `.env` is gitignored (correctly — secrets shouldn't be committed),
+// so when EAS runs `expo export` on its build server the `.env` file
+// isn't there and `process.env.EXPO_PUBLIC_BACKEND_URL` is undefined
+// in the bundled JS. The dev preview app worked because Metro reads
+// `.env` from the local filesystem at dev-server start; production
+// builds had no such luck and silently fell back to relative URLs
+// (`/api/uploads/...`), which React Native's <Image> can't render.
+// Symptom: Explore tab thumbnails missing in production but fine in
+// Expo Go. (Reported May 2026.)
+//
+// We now mirror the value into `extra.EXPO_PUBLIC_BACKEND_URL` so
+// `Constants.expoConfig.extra` always carries it, even when the
+// `.env` file isn't present. Frontend helpers
+// (`src/utils/image-url.ts`, `src/utils/upload-image.ts`) already
+// fall back to `Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL`
+// when `process.env.…` is undefined, so this single injection fixes
+// every code path that reads the backend URL.
+const PROD_BACKEND_URL = 'https://photo-finder-60.preview.emergentagent.com';
+const PROD_WEB_BASE_URL = 'https://lumascout.app';
+
+function resolvedBackendUrl() {
+  // Honor the live env var first (so dev/staging EAS profiles can
+  // override). Fall back to the production URL when nothing is set —
+  // EAS production builds ship without `.env` on the build server.
+  return (process.env.EXPO_PUBLIC_BACKEND_URL || PROD_BACKEND_URL).replace(/\/+$/, '');
+}
+function resolvedWebBaseUrl() {
+  return (process.env.EXPO_PUBLIC_WEB_BASE_URL || PROD_WEB_BASE_URL).replace(/\/+$/, '');
+}
+
 function buildAndroidIntentFilters() {
   return [
     {
@@ -87,6 +119,8 @@ module.exports = ({ config }) => {
   // auto-loaded by the CLI, plus any base we might receive from a
   // parent config tool. We spread it and overlay only the two blocks
   // that the Emergent rewriter strips (see module header).
+  const backendUrl = resolvedBackendUrl();
+  const webBaseUrl = resolvedWebBaseUrl();
   return {
     ...config,
     ios: {
@@ -96,6 +130,19 @@ module.exports = ({ config }) => {
     android: {
       ...(config.android || {}),
       intentFilters: buildAndroidIntentFilters(),
+    },
+    extra: {
+      // Preserve everything app.json already declared (router, eas
+      // projectId, privacyPolicyUrl, etc.).
+      ...(config.extra || {}),
+      // Fix for production-build "blank thumbnails" regression
+      // reported May 2026 — see V3 note above. These two values must
+      // be present in the bundled JS so `Constants.expoConfig.extra`
+      // works as a fallback when `process.env.EXPO_PUBLIC_…` is
+      // missing (which it is on the EAS build server because `.env`
+      // is gitignored).
+      EXPO_PUBLIC_BACKEND_URL: backendUrl,
+      EXPO_PUBLIC_WEB_BASE_URL: webBaseUrl,
     },
   };
 };

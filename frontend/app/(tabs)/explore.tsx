@@ -887,12 +887,19 @@ export default function Explore() {
   // though the backend is healthy.
   useEffect(() => {
     try {
-      const backend = (process.env.EXPO_PUBLIC_BACKEND_URL as string | undefined) || '(empty)';
+      const envBackend = (process.env.EXPO_PUBLIC_BACKEND_URL as string | undefined) || '(empty)';
+      // V3 (May 2026) — also log the `extra` fallback so we can confirm
+      // the app.config.js mirror is active. After the production-build
+      // image regression, the bundled config carries the canonical URL
+      // even when .env wasn't read by the EAS server.
+      const extraBackend = (Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL as string | undefined) || '(empty)';
       const owner = (Constants as any)?.appOwnership || '(none)';
       const exec = (Constants as any)?.executionEnvironment || '(none)';
       // eslint-disable-next-line no-console
       console.log('[explore] build_diagnostics', {
-        backend,
+        backend_env: envBackend,
+        backend_extra: extraBackend,
+        backend_resolved: envBackend !== '(empty)' ? envBackend : extraBackend,
         appOwnership: owner,
         executionEnvironment: exec,
         isExpoGo: IS_EXPO_GO,
