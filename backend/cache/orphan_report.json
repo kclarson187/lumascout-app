@@ -1,0 +1,334 @@
+{
+  "generated_at": "2026-05-04T04:59:37.747158+00:00",
+  "prod_base": "https://photo-finder-60.emergent.host",
+  "totals": {
+    "spots_scanned": 44,
+    "spots_hydrated": 44,
+    "url_references_checked": 130,
+    "unique_urls_checked": 52,
+    "url_references_missing": 36,
+    "spots_with_at_least_one_missing_image": 11
+  },
+  "status_histogram": {
+    "404": 36,
+    "206": 94
+  },
+  "sample_failed_urls": [
+    {
+      "spot_id": "spot_02d1dcb7b45e",
+      "title": "McAllister Park",
+      "field": "hero_cover_image_url",
+      "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/7483b168da0b4da28952def5c931b6b6.jpg",
+      "status": 404,
+      "reason": "Not Found"
+    },
+    {
+      "spot_id": "spot_02d1dcb7b45e",
+      "title": "McAllister Park",
+      "field": "cover_image_url",
+      "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/7483b168da0b4da28952def5c931b6b6.jpg",
+      "status": 404,
+      "reason": "Not Found"
+    },
+    {
+      "spot_id": "spot_02d1dcb7b45e",
+      "title": "McAllister Park",
+      "field": "admin_cover_override.image_url",
+      "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/7483b168da0b4da28952def5c931b6b6.jpg",
+      "status": 404,
+      "reason": "Not Found"
+    },
+    {
+      "spot_id": "spot_02d1dcb7b45e",
+      "title": "McAllister Park",
+      "field": "images[0].image_url",
+      "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/7483b168da0b4da28952def5c931b6b6.jpg",
+      "status": 404,
+      "reason": "Not Found"
+    },
+    {
+      "spot_id": "spot_02d1dcb7b45e",
+      "title": "McAllister Park",
+      "field": "images[1].image_url",
+      "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/2c18a14b1e75431fa41818b364ef11e8.jpg",
+      "status": 404,
+      "reason": "Not Found"
+    }
+  ],
+  "top_10_affected": [
+    {
+      "spot_id": "spot_02d1dcb7b45e",
+      "title": "McAllister Park",
+      "missing_count": 7,
+      "fields": [
+        {
+          "field": "hero_cover_image_url",
+          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/7483b168da0b4da28952def5c931b6b6.jpg",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "cover_image_url",
+          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/7483b168da0b4da28952def5c931b6b6.jpg",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "admin_cover_override.image_url",
+          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/7483b168da0b4da28952def5c931b6b6.jpg",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "images[0].image_url",
+          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/7483b168da0b4da28952def5c931b6b6.jpg",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "images[1].image_url",
+          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/2c18a14b1e75431fa41818b364ef11e8.jpg",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "images[2].image_url",
+          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/bf280d2306b7443ea4a1c5ecb349840c.jpg",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "images[3].image_url",
+          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/798a8f0bee6c41c0b74bd66d3fc62b4f.jpg",
+          "status": 404,
+          "reason": "Not Found"
+        }
+      ]
+    },
+    {
+      "spot_id": "spot_a18273a9323a",
+      "title": "Marfa Prada Installation",
+      "missing_count": 4,
+      "fields": [
+        {
+          "field": "hero_cover_image_url",
+          "url": "https://images.unsplash.com/photo-1600101720232-3b37ebde93be?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "cover_image_url",
+          "url": "https://images.unsplash.com/photo-1600101720232-3b37ebde93be?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "images[0].image_url",
+          "url": "https://images.unsplash.com/photo-1600101720232-3b37ebde93be?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "images[1].image_url",
+          "url": "https://images.unsplash.com/photo-1510253687831-9f65dce00bcc?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        }
+      ]
+    },
+    {
+      "spot_id": "spot_728111475591",
+      "title": "Centro Hist\u00f3rico Guadalajara",
+      "missing_count": 3,
+      "fields": [
+        {
+          "field": "hero_cover_image_url",
+          "url": "https://images.unsplash.com/photo-1585975406140-f2b8e7f1f472?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "cover_image_url",
+          "url": "https://images.unsplash.com/photo-1585975406140-f2b8e7f1f472?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "images[0].image_url",
+          "url": "https://images.unsplash.com/photo-1585975406140-f2b8e7f1f472?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        }
+      ]
+    },
+    {
+      "spot_id": "spot_722a72162ab7",
+      "title": "Centro Hist\u00f3rico Guadalajara",
+      "missing_count": 3,
+      "fields": [
+        {
+          "field": "hero_cover_image_url",
+          "url": "https://images.unsplash.com/photo-1585975406140-f2b8e7f1f472?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "cover_image_url",
+          "url": "https://images.unsplash.com/photo-1585975406140-f2b8e7f1f472?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "images[0].image_url",
+          "url": "https://images.unsplash.com/photo-1585975406140-f2b8e7f1f472?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        }
+      ]
+    },
+    {
+      "spot_id": "spot_0fa68639ddf3",
+      "title": "Cerro de la Silla at Golden Hour",
+      "missing_count": 3,
+      "fields": [
+        {
+          "field": "hero_cover_image_url",
+          "url": "https://images.unsplash.com/photo-1518659526054-190340b61bee?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "cover_image_url",
+          "url": "https://images.unsplash.com/photo-1518659526054-190340b61bee?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "images[0].image_url",
+          "url": "https://images.unsplash.com/photo-1518659526054-190340b61bee?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        }
+      ]
+    },
+    {
+      "spot_id": "spot_a2134866d3d9",
+      "title": "Coyoac\u00e1n Cobblestone Courtyards",
+      "missing_count": 3,
+      "fields": [
+        {
+          "field": "hero_cover_image_url",
+          "url": "https://images.unsplash.com/photo-1518659526054-190340b61bee?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "cover_image_url",
+          "url": "https://images.unsplash.com/photo-1518659526054-190340b61bee?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "images[0].image_url",
+          "url": "https://images.unsplash.com/photo-1518659526054-190340b61bee?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        }
+      ]
+    },
+    {
+      "spot_id": "spot_6721d38c9fd8",
+      "title": "Coyoac\u00e1n Cobblestone Courtyards",
+      "missing_count": 3,
+      "fields": [
+        {
+          "field": "hero_cover_image_url",
+          "url": "https://images.unsplash.com/photo-1518659526054-190340b61bee?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "cover_image_url",
+          "url": "https://images.unsplash.com/photo-1518659526054-190340b61bee?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "images[0].image_url",
+          "url": "https://images.unsplash.com/photo-1518659526054-190340b61bee?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        }
+      ]
+    },
+    {
+      "spot_id": "spot_c13725df39ce",
+      "title": "Griffith Observatory Overlook",
+      "missing_count": 3,
+      "fields": [
+        {
+          "field": "hero_cover_image_url",
+          "url": "https://images.unsplash.com/photo-1503891617560-5b8c2e28cbbf?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "cover_image_url",
+          "url": "https://images.unsplash.com/photo-1503891617560-5b8c2e28cbbf?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "images[0].image_url",
+          "url": "https://images.unsplash.com/photo-1503891617560-5b8c2e28cbbf?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        }
+      ]
+    },
+    {
+      "spot_id": "spot_61f1a1d4e03b",
+      "title": "Griffith Observatory Overlook",
+      "missing_count": 3,
+      "fields": [
+        {
+          "field": "hero_cover_image_url",
+          "url": "https://images.unsplash.com/photo-1503891617560-5b8c2e28cbbf?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "cover_image_url",
+          "url": "https://images.unsplash.com/photo-1503891617560-5b8c2e28cbbf?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "images[0].image_url",
+          "url": "https://images.unsplash.com/photo-1503891617560-5b8c2e28cbbf?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        }
+      ]
+    },
+    {
+      "spot_id": "spot_9a247e816bd9",
+      "title": "Bullis County Park",
+      "missing_count": 2,
+      "fields": [
+        {
+          "field": "hero_cover_image_url",
+          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/ccf49c1e0d7a47f1ae7224aa2fa712ae.jpg",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "cover_image_url",
+          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/ccf49c1e0d7a47f1ae7224aa2fa712ae.jpg",
+          "status": 404,
+          "reason": "Not Found"
+        }
+      ]
+    }
+  ]
+}

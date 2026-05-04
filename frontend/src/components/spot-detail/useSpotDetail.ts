@@ -130,17 +130,15 @@ export function useSpotDetail(id: string, initialCoverUrl: string | null) {
     // All retries exhausted (or we hit a non-retryable category).
     setLoading(false);
     if (lastCat === 'missing') {
-      Alert.alert(
-        'Spot no longer available',
-        'This location has been removed or is no longer public.',
-        [{
-          text: 'OK',
-          onPress: () => {
-            if (router.canGoBack()) router.back();
-            else router.replace('/(tabs)/explore');
-          },
-        }],
-      );
+      // May 2026: previously this bucket popped a native `Alert.alert`
+      // then navigated away automatically, which felt like a crash
+      // when users arrived via a deep link from a shared spot URL
+      // that had since been deleted. Now we surface the same
+      // `missing` category up to the screen so [id].tsx can render
+      // an inline "This spot is no longer available" view with a
+      // single "Back to Explore" CTA — no Retry button, because
+      // 404 / 410 aren't recoverable by retrying.
+      setErrorCategory('missing');
       return;
     }
     if (lastCat === 'auth') { setErrorCategory('auth'); return; }

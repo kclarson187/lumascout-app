@@ -313,11 +313,19 @@ function SpotDetailImpl() {
   // network. Auth-required errors render a similar gentle message — the
   // axios interceptor already triggers the global logout flow when
   // genuinely warranted (status===401), so no extra redirect needed here.
+  //
+  // May 2026 — Per user feedback on v2.0.30: a 404 from
+  // /api/spots/{id} (deleted spot, stale deep link, wrong DB) used to
+  // pop an OS Alert and navigate away, which read as "the app is
+  // broken / your connection is bad". Now we surface `missing` to this
+  // screen and render a distinct, no-retry view so the user understands
+  // the spot is gone, not that something transient failed.
   if (!loading && !spot && errorCategory) {
     const isTimeout = errorCategory === 'timeout';
     const isNet = errorCategory === 'network';
     const isAuth = errorCategory === 'auth';
     const isServer = errorCategory === 'server';
+    const isMissing = errorCategory === 'missing';
     // CR Item 5 (May 2026): All copy here was rewritten to read like a
     // premium product, not a casual side project. "Server hiccup",
     // "Tap retry — it usually works", and the like felt apologetic and
@@ -327,22 +335,32 @@ function SpotDetailImpl() {
     // clean Retry. No exclamation marks, no apologies.
     const headline = isAuth
       ? 'Sign in to continue'
-      : isTimeout
-        ? 'This is taking longer than expected'
-        : isNet
-          ? 'No connection'
-          : isServer
-            ? "Couldn't load this spot"
-            : "Couldn't load this spot";
+      : isMissing
+        ? 'This spot is no longer available'
+        : isTimeout
+          ? 'This is taking longer than expected'
+          : isNet
+            ? 'No connection'
+            : isServer
+              ? "Couldn't load this spot"
+              : "Couldn't load this spot";
     const sub = isAuth
       ? 'Your session has ended. Sign in again to view this spot.'
-      : isTimeout
-        ? 'The server is responding slowly. Check your connection and try again.'
-        : isNet
-          ? 'Check your connection and try again.'
-          : isServer
+      : isMissing
+        ? 'It may have been removed by its owner, made private, or never existed at this link.'
+        : isTimeout
+          ? 'The server is responding slowly. Check your connection and try again.'
+          : isNet
             ? 'Check your connection and try again.'
-            : 'Check your connection and try again.';
+            : isServer
+              ? 'Check your connection and try again.'
+              : 'Check your connection and try again.';
+    // 404 / 410 aren't recoverable by retrying — hide the Retry CTA and
+    // promote "Back to Explore" to the primary action. For every other
+    // category (network / timeout / server / unknown / auth) a retry
+    // or re-auth can plausibly help, so we keep that button.
+    const showRetry = !isMissing;
+    const primaryCtaLabel = isAuth ? 'Sign in' : isMissing ? 'Back to Explore' : 'Retry';
     return (
       <View style={{ flex: 1, backgroundColor: colors.bg, paddingHorizontal: 24, paddingTop: 80 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 24 }}>
@@ -375,7 +393,16 @@ function SpotDetailImpl() {
           {sub}
         </Text>
         <Pressable
-          onPress={() => load()}
+          onPress={() => {
+            if (isMissing) {
+              // Primary action for "missing" is navigation out —
+              // a retry would just re-produce the same 404.
+              if (router.canGoBack()) router.back();
+              else router.replace('/(tabs)/explore');
+              return;
+            }
+            load();
+          }}
           style={{
             backgroundColor: colors.primary,
             paddingVertical: 14,
@@ -383,12 +410,13 @@ function SpotDetailImpl() {
             alignItems: 'center',
             marginBottom: 12,
           }}
-          testID="spot-detail-retry"
+          testID={isMissing ? 'spot-detail-back-to-explore' : 'spot-detail-retry'}
         >
           <Text style={{ color: '#1a1300', fontFamily: font.bodyBold, fontSize: 14 }}>
-            {isAuth ? 'Sign in' : 'Retry'}
+            {primaryCtaLabel}
           </Text>
         </Pressable>
+        {showRetry && (
         <Pressable
           onPress={() => {
             if (router.canGoBack()) router.back();
@@ -404,6 +432,7 @@ function SpotDetailImpl() {
             Back to Explore
           </Text>
         </Pressable>
+        )}
       </View>
     );
   }

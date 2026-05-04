@@ -65,6 +65,9 @@ type QItem = {
   status: QStatus;
   progress: number; // 0..1 — only meaningful while uploading
   hostedUrl?: string;
+  // May 2026: R2 storage key echoed back alongside hostedUrl so we
+  // can persist it with the spot_community_uploads row.
+  storageKey?: string | null;
   error?: string;
   errorName?: string;
   attempts: number; // how many upload attempts we've made so far
@@ -157,6 +160,7 @@ export default function UploadScreen() {
             status: 'success',
             progress: 1,
             hostedUrl: result.image_url,
+            storageKey: (result as any).storage_key || null,
             attempts: attemptNumber,
             error: undefined,
             errorName: undefined,
@@ -466,7 +470,13 @@ export default function UploadScreen() {
 
     setSubmitting(true);
     const promise = api.post(`/spots/${spotId}/uploads`, {
-      images: successful.map((q) => ({ image_url: q.hostedUrl!, caption: null })),
+      images: successful.map((q) => ({
+        image_url: q.hostedUrl!,
+        // Forward R2 object key alongside the public URL so the
+        // spot_community_uploads row can re-sign / rewrite later.
+        storage_key: q.storageKey || null,
+        caption: null,
+      })),
       caption: caption.trim() || null,
       condition_tags: tags,
       visibility,
