@@ -1,16 +1,16 @@
 {
-  "generated_at": "2026-05-04T04:59:37.747158+00:00",
+  "generated_at": "2026-05-04T17:55:48.432047+00:00",
   "prod_base": "https://photo-finder-60.emergent.host",
   "totals": {
     "spots_scanned": 44,
     "spots_hydrated": 44,
-    "url_references_checked": 130,
+    "url_references_checked": 128,
     "unique_urls_checked": 52,
-    "url_references_missing": 36,
+    "url_references_missing": 34,
     "spots_with_at_least_one_missing_image": 11
   },
   "status_histogram": {
-    "404": 36,
+    "404": 34,
     "206": 94
   },
   "sample_failed_urls": [
@@ -18,7 +18,7 @@
       "spot_id": "spot_02d1dcb7b45e",
       "title": "McAllister Park",
       "field": "hero_cover_image_url",
-      "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/7483b168da0b4da28952def5c931b6b6.jpg",
+      "url": "https://pub-799be3bb95574d71ad3213680ce5e0c1.r2.dev/uploads/2026/05/265dbb904e26445ba92b99b5a7f866d1.jpg",
       "status": 404,
       "reason": "Not Found"
     },
@@ -26,7 +26,7 @@
       "spot_id": "spot_02d1dcb7b45e",
       "title": "McAllister Park",
       "field": "cover_image_url",
-      "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/7483b168da0b4da28952def5c931b6b6.jpg",
+      "url": "https://pub-799be3bb95574d71ad3213680ce5e0c1.r2.dev/uploads/2026/05/526ef877bc2c4bec81a4a3112063fdb5.jpg",
       "status": 404,
       "reason": "Not Found"
     },
@@ -34,77 +34,28 @@
       "spot_id": "spot_02d1dcb7b45e",
       "title": "McAllister Park",
       "field": "admin_cover_override.image_url",
-      "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/7483b168da0b4da28952def5c931b6b6.jpg",
+      "url": "https://pub-799be3bb95574d71ad3213680ce5e0c1.r2.dev/uploads/2026/05/265dbb904e26445ba92b99b5a7f866d1.jpg",
       "status": 404,
       "reason": "Not Found"
     },
     {
-      "spot_id": "spot_02d1dcb7b45e",
-      "title": "McAllister Park",
-      "field": "images[0].image_url",
-      "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/7483b168da0b4da28952def5c931b6b6.jpg",
+      "spot_id": "spot_08febbb152c2",
+      "title": "Joshua Springs Preserve",
+      "field": "hero_cover_image_url",
+      "url": "https://pub-799be3bb95574d71ad3213680ce5e0c1.r2.dev/uploads/2026/05/3296d46bfa1c46fdbe2e6ea7fd471428.jpg",
       "status": 404,
       "reason": "Not Found"
     },
     {
-      "spot_id": "spot_02d1dcb7b45e",
-      "title": "McAllister Park",
-      "field": "images[1].image_url",
-      "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/2c18a14b1e75431fa41818b364ef11e8.jpg",
+      "spot_id": "spot_08febbb152c2",
+      "title": "Joshua Springs Preserve",
+      "field": "cover_image_url",
+      "url": "https://pub-799be3bb95574d71ad3213680ce5e0c1.r2.dev/uploads/2026/05/85fbcf5b7bcd4453916679936a07f399.jpg",
       "status": 404,
       "reason": "Not Found"
     }
   ],
   "top_10_affected": [
-    {
-      "spot_id": "spot_02d1dcb7b45e",
-      "title": "McAllister Park",
-      "missing_count": 7,
-      "fields": [
-        {
-          "field": "hero_cover_image_url",
-          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/7483b168da0b4da28952def5c931b6b6.jpg",
-          "status": 404,
-          "reason": "Not Found"
-        },
-        {
-          "field": "cover_image_url",
-          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/7483b168da0b4da28952def5c931b6b6.jpg",
-          "status": 404,
-          "reason": "Not Found"
-        },
-        {
-          "field": "admin_cover_override.image_url",
-          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/7483b168da0b4da28952def5c931b6b6.jpg",
-          "status": 404,
-          "reason": "Not Found"
-        },
-        {
-          "field": "images[0].image_url",
-          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/7483b168da0b4da28952def5c931b6b6.jpg",
-          "status": 404,
-          "reason": "Not Found"
-        },
-        {
-          "field": "images[1].image_url",
-          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/2c18a14b1e75431fa41818b364ef11e8.jpg",
-          "status": 404,
-          "reason": "Not Found"
-        },
-        {
-          "field": "images[2].image_url",
-          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/bf280d2306b7443ea4a1c5ecb349840c.jpg",
-          "status": 404,
-          "reason": "Not Found"
-        },
-        {
-          "field": "images[3].image_url",
-          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/798a8f0bee6c41c0b74bd66d3fc62b4f.jpg",
-          "status": 404,
-          "reason": "Not Found"
-        }
-      ]
-    },
     {
       "spot_id": "spot_a18273a9323a",
       "title": "Marfa Prada Installation",
@@ -131,6 +82,31 @@
         {
           "field": "images[1].image_url",
           "url": "https://images.unsplash.com/photo-1510253687831-9f65dce00bcc?w=1200&q=85",
+          "status": 404,
+          "reason": "Not Found"
+        }
+      ]
+    },
+    {
+      "spot_id": "spot_9a247e816bd9",
+      "title": "Bullis County Park",
+      "missing_count": 3,
+      "fields": [
+        {
+          "field": "hero_cover_image_url",
+          "url": "https://pub-799be3bb95574d71ad3213680ce5e0c1.r2.dev/uploads/2026/05/f82cebeb055a443aba970682a22a687b.jpg",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "cover_image_url",
+          "url": "https://pub-799be3bb95574d71ad3213680ce5e0c1.r2.dev/uploads/2026/05/2eca3263fd2242b296676885c1707892.jpg",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "admin_cover_override.image_url",
+          "url": "https://pub-799be3bb95574d71ad3213680ce5e0c1.r2.dev/uploads/2026/05/f82cebeb055a443aba970682a22a687b.jpg",
           "status": 404,
           "reason": "Not Found"
         }
@@ -312,19 +288,25 @@
       ]
     },
     {
-      "spot_id": "spot_9a247e816bd9",
-      "title": "Bullis County Park",
-      "missing_count": 2,
+      "spot_id": "spot_08febbb152c2",
+      "title": "Joshua Springs Preserve",
+      "missing_count": 3,
       "fields": [
         {
           "field": "hero_cover_image_url",
-          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/ccf49c1e0d7a47f1ae7224aa2fa712ae.jpg",
+          "url": "https://pub-799be3bb95574d71ad3213680ce5e0c1.r2.dev/uploads/2026/05/3296d46bfa1c46fdbe2e6ea7fd471428.jpg",
           "status": 404,
           "reason": "Not Found"
         },
         {
           "field": "cover_image_url",
-          "url": "https://photo-finder-60.emergent.host/api/uploads/2026/05/ccf49c1e0d7a47f1ae7224aa2fa712ae.jpg",
+          "url": "https://pub-799be3bb95574d71ad3213680ce5e0c1.r2.dev/uploads/2026/05/85fbcf5b7bcd4453916679936a07f399.jpg",
+          "status": 404,
+          "reason": "Not Found"
+        },
+        {
+          "field": "admin_cover_override.image_url",
+          "url": "https://pub-799be3bb95574d71ad3213680ce5e0c1.r2.dev/uploads/2026/05/3296d46bfa1c46fdbe2e6ea7fd471428.jpg",
           "status": 404,
           "reason": "Not Found"
         }
