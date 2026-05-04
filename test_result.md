@@ -12,6 +12,76 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Final Polish — Map Image Refresh + Add Recent Photos UX"
+    implemented: true
+    working: "needs_user_verification"
+    file: |
+      /app/frontend/app/spot/[id]/upload.tsx           (ScrollView flex:1 + flexGrow:1, tightened gaps, lifted submit bar with elevation/shadow)
+      /app/frontend/app/spot/[id].tsx                  (DeviceEventEmitter listeners for spot:photos:posted + spot:cover:changed; ExpoImage.clearMemoryCache + reload on event)
+      /app/frontend/app/admin/spots/[id]/cover.tsx     (emits spot:cover:changed on saveOverride/clearOverride/promoteToCover; also fixed pre-existing duplicate `});` syntax error at EOF)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "needs_user_verification"
+        -agent: "main"
+        -comment: |
+          May 2026 final polish pass.
+
+          Issue 1 — Map image refresh
+          ───────────────────────────
+          expo-image keeps a URL-keyed memory+disk cache (intentional, see
+          CachedImage.tsx for the v2.0.24 RCA). When the same URL got
+          recycled (e.g. admin promoted a previously-served photo back
+          to cover), the spot-detail hero served stale bytes from that
+          cache until force-quit. SWR cache invalidation alone wasn't
+          enough because expo-image lives below SWR.
+
+          Fix:
+          • Wired DeviceEventEmitter listeners on spot/[id].tsx for both
+            'spot:photos:posted' (fired by upload.tsx) and
+            'spot:cover:changed' (fired by admin cover editor on save /
+            clear / promote-to-cover).
+          • On either event for the matching spotId we
+              1) call ExpoImage.clearMemoryCache() — drops in-RAM bytes
+                 only, disk LRU stays intact so unrelated images still
+                 hit cold-start fast.
+              2) call useSpotDetail.reload() to refetch /spots/:id
+                 immediately, no waiting on useFocusEffect microtask.
+          • admin/spots/[id]/cover.tsx now emits the cover-changed event
+            from all three mutation paths.
+          • Bonus: removed a pre-existing duplicate `});` at EOF of
+            cover.tsx that was throwing SyntaxError on the route bundle
+            (caught by the screenshot tool's first attempt).
+
+          Issue 2 — Add Recent Photos UX
+          ──────────────────────────────
+          Symptom: Black "dead zone" below content where drag did
+          nothing; submit button visually blended with bg.
+
+          Fix in upload.tsx:
+          • ScrollView now has style={{flex:1}} + contentContainerStyle
+            with flexGrow:1 + paddingBottom:120, so the entire scroll
+            surface (including empty bg) is a hit target — drag-anywhere
+            scrolls.
+          • Tightened vertical rhythm: section gap dropped from
+            space.lg → space.md; first inner section gap from
+            space.sm → 8.
+          • Submit bar now has iOS shadow / Android elevation so it
+            visually anchors above content; submit-bar paddings
+            re-balanced (px:lg, pt:md, pb:xl on iOS for safe area).
+          • Sticky position retained — bar already sat at bottom; no
+            change in placement, just polish.
+
+          Verification
+          ────────────
+          • Metro bundle for /spot/[id]/upload returns 200 and full
+            65KB SSR HTML, no syntax errors.
+          • Lint reports only spurious TS-parser errors from the
+            bracketed-route filenames (pre-existing across the
+            codebase, not regressions).
+          • UI verification on real device pending user confirmation.
+
 
 
   - task: "PRODUCTION INCIDENT — accidentally deleted 6 R2 objects referenced by prod Mongo"

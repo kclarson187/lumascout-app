@@ -593,11 +593,13 @@ export default function UploadScreen() {
       </View>
       <KeyboardSafe style={{ flex: 1 }}>
         <ScrollView
-          contentContainerStyle={{ paddingBottom: space.xxxl + 80, paddingHorizontal: space.xl, gap: space.lg }}
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
           {/* Queue header with global progress status */}
-          <View style={{ gap: space.sm }}>
+          <View style={{ gap: 8 }}>
             <View style={styles.queueHeaderRow}>
               <Text style={styles.sectionTitle}>
                 Photos <Text style={styles.req}>· up to {MAX_PHOTOS}</Text>
@@ -1075,7 +1077,44 @@ const styles = StyleSheet.create({
   visSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11 },
 
   // Submit bar
-  submitBar: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: space.lg, paddingBottom: Platform.OS === 'ios' ? space.xl : space.lg, backgroundColor: colors.bg, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  submitBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: space.lg,
+    paddingTop: space.md,
+    paddingBottom: Platform.OS === 'ios' ? space.xl : space.md,
+    backgroundColor: colors.bg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    // Lift the bar above the scroll content so it never blends with the bg.
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOpacity: 0.18,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: -2 },
+      },
+      android: { elevation: 8 },
+      default: {},
+    }),
+  },
+  scroll: { flex: 1 },
+  // `flexGrow: 1` is the magic that turns the entire scroll surface
+  // (including the empty/black region at the bottom) into a hit
+  // target — drag-anywhere to scroll. `gap: space.md` tightens the
+  // vertical rhythm between sections so the whole form feels
+  // cohesive instead of loose.
+  scrollContent: {
+    flexGrow: 1,
+    paddingHorizontal: space.xl,
+    paddingTop: space.xs,
+    // submitBar height ≈ 78pt (14 padY + 48 btn + 12 topPad + safe-area).
+    // Add a comfortable extra so the last section breathes above it.
+    paddingBottom: 120,
+    gap: space.md,
+  },
   submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: radii.md, backgroundColor: colors.primary, minHeight: 48 },
   submitBtnDisabled: { backgroundColor: colors.surface2 },
   submitBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 },

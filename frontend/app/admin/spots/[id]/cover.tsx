@@ -24,6 +24,7 @@ import {
   Alert,
   Dimensions,
   Platform,
+  DeviceEventEmitter,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
@@ -152,6 +153,11 @@ export default function CoverEditor() {
         rotation: Math.round(rotation.value) % 360,
       });
       await invalidateSpotCaches();
+      // May 2026 — broadcast a cover-changed signal so any back-stack
+      // SpotDetail screen for this id flushes its expo-image memory
+      // cache + refetches /spots/:id immediately on focus return.
+      // Without this the user sees the old map image until force-quit.
+      try { DeviceEventEmitter.emit('spot:cover:changed', { spotId: id }); } catch { /* noop */ }
       Alert.alert('Saved', 'Cover updated across Explore, detail pages, and map thumbnails.');
       load();
     } catch (e: any) {
@@ -182,6 +188,7 @@ export default function CoverEditor() {
     try {
       await api.patch(`/admin/spots/${id}/gallery`, { image_urls: urls });
       await invalidateSpotCaches();
+      try { DeviceEventEmitter.emit('spot:cover:changed', { spotId: id }); } catch { /* noop */ }
       load();
     } catch (e: any) {
       Alert.alert('Error', e?.response?.data?.detail || 'Failed.');
