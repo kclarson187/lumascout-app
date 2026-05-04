@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect, memo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Pressable, Platform, Animated, Easing } from 'react-native';
+import React, { useState, useRef, useEffect, useMemo, memo } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Pressable, Platform, Animated, Easing, Dimensions } from 'react-native';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { Bookmark, Star, Shield, Lock, EyeOff, MapPin, MoreVertical, TrendingUp, Sparkles, ShieldCheck } from 'lucide-react-native';
@@ -47,6 +47,49 @@ function SpotCardImpl({
   // #8: track whether the hero image has painted yet so we can fade in
   // and keep a shimmer placeholder until the pixels arrive.
   const [imgLoaded, setImgLoaded] = useState(false);
+
+  // ─── May 2026 (v2.1.1) — image-resize-flash fix ────────────────────
+  // Bug: on the Explore list view, cards rendered too LARGE on first
+  // paint, then "shrunk" 1–7 s later to the correct card size. Looked
+  // unstable / cheap.
+  //
+  // Root cause:  the imageWrap used `width: '100%' + aspectRatio: 4/5`,
+  // which leaves the wrapper unsized in the very first layout pass
+  // when the parent ScrollView's content width hasn't been measured
+  // yet. RN's layout engine then fell back to satisfying `aspectRatio`
+  // against the image's INTRINSIC dimensions — typically ~1200×1500
+  // for our R2-hosted JPEGs — so the cell briefly painted at native
+  // resolution before the ScrollView's measured width forced a
+  // re-layout and the image collapsed to its real card footprint.
+  //
+  // Fix: compute the card image height in ABSOLUTE PIXELS up-front
+  // from the window width minus the page's horizontal gutter
+  // (paddingHorizontal: 12 on each side ⇒ 24px gutter). The wrapper
+  // now has a concrete pixel height before any measurement happens,
+  // so RN never falls back to intrinsic-image sizing.
+  //
+  // Why it stays correct on rotation / iPad / split view: we recompute
+  // the height each render via Dimensions.get('window'). For static
+  // phone use that's effectively a constant; for orientation flips
+  // the next render picks up the new width and the cards reflow
+  // smoothly through React.
+  //
+  // Why we keep `aspectRatio` as a fallback: when this card is used
+  // in horizontally-scrolling lists (Home's "Saved Spots" rail at
+  // index.tsx:539 passes `width={260}`), the explicit width prop
+  // makes aspectRatio unambiguous on first paint — no flash there.
+  // We only override the height when no explicit width is supplied.
+  const winWidth = Dimensions.get('window').width;
+  const fallbackImgHeight = useMemo(() => {
+    // Mirror the page gutter from explore.tsx:1469 (paddingHorizontal: 12).
+    const gutter = 24;
+    const cardWidth = Math.max(280, winWidth - gutter);
+    return Math.round(cardWidth * (5 / 4)); // aspectRatio 4:5 → height = 5/4 × width
+  }, [winWidth]);
+  const wrapStyle = typeof width === 'number'
+    ? styles.imageWrap                                  // explicit pixel width — aspectRatio handles height fine
+    : [styles.imageWrap, { aspectRatio: undefined as unknown as number, height: fallbackImgHeight }]; // % width — pin pixels
+
   // v2.1.0 (May 2026) — image-sizing-flash fix. FlashList recycles
   // cells: when a cell is reused for a different spot, the NEW `cover`
   // URL starts loading but `imgLoaded` is still `true` from the old
@@ -132,7 +175,7 @@ function SpotCardImpl({
       style={[styles.card, { width: width ?? '100%' }]}
       testID={testID}
     >
-      <View style={styles.imageWrap}>
+      <View style={wrapStyle}>
         {cover && !imgError ? (
           <>
             <Image

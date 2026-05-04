@@ -178,10 +178,28 @@ export default function Explore() {
     return () => clearTimeout(t);
   }, [mapEverMounted]);
 
+  // ─── May 2026 Phase E — map performance timeline ──────────────────
+  // Stamps `performance.now()` the moment the user flips into Map view.
+  // Used by the markers diagnostic logs to compute "ms_since_map_open"
+  // for every step (HTTP start, HTTP done, first marker render). Helps
+  // attribute the user-reported 5-second pin-appear delay to the right
+  // step (warm-up timer? GPS gate? API latency? RN bridge commit?).
+  const mapOpenAt = useRef<number | null>(null);
+
   const switchView = useCallback((next: 'list' | 'map') => {
     Haptics.selectionAsync().catch(() => {});
     setView(next);
-    if (next === 'map') setMapEverMounted(true);
+    if (next === 'map') {
+      setMapEverMounted(true);
+      mapOpenAt.current = performance.now();
+      // Use console.log directly here — exploreLog requires the
+      // surrounding hooks to have initialized which isn't guaranteed
+      // in this very early callback.
+      try {
+        // eslint-disable-next-line no-console
+        console.log('[explore] view → map', new Date().toISOString());
+      } catch {}
+    }
     // NOTE: intentionally NOT persisted — session memory only.
   }, []);
   const [filters, setFilters] = useState<Filters>({});
@@ -539,11 +557,33 @@ export default function Explore() {
     // (and risks a setState after the map unmounts).
     if (view !== 'map') return;
 
+    // ─── May 2026 — markers timing diagnostics (Phase E) ──────────
+    // Measures every step of the map-load timeline so we can identify
+    // the actual bottleneck behind the user-reported 5-second delay
+    // before pins appear. All times are in ms relative to the
+    // `mapOpenAt` ref, which was stamped the moment view flipped to
+    // 'map'. Intentionally cheap: 4 console statements per fetch via
+    // the existing exploreLog wrapper, with a single timeline object
+    // so the analyst can see the full sequence in one log line.
+    const _markerPerfStart = performance.now();
+    const _msSinceMapOpen = mapOpenAt.current
+      ? Math.round(performance.now() - mapOpenAt.current)
+      : null;
+    exploreLog('info', 'markers_fetch_start', {
+      ms_since_map_open: _msSinceMapOpen,
+      has_region: !!region,
+      view, mapEverMounted, mapNativeReady,
+    });
+
     // Rate-limit: skip if we just fetched. In Expo Go the bridge gets
     // overwhelmed by rapid setMapMarkers; we throttle to 2.5s between
     // calls. Production builds (EAS) use 800ms.
     const now = Date.now();
     if (now - lastMarkerFetchAt.current < MARKER_REFETCH_MIN_MS) {
+      exploreLog('info', 'markers_fetch_throttled', {
+        ms_since_last_fetch: now - lastMarkerFetchAt.current,
+        ms_since_map_open: _msSinceMapOpen,
+      });
       return;
     }
     // Pause refetches while the user is actively touching the map.
@@ -585,6 +625,16 @@ export default function Explore() {
       if (filters.shoot_type) params.shoot_type = filters.shoot_type;
       if (filters.niche) params.shoot_type = filters.niche;
       const resp = await api.get('/spots/markers', params);
+      // ─── markers diagnostic — HTTP latency ─────────────────────
+      const _httpMs = Math.round(performance.now() - _markerPerfStart);
+      const _itemCount = Array.isArray(resp?.items) ? resp.items.length : 0;
+      exploreLog('info', 'markers_http_done', {
+        http_ms: _httpMs,
+        item_count: _itemCount,
+        ms_since_map_open: mapOpenAt.current
+          ? Math.round(performance.now() - mapOpenAt.current)
+          : null,
+      });
       if (ac.signal.aborted || !mapMountedRef.current) return;
       const items: any[] = Array.isArray(resp?.items) ? resp.items : [];
       // Hard-filter: drop any marker without a finite, in-range coord.
@@ -605,6 +655,17 @@ export default function Explore() {
           !!m.spot_id,
         );
       setMapMarkers(coerced);
+      // ─── markers diagnostic — state committed ────────────────
+      // setMapMarkers triggers a re-render; the next paint should
+      // include the actual native Marker views. The gap between
+      // this log and on-screen pins is the Fabric mounting transaction
+      // cost (typically <100 ms even for ~200 markers).
+      exploreLog('info', 'markers_state_committed', {
+        marker_count: coerced.length,
+        ms_since_map_open: mapOpenAt.current
+          ? Math.round(performance.now() - mapOpenAt.current)
+          : null,
+      });
       exploreLog('info', 'markers_loaded', { count: coerced.length, hasBbox: !!region, expoGo: IS_EXPO_GO });
     } catch (e: any) {
       if (!ac.signal.aborted) exploreLog('warn', 'markers_load_error', { message: e?.message });
@@ -1187,7 +1248,15 @@ export default function Explore() {
               onMapReady: () => {
                 if (!mapNativeReady) {
                   setMapNativeReady(true);
-                  exploreLog('info', 'map_native_ready', {});
+                  exploreLog('info', 'map_native_ready', {
+                    // Phase E diagnostic: time from user-tap to native
+                    // map-ready. If this is >800 ms on prod we know
+                    // MapView itself is the slow bit (Catalyst-arch
+                    // initial-tile render usually 50-200 ms).
+                    ms_since_map_open: mapOpenAt.current
+                      ? Math.round(performance.now() - mapOpenAt.current)
+                      : null,
+                  });
                 }
               },
               // Custom cluster — gold glowing disc with pulse ring.
