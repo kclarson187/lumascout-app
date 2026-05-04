@@ -35,6 +35,37 @@ import {
 } from 'react-native';
 import { ImageOff } from 'lucide-react-native';
 import { colors, radii } from '../theme';
+import { resolveBackendUrl } from '../constants/config';
+
+// V3 (May 2026) — Defensive URL absolutization at the rendering layer.
+//
+// Why this is here, not just in image-url.ts callers:
+//   Multiple call sites pass URLs directly from API responses to
+//   <Image> (e.g., spot.owner.avatar_url, item.attachment_url, raw
+//   community_uploads URLs). If the backend ever returns a relative
+//   path like "/api/uploads/2026/05/abc.jpg" — which iOS native
+//   <Image> CANNOT render — those paths bypass the resolver and
+//   produce silent blanks ONLY in production builds (Expo Go's metro
+//   bundler somehow papers this over for `http://localhost:8081/...`
+//   relative paths during dev, which is why dev "just works" but
+//   prod doesn't).
+//
+//   This guard absolutizes any "/path" URI to "${backendBaseUrl}/path"
+//   inside the image component itself, so EVERY consumer is protected
+//   regardless of which helper it forgot to call.
+function _absolutize(uri: string | null | undefined): string | null {
+  if (!uri || typeof uri !== 'string') return uri || null;
+  if (/^[a-z][a-z0-9+\-.]*:\/\//i.test(uri)) return uri;   // http(s)://, ftp://, file://
+  if (uri.startsWith('data:') || uri.startsWith('blob:')) return uri;
+  if (uri.startsWith('//')) return `https:${uri}`;          // protocol-relative
+  if (uri.startsWith('/')) {
+    try {
+      const base = resolveBackendUrl();
+      return base ? `${base}${uri}` : uri;
+    } catch { return uri; }
+  }
+  return uri;
+}
 
 // Module-level cache of URLs that have failed to load this session. Using
 // a Set keeps lookups O(1) and memory usage bounded to the number of
@@ -62,7 +93,8 @@ function extractUri(source: SafeImageProps['source']): string | null {
   if (!source) return null;
   if (typeof source === 'number') return null; // local asset
   if (typeof source === 'object' && 'uri' in source) {
-    return (source as { uri?: string | null }).uri || null;
+    const raw = (source as { uri?: string | null }).uri || null;
+    return _absolutize(raw);
   }
   return null;
 }
@@ -111,7 +143,14 @@ export default function SafeImage({
 
   return (
     <Image
-      source={source as ImageSourcePropType}
+      // V3 (May 2026 production fix) — pass the absolutized URI back
+      // through so iOS native <Image> receives a fully-qualified URL.
+      // For non-uri sources (numeric require()) we forward as-is.
+      source={
+        typeof source === 'object' && source && 'uri' in source
+          ? { ...(source as object), uri: uri || (source as { uri?: string | null }).uri }
+          : (source as ImageSourcePropType)
+      }
       style={style}
       onError={() => {
         // Cache the broken URI so every *other* mount of the same URL

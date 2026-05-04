@@ -47,6 +47,26 @@ import { StyleSheet, View, ViewStyle } from 'react-native';
 import { Image as ExpoImage, ImageProps as ExpoImageProps, ImageSource } from 'expo-image';
 import { ImageOff } from 'lucide-react-native';
 import { colors, radii } from '../theme';
+import { resolveBackendUrl } from '../constants/config';
+
+// V3 (May 2026) — Defensive URL absolutization at the rendering layer.
+// See SafeImage for the full RCA. Same logic mirrored here so both
+// image components are protected against any caller passing a
+// relative URI like "/api/uploads/...". iOS native <ExpoImage>
+// silently fails on relative URIs in production builds.
+function _absolutize(uri: string | null | undefined): string | null {
+  if (!uri || typeof uri !== 'string') return uri || null;
+  if (/^[a-z][a-z0-9+\-.]*:\/\//i.test(uri)) return uri;
+  if (uri.startsWith('data:') || uri.startsWith('blob:')) return uri;
+  if (uri.startsWith('//')) return `https:${uri}`;
+  if (uri.startsWith('/')) {
+    try {
+      const base = resolveBackendUrl();
+      return base ? `${base}${uri}` : uri;
+    } catch { return uri; }
+  }
+  return uri;
+}
 
 // Broken-URL cache — O(1) lookups keyed by URL. Cleared only on reload.
 const BROKEN_URLS = new Set<string>();
@@ -67,7 +87,8 @@ function extractUri(source: CachedImageProps['source']): string | null {
   if (typeof source === 'number') return null;
   if (typeof source === 'object' && 'uri' in source) {
     const uri = (source as { uri?: string | null }).uri;
-    return typeof uri === 'string' && uri.length > 0 ? uri : null;
+    const raw = typeof uri === 'string' && uri.length > 0 ? uri : null;
+    return _absolutize(raw);
   }
   return null;
 }
