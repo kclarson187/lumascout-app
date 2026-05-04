@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';import {
+import React, { useState, useCallback, useEffect, useMemo } from 'react';import {
   View,
   Text,
   StyleSheet,
@@ -10,12 +10,14 @@ import React, { useState, useCallback, useMemo } from 'react';import {
   Linking,
   Platform,
   Pressable,
+  DeviceEventEmitter,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as ExpoLinking from 'expo-linking';
 import Head from 'expo-router/head';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Image as ExpoImage } from 'expo-image';
 import {
   ChevronLeft, Bookmark, Share2, Flag, MapPin, Sun, Sunrise, Sunset, Cloud,
   Camera, Car, Accessibility, Users, Shield, DogIcon, BabyIcon, TicketIcon, ClockIcon, CheckCircle,
@@ -118,6 +120,46 @@ function SpotDetailImpl() {
   const [reportOpen, setReportOpen] = useState(false);
   const [shotListOpen, setShotListOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+
+  // ─── Map / Hero Image Refresh (May 2026) ─────────────────────────────
+  // The spot's "map image" (cover) updates whenever a user posts new
+  // community photos that get auto-promoted, OR an admin saves a new
+  // cover override. Both flows now broadcast a DeviceEvent that this
+  // screen listens for. We:
+  //   1) Drop expo-image's in-memory bytes cache so the hero never
+  //      serves stale pixels for a recycled URL.
+  //   2) Force a fresh /spots/:id fetch immediately — `useFocusEffect`
+  //      already re-fetches on focus, but a same-frame reload removes
+  //      the perceptible "old → new" flash when the user comes back
+  //      from upload / cover editor.
+  // Disk cache is preserved (LRU keys still valid for unrelated
+  // images), keeping the v2.0.24 bandwidth wins intact.
+  useEffect(() => {
+    const onPhotosPosted = (payload: any) => {
+      try {
+        if (!payload || (payload.spotId && String(payload.spotId) !== String(id))) return;
+        // eslint-disable-next-line no-console
+        console.log('[spot-detail] photos:posted — refreshing hero', { id, autoApproved: !!payload.autoApproved });
+      } catch { /* noop */ }
+      try { ExpoImage.clearMemoryCache(); } catch { /* noop */ }
+      try { load(); } catch { /* noop */ }
+    };
+    const onCoverChanged = (payload: any) => {
+      try {
+        if (!payload || (payload.spotId && String(payload.spotId) !== String(id))) return;
+        // eslint-disable-next-line no-console
+        console.log('[spot-detail] cover:changed — refreshing hero', { id });
+      } catch { /* noop */ }
+      try { ExpoImage.clearMemoryCache(); } catch { /* noop */ }
+      try { load(); } catch { /* noop */ }
+    };
+    const sub1 = DeviceEventEmitter.addListener('spot:photos:posted', onPhotosPosted);
+    const sub2 = DeviceEventEmitter.addListener('spot:cover:changed', onCoverChanged);
+    return () => {
+      try { sub1.remove(); } catch { /* noop */ }
+      try { sub2.remove(); } catch { /* noop */ }
+    };
+  }, [id, load]);
 
   const toggleSave = async () => {
     if (!user) return router.push('/(auth)/login');
