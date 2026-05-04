@@ -118,6 +118,13 @@ ALLOWED_HOSTS = {
     "images.unsplash.com",
     # Our own uploads origin — same host as the preview backend.
     "photo-finder-60.preview.emergentagent.com",
+    # Production web origin. EAS production iOS/Android builds may
+    # cache or rewrite image URLs to this canonical host (the AASA /
+    # Universal Links domain) — accept it so the proxy stays
+    # symmetric between dev preview and production. Subdomains
+    # (api.lumascout.app, cdn.lumascout.app, etc.) are matched via
+    # the suffix rule in `_is_allowed_host`.
+    "lumascout.app",
 }
 
 # If a source URL already has `?w=...&q=...` params of its own (like

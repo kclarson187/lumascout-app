@@ -12,6 +12,96 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Production-build image regression fix — bake EXPO_PUBLIC_BACKEND_URL into Constants.expoConfig.extra so EAS builds carry it without .env"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/app.config.js (V3 — resolvedBackendUrl() and resolvedWebBaseUrl() helpers + module.exports now mirrors them into extra.EXPO_PUBLIC_BACKEND_URL and extra.EXPO_PUBLIC_WEB_BASE_URL so Constants.expoConfig.extra carries the URLs in EAS production builds even when .env isn't on the build server),
+      /app/frontend/src/api.ts (added Constants import + _resolvedBackendUrl() with the same env→extra cascade as the image helpers, so axios baseURL no longer falls back to relative '/api' in production),
+      /app/frontend/app/(tabs)/explore.tsx (build_diagnostics log upgraded to print backend_env / backend_extra / backend_resolved so we can confirm in Xcode/Console.app which path the production app is using),
+      /app/backend/routes/img_proxy.py (ALLOWED_HOSTS += "lumascout.app" so production-domain image URLs can be proxied symmetrically with the dev preview host)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          USER REPORT: After deploying iOS + Android EAS production
+          builds, Explore tab thumbnails went blank. Expo Go still
+          worked. Uploads completed but uploaded photos didn't appear
+          on map / list / detail.
+          
+          ROOT CAUSE
+          • `/app/frontend/.env` is gitignored (correctly — secrets
+            shouldn't be committed). EAS production build server
+            clones the repo without `.env`, so Metro doesn't see
+            EXPO_PUBLIC_BACKEND_URL during `expo export`.
+          • Result: `process.env.EXPO_PUBLIC_BACKEND_URL` is
+            UNDEFINED in the bundled production JS.
+          • `image-url.ts` and `upload-image.ts` already had a
+            `Constants.expoConfig.extra.EXPO_PUBLIC_BACKEND_URL`
+            fallback, but `app.config.js` was never WRITING that
+            value into `extra` — so the fallback was reading from
+            a path that was always empty.
+          • `api.ts` had NO fallback at all — `BASE_URL = '/api'`
+            (relative). Native fetch refuses to resolve relative
+            URLs → uploads should have failed, but they apparently
+            succeeded (likely user retried on dev / staging build
+            and saw success there before promoting).
+          • Net effect in prod: <Image source={{ uri: '/api/uploads/…' }} />
+            silently fails on iOS/Android (no origin to resolve
+            against) → blank thumbnails.
+          
+          FIX
+          1. `app.config.js` now mirrors EXPO_PUBLIC_BACKEND_URL and
+             EXPO_PUBLIC_WEB_BASE_URL into `extra` at build time.
+             Falls back to canonical production URLs
+             (https://photo-finder-60.preview.emergentagent.com and
+             https://lumascout.app) when env vars are absent.
+             Result: `Constants.expoConfig.extra.EXPO_PUBLIC_BACKEND_URL`
+             is ALWAYS set in EAS bundles.
+          2. `api.ts` now reads the same env→extra cascade. Axios
+             baseURL is stable in production.
+          3. `explore.tsx` build_diagnostics log upgraded to print
+             both env and extra paths + the resolved value, so we
+             can verify in Xcode / Console.app that production is
+             reading the right URL.
+          4. Backend `/api/img` proxy ALLOWED_HOSTS extended with
+             `lumascout.app` so production-built image URLs that
+             reference the canonical web origin are also accepted
+             (defense in depth).
+          
+          VERIFICATION
+          • `node -e "require('./app.config.js')(...).extra"` →
+            confirms { EXPO_PUBLIC_BACKEND_URL: 'https://photo-...',
+            EXPO_PUBLIC_WEB_BASE_URL: 'https://lumascout.app' }.
+          • Metro bundled cleanly after restart.
+          • Backend reloaded cleanly with ALLOWED_HOSTS update.
+          • ESLint: 0 NEW errors. Pre-existing warnings only.
+          
+          PRD #11 (cache & refresh logic) reverified:
+          • Upload submit invalidates explore.list:v1, saved:v1,
+            groups:v1, spot:${id} (added in prior round).
+          • Admin cover override propagation uses the same
+            invalidation set (added in prior round).
+          
+          PRD #12 (offline handling): NOT addressed in this fix —
+          larger effort (AsyncStorage-persisted upload queue +
+          background-sync on reconnect). Tracked as backlog.
+          
+          USER ACTION REQUIRED
+          • Trigger a NEW EAS production build (iOS + Android) so
+            the updated app.config.js's `extra` values are baked
+            in. The CURRENTLY-DEPLOYED builds will continue to
+            show blank thumbnails — only the next build picks up
+            the fix.
+          • After the new build is live, look for
+            `[explore] build_diagnostics` in Xcode / Console.app
+            and confirm `backend_resolved` is non-empty.
+
+
+
   - task: "Comprehensive Explore Tab audit — verify 17-item PRD + tighten cache invalidation + add dev docs"
     implemented: true
     working: true

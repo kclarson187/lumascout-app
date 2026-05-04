@@ -1,8 +1,31 @@
 import axios, { AxiosInstance } from 'axios';
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
+import Constants from 'expo-constants';
 
-const BASE_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || '') + '/api';
+// Backend base URL resolution (V2, May 2026 — production fix).
+//
+// In dev / Expo Go: Metro reads `frontend/.env` at server start and
+// inlines `process.env.EXPO_PUBLIC_BACKEND_URL` into the bundle. ✅
+//
+// In production EAS builds: the build server clones the repo from git
+// where `.env` is gitignored, so `process.env.EXPO_PUBLIC_BACKEND_URL`
+// is undefined in the bundled JS → axios baseURL becomes `/api`
+// (relative) → every API call fails or is silently misrouted.
+// Symptom: live in production but Expo Go works fine.
+//
+// Fix: `app.config.js` mirrors the canonical backend URL into
+// `extra.EXPO_PUBLIC_BACKEND_URL` at build time. We read that as a
+// fallback so the bundled config carries the URL even when the env
+// var is missing on the build server.
+function _resolvedBackendUrl(): string {
+  const raw =
+    (process.env.EXPO_PUBLIC_BACKEND_URL as string | undefined)
+    || (Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL as string | undefined)
+    || '';
+  return raw.replace(/\/+$/, '');
+}
+const BASE_URL = _resolvedBackendUrl() + '/api';
 const TOKEN_KEY = 'photoscout_token';
 
 // Global listeners for paywall triggers (402 responses)
