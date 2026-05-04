@@ -15,7 +15,6 @@
  */
 import * as ImagePicker from 'expo-image-picker';
 import { Alert, Platform } from 'react-native';
-import Constants from 'expo-constants';
 
 /**
  * Resolved backend base URL. EXPO_PUBLIC_BACKEND_URL is the source of
@@ -24,10 +23,12 @@ import Constants from 'expo-constants';
  * where `/api/*` is rewritten at the edge to port 8001.
  */
 function backendBaseUrl(): string {
-  const raw = (process.env.EXPO_PUBLIC_BACKEND_URL as string | undefined)
-    || (Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL as string | undefined)
-    || '';
-  return raw.replace(/\/+$/, '');
+  // V3 (May 2026 — production fix 2): delegate to shared helper for
+  // triple-layered fallback (env → extra → hardcoded). See
+  // `src/constants/config.ts` header for RCA.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { resolveBackendUrl } = require('../constants/config');
+  return resolveBackendUrl();
 }
 
 export type UploadedImage = {
