@@ -28,8 +28,11 @@ from server import (
     get_current_user,
     utcnow,
     send_growth_push,
+    send_push,
+    require_role,
     DEFAULT_NOTIFICATION_PREFERENCES,
 )
+from services import apns as apns_service
 
 router = APIRouter(prefix="/api", tags=["push"])
 
@@ -147,17 +150,38 @@ class PushTokenIn(BaseModel):
     token: str
     platform: Optional[str] = None   # "ios" | "android" | "web"
     device_id: Optional[str] = None
+    token_type: Optional[str] = None  # "expo" | "apns" | "fcm" (auto-detected if None)
 
 # --- register_push_token (server.py:5518-5538) ---
 @router.post("/me/push-token")
 async def register_push_token(body: PushTokenIn, user: dict = Depends(get_current_user)):
-    if not body.token or not body.token.startswith("ExponentPushToken"):
+    # Accept Expo tokens (ExponentPushToken[...]) AND raw APNs device tokens
+    # (64 hex chars). token_type is optional — if absent we auto-detect.
+    raw = (body.token or "").strip().replace("<", "").replace(">", "").replace(" ", "")
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty push token")
+
+    ttype = (body.token_type or "").lower() or None
+    if not ttype:
+        if raw.startswith("ExponentPushToken"):
+            ttype = "expo"
+        elif all(c in "0123456789abcdefABCDEF" for c in raw) and len(raw) >= 32:
+            ttype = "apns"
+        else:
+            ttype = "expo"  # default — keep backward compat
+
+    # Minimal validation per type
+    if ttype == "expo" and not raw.startswith("ExponentPushToken"):
         raise HTTPException(status_code=400, detail="Not a valid Expo push token")
+    if ttype == "apns" and not (all(c in "0123456789abcdefABCDEF" for c in raw) and len(raw) >= 32):
+        raise HTTPException(status_code=400, detail="Not a valid APNs device token")
+
     now = utcnow()
     set_doc = {
         "user_id": user["user_id"],
-        "token": body.token,
-        "platform": body.platform or "unknown",
+        "token": raw,
+        "token_type": ttype,
+        "platform": body.platform or ("ios" if ttype == "apns" else "unknown"),
         "device_id": body.device_id,
         "updated_at": now,
     }
@@ -165,15 +189,99 @@ async def register_push_token(body: PushTokenIn, user: dict = Depends(get_curren
     # created_at lives only in $setOnInsert so it's preserved on updates and
     # doesn't conflict with $set on the same path.
     await db.push_tokens.update_one(
-        {"user_id": user["user_id"], "token": body.token},
+        {"user_id": user["user_id"], "token": raw},
         {"$set": set_doc, "$setOnInsert": {"created_at": now}},
         upsert=True,
     )
-    return {"ok": True}
+    return {"ok": True, "token_type": ttype}
 
 # --- unregister_push_token (server.py:5541-5544) ---
 @router.delete("/me/push-token")
 async def unregister_push_token(token: str, user: dict = Depends(get_current_user)):
     await db.push_tokens.delete_one({"user_id": user["user_id"], "token": token})
     return {"ok": True}
+
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# APNs direct-dispatch admin endpoints (May 2026)
+# ──────────────────────────────────────────────────────────────────────────
+# These live next to the push-token registry because they share the
+# concept of "what tokens does this user have and which transport path
+# are they on?". Admin/super_admin only — regular users don't need to
+# see APNs internals.
+
+class ApnsTestIn(BaseModel):
+    device_token: str
+    title: Optional[str] = None
+    body: Optional[str] = None
+
+
+@router.get("/admin/apns/status")
+async def apns_status(user: dict = Depends(require_role("admin"))):
+    """Return APNs service configuration status.
+
+    Used by /admin/diagnostics to confirm the .p8 key is readable, the
+    team/bundle IDs are wired in, and the target endpoint (sandbox vs
+    production) is correct. Safe to call in production — returns no secrets.
+    """
+    # Also report how many APNs-typed tokens are currently on file
+    # so operators know whether ANY iOS device has registered yet.
+    try:
+        apns_count = await db.push_tokens.count_documents({"token_type": "apns"})
+    except Exception:
+        apns_count = 0
+    try:
+        expo_count = await db.push_tokens.count_documents(
+            {"$or": [{"token_type": "expo"}, {"token_type": {"$exists": False}}]}
+        )
+    except Exception:
+        expo_count = 0
+    return {
+        **apns_service.debug_status(),
+        "registered_apns_tokens": apns_count,
+        "registered_expo_tokens": expo_count,
+    }
+
+
+@router.post("/admin/apns/test")
+async def apns_test_admin(body: ApnsTestIn, user: dict = Depends(require_role("admin"))):
+    """
+    Admin-only: dispatch a single APNs push directly to an arbitrary device
+    token. Used to validate the .p8 + team + bundle configuration without
+    involving a user's preference gating or the daily cap.
+    """
+    if not apns_service.apns_configured():
+        raise HTTPException(status_code=409, detail="APNs not configured on this server")
+    result = await apns_service.send_apns(
+        body.device_token,
+        title=body.title or "LumaScout APNs test",
+        body=body.body or "Direct APNs dispatch is working.",
+        data={"kind": "apns_test"},
+    )
+    return result
+
+
+@router.post("/me/notifications/test-apns")
+async def test_apns_me(user: dict = Depends(get_current_user)):
+    """
+    Caller-facing test — dispatch to EVERY registered push token on the
+    caller's account, then report the per-transport breakdown. Bypasses
+    quiet hours / daily caps so operators can verify delivery instantly.
+    """
+    # Reuse the centralized send_push which now handles Expo + APNs split.
+    await send_push(
+        [user["user_id"]],
+        "APNs wiring test 🎯",
+        "Direct APNs dispatch should arrive alongside the Expo copy.",
+        {"kind": "apns_test", "deep_link": "/notifications"},
+    )
+    rows = await db.push_tokens.find(
+        {"user_id": user["user_id"]}, {"_id": 0, "token": 1, "token_type": 1, "platform": 1},
+    ).to_list(20)
+    return {"ok": True, "tokens_targeted": len(rows), "tokens": [
+        {"type": r.get("token_type") or "expo", "platform": r.get("platform"),
+         "token_preview": (r.get("token") or "")[:12] + "…"}
+        for r in rows
+    ]}
 

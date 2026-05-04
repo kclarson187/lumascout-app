@@ -4672,36 +4672,84 @@ async def astronomy(lat: float, lng: float, date: Optional[str] = None):
 
 
 async def send_push(user_ids: List[str], title: str, body: str, data: Optional[dict] = None):
-    """Fire-and-forget push delivery via Expo's push API. Never raises."""
+    """Fire-and-forget push delivery. Never raises.
+
+    Dual transport:
+      • Expo tokens (`ExponentPushToken[...]`) → exp.host/--/api/v2/push/send
+      • Raw APNs device tokens (hex, iOS)    → api.push.apple.com direct dispatch
+        when services.apns is configured via env vars.
+
+    We pull the device rows once and split by token_type (stored on the
+    push_tokens document; rows without it default to "expo" for backward
+    compatibility with the pre-APNs schema).
+    """
     if not user_ids:
         return
     try:
         import httpx
-        tokens = await db.push_tokens.find(
+        from services.apns import apns_configured, send_apns_many
+
+        rows = await db.push_tokens.find(
             {"user_id": {"$in": list(set(user_ids))}},
-            {"_id": 0, "token": 1},
+            {"_id": 0, "token": 1, "token_type": 1, "platform": 1},
         ).to_list(500)
-        if not tokens:
+        if not rows:
             return
-        messages = [
-            {
-                "to": t["token"],
-                "sound": "default",
-                "title": title[:120],
-                "body": body[:240],
-                "data": data or {},
-                "priority": "high",
-            }
-            for t in tokens
-        ]
-        async with httpx.AsyncClient(timeout=8.0) as client_h:
-            # Expo accepts up to 100 messages per call.
-            for i in range(0, len(messages), 100):
-                await client_h.post(
-                    "https://exp.host/--/api/v2/push/send",
-                    json=messages[i:i + 100],
-                    headers={"Accept": "application/json", "Content-Type": "application/json"},
+
+        expo_tokens: List[str] = []
+        apns_tokens: List[str] = []
+        for r in rows:
+            token = r.get("token") or ""
+            if not token:
+                continue
+            ttype = (r.get("token_type") or "").lower()
+            # Auto-detect when older rows don't carry token_type.
+            if not ttype:
+                ttype = "expo" if token.startswith("ExponentPushToken") else (
+                    "apns" if all(c in "0123456789abcdefABCDEF" for c in token) and len(token) >= 32 else "expo"
                 )
+            if ttype == "apns":
+                apns_tokens.append(token)
+            else:
+                expo_tokens.append(token)
+
+        # ─── Expo batch ───────────────────────────────────────────
+        if expo_tokens:
+            messages = [
+                {
+                    "to": t,
+                    "sound": "default",
+                    "title": title[:120],
+                    "body": body[:240],
+                    "data": data or {},
+                    "priority": "high",
+                }
+                for t in expo_tokens
+            ]
+            async with httpx.AsyncClient(timeout=8.0) as client_h:
+                # Expo accepts up to 100 messages per call.
+                for i in range(0, len(messages), 100):
+                    await client_h.post(
+                        "https://exp.host/--/api/v2/push/send",
+                        json=messages[i:i + 100],
+                        headers={"Accept": "application/json", "Content-Type": "application/json"},
+                    )
+
+        # ─── APNs direct dispatch (optional) ──────────────────────
+        if apns_tokens and apns_configured():
+            summary = await send_apns_many(
+                apns_tokens,
+                title=title, body=body,
+                data=data,
+            )
+            # Clean up tokens Apple told us are dead (uninstalled / migrated).
+            dead = summary.get("invalid_tokens") or []
+            if dead:
+                try:
+                    await db.push_tokens.delete_many({"token": {"$in": dead}})
+                    logger.info("apns pruned %d dead tokens", len(dead))
+                except Exception:
+                    pass
     except Exception as e:
         # Push delivery is best-effort — never block the caller.
         logger.warning("Push delivery failed: %s", e)
