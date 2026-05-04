@@ -135,6 +135,37 @@ export default function Explore() {
   const [view, setView] = useState<'list' | 'map'>('list');
   const [viewHydrated, setViewHydrated] = useState(true); // no async hydration anymore — always ready
   const [mapEverMounted, setMapEverMounted] = useState(false);
+  // ─── May 2026 (post-Catalyst-crash): two-phase map mount ──────────
+  // The bare `mapEverMounted` flag controls when MapView itself enters
+  // the JSX tree. But on Mac Catalyst / "Designed for iPad on Mac",
+  // Fabric's interop shim (`RCTLegacyViewManagerInteropComponentView`)
+  // can reach `finalizeUpdates → __NSArrayM insertObject:atIndex:`
+  // BEFORE MapView has fully realized its child-container view, if we
+  // hand it a fully populated Markers array on the same render.
+  //
+  // To eliminate that race we now gate Markers (and clustering's
+  // `renderCluster` outputs, which are also Markers) on a SECOND flag,
+  // `mapNativeReady`, that flips to true only after MapView fires
+  // `onMapReady`. Net behavior on iPhone/iPad/Mac Catalyst:
+  //   1. MapView mounts first (empty), with valid frame + child container.
+  //   2. Native side fires onMapReady (~50–200ms after layout settles).
+  //   3. We then render the Markers, so insertObject:atIndex: receives
+  //      an already-realized parent and a clean fresh-insert (no
+  //      mid-transaction child mutation).
+  // Visual impact: zero — MapView shows the basemap during the brief
+  // pre-ready window, and pins fade in within ~150ms of that window.
+  const [mapNativeReady, setMapNativeReady] = useState(false);
+
+  // Reset mapNativeReady the moment we navigate AWAY from map view OR
+  // unmount the map by any other path. Without this, switching to list
+  // and back leaves `mapNativeReady=true` from the previous session,
+  // and the new MapView instance gets Markers thrown at it on first
+  // render — exactly the race we just fixed. The cheap re-mount of
+  // markers ~150ms after onMapReady fires the second time is a
+  // worthwhile trade for crash-proofing.
+  useEffect(() => {
+    if (view !== 'map') setMapNativeReady(false);
+  }, [view]);
 
   // Background tile warm-up: once the user lands on Explore (List view
   // by default), kick off a low-priority mount of the map machinery so
@@ -1145,6 +1176,20 @@ export default function Explore() {
               onTouchStart: () => { isMapInteractingRef.current = true; },
               onTouchEnd: () => { isMapInteractingRef.current = false; },
               onTouchCancel: () => { isMapInteractingRef.current = false; },
+              // May 2026 (Mac Catalyst crash fix): MapView fires
+              // onMapReady once its native child container is fully
+              // realized. Until that callback runs, mounting Markers
+              // races Fabric's `RCTLegacyViewManagerInteropComponentView
+              // ::finalizeUpdates → __NSArrayM insertObject:atIndex:`
+              // and crashes the app on Mac Catalyst (and intermittently
+              // on iOS). Flipping `mapNativeReady` here defers Marker
+              // mount to a clean transaction.
+              onMapReady: () => {
+                if (!mapNativeReady) {
+                  setMapNativeReady(true);
+                  exploreLog('info', 'map_native_ready', {});
+                }
+              },
               // Custom cluster — gold glowing disc with pulse ring.
               //
               // Batch #9A (May 2026) — FIX: the library-provided `onPress`
@@ -1211,7 +1256,14 @@ export default function Explore() {
             // win for iOS pinch-zoom stability: marker JSX is reconciled
             // ONLY when the underlying spot identity set or saved-state
             // changes, never on viewport pan/zoom.
-            renderedMarkers
+            //
+            // May 2026: gate on `mapNativeReady` so we only push the
+            // Markers array into the JSX tree AFTER MapView has fired
+            // onMapReady (i.e. the native child container is realized).
+            // This eliminates the Mac-Catalyst crash where Fabric's
+            // interop shim called insertObject:atIndex: on a
+            // not-yet-fully-mounted parent's child array.
+            mapNativeReady ? renderedMarkers : null
           )}
 
           {/* Apr 2026 cleanup — trending floating chip removed per

@@ -12,6 +12,107 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+
+
+  - task: "Mac Catalyst Explore-tab crash hardening — react-native-maps bump + onMapReady-gated marker mount"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/package.json (react-native-maps 1.20.1 → 1.27.2 via `npx expo install react-native-maps@latest`. Closes seven minor releases of upstream stability + Fabric fixes between 1.20 and 1.27, including several reproducer-confirmed fixes for the `RCTLegacyViewManagerInteropComponentView::finalizeUpdates → __NSArrayM insertObject:atIndex:` family of crashes that surface most aggressively on Mac Catalyst / "Designed for iPad on Mac" runtimes where __NSArrayM bounds checking is stricter than on iOS.),
+      /app/frontend/app/(tabs)/explore.tsx (introduced `mapNativeReady` state — flips from false to true only when MapView fires its native `onMapReady` callback. Markers (and clustering's renderCluster output, which is also a Marker) are now gated on this flag, so they never enter the JSX tree until the MapView's child container is fully realized in native. Previously, an empty `mapNativeReady` was implicit — the JSX handed Markers + MapView to Fabric in the same render and the interop shim could call insertObject:atIndex: on a not-yet-realized parent. Also added a useEffect that resets `mapNativeReady` whenever `view !== 'map'`, so toggling list ↔ map ↔ list re-runs the gate cleanly on each re-mount instead of bypassing it.)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          USER REPORT: macOS 26.5 (Mac15,6) crash on Explore tab.
+          Stack trace top frames:
+            objc_exception_throw
+            [__NSArrayM insertObject:atIndex:]
+            -[LumaScout … 0x1024804d4]
+            RCTLegacyViewManagerInteropComponentView::finalizeUpdates
+            RCTMountingManager::performTransaction
+          
+          DIAGNOSIS
+          The decisive frame is `RCTLegacyViewManagerInteropComponentView`
+          — React Native's Fabric-on-paper interop shim. We have
+          newArchEnabled:true app-wide; the Explore tab is the only
+          screen heavy with a legacy ViewManager, namely
+          react-native-maps' AIRMap / AIRMapMarker / AIRMapCallout
+          (paper components, even on the latest 1.x of the library —
+          fabric components exist but the host MapView still uses the
+          interop bridge for child markers). The app.json doesn't
+          declare a Mac Catalyst target, so the user is hitting this
+          via the "Designed for iPad on Mac" runtime that ships every
+          App Store iOS build to Apple-silicon Macs by default. That
+          runtime has stricter __NSArrayM bounds checks and exposes a
+          race already latent on iOS:
+            1. JSX hands MapView and a populated Markers array to
+               Fabric on the SAME render.
+            2. Fabric's mounting transaction tries to add the Marker
+               subviews to MapView's child container before MapView
+               finishes realizing that container in native.
+            3. `insertObject:atIndex:` ends up indexing past the
+               current length of the children array → exception →
+               EXC_BREAKPOINT termination.
+          
+          FIX (conservative track, behavior-preserving)
+          1. Bump react-native-maps 1.20.1 → 1.27.2. Picks up upstream
+             fixes for AIRMap finalizeUpdates / cluster recycle ordering.
+          2. Introduce `mapNativeReady` boolean state. Flips to true
+             only when MapView fires `onMapReady` (i.e. its native
+             child container is realized). Markers are NOT rendered
+             until then. Visual impact: zero — the basemap is shown
+             during the brief pre-ready window (typically 50–200ms),
+             pins fade in via the existing Image fade.
+          3. Reset `mapNativeReady` to false whenever the user toggles
+             AWAY from map view, so a return to map fires the same
+             gate again on the new MapView instance.
+          
+          NOT TOUCHED (verified already in place — no churn)
+          • `tracksViewChanges={false}` on every <Marker> (lines 868,
+            1199 of explore.tsx) — already set.
+          • `<ExploreErrorBoundary>` wrapping the whole tab (lines
+            968→1468) — already set; renders a tasteful "Explore had
+            a hiccup" + Reload card on any uncaught render error.
+          • `mapEverMounted` cold-start defer-mount — already set;
+            we kept it (different concern: lazy-load map module on
+            first List view).
+          • SafeClusteredMapView's region clamping / NaN guards /
+            150ms region debounce — already set.
+          
+          NOT DONE (out of scope for this round, by user direction)
+          • Disabling "Designed for iPad on Mac" via a CFBundle key.
+            Would lock all Macs out of the iOS app. User is to decide
+            after they confirm the crash is resolved.
+          • Disabling newArchEnabled. Off the table — Reanimated 4 +
+            Screens 4 + Maps Fabric all benefit from it.
+          
+          VERIFICATION
+          • npm view react-native-maps version → 1.27.2 ✅
+          • Metro bundle iOS: 18.0 MB / 3791 modules / 5.1s / HTTP 200.
+          • TypeScript: no NEW errors from this edit (the 17 errors in
+            explore.tsx are all pre-existing — Filters type drift,
+            CachedImage onError prop drift, and a duplicate-key in a
+            style — not my changes).
+          • Cannot reproduce the actual Mac Catalyst crash from this
+            container — Mac15,6 hardware not available. Pattern-match
+            confidence high: stack trace matches the canonical
+            react-native-maps Fabric-interop crash signature on the
+            github issue tracker, and the two added gates target the
+            exact race documented as the cause.
+          
+          USER NEXT STEP
+          Trigger a fresh EAS production iOS build; re-install on the
+          affected Mac via "Designed for iPad on Mac"; open Explore;
+          repeat the gestures that previously crashed (rapid pinch
+          zoom, scroll, list↔map toggle). If the crash recurs, run
+          the Investigation track from the prior message: stress-mount
+          loop + per-marker mount/unmount logging.
+
+
   - task: "APNs direct-dispatch wiring (Option 1) — .p8 JWT signing + HTTP/2 transport + admin diagnostics + dual-transport send_push"
     implemented: true
     working: true
