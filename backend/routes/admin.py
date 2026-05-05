@@ -775,6 +775,98 @@ async def admin_clear_spot_cover(
 class AdminSpotGalleryReorderIn(BaseModel):
     image_urls: list[str]    # full ordered list of URLs; first becomes the cover fallback
 
+
+# ─── AdminSpotDescriptionPatch (May 2026) ─────────────────────────────────
+# Narrow body for `PATCH /admin/spots/{spot_id}/description`. The intent
+# is INTENTIONALLY scoped to a single field — admins editing a spot's
+# story should not be able to nuke its pin, owner, images, premium tier
+# or category by accident. Pydantic + the explicit single-field $set
+# below give us defence-in-depth.
+class AdminSpotDescriptionPatch(BaseModel):
+    description: str
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def _coerce_str(cls, v):
+        if v is None:
+            return ""
+        return str(v)
+
+
+@router.patch("/admin/spots/{spot_id}/description")
+async def admin_set_spot_description(
+    spot_id: str,
+    body: AdminSpotDescriptionPatch,
+    user: dict = Depends(require_role("admin")),  # admin OR super_admin (see require_role)
+):
+    """Admin / Super-Admin description-only update.
+
+    Why a dedicated endpoint
+    ────────────────────────
+    The pre-existing surfaces (admin_spot_action, the cover/gallery
+    PATCHes) are scoped to specific fields. A photographer-trust
+    feature like description editing deserves the same surgical
+    contract — the audit log must show exactly one field changed,
+    nothing else. This guards against future regressions where a
+    broader admin-edit endpoint would creep in unrelated fields
+    (images / pin / owner) and cause a "lost cover photo after
+    description edit" support ticket.
+
+    Permission
+    ──────────
+    require_role("admin") accepts {admin, super_admin}. We do NOT
+    accept {moderator, support, founding_scout} here — those roles
+    have content-moderation power but no narrative authority over a
+    spot's description.
+
+    Data safety
+    ───────────
+    • Only `description` + `updated_at` are written.
+    • Whitespace trimmed from each end; internal blank lines collapsed
+      from 3+ → 2 (preserves intentional paragraph breaks but kills
+      runaway `\n\n\n\n` accidents).
+    • Length capped at 4000 chars (matches the create-spot validator).
+    • Empty / whitespace-only descriptions are stored as null so
+      hero-card renderers fall through to the "no description yet"
+      placeholder instead of an awkward blank gap.
+    • Fully audit-logged with before/after.
+    """
+    spot = await db.spots.find_one(
+        {"spot_id": spot_id},
+        {"_id": 0, "spot_id": 1, "description": 1, "title": 1},
+    )
+    if not spot:
+        raise HTTPException(status_code=404, detail="Spot not found")
+
+    raw = body.description or ""
+    # Normalize line endings, trim each end, collapse runs of blank
+    # lines (3+ \n in a row → 2 \n) to preserve paragraph breaks.
+    cleaned = raw.replace("\r\n", "\n").replace("\r", "\n").strip()
+    while "\n\n\n" in cleaned:
+        cleaned = cleaned.replace("\n\n\n", "\n\n")
+    if len(cleaned) > 4000:
+        cleaned = cleaned[:4000].rstrip()
+
+    # Empty → null so the read path's "no description yet" branch fires.
+    new_value: Optional[str] = cleaned or None
+
+    if new_value == (spot.get("description") or None):
+        # No-op — return current value without writing or audit-logging
+        # so repeated saves don't pollute the audit trail.
+        return {"ok": True, "description": new_value, "changed": False}
+
+    await db.spots.update_one(
+        {"spot_id": spot_id},
+        {"$set": {"description": new_value, "updated_at": utcnow()}},
+    )
+    await audit_log(
+        user, "spot.description.update", "spot", spot_id,
+        before={"description": spot.get("description")},
+        after={"description": new_value},
+    )
+    return {"ok": True, "description": new_value, "changed": True}
+
+
 # --- admin_reorder_spot_gallery (server.py:5655-5687) ---
 @router.patch("/admin/spots/{spot_id}/gallery")
 async def admin_reorder_spot_gallery(

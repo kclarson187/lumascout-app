@@ -242,6 +242,48 @@ export const styles = StyleSheet.create({
   },
   ownerAvatar: { width: 40, height: 40, borderRadius: 20 },
   desc: { color: colors.textSecondary, fontFamily: font.body, fontSize: 15, lineHeight: 22, marginTop: space.lg },
+  // ─── Description block (May 2026) ──────────────────────────────────
+  // Wraps the description paragraph + the admin-only ✏️ Edit
+  // affordance. The wrapper exists so the header row sits above the
+  // text without bleeding the marginTop of `desc` into the layout.
+  descBlock: {
+    marginTop: space.lg,
+  },
+  descHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginBottom: 6,
+  },
+  descHeaderLabel: {
+    flex: 1,
+    color: colors.textTertiary,
+    fontFamily: font.bodyBold,
+    fontSize: 10,
+    letterSpacing: 1.2,
+  },
+  descEditBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(245,166,35,0.10)',
+  },
+  descEditTxt: {
+    color: colors.primary,
+    fontFamily: font.bodyBold,
+    fontSize: 11,
+    letterSpacing: 0.2,
+  },
+  descPlaceholder: {
+    color: colors.textTertiary,
+    fontFamily: font.body,
+    fontStyle: 'italic',
+    fontSize: 14,
+    lineHeight: 20,
+  },
   privacyNote: {
     flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: space.md,
     padding: space.md, backgroundColor: 'rgba(96,165,250,0.1)',
