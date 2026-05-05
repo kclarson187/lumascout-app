@@ -869,7 +869,11 @@ function AddSpotImpl() {
               {/* Currently selected */}
               {draft.locationLabel ? (
                 <View style={styles.selectedCard}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  {/* paddingRight reserves a no-go zone for the
+                      absolutely-positioned `changeBtn` (top/right) so
+                      a long kicker + verified chip can never slide
+                      under it on narrow screens. */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingRight: 76 }}>
                     <MapPin size={16} color={colors.primary} />
                     <Text style={styles.selectedKicker}>
                       {draft.locationSource === 'gps' ? 'Current location' :
@@ -1636,7 +1640,14 @@ const styles = StyleSheet.create({
   selectedKicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase' },
   selectedLabel: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14, lineHeight: 19, marginTop: 4 },
   selectedCoords: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 2 },
-  confChip: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.pill, backgroundColor: 'rgba(34,197,94,0.12)', borderWidth: 1, borderColor: 'rgba(34,197,94,0.3)', marginLeft: 'auto' },
+  // May 2026 — removed `marginLeft: 'auto'` so the confidence chip
+  // sits NEXT to the "Current location" kicker on the left side of
+  // the row. Previously the chip was pushed to the far right, where
+  // the absolutely-positioned `changeBtn` (top/right) overlaps and
+  // visually collided with it on the Location step (mobile capture).
+  // The kicker row already uses `gap: 8` so the chip naturally
+  // breathes from the kicker without any extra spacing.
+  confChip: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.pill, backgroundColor: 'rgba(34,197,94,0.12)', borderWidth: 1, borderColor: 'rgba(34,197,94,0.3)' },
   confChipTxt: { color: colors.success, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.3, textTransform: 'uppercase' },
   changeBtn: { position: 'absolute', top: space.md, right: space.md, paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.pill, backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border },
   changeBtnTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
