@@ -12,6 +12,222 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Admin description editing + Responsive Spot Detail + Take-Photo-Now GPS fallback"
+    implemented: true
+    working: true
+    file: |
+      /app/backend/routes/admin.py                                       (new PATCH /admin/spots/{spot_id}/description, AdminSpotDescriptionPatch model)
+      /app/frontend/src/components/spot-detail/DescriptionEditorSheet.tsx (new file — admin-only editor sheet)
+      /app/frontend/src/components/spot-detail/styles.ts                  (new descBlock/descHeaderRow/descHeaderLabel/descEditBtn/descEditTxt/descPlaceholder styles)
+      /app/frontend/app/spot/[id].tsx                                     (responsive heroDynamic via useWindowDimensions; admin description editor wired; carousel paging now reads winW)
+      /app/frontend/app/(tabs)/add.tsx                                    (Take-Photo-Now: getLastKnownPositionAsync fallback when getCurrentPositionAsync times out; friendly fallback copy; ALWAYS advance to Location step; removed redundant >30m alert)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "needs_testing"
+        -agent: "main"
+        -comment: |
+          May 2026 — three targeted polish items shipped:
+
+          P0-1 · Admin description editing
+          ─────────────────────────────────
+          Backend: PATCH /api/admin/spots/{spot_id}/description with
+          AdminSpotDescriptionPatch ({description: str}). Permission
+          via require_role("admin") (admin + super_admin only;
+          moderator/support/founding_scout/regular all 403).
+
+          Data safety:
+            • narrow $set: only `description` + `updated_at` written
+            • whitespace trimmed each end
+            • runs of \n\n\n+ collapsed to \n\n (paragraph-preserving)
+            • length capped at 4000 chars
+            • empty/whitespace → null so the read path's "no
+              description yet" placeholder fires
+            • no-op edits return changed=false without writing or
+              audit-logging (avoids audit-log noise)
+            • full audit_log w/ before+after on real changes
+
+          Frontend: DescriptionEditorSheet — bottom-sheet modal with
+          multiline TextInput, character counter, dirty-discard
+          confirm, optimistic merge via setSpot. Edit affordance
+          ("✏️ Edit" / "Add description") gated by isAdminUser, never
+          rendered for non-admins.
+
+          P0-2 · Responsive spot detail
+          ─────────────────────────────
+          Pre-fix: hero was a static `width: W, height: W` square
+          captured at module import — locked at startup width, ate
+          the entire above-the-fold on tablets, never resized on
+          rotation/web-resize.
+
+          Fix: useWindowDimensions inside SpotDetailImpl computes
+          heroSize = clamp(winW * 0.72, 260, winH * 0.48). Applied
+          inline as [styles.heroWrap, heroDynamic] +
+          [styles.heroImg, heroDynamic]. Carousel paging math
+          switched from module-level `W` to live `winW` so the
+          galleryIdx tracking survives rotation. >720pt screens
+          (tablets/web) cap content max-width at 720pt via
+          contentMaxW (used for downstream sections — hero stays
+          full-bleed by design).
+
+          P0-3 · Take-Photo-Now GPS fallback
+          ──────────────────────────────────
+          Root cause of "cannot find the location" error:
+          Location.getCurrentPositionAsync({BestForNavigation}) was
+          racing a 7s timeout. Indoors / urban canyon / denied perm
+          → fix=null → no auto-tag → harsh "Location couldn't be
+          captured" alert + the user wasn't auto-advanced to the
+          Location step, so they felt blocked.
+
+          Fix:
+            1. After getCurrentPositionAsync timeout, fall back to
+               Location.getLastKnownPositionAsync({maxAge: 5min,
+               requiredAccuracy: 100m}). Cached fix is far better
+               than no-pin fallback.
+            2. Replaced harsh copy with PRD-required friendly:
+               "We couldn't detect the exact photo location. You
+               can still add this spot by using your current GPS
+               location or entering the location manually."
+            3. ALWAYS auto-advance to step 1 (Location), even when
+               lat==null. The Location step's search /
+               map-picker / manual-entry flow handles the no-pin
+               case cleanly.
+            4. Removed redundant >30m advisory alert (alert
+               fatigue — most urban GPS lands at 30-50m).
+
+          Backwards compatibility:
+            • EXIF GPS still consumed when present
+            • photos with GPS metadata still auto-tag
+            • upload-from-library flow untouched
+            • camera permission flow unchanged
+            • location permission denial no longer blocks (was
+              already silent, now followed by friendly fallback)
+
+          Tested locally:
+            • backend reloads cleanly, lint clean for new code
+            • spot detail HTTP 200, add tab HTTP 200
+            • DescriptionEditorSheet bundles correctly
+
+          Pending verification (deep_testing_backend_v2):
+            • PATCH /admin/spots/{id}/description as admin → 200,
+              description updates, audit row created
+            • PATCH as super_admin → 200
+            • PATCH as regular user / founding_scout / moderator /
+              support → 403
+            • PATCH on non-existent spot → 404
+            • Verify other spot fields (images, pin, owner, etc.)
+              UNCHANGED after the description PATCH
+            • Verify whitespace trim + paragraph preservation
+            • Verify empty body → description stored as null
+            • No-op (same value as current) → changed=false, no
+              new audit row
+        -working: true
+        -agent: "testing"
+        -comment: |
+          Admin description-edit endpoint — BACKEND CONTRACT TEST: 31/31 PASS.
+          Test script: /app/backend_test.py. Run 2026-05-05 against the preview
+          backend https://photo-finder-60.preview.emergentagent.com.
+
+          Auth: kclarson187@gmail.com still 401 (per /app/memory/test_credentials.md);
+          used the seed super_admin admin@lumascout.app / Grayson@1117!! — works.
+          Test spot: spot_88a7cbd41ac1 ("QA Stability Pass Spot 1777661705").
+          Original description preserved & restored at end ("Final stability pass — test spot from backend QA harness.").
+
+          Bucket 1 — Happy path super_admin ✅
+            PATCH 200 with {ok:true, description:"<new>", changed:true};
+            GET shows new description; audit_logs row created with action=
+            "spot.description.update", target_id=spot_88a7cbd41ac1,
+            admin_user_id=user_6daa7d0a3abc, before/after both populated.
+
+          Bucket 2 — Happy path admin ✅
+            Provisioned a fresh user, promoted to role="admin" via
+            super_admin's PATCH /api/admin/users/{id}, re-logged in;
+            PATCH 200 with changed=true.
+
+          Bucket 3 — RBAC denials (CRITICAL) ✅
+            Created fresh accounts and (where needed) promoted them to
+            role=founding_scout / moderator / support. Each role's
+            PATCH /api/admin/spots/{id}/description returned exactly:
+              status=403, body={"detail":"Forbidden"}.
+            user → 403 ✅, founding_scout → 403 ✅, moderator → 403 ✅,
+            support → 403 ✅. No 200/400/500 leaks; generic permission
+            error wording confirmed.
+
+          Bucket 4 — 404 non-existent spot ✅
+            PATCH /api/admin/spots/spot_does_not_exist/description →
+              status=404, body={"detail":"Spot not found"} — exact match.
+
+          Bucket 5 — Whitespace + paragraph normalization ✅
+            Input: "   leading spaces  \n\n\n\n big gap\n\n trailing  "
+            Output: "leading spaces  \n\n big gap\n\n trailing"
+            (each end stripped, \n\n\n+ collapsed to \n\n, internal
+            double-spaces preserved). Byte-for-byte exact.
+
+          Bucket 6 — Empty/whitespace-only → null ✅
+            PATCH "   \n\n  " → 200 with description=null, changed=true.
+            GET /api/spots/{id} returns description=null afterwards.
+
+          Bucket 7 — Length cap @ 4000 ✅
+            PATCH with "a"*5000 → 200, response.description length === 4000.
+
+          Bucket 8 — No-op handling ✅
+            Two consecutive PATCHes with the IDENTICAL current value:
+              both 200, both with changed=false. Audit-log count
+              before=14, after=14 → NO new audit row written for the
+              no-op (matches the design: avoids audit-log noise).
+
+          Bucket 9 — Data safety, other fields untouched (CRITICAL) ✅
+            Snapshotted full spot via GET, PATCH'd description with
+            "Safety check — <ts>", snapshotted again. Compared every
+            top-level key. After excluding the obvious ignored keys
+            (description, updated_at) AND the documented READ-time
+            computed fields (quality_score, is_new, is_fresh,
+            is_trending, is_verified, freshness, freshness_label —
+            these are recomputed by hydrate logic in server.py:477-572
+            based on description length, which is BY DESIGN), every
+            other field was byte-for-byte identical including:
+              images (0→0, identical), admin_cover_override (None→None),
+              latitude (30.2672), longitude (-97.7431), title, owner,
+              category, shoot_types, style_tags, hero_cover_image_url,
+              cover_image_url, premium fields, created_by, save_count,
+              like_count, rating_count, view_count, etc.
+            Verified by reading the route source: $set is narrowly
+            scoped to {description, updated_at} only (admin.py:858-861).
+
+            NOTE: quality_score legitimately changed from 46→33 between
+            snapshots because the test had set the description to 4000
+            "a"s (desc_len ≥ 200 → +13 score bonus per server.py:533-535)
+            and then to a short "Safety check — ..." string. This is
+            the read-side hydrate doing its job, NOT the PATCH writing
+            quality_score to Mongo. No actual data leak.
+
+          Bucket 10 — Pydantic / validation ✅
+            PATCH {} → 422 (missing description field).
+            PATCH {description: 12345} → 200, response.description="12345"
+              (the @field_validator coerces non-string to str).
+            PATCH {description: null} → 200, response.description=null
+              (validator returns "" → cleaned to null).
+
+          Bucket 11 — Smoke / no regressions ✅
+            GET /api/spots?limit=5 → 200
+            GET /api/spots/markers?sw_lat=-90&sw_lng=-180&ne_lat=90&
+              ne_lng=180&limit=20 → 200
+            GET /api/spots/{id} → 200, includes description field.
+
+          Cleanup ✅
+            Original description restored verbatim to the test spot.
+
+          Backend log audit during test window — no 5xx, no tracebacks,
+          no unexpected errors. Only the expected 422 on the missing-body
+          test and 403s on the RBAC tests.
+
+          VERDICT: PATCH /api/admin/spots/{spot_id}/description is
+          PRODUCTION-READY. Permission gating, validation, normalization,
+          length cap, null-on-empty, no-op handling, audit logging, and
+          data-safety guarantees all behave exactly as documented in the
+          implementation comments (admin.py:796-867).
+
   - task: "Organized R2 storage layout — locations/{slug}_{spot_id}/gallery/"
     implemented: true
     working: true

@@ -11,6 +11,7 @@ import React, { useState, useCallback, useEffect, useMemo } from 'react';import 
   Platform,
   Pressable,
   DeviceEventEmitter,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -54,6 +55,7 @@ import { goldenHourLabel } from '../../src/utils/sun';
 // Badge) live in the spot-detail bundle. The screen component below
 // is now focused on orchestration + render only.
 import { useSpotDetail } from '../../src/components/spot-detail/useSpotDetail';
+import DescriptionEditorSheet from '../../src/components/spot-detail/DescriptionEditorSheet';
 import { styles, sadStyles, W } from '../../src/components/spot-detail/styles';
 import { InfoCard, LogisticsRow, Badge } from '../../src/components/spot-detail/atoms';
 
@@ -120,6 +122,44 @@ function SpotDetailImpl() {
   const [reportOpen, setReportOpen] = useState(false);
   const [shotListOpen, setShotListOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // May 2026 — admin / super_admin description editor.
+  const [descEditOpen, setDescEditOpen] = useState(false);
+
+  // ─── Responsive Hero Sizing (May 2026) ───────────────────────────────
+  // Pre-refactor the hero was a static `width: W, height: W` square
+  // captured at module import. Three problems:
+  //   • on a tablet (1024×1366) the hero ate the entire above-the-fold,
+  //     pushing every other section below the scroll
+  //   • on a small iPhone SE (375×667) the same square was fine but
+  //     felt slightly heavy
+  //   • web preview / split-screen / rotation never resized the hero
+  //     because Dimensions.get is a one-shot snapshot
+  //
+  // Fix: useWindowDimensions() re-renders the screen on every resize.
+  // Hero target = 0.72 × width (a comfortable photographic 4:3 to 5:4
+  // crop), bounded:
+  //   • lower bound 260pt — a small phone in portrait still gets a
+  //     dignified hero, never a postage stamp
+  //   • upper bound 0.48 × height — keeps the title + meta pills
+  //     visible without a scroll on every screen
+  // Wide screens (>= 720pt) cap the page content to 720pt and centre
+  // it so a tablet/web preview doesn't render mobile UI stretched
+  // across the entire viewport.
+  const { width: winW, height: winH } = useWindowDimensions();
+  const heroSize = useMemo(() => {
+    const target = winW * 0.72;
+    return Math.min(Math.max(target, 260), winH * 0.48);
+  }, [winW, winH]);
+  const isWide = winW >= 720;
+  const contentMaxW = isWide ? 720 : winW;
+  const heroDynamic = useMemo(
+    () => ({ width: winW, height: heroSize }),
+    [winW, heroSize],
+  );
+  const heroImgDynamic = useMemo(
+    () => ({ width: contentMaxW, height: heroSize }),
+    [contentMaxW, heroSize],
+  );
 
   // ─── Map / Hero Image Refresh (May 2026) ─────────────────────────────
   // The spot's "map image" (cover) updates whenever a user posts new
@@ -530,12 +570,17 @@ function SpotDetailImpl() {
         </Head>
       ) : null}
       <ScrollView contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
-        <View style={styles.heroWrap}>
+        <View style={[styles.heroWrap, heroDynamic]}>
           <ScrollView
             horizontal
             pagingEnabled
             showsHorizontalScrollIndicator={false}
-            onMomentumScrollEnd={(e) => setGalleryIdx(Math.round(e.nativeEvent.contentOffset.x / W))}
+            // May 2026 — paging math now reads the live window width
+            // (winW from useWindowDimensions) rather than the
+            // module-level `W` snapshot, so dot/counter sync survives
+            // device rotation, web preview resize, and tablet
+            // multi-tasking.
+            onMomentumScrollEnd={(e) => setGalleryIdx(Math.round(e.nativeEvent.contentOffset.x / winW))}
           >
             {/* All image rendering driven by `orderedImages` memo — see
                 the CRITICAL FIX comment near the load() hook. Single
@@ -558,7 +603,7 @@ function SpotDetailImpl() {
               >
                 <CachedImage
                   source={{ uri: resolveImageUrl(img.image_url, IMG_SIZES.HERO) }}
-                  style={styles.heroImg}
+                  style={[styles.heroImg, heroDynamic]}
                   contentFit="cover"
                 />
                 {/* v2.0.25 — hero carousel now uses expo-image-backed
@@ -830,7 +875,39 @@ function SpotDetailImpl() {
           )}
           </SectionErrorBoundary>
 
-          {spot.description ? <Text style={styles.desc}>{spot.description}</Text> : null}
+          {/* Description block. May 2026 — admin / super_admin sees an
+              inline ✏️ Edit affordance that opens a bottom-sheet
+              editor. The sheet hits PATCH /api/admin/spots/:id/description
+              and optimistically merges the cleaned value back into
+              local state on success. Non-admins see only the text. */}
+          {(spot.description || isAdminUser) ? (
+            <View style={styles.descBlock}>
+              {isAdminUser ? (
+                <View style={styles.descHeaderRow}>
+                  <Text style={styles.descHeaderLabel}>DESCRIPTION</Text>
+                  <TouchableOpacity
+                    onPress={() => setDescEditOpen(true)}
+                    style={styles.descEditBtn}
+                    hitSlop={8}
+                    testID="spot-desc-edit"
+                    accessibilityLabel="Edit description (admin)"
+                  >
+                    <PenLine color={colors.primary} size={13} />
+                    <Text style={styles.descEditTxt}>
+                      {spot.description ? 'Edit' : 'Add description'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+              {spot.description ? (
+                <Text style={styles.desc}>{spot.description}</Text>
+              ) : isAdminUser ? (
+                <Text style={styles.descPlaceholder}>
+                  No description yet — tap "Add description" to write one.
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
 
           {spot.location_display_mode === 'approximate' && (
             <View style={styles.privacyNote}>
@@ -1205,6 +1282,26 @@ function SpotDetailImpl() {
         presets={SPOT_DELETE_PRESETS}
         destructiveCta="Delete spot permanently"
       />
+
+      {/* May 2026 — admin-only description editor. We render the
+          modal unconditionally (cheap; native renders nothing while
+          visible=false) and gate visibility on isAdminUser+state so a
+          non-admin can never trip into it through devtools. */}
+      {isAdminUser ? (
+        <DescriptionEditorSheet
+          visible={descEditOpen}
+          spotId={id}
+          spotTitle={spot.title}
+          initialValue={spot.description || ''}
+          onClose={() => setDescEditOpen(false)}
+          onSaved={(next) => {
+            // Optimistic merge — the spot detail listener also fires
+            // a load() on focus return, but updating in-place removes
+            // the perceptible flash between save and refetch.
+            setSpot((s: any) => (s ? { ...s, description: next } : s));
+          }}
+        />
+      ) : null}
     </View>
   );
 }

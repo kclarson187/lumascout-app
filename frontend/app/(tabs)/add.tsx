@@ -429,7 +429,8 @@ function AddSpotImpl() {
     //    value closest to where the shutter fired. BestForNavigation =
     //    ~5m radius on modern phones with clear sky. We wrap in a 7s
     //    timeout so a weak GPS signal doesn't lock up the add flow;
-    //    if it times out we fall back to EXIF GPS, then to no-pin.
+    //    if it times out we fall back to the cached LastKnown fix,
+    //    then to EXIF GPS, then to no-pin (manual entry).
     let deviceFix: Awaited<ReturnType<typeof Location.getCurrentPositionAsync>> | null = null;
     if (locPerm.status === 'granted') {
       try {
@@ -440,6 +441,24 @@ function AddSpotImpl() {
           new Promise<null>((resolve) => setTimeout(() => resolve(null), 7000)),
         ]);
       } catch { deviceFix = null; }
+
+      // May 2026 — getCurrentPositionAsync can return null on a 7s
+      // timeout (cold-start, indoors, urban canyon). getLastKnown
+      // returns the cached fix from the OS (typically <60s old), which
+      // is far more useful than no-pin fallback. We accept it even if
+      // accuracy is loose because step #3 makes the user confirm
+      // before publishing.
+      if (!deviceFix) {
+        try {
+          const last = await Location.getLastKnownPositionAsync({
+            maxAge: 5 * 60 * 1000, // 5 min
+            requiredAccuracy: 100, // m
+          });
+          if (last && last.coords) {
+            deviceFix = last as any;
+          }
+        } catch { /* noop — keep deviceFix null */ }
+      }
     }
 
     // Parse EXIF GPS (iOS + Android both populate GPSLatitude /
@@ -499,19 +518,11 @@ function AddSpotImpl() {
       } catch {}
     }
 
-    // If the final accuracy is worse than 30m we surface it so the
-    // user knows to nudge the pin in step #3. Never auto-save a
-    // loose fix silently.
-    if (accuracy != null && accuracy > 30 && lat != null && lng != null) {
-      // Non-blocking toast-ish alert — the auto-advance to Location
-      // step below still happens; this is purely informational.
-      try {
-        Alert.alert(
-          'GPS fix is approximate',
-          `We got your position within about ${Math.round(accuracy)} meters. Please confirm or drag the pin on the next step.`,
-        );
-      } catch {}
-    }
+    // May 2026 — removed the legacy >30m advisory alert. It was
+    // duplicative with the >100m "Approximate location" alert below,
+    // and the 30m bar fired on most modern phones in any urban
+    // setting (city block accuracy ≈ 30-50m), creating alert fatigue.
+    // The user can still see + drag the pin on the Location step.
 
     // 6. Merge into draft and auto-advance to Location step for confirmation.
     const newImage = {
@@ -537,23 +548,35 @@ function AddSpotImpl() {
       geocodeConfidence: locationLabel ? 0.85 : undefined,
     }));
 
-    // 7. Low-accuracy warning — if accuracy > 100m, nudge the user to drop a pin.
-    if (accuracy != null && accuracy > 100) {
+    // 7. Friendly fallback messaging — NEVER block the flow.
+    //
+    // Per May 2026 PRD: "Take photo now no longer fails because EXIF
+    // GPS is missing. Reverse geocode failure does not fully block
+    // submission." We always advance the user to step #3 (Location)
+    // where they can search a place, drop a pin, or type the address
+    // by hand. The alerts here are advisory, not gating.
+    if (lat == null) {
+      // Permission denied OR getCurrentPosition + getLastKnown both
+      // failed. Photo is captured; user just needs to set the pin
+      // manually. Friendly copy from the PRD.
       Alert.alert(
-        'Low GPS accuracy',
-        `We locked on to a rough area (${Math.round(accuracy)}m radius). Please tap "Change" on the next step to drop a pin or search for the exact spot.`,
+        'Add the location manually',
+        "We couldn\u2019t detect the exact photo location. You can still add this spot by using your current GPS location or entering the location manually.",
       );
-    } else if (lat == null) {
+    } else if (accuracy != null && accuracy > 100) {
       Alert.alert(
-        'Location couldn\'t be captured',
-        'The photo was saved, but we couldn\'t auto-tag the GPS coordinates. Please set the location on the next step.',
+        'Approximate location',
+        `We locked on to a rough area (${Math.round(accuracy)}m radius). Please tap "Change" on the next step to drop a pin or search for the exact spot.`,
       );
     }
 
-    // Jump forward to the Location step only if we actually got coordinates.
-    if (lat != null) {
-      setStep(1);
-    }
+    // 8. ALWAYS advance to the Location step. Even when we have no
+    //    coordinates the user needs the Location step to finish their
+    //    submission — keeping them on the photo step traps them with
+    //    a confusing "is the upload working?" feeling. The Location
+    //    step's search / map-picker / manual-entry flows handle the
+    //    no-pin case cleanly.
+    setStep(1);
   };
 
   const setCover = (idx: number) => {

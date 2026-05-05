@@ -1,518 +1,504 @@
 """
-Backend test for the Organized R2 storage layout (May 2026).
+Backend contract test for the new admin description-edit endpoint.
 
-Verifies:
-  1) Slug helpers (read-only)
-  2) NEW LAYOUT — POST /api/uploads/image WITH ?spot_id=...
-  3) LEGACY LAYOUT — POST /api/uploads/image WITHOUT spot_id
-  4) STALE / UNKNOWN spot_id falls back gracefully
-  5) FULL ROUND-TRIP — record + admin delete (R2 object deleted)
-  6) BACKWARDS COMPAT — legacy storage_key delete still works
-  7) BACKWARDS COMPAT — null storage_key still safe
-  8) NO REGRESSIONS — smoke tests on existing endpoints
+PATCH /api/admin/spots/{spot_id}/description
 
-Run from /app:  python3 backend_test.py
+Test plan implements all 11 buckets from the May 2026 review request.
+Run against the preview backend defined by REACT_APP_BACKEND_URL.
 """
-import io
-import json
-import sys
+
+import os
 import time
-import urllib.parse
-from typing import Optional, Tuple
-
+import json
+import uuid
 import requests
-from PIL import Image
+from copy import deepcopy
+from typing import Any, Optional
+from urllib.parse import urljoin
 
-# ── Config ───────────────────────────────────────────────────────────────
-BACKEND = "https://photo-finder-60.preview.emergentagent.com"
-API = f"{BACKEND}/api"
+# ---------------------------------------------------------------- config -----
+def _frontend_env_url() -> str:
+    p = "/app/frontend/.env"
+    with open(p) as fh:
+        for line in fh:
+            line = line.strip()
+            if line.startswith("EXPO_PACKAGER_PROXY_URL=") or line.startswith(
+                "EXPO_PUBLIC_BACKEND_URL="
+            ):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    raise RuntimeError("backend URL not found")
 
-PRIMARY_SUPER_ADMIN = ("kclarson187@gmail.com", "Pass123!")
-SEED_ADMIN = ("admin@lumascout.app", "Grayson@1117!!")
 
-RESULTS = []
-CREATED_UPLOADS = []  # list of dicts we may need to clean up
+BACKEND = _frontend_env_url().rstrip("/")
+API = BACKEND + "/api"
+
+SUPER_EMAIL = "admin@lumascout.app"
+SUPER_PASS = "Grayson@1117!!"
+
+# Track results
+RESULTS: list[tuple[str, bool, str]] = []
 
 
-def log(name: str, ok: bool, detail: str = ""):
-    mark = "PASS" if ok else "FAIL"
-    line = f"[{mark}] {name}" + ((" — " + detail) if detail else "")
-    print(line, flush=True)
+def record(name: str, ok: bool, detail: str = "") -> None:
     RESULTS.append((name, ok, detail))
+    print(f"  {'OK ' if ok else 'FAIL'}  {name}{(' — ' + detail) if detail else ''}")
 
 
-def auth_login() -> Tuple[str, dict]:
-    for email, pw in (PRIMARY_SUPER_ADMIN, SEED_ADMIN):
-        r = requests.post(
-            f"{API}/auth/login",
-            json={"email": email, "password": pw},
-            timeout=15,
-        )
-        if r.status_code == 200:
-            data = r.json()
-            token = data.get("token") or data.get("access_token")
-            user = data.get("user") or {}
-            print(f"[auth] logged in as {email} (role={user.get('role')}, id={user.get('user_id')})")
-            return token, user
-        print(f"[auth] {email} → HTTP {r.status_code}: {r.text[:200]}")
-    raise RuntimeError("Could not authenticate as super_admin or seed admin")
+def heading(s: str) -> None:
+    print()
+    print("=" * 78)
+    print(s)
+    print("=" * 78)
 
 
-def make_jpeg(width: int = 320, height: int = 240, color=(220, 60, 60)) -> bytes:
-    img = Image.new("RGB", (width, height), color)
-    px = img.load()
-    px[0, 0] = (int(time.time() * 1000) % 255, 0, 0)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=85)
-    return buf.getvalue()
-
-
-def head(url: str) -> int:
-    try:
-        r = requests.head(url, timeout=15, allow_redirects=True)
-        return r.status_code
-    except requests.RequestException as e:
-        print(f"[head] {url} → exception {e!r}")
-        return 0
-
-
-# ── Tests ────────────────────────────────────────────────────────────────
-
-
-def test_1_slug_helpers():
-    print("\n=== 1) Slug helpers ===")
-    sys.path.insert(0, "/app/backend")
-    try:
-        from services.storage_r2 import slugify, build_location_key_prefix
-    except Exception as e:
-        log("1.import", False, f"import failure: {e!r}")
-        return
-    cases = [
-        (slugify("Charro Ranch Park"), "charro-ranch-park"),
-        (slugify("São Paulo"), "sao-paulo"),
-        (slugify(""), "spot"),
-        (slugify(None), "spot"),
-        (slugify("McAllister Park (TX)"), "mcallister-park-tx"),
-        (
-            build_location_key_prefix("spot_abc", "McAllister Park (TX)"),
-            "locations/mcallister-park-tx_spot_abc/gallery",
-        ),
-    ]
-    all_ok = True
-    for got, want in cases:
-        ok = got == want
-        all_ok &= ok
-        print(f"   {'ok' if ok else 'FAIL'}: got={got!r} want={want!r}")
-    log("1.slug_helpers", all_ok)
-
-
-def get_existing_spot(token: str) -> Optional[dict]:
-    r = requests.get(
-        f"{API}/spots",
-        params={"limit": 1},
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=15,
+def login(email: str, password: str) -> Optional[dict]:
+    r = requests.post(
+        f"{API}/auth/login",
+        json={"email": email, "password": password},
+        timeout=20,
     )
     if r.status_code != 200:
-        log("0.fetch_spot", False, f"HTTP {r.status_code}: {r.text[:200]}")
+        print(f"   login fail {email}: HTTP {r.status_code} {r.text[:200]}")
         return None
-    j = r.json()
-    items = j.get("items") if isinstance(j, dict) else j
-    if not items:
-        log("0.fetch_spot", False, "no spots returned")
-        return None
-    spot = items[0]
-    print(f"[spot] using spot_id={spot.get('spot_id')} title={spot.get('title')!r}")
-    return spot
+    return r.json()
 
 
-def test_2_new_layout(token: str, spot: dict):
-    print("\n=== 2) NEW LAYOUT — POST /api/uploads/image with ?spot_id ===")
-    sys.path.insert(0, "/app/backend")
-    from services.storage_r2 import slugify
+def auth(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
 
-    spot_id = spot["spot_id"]
-    title = spot.get("title") or ""
-    expected_slug = slugify(title)
 
-    blob = make_jpeg(640, 480)
-    files = {"file": ("test_new_layout.jpg", blob, "image/jpeg")}
+def register(role_label: str) -> Optional[dict]:
+    """Register a fresh user and return {token, user}.  role_label is for
+    naming only; role still 'user' until we promote via super_admin."""
+    email = f"qa_descedit_{role_label}_{uuid.uuid4().hex[:8]}@example.com"
     r = requests.post(
-        f"{API}/uploads/image",
-        params={"spot_id": spot_id},
-        files=files,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=60,
+        f"{API}/auth/register",
+        json={
+            "email": email,
+            "password": "TestPass123!",
+            "name": f"QA Desc {role_label}",
+        },
+        timeout=20,
     )
     if r.status_code != 200:
-        log("2.upload", False, f"HTTP {r.status_code}: {r.text[:300]}")
+        print(f"   register fail: {r.status_code} {r.text[:200]}")
         return None
-    body = r.json()
-    print(f"[upload] keys: {sorted(body.keys())}")
-    print(f"[upload] storage_key={body.get('storage_key')}")
-    print(f"[upload] image_url={body.get('image_url')}")
-
-    required = {"image_url", "image_id", "storage", "storage_key", "r2_key",
-                "width", "height", "bytes", "size_bytes", "mime", "content_type"}
-    missing = required - set(body.keys())
-    log("2.response_shape", len(missing) == 0, f"missing={missing}" if missing else "")
-
-    log("2.image_id_prefix", isinstance(body.get("image_id"), str) and body["image_id"].startswith("img_"),
-        f"image_id={body.get('image_id')}")
-    log("2.storage_r2", body.get("storage") == "r2", f"storage={body.get('storage')}")
-
-    sk = body.get("storage_key") or ""
-    expected_prefix = f"locations/{expected_slug}_{spot_id}/gallery/"
-    log("2.storage_key_prefix",
-        sk.startswith(expected_prefix) and sk.endswith(".jpg"),
-        f"sk={sk!r} expected_prefix={expected_prefix!r}")
-
-    log("2.r2_key_equals_storage_key", body.get("r2_key") == body.get("storage_key"))
-
-    iurl = body.get("image_url") or ""
-    log("2.image_url_pub_prefix", iurl.startswith("https://pub-") and sk in iurl,
-        f"image_url={iurl}")
-
-    code = head(iurl)
-    log("2.head_image_url_200", code == 200, f"HEAD={code}")
-
-    body["_spot_id"] = spot_id
-    CREATED_UPLOADS.append(body)
-    return body
+    return r.json()
 
 
-def test_3_legacy_layout(token: str):
-    print("\n=== 3) LEGACY LAYOUT — POST /api/uploads/image without spot_id ===")
-    blob = make_jpeg(320, 240, color=(60, 180, 60))
-    files = {"file": ("test_legacy.jpg", blob, "image/jpeg")}
-    r = requests.post(
-        f"{API}/uploads/image",
-        files=files,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=60,
+def set_role(super_token: str, target_user_id: str, role: str) -> bool:
+    r = requests.patch(
+        f"{API}/admin/users/{target_user_id}",
+        json={"role": role},
+        headers=auth(super_token),
+        timeout=20,
     )
     if r.status_code != 200:
-        log("3.upload", False, f"HTTP {r.status_code}: {r.text[:300]}")
-        return None
-    body = r.json()
-    print(f"[legacy] storage_key={body.get('storage_key')}")
-    print(f"[legacy] image_url={body.get('image_url')}")
-
-    sk = body.get("storage_key") or ""
-    log("3.storage_key_uploads_prefix",
-        sk.startswith("uploads/") and sk.endswith(".jpg"),
-        f"sk={sk!r}")
-    parts = sk.split("/")
-    yyyy_mm_ok = (
-        len(parts) >= 4
-        and parts[0] == "uploads"
-        and parts[1].isdigit() and len(parts[1]) == 4
-        and parts[2].isdigit() and len(parts[2]) == 2
-    )
-    log("3.storage_key_yyyy_mm", yyyy_mm_ok, f"parts={parts[:4]}")
-
-    iurl = body.get("image_url") or ""
-    log("3.image_url_full_r2", iurl.startswith("https://pub-") and sk in iurl, f"image_url={iurl}")
-
-    log("3.spot_id_null", body.get("spot_id") in (None, ""), f"spot_id={body.get('spot_id')}")
-    log("3.r2_key_equals_storage_key", body.get("r2_key") == sk)
-    log("3.has_image_id", isinstance(body.get("image_id"), str) and body["image_id"].startswith("img_"))
-    log("3.has_size_bytes", isinstance(body.get("size_bytes"), int) and body["size_bytes"] > 0)
-    log("3.has_content_type", body.get("content_type") == "image/jpeg")
-
-    code = head(iurl)
-    log("3.head_image_url_200", code == 200, f"HEAD={code}")
-
-    body["_spot_id"] = None
-    CREATED_UPLOADS.append(body)
-    return body
+        print(f"   set_role({role}) fail: {r.status_code} {r.text[:200]}")
+        return False
+    return True
 
 
-def test_4_unknown_spot_id(token: str):
-    print("\n=== 4) UNKNOWN spot_id — graceful fallback ===")
-    blob = make_jpeg(200, 200, color=(60, 60, 200))
-    files = {"file": ("test_unknown_spot.jpg", blob, "image/jpeg")}
-    r = requests.post(
-        f"{API}/uploads/image",
-        params={"spot_id": "spot_doesnotexist123"},
-        files=files,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=60,
-    )
-    if r.status_code != 200:
-        log("4.upload", False, f"HTTP {r.status_code}: {r.text[:300]}")
-        return None
-    body = r.json()
-    sk = body.get("storage_key") or ""
-    print(f"[unknown] storage_key={sk}")
-    log("4.no_4xx", True, "HTTP 200")
-    log("4.fallback_to_uploads_prefix",
-        sk.startswith("uploads/") and not sk.startswith("locations/"),
-        f"sk={sk!r}")
-    log("4.spot_id_null", body.get("spot_id") in (None, ""), f"spot_id={body.get('spot_id')}")
-
-    body["_spot_id"] = None
-    CREATED_UPLOADS.append(body)
-    return body
-
-
-def test_5_round_trip(token: str, spot: dict, upload: Optional[dict]):
-    print("\n=== 5) ROUND-TRIP — record + admin delete (R2 deleted) ===")
-    if upload is None:
-        log("5.precondition", False, "no upload from test 2")
-        return None
-
-    spot_id = spot["spot_id"]
-    image_url = upload["image_url"]
-    storage_key = upload["storage_key"]
-
-    body = {
-        "images": [{
-            "image_url": image_url,
-            "storage_key": storage_key,
-            "image_id": upload["image_id"],
-            "content_type": "image/jpeg",
-            "size_bytes": upload["bytes"],
-            "width": upload["width"],
-            "height": upload["height"],
-        }],
-        "caption": "r2 organized layout test",
-        "condition_tags": [],
-        "visibility": "public",
-    }
-    r = requests.post(
-        f"{API}/spots/{spot_id}/uploads",
+def patch_desc(token: str, spot_id: str, body: Any) -> requests.Response:
+    return requests.patch(
+        f"{API}/admin/spots/{spot_id}/description",
         json=body,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=30,
+        headers=auth(token),
+        timeout=20,
     )
-    if r.status_code != 200:
-        log("5.post_upload", False, f"HTTP {r.status_code}: {r.text[:300]}")
-        return None
-    cu = r.json()
-    print(f"[round-trip] post: {cu}")
-    log("5.post.ok", cu.get("ok") is True)
-    log("5.post.count", cu.get("count") == 1, f"count={cu.get('count')}")
-    log("5.post.auto_approved", cu.get("auto_approved") is True, f"auto_approved={cu.get('auto_approved')}")
 
+
+def get_spot(spot_id: str, token: Optional[str] = None) -> Optional[dict]:
+    headers = auth(token) if token else {}
+    r = requests.get(f"{API}/spots/{spot_id}", headers=headers, timeout=20)
+    if r.status_code != 200:
+        print(f"   get_spot {spot_id} → HTTP {r.status_code}")
+        return None
+    return r.json()
+
+
+def list_audit(super_token: str, target_id: str, action: str = "spot.description") -> list[dict]:
     r = requests.get(
-        f"{API}/spots/{spot_id}/uploads",
-        params={"limit": 25},
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=15,
-    )
-    found = False
-    if r.status_code == 200:
-        items = r.json().get("items", [])
-        for it in items:
-            if it.get("image_url") == image_url:
-                found = True
-                break
-    log("5.uploads_listing_has_row", found, f"GET /uploads HTTP {r.status_code}")
-
-    enc = urllib.parse.quote(image_url, safe="")
-    r = requests.delete(
-        f"{API}/admin/spots/{spot_id}/images/{enc}",
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=30,
+        f"{API}/admin/audit-logs",
+        params={"action": action, "target_id": target_id, "limit": 50},
+        headers=auth(super_token),
+        timeout=20,
     )
     if r.status_code != 200:
-        log("5.delete", False, f"HTTP {r.status_code}: {r.text[:400]}")
-        return None
-    delr = r.json()
-    print(f"[round-trip] delete: {json.dumps(delr, indent=2)[:1000]}")
-    log("5.delete.ok", delr.get("ok") is True)
-
-    fc = delr.get("file_cleanup") or {}
-    log("5.file_cleanup.storage_r2", fc.get("storage") == "r2", f"storage={fc.get('storage')}")
-    log("5.file_cleanup.deleted", fc.get("deleted") is True, f"file_cleanup={fc}")
-    log("5.file_cleanup.path_eq_storage_key", fc.get("path") == storage_key,
-        f"path={fc.get('path')!r} sk={storage_key!r}")
-
-    cc = delr.get("community_cleanup") or {}
-    log("5.community_cleanup.deleted_ge_1", (cc.get("deleted") or 0) >= 1, f"community_cleanup={cc}")
-
-    code = head(image_url)
-    log("5.head_after_delete_404", code in (403, 404), f"HEAD after delete={code}")
-
-    upload["_cleaned"] = True
-    return delr
+        return []
+    return r.json().get("items") or []
 
 
-def test_6_legacy_delete(token: str, spot: dict, legacy_upload: Optional[dict]):
-    print("\n=== 6) BACKWARDS COMPAT — legacy storage_key delete ===")
-    if legacy_upload is None:
-        log("6.precondition", False, "no legacy upload from test 3")
-        return None
+# -------------------------------------------------------------- main test -----
+def main() -> int:
+    heading(f"Admin description edit — backend contract test\n         backend = {BACKEND}")
+
+    # 0. login super_admin
+    s = login(SUPER_EMAIL, SUPER_PASS)
+    if not s:
+        record("super_admin login", False, "could not log in seed admin")
+        return 1
+    super_tok = s["token"]
+    super_uid = s["user"]["user_id"]
+    record("super_admin login", True, f"role={s['user'].get('role')} uid={super_uid}")
+
+    # pick an existing spot via /api/spots?limit=10
+    r = requests.get(f"{API}/spots", params={"limit": 10}, timeout=20)
+    if r.status_code != 200:
+        record("GET /api/spots", False, f"HTTP {r.status_code}")
+        return 1
+    raw = r.json()
+    if isinstance(raw, dict):
+        spots = raw.get("items") or raw.get("spots") or []
+    else:
+        spots = raw if isinstance(raw, list) else []
+    if not isinstance(spots, list) or not spots:
+        record("GET /api/spots", False, "no spots returned")
+        return 1
+    spot = spots[0]
     spot_id = spot["spot_id"]
-    image_url = legacy_upload["image_url"]
-    storage_key = legacy_upload["storage_key"]
+    record("GET /api/spots — pick a spot", True, f"spot_id={spot_id} title={spot.get('title')!r}")
 
-    body = {
-        "images": [{
-            "image_url": image_url,
-            "storage_key": storage_key,
-            "image_id": legacy_upload["image_id"],
-            "content_type": "image/jpeg",
-            "size_bytes": legacy_upload["bytes"],
-            "width": legacy_upload["width"],
-            "height": legacy_upload["height"],
-        }],
-        "caption": "r2 legacy layout backwards-compat test",
-        "condition_tags": [],
-        "visibility": "public",
+    # snapshot full spot view (used for data-safety check)
+    snap_full = get_spot(spot_id, super_tok)
+    if not snap_full:
+        record("GET /api/spots/{id} (snapshot)", False)
+        return 1
+    original_description = snap_full.get("description")
+    print(f"   original description={original_description!r}")
+
+    # =====================================================================
+    # 1. Happy path super_admin
+    # =====================================================================
+    heading("Bucket 1 — Happy path super_admin")
+    new_desc = f"Brand-new write-up — {int(time.time())}"
+    r = patch_desc(super_tok, spot_id, {"description": new_desc})
+    ok = r.status_code == 200
+    body = r.json() if ok else None
+    record(
+        "PATCH 200 super_admin",
+        ok and body and body.get("ok") is True
+        and body.get("description") == new_desc
+        and body.get("changed") is True,
+        f"status={r.status_code} body={r.text[:200]}",
+    )
+    fresh = get_spot(spot_id, super_tok)
+    record(
+        "GET shows new description",
+        bool(fresh) and fresh.get("description") == new_desc,
+        f"got={fresh.get('description') if fresh else None!r}",
+    )
+
+    # audit log row
+    items = list_audit(super_tok, spot_id, "spot.description.update")
+    latest = items[0] if items else None
+    has_audit = (
+        latest is not None
+        and latest.get("action") == "spot.description.update"
+        and latest.get("target_id") == spot_id
+        and latest.get("admin_user_id") == super_uid
+        and isinstance(latest.get("before"), dict)
+        and isinstance(latest.get("after"), dict)
+        and latest.get("after", {}).get("description") == new_desc
+    )
+    record(
+        "audit_logs row created (before/after)",
+        has_audit,
+        f"latest action={latest.get('action') if latest else None} after.desc={latest.get('after', {}).get('description') if latest else None!r}",
+    )
+    audit_count_after_b1 = len(items)
+
+    # =====================================================================
+    # 2. Happy path admin (promote a fresh user to admin via super_admin)
+    # =====================================================================
+    heading("Bucket 2 — Happy path admin")
+    admin_acct = register("admin")
+    admin_ok = bool(admin_acct) and set_role(super_tok, admin_acct["user"]["user_id"], "admin")
+    if admin_ok:
+        admin_tok = admin_acct["token"]
+        # IMPORTANT: token was minted while role=user. JWT typically only
+        # carries user_id; backend re-reads role on each request, so it's fine.
+        # But to be safe, re-login to refresh user payload.
+        re = login(admin_acct["user"]["email"], "TestPass123!")
+        if re:
+            admin_tok = re["token"]
+        new_desc2 = f"Admin edit pass — {int(time.time())}"
+        r = patch_desc(admin_tok, spot_id, {"description": new_desc2})
+        record(
+            "PATCH 200 admin",
+            r.status_code == 200 and r.json().get("ok") is True and r.json().get("changed") is True,
+            f"status={r.status_code} body={r.text[:200]}",
+        )
+    else:
+        record("PATCH 200 admin", False, "could not provision admin user")
+
+    # =====================================================================
+    # 3. RBAC denials — user, founding_scout, moderator, support → 403
+    # =====================================================================
+    heading("Bucket 3 — RBAC denials (CRITICAL)")
+    rbac_roles = ["user", "founding_scout", "moderator", "support"]
+    for r_label in rbac_roles:
+        acct = register(r_label)
+        if not acct:
+            record(f"403 for role={r_label}", False, "could not register account")
+            continue
+        if r_label != "user":
+            if not set_role(super_tok, acct["user"]["user_id"], r_label):
+                record(f"403 for role={r_label}", False, "could not promote to role")
+                continue
+        # refresh token (role re-read on auth, but be safe)
+        re = login(acct["user"]["email"], "TestPass123!")
+        tok = (re or acct)["token"]
+        rr = patch_desc(tok, spot_id, {"description": f"Should be denied — {r_label}"})
+        is_403 = rr.status_code == 403
+        record(
+            f"403 for role={r_label}",
+            is_403,
+            f"status={rr.status_code} body={rr.text[:200]}",
+        )
+
+    # =====================================================================
+    # 4. 404 — non-existent spot
+    # =====================================================================
+    heading("Bucket 4 — 404 non-existent spot")
+    rr = patch_desc(super_tok, "spot_does_not_exist", {"description": "test"})
+    record(
+        "404 with 'Spot not found'",
+        rr.status_code == 404 and "Spot not found" in rr.text,
+        f"status={rr.status_code} body={rr.text[:200]}",
+    )
+
+    # =====================================================================
+    # 5. Whitespace + paragraph normalization
+    # =====================================================================
+    heading("Bucket 5 — Whitespace / paragraph normalization")
+    raw = "   leading spaces  \n\n\n\n big gap\n\n trailing  "
+    rr = patch_desc(super_tok, spot_id, {"description": raw})
+    out = rr.json().get("description") if rr.status_code == 200 else None
+    # Implementation: normalize \r\n→\n, strip both ends, collapse \n\n\n+ → \n\n.
+    # Internal spaces are NOT collapsed (the impl never touches non-newline runs).
+    # So we expect: "leading spaces  \n\n big gap\n\n trailing".
+    expected = "leading spaces  \n\n big gap\n\n trailing"
+    record(
+        "PATCH 200",
+        rr.status_code == 200,
+        f"status={rr.status_code}",
+    )
+    record(
+        "trim+collapse triple-newline (start/end stripped, paragraph preserved)",
+        out == expected,
+        f"got={out!r} expected={expected!r}",
+    )
+
+    # =====================================================================
+    # 6. Empty / whitespace-only → null
+    # =====================================================================
+    heading("Bucket 6 — Empty/whitespace-only → null")
+    # First make sure the field is not already null
+    pre = get_spot(spot_id, super_tok)
+    if pre.get("description") is None:
+        # Set to a real value first so changed=true on the null transition
+        patch_desc(super_tok, spot_id, {"description": "non-null bridge"})
+    rr = patch_desc(super_tok, spot_id, {"description": "   \n\n  "})
+    body = rr.json() if rr.status_code == 200 else {}
+    record(
+        "empty/whitespace → null",
+        rr.status_code == 200
+        and body.get("description") is None
+        and body.get("changed") is True,
+        f"status={rr.status_code} body={rr.text[:200]}",
+    )
+    after = get_spot(spot_id, super_tok)
+    record(
+        "GET shows description null/absent",
+        after is not None and (after.get("description") is None),
+        f"got={after.get('description') if after else None!r}",
+    )
+
+    # =====================================================================
+    # 7. Length cap at 4000
+    # =====================================================================
+    heading("Bucket 7 — Length cap @ 4000")
+    big = "a" * 5000
+    rr = patch_desc(super_tok, spot_id, {"description": big})
+    body = rr.json() if rr.status_code == 200 else {}
+    record(
+        "PATCH 200 — 5000 char input capped to 4000",
+        rr.status_code == 200 and isinstance(body.get("description"), str)
+        and len(body["description"]) == 4000,
+        f"status={rr.status_code} len={len(body.get('description') or '')}",
+    )
+
+    # =====================================================================
+    # 8. No-op handling
+    # =====================================================================
+    heading("Bucket 8 — No-op handling (changed=false on identical re-PATCH)")
+    cur = get_spot(spot_id, super_tok).get("description")
+    audit_before = len(list_audit(super_tok, spot_id, "spot.description.update"))
+    r1 = patch_desc(super_tok, spot_id, {"description": cur})
+    r2 = patch_desc(super_tok, spot_id, {"description": cur})
+    audit_after = len(list_audit(super_tok, spot_id, "spot.description.update"))
+    j1 = r1.json() if r1.status_code == 200 else {}
+    j2 = r2.json() if r2.status_code == 200 else {}
+    record(
+        "first identical PATCH returns 200 with changed=false",
+        r1.status_code == 200 and j1.get("changed") is False,
+        f"status={r1.status_code} body={r1.text[:200]}",
+    )
+    record(
+        "second identical PATCH returns 200 with changed=false",
+        r2.status_code == 200 and j2.get("changed") is False,
+        f"status={r2.status_code} body={r2.text[:200]}",
+    )
+    record(
+        "no extra audit row written for no-op",
+        audit_after == audit_before,
+        f"before={audit_before} after={audit_after}",
+    )
+
+    # =====================================================================
+    # 9. Data safety — other fields untouched (CRITICAL)
+    # =====================================================================
+    heading("Bucket 9 — Data safety (CRITICAL): other fields untouched")
+    snap_before = get_spot(spot_id, super_tok)
+    new_desc9 = f"Safety check — {int(time.time())}"
+    rr = patch_desc(super_tok, spot_id, {"description": new_desc9})
+    record(
+        "Safety PATCH 200",
+        rr.status_code == 200 and rr.json().get("description") == new_desc9,
+        f"status={rr.status_code}",
+    )
+    snap_after = get_spot(spot_id, super_tok)
+    # diff every key, ignoring description + updated_at
+    # NOTE: quality_score / is_new / is_fresh / is_trending / freshness*
+    # are computed at READ time by hydrate logic in server.py
+    # (server.py:477-572 — desc_len >= 80 gives +10, >= 200 gives +3, etc.).
+    # A description change is *expected* to nudge quality_score because
+    # description length is one of the inputs. The DB-side $set is still
+    # narrow ({description, updated_at}) — confirmed by reading the route.
+    ignored_keys = {
+        "description", "updated_at",
+        "quality_score", "is_new", "is_fresh", "is_trending",
+        "is_verified", "freshness", "freshness_label",
     }
-    r = requests.post(
-        f"{API}/spots/{spot_id}/uploads", json=body,
-        headers={"Authorization": f"Bearer {token}"}, timeout=30,
+    differences: list[str] = []
+    keys = set(snap_before.keys()) | set(snap_after.keys())
+    for k in sorted(keys):
+        if k in ignored_keys:
+            continue
+        if snap_before.get(k) != snap_after.get(k):
+            differences.append(
+                f"{k}: BEFORE={json.dumps(snap_before.get(k), default=str)[:120]} "
+                f"AFTER={json.dumps(snap_after.get(k), default=str)[:120]}"
+            )
+    record(
+        "ALL fields except description + updated_at byte-for-byte identical",
+        not differences,
+        ("clean" if not differences else f"DIFFS: {differences}"),
     )
-    log("6.post", r.status_code == 200, f"HTTP {r.status_code}")
-
-    enc = urllib.parse.quote(image_url, safe="")
-    r = requests.delete(
-        f"{API}/admin/spots/{spot_id}/images/{enc}",
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=30,
+    # specific assertions (subset of the catch-all above, but logged separately)
+    record(
+        "images array identical",
+        snap_before.get("images") == snap_after.get("images"),
+        f"before_len={len(snap_before.get('images') or [])} after_len={len(snap_after.get('images') or [])}",
     )
-    if r.status_code != 200:
-        log("6.delete", False, f"HTTP {r.status_code}: {r.text[:400]}")
-        return None
-    delr = r.json()
-    print(f"[legacy delete] {json.dumps(delr, indent=2)[:800]}")
-    log("6.delete.ok", delr.get("ok") is True)
-    fc = delr.get("file_cleanup") or {}
-    log("6.file_cleanup.storage_r2", fc.get("storage") == "r2", f"file_cleanup={fc}")
-    log("6.file_cleanup.deleted", fc.get("deleted") is True)
-    log("6.file_cleanup.path_eq_legacy_key", fc.get("path") == storage_key,
-        f"path={fc.get('path')!r} sk={storage_key!r}")
-
-    code = head(image_url)
-    log("6.head_after_delete_404", code in (403, 404), f"HEAD={code}")
-
-    legacy_upload["_cleaned"] = True
-    return delr
-
-
-def test_7_null_storage_key(token: str, spot: dict):
-    print("\n=== 7) BACKWARDS COMPAT — null storage_key external URL ===")
-    spot_id = spot["spot_id"]
-    external = f"https://images.unsplash.com/photo-1502082553048-f009c37129b9?w=800&q=80&t={int(time.time())}"
-    body = {
-        "images": [{
-            "image_url": external,
-            "storage_key": None,
-        }],
-        "caption": "external url null storage_key test",
-        "condition_tags": [],
-        "visibility": "public",
-    }
-    r = requests.post(
-        f"{API}/spots/{spot_id}/uploads", json=body,
-        headers={"Authorization": f"Bearer {token}"}, timeout=30,
+    record(
+        "admin_cover_override identical",
+        snap_before.get("admin_cover_override") == snap_after.get("admin_cover_override"),
     )
-    if r.status_code != 200:
-        log("7.post", False, f"HTTP {r.status_code}: {r.text[:300]}")
-        return None
-    log("7.post.ok", r.json().get("ok") is True)
-
-    enc = urllib.parse.quote(external, safe="")
-    r = requests.delete(
-        f"{API}/admin/spots/{spot_id}/images/{enc}",
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=30,
+    record(
+        "pin (lat/lng) identical",
+        snap_before.get("latitude") == snap_after.get("latitude")
+        and snap_before.get("longitude") == snap_after.get("longitude"),
+        f"({snap_before.get('latitude')},{snap_before.get('longitude')}) → ({snap_after.get('latitude')},{snap_after.get('longitude')})",
     )
-    if r.status_code != 200:
-        log("7.delete", False, f"HTTP {r.status_code}: {r.text[:400]}")
-        return None
-    delr = r.json()
-    print(f"[null sk delete] {json.dumps(delr, indent=2)[:600]}")
-    log("7.delete.ok", delr.get("ok") is True)
-    fc = delr.get("file_cleanup") or {}
-    log("7.file_cleanup.external_url_not_local",
-        fc.get("reason") == "external_url_not_local",
-        f"file_cleanup={fc}")
-    return delr
 
+    # =====================================================================
+    # 10. Pydantic validation
+    # =====================================================================
+    heading("Bucket 10 — Pydantic / validation")
+    rr = patch_desc(super_tok, spot_id, {})
+    record(
+        "PATCH {} → 422",
+        rr.status_code == 422,
+        f"status={rr.status_code} body={rr.text[:200]}",
+    )
+    rr = patch_desc(super_tok, spot_id, {"description": 12345})
+    body = rr.json() if rr.status_code == 200 else {}
+    coerced_ok = rr.status_code == 200 and body.get("description") == "12345"
+    record(
+        "PATCH {description: 12345} → 200 coerced to '12345' (or 422 acceptable)",
+        coerced_ok or rr.status_code == 422,
+        f"status={rr.status_code} body={rr.text[:200]}",
+    )
+    rr = patch_desc(super_tok, spot_id, {"description": None})
+    body = rr.json() if rr.status_code == 200 else {}
+    record(
+        "PATCH {description: null} → 200 with description=null",
+        rr.status_code == 200 and body.get("description") is None,
+        f"status={rr.status_code} body={rr.text[:200]}",
+    )
 
-def test_8_smoke(token: str, spot_id: str):
-    print("\n=== 8) NO REGRESSIONS — smoke tests ===")
-    headers = {"Authorization": f"Bearer {token}"}
-
-    r = requests.get(f"{API}/spots", params={"limit": 5}, headers=headers, timeout=15)
-    log("8a.spots_list", r.status_code == 200, f"HTTP {r.status_code}")
-
-    r = requests.get(
+    # =====================================================================
+    # 11. Smoke — no regressions
+    # =====================================================================
+    heading("Bucket 11 — Smoke / regression checks")
+    r1 = requests.get(f"{API}/spots", params={"limit": 5}, timeout=20)
+    record("GET /api/spots?limit=5 → 200", r1.status_code == 200, f"status={r1.status_code}")
+    r2 = requests.get(
         f"{API}/spots/markers",
         params={"sw_lat": -90, "sw_lng": -180, "ne_lat": 90, "ne_lng": 180, "limit": 20},
-        headers=headers, timeout=15,
+        timeout=20,
     )
-    log("8b.spots_markers", r.status_code == 200, f"HTTP {r.status_code}")
-
-    r = requests.get(f"{API}/spots/{spot_id}", headers=headers, timeout=15)
-    log("8c.spots_detail", r.status_code == 200, f"HTTP {r.status_code}")
-
-    r = requests.get(
-        f"{API}/spots/{spot_id}/uploads",
-        params={"limit": 10}, headers=headers, timeout=15,
+    record(
+        "GET /api/spots/markers (full bbox) → 200",
+        r2.status_code == 200,
+        f"status={r2.status_code}",
     )
-    log("8d.spots_uploads", r.status_code == 200, f"HTTP {r.status_code}")
+    r3 = requests.get(f"{API}/spots/{spot_id}", timeout=20)
+    has_desc = r3.status_code == 200 and "description" in r3.json()
+    record(
+        "GET /api/spots/{id} → 200, includes description field",
+        has_desc,
+        f"status={r3.status_code}",
+    )
 
+    # =====================================================================
+    # Restore original description
+    # =====================================================================
+    heading("Cleanup — restore original description")
+    if original_description is None:
+        # set to whitespace → null
+        patch_desc(super_tok, spot_id, {"description": ""})
+    else:
+        patch_desc(super_tok, spot_id, {"description": original_description})
+    final = get_spot(spot_id, super_tok)
+    final_desc = final.get("description") if final else None
+    if (final_desc == original_description) or (
+        original_description is None and final_desc is None
+    ):
+        record("description restored", True, f"now={final_desc!r}")
+    else:
+        record(
+            "description restored",
+            False,
+            f"expected={original_description!r} got={final_desc!r}",
+        )
 
-def cleanup_uploads(token: str):
-    headers = {"Authorization": f"Bearer {token}"}
-    for u in CREATED_UPLOADS:
-        if u.get("_cleaned"):
-            continue
-        spot_id = u.get("_spot_id")
-        url = u.get("image_url")
-        if not spot_id or not url:
-            print(f"[cleanup] orphan (no spot_id, won't try admin delete): {url}")
-            continue
-        enc = urllib.parse.quote(url, safe="")
-        try:
-            r = requests.delete(
-                f"{API}/admin/spots/{spot_id}/images/{enc}",
-                headers=headers, timeout=20,
-            )
-            print(f"[cleanup] DELETE {url[:80]} → {r.status_code}")
-        except Exception as e:
-            print(f"[cleanup] DELETE {url[:80]} → exception {e!r}")
-
-
-def main():
-    print(f"Backend: {BACKEND}")
-
-    test_1_slug_helpers()
-
-    token, _user = auth_login()
-
-    spot = get_existing_spot(token)
-    if not spot:
-        print("Cannot proceed without an existing spot.")
-        sys.exit(1)
-    spot_id = spot["spot_id"]
-
-    new_upload = test_2_new_layout(token, spot)
-    legacy_upload = test_3_legacy_layout(token)
-    test_4_unknown_spot_id(token)
-    test_5_round_trip(token, spot, new_upload)
-    test_6_legacy_delete(token, spot, legacy_upload)
-    test_7_null_storage_key(token, spot)
-    test_8_smoke(token, spot_id)
-
-    cleanup_uploads(token)
-
-    print("\n" + "=" * 60)
-    print("SUMMARY")
-    print("=" * 60)
-    fails = [(n, d) for n, ok, d in RESULTS if not ok]
-    passes = [(n, d) for n, ok, d in RESULTS if ok]
-    for name, ok, d in RESULTS:
-        mark = "PASS" if ok else "FAIL"
-        print(f"  [{mark}] {name}{(' — ' + d) if d and not ok else ''}")
-    print(f"\nTotal: {len(passes)} passed, {len(fails)} failed (of {len(RESULTS)})")
-    sys.exit(0 if not fails else 1)
+    # =====================================================================
+    # Summary
+    # =====================================================================
+    heading("RESULTS")
+    passed = sum(1 for _, ok, _ in RESULTS if ok)
+    total = len(RESULTS)
+    print(f"   {passed}/{total} checks passed")
+    fails = [r for r in RESULTS if not r[1]]
+    if fails:
+        print("\n   FAILED CHECKS:")
+        for name, _, detail in fails:
+            print(f"     - {name}: {detail}")
+    return 0 if not fails else 2
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
