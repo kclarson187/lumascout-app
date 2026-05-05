@@ -869,34 +869,33 @@ function AddSpotImpl() {
               {/* Currently selected */}
               {draft.locationLabel ? (
                 <View style={styles.selectedCard}>
-                  {/* Header row — kicker + MapPin only. The
-                      confidence chip used to live here too but kept
-                      colliding with the absolutely-positioned Change
-                      button on narrow phones. We moved the chip to
-                      its own row below the city name so both
-                      controls have unambiguous space. */}
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingRight: 76 }}>
+                  {/* Header row — pin icon + kicker label + verified
+                      chip, all inline. `paddingRight: 84` reserves a
+                      hard no-go zone for the absolutely-positioned
+                      `changeBtn` (top/right) so the chip can never
+                      slide under it on narrow screens. The chip uses
+                      its natural width — no marginLeft:auto so it
+                      stays right beside the label, not pushed to the
+                      Change button's edge. */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingRight: 84 }}>
                     <MapPin size={16} color={colors.primary} />
-                    <Text style={styles.selectedKicker}>
+                    <Text style={styles.selectedKicker} numberOfLines={1}>
                       {draft.locationSource === 'gps' ? 'Current location' :
                        draft.locationSource === 'searched_place' ? 'Searched place' :
                        draft.locationSource === 'dropped_pin' ? 'Dropped pin' :
                        draft.locationSource === 'manual_entry' ? 'Manual entry' : 'Location'}
                     </Text>
+                    {draft.geocodeConfidence != null && draft.geocodeStatus === 'success' && (
+                      <View style={styles.confChip}>
+                        <Check size={10} color={colors.success} />
+                        <Text style={styles.confChipTxt}>
+                          {draft.geocodeConfidence >= 0.8 ? 'Verified' :
+                           draft.geocodeConfidence >= 0.5 ? 'Matched' : 'Approximate'}
+                        </Text>
+                      </View>
+                    )}
                   </View>
                   <Text style={styles.selectedLabel} numberOfLines={2}>{draft.locationLabel}</Text>
-                  {/* Verified / Matched / Approximate chip — its own
-                      row below the city. Sits on the left, no longer
-                      competes with Change for the top-right corner. */}
-                  {draft.geocodeConfidence != null && draft.geocodeStatus === 'success' && (
-                    <View style={[styles.confChip, { alignSelf: 'flex-start', marginTop: 6 }]}>
-                      <Check size={10} color={colors.success} />
-                      <Text style={styles.confChipTxt}>
-                        {draft.geocodeConfidence >= 0.8 ? 'Verified' :
-                         draft.geocodeConfidence >= 0.5 ? 'Matched' : 'Approximate'}
-                      </Text>
-                    </View>
-                  )}
                   {draft.latitude != null && draft.longitude != null && (
                     <MapPreviewCard
                       latitude={draft.latitude}
