@@ -66,7 +66,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
+import unicodedata
 import uuid
 from typing import Any, Dict, Optional
 
@@ -136,13 +138,62 @@ def _get_client():
 
 
 # ─── public API ──────────────────────────────────────────────────────────
+# Slug rules (May 2026, R2 organized layout):
+#   • lowercase ASCII-only
+#   • non-alphanumeric collapsed to a single hyphen
+#   • leading / trailing hyphens stripped
+#   • capped to 60 chars so combined with spot_id we stay well below R2's
+#     1024-char key limit (`locations/{slug}_{spot_id}/gallery/{uuid}.jpg`
+#     ≈ 60 + 1 + 24 + 9 + 36 = 130 chars, plenty of headroom).
+_SLUG_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+_SLUG_TRIM = re.compile(r"^-+|-+$")
+
+
+def slugify(text: Optional[str], *, max_len: int = 60) -> str:
+    """Turn a free-form location name into a URL/key-safe slug.
+
+    "Charro Ranch Park"     → "charro-ranch-park"
+    "McAllister Park (TX)"  → "mcallister-park-tx"
+    "Joshua Springs"        → "joshua-springs"
+    ""  / None              → "spot"  (defensive — keys must be non-empty)
+    """
+    if not text:
+        return "spot"
+    # NFKD strips diacritics ("São Paulo" → "Sao Paulo") so URLs stay ASCII.
+    norm = unicodedata.normalize("NFKD", str(text))
+    norm = norm.encode("ascii", "ignore").decode("ascii").lower()
+    norm = _SLUG_NON_ALNUM.sub("-", norm)
+    norm = _SLUG_TRIM.sub("", norm)
+    if not norm:
+        return "spot"
+    return norm[:max_len].rstrip("-") or "spot"
+
+
+def build_location_key_prefix(spot_id: str, name: Optional[str]) -> str:
+    """Compose the R2 key prefix for a location's gallery uploads.
+
+    Returns: ``locations/{slug}_{spot_id}/gallery``
+
+    The combined ``{slug}_{spot_id}`` segment is what guarantees
+    uniqueness even when two parks share the exact same name — the
+    spot_id suffix is always present and unique. The ``gallery``
+    sub-segment leaves room for future per-location prefixes (e.g.
+    ``cover``, ``derived``, ``audit``) without breaking object naming.
+    """
+    safe_id = (spot_id or "").strip() or "unknown"
+    slug = slugify(name)
+    return f"locations/{slug}_{safe_id}/gallery"
+
+
 def build_key(prefix: str, extension: str) -> str:
     """
     Build a content-addressed, path-safe object key.
 
     `prefix` is expected to already encode any date partitioning
-    ("uploads/2026/05"). We append a UUID filename + extension.
-    Extension is normalized to lowercase, dotless, at most 8 chars.
+    ("uploads/2026/05") OR a location-scoped prefix produced by
+    `build_location_key_prefix(...)`. We append a UUID filename +
+    extension. Extension is normalized to lowercase, dotless, at most
+    8 chars.
     """
     ext = (extension or "jpg").lstrip(".").lower()[:8] or "jpg"
     pfx = prefix.strip("/")
@@ -216,6 +267,39 @@ def head_object(key: str) -> Optional[Dict[str, Any]]:
     except BotoCoreError as e:
         log.warning("r2.head_object transport error key=%s err=%r", key, e)
         return None
+
+
+def delete_object(key: str) -> Dict[str, Any]:
+    """Delete a single object by its exact key.
+
+    Returns ``{"ok": bool, "key": str, "reason": Optional[str]}``.
+
+    Caller MUST pass the object key as it was stored in MongoDB
+    (``storage_key`` / ``r2_key``) — we never reconstruct the key from
+    a URL because the new layout uses location-scoped prefixes that
+    a URL parser can't reverse-engineer reliably.
+
+    Treats S3 "key not found" as a non-fatal success (idempotent
+    delete) so retries don't error.
+    """
+    if not r2_configured():
+        return {"ok": False, "key": key, "reason": "r2_not_configured"}
+    if not key or not isinstance(key, str):
+        return {"ok": False, "key": key, "reason": "empty_key"}
+    try:
+        client = _get_client()
+        client.delete_object(Bucket=R2_BUCKET, Key=key)
+        return {"ok": True, "key": key, "reason": None}
+    except ClientError as e:
+        code = (e.response.get("Error") or {}).get("Code") if e.response else None
+        if code in ("404", "NoSuchKey", "NotFound"):
+            # Idempotent: deleting an already-gone object is a success.
+            return {"ok": True, "key": key, "reason": "not_found"}
+        log.warning("r2.delete_object unexpected error key=%s err=%r", key, e)
+        return {"ok": False, "key": key, "reason": f"client_error:{code or 'unknown'}"}
+    except BotoCoreError as e:
+        log.warning("r2.delete_object transport error key=%s err=%r", key, e)
+        return {"ok": False, "key": key, "reason": "transport_error"}
 
 
 def debug_status() -> Dict[str, Any]:

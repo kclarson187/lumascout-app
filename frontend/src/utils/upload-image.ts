@@ -33,6 +33,10 @@ function backendBaseUrl(): string {
 
 export type UploadedImage = {
   image_url: string;
+  // May 2026: backend returns a stable `image_id` (prefix "img_") for
+  // every upload. The spot_community_uploads row is created with the
+  // same id so later admin tooling can reference a photo by id.
+  image_id?: string;
   width: number;
   height: number;
   bytes: number;
@@ -43,6 +47,12 @@ export type UploadedImage = {
   // stable key next to the URL on the spot row.
   storage?: 'r2' | 'local';
   storage_key?: string | null;
+  // Alias for `storage_key` introduced alongside the organized-layout
+  // rollout — readers may use either field.
+  r2_key?: string | null;
+  size_bytes?: number;
+  content_type?: string;
+  spot_id?: string | null;
 };
 
 async function authHeader(): Promise<Record<string, string>> {
@@ -68,6 +78,7 @@ async function authHeader(): Promise<Record<string, string>> {
  */
 export async function uploadImageAsset(
   asset: { uri: string; mimeType?: string | null; fileName?: string | null },
+  opts: { spotId?: string | null } = {},
 ): Promise<UploadedImage> {
   const form = new FormData();
   const filename = asset.fileName || `upload_${Date.now()}.jpg`;
@@ -83,7 +94,12 @@ export async function uploadImageAsset(
     name: filename,
     type: mime,
   });
-  const url = `${backendBaseUrl()}/api/uploads/image`;
+  // May 2026 — when the caller knows the target spot, forward the id
+  // so the backend writes the R2 object under the organized
+  // `locations/{slug}_{spot_id}/gallery/...` prefix. Missing is fine;
+  // server falls back to the legacy date-partitioned prefix.
+  const qs = opts.spotId ? `?spot_id=${encodeURIComponent(opts.spotId)}` : '';
+  const url = `${backendBaseUrl()}/api/uploads/image${qs}`;
 
   // Per-asset 60s timeout — large iPhone photos on slow cellular can
   // take 30–45s including the server-side Pillow re-encode.
@@ -184,10 +200,13 @@ export async function uploadImageAsset(
  */
 export async function uploadImageAssetWithProgress(
   asset: { uri: string; mimeType?: string | null; fileName?: string | null },
-  opts: { onProgress?: (fraction: number) => void; signal?: AbortSignal } = {},
+  opts: { onProgress?: (fraction: number) => void; signal?: AbortSignal; spotId?: string | null } = {},
 ): Promise<UploadedImage> {
   const token = (await authHeader()).Authorization?.replace(/^Bearer\s+/i, '') || '';
-  const url = `${backendBaseUrl()}/api/uploads/image`;
+  // May 2026 — forward spot_id to the backend so new uploads land in
+  // the organized R2 prefix. Backward-compat: omitted when absent.
+  const qs = opts.spotId ? `?spot_id=${encodeURIComponent(opts.spotId)}` : '';
+  const url = `${backendBaseUrl()}/api/uploads/image${qs}`;
   const form = new FormData();
   const filename = asset.fileName || `upload_${Date.now()}.jpg`;
   const mime = asset.mimeType || 'image/jpeg';

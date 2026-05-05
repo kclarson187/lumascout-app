@@ -232,12 +232,24 @@ class CollectionAddIn(BaseModel):
 class SpotUploadImageIn(BaseModel):
     image_url: str  # base64 data URL or remote URL
     caption: Optional[str] = None
-    # May 2026: R2 object key (e.g. "uploads/2026/05/<uuid>.jpg") so we
-    # can re-sign or rewrite to a new public domain later without
-    # having to parse or regex the URL. Populated when the client
-    # uploaded via POST /api/uploads/image and R2 is configured.
+    # May 2026: R2 object key (e.g. "uploads/2026/05/<uuid>.jpg" — or
+    # for the new organized layout,
+    # "locations/{slug}_{spot_id}/gallery/<uuid>.jpg") so we can re-sign
+    # or rewrite to a new public domain later, AND so the admin delete
+    # path can call storage_r2.delete_object on the exact stored key
+    # without trying to reconstruct it from the URL.
     # Legacy clients / local-disk uploads leave this null — perfectly fine.
     storage_key: Optional[str] = None
+    # May 2026 (organized R2 layout) — additional metadata returned by
+    # POST /api/uploads/image. Persisting these alongside the upload
+    # row gives admin tooling a single source of truth for size/dim
+    # without re-fetching bytes, and gives debug surfaces a stable
+    # `image_id` to reference. All optional for backwards-compat.
+    image_id: Optional[str] = None
+    content_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
 
 # --- SpotCommunityUploadIn (server.py:1970-2003) ---
 class SpotCommunityUploadIn(BaseModel):
@@ -1118,17 +1130,39 @@ async def post_spot_upload(
     batch_id = f"batch_{uuid.uuid4().hex[:12]}"
     docs = []
     for img in body.images:
+        # May 2026 (organized R2 layout) — image_id is the stable
+        # identifier returned by /api/uploads/image. Older clients
+        # don't send it; fall back to a freshly-minted one so the row
+        # always has a non-null `image_id` for admin tooling to
+        # reference.
+        img_id = (img.image_id or f"img_{uuid.uuid4().hex[:10]}")
         docs.append({
             "upload_id": f"upl_{uuid.uuid4().hex[:12]}",
             "batch_id": batch_id,
             "spot_id": spot_id,
             "user_id": user["user_id"],
+            # Mirrors `user_id` under the contract name documented in the
+            # PRD ("uploaded_by"). Kept as a separate field so existing
+            # readers of `user_id` stay untouched.
+            "uploaded_by": user["user_id"],
+            "image_id": img_id,
             "image_url": img.image_url,
             # Carry the R2 storage_key alongside image_url so a future
             # rewrite of the public domain (or a periodic garbage sweep
             # of orphaned R2 objects) can key off the stable object
             # identity rather than parsing URLs.
             "storage_key": img.storage_key,
+            # `r2_key` mirrors `storage_key` under the contract name from
+            # the PRD. We persist BOTH so existing code that reads
+            # `storage_key` keeps working untouched, and new tooling can
+            # use the friendlier `r2_key`. They always carry the same
+            # value (or both null for legacy local-disk uploads).
+            "r2_key": img.storage_key,
+            "image_type": "gallery",
+            "content_type": img.content_type,
+            "size_bytes": img.size_bytes,
+            "width": img.width,
+            "height": img.height,
             "caption": (img.caption or body.caption or "").strip() or None,
             "condition_tags": body.condition_tags,
             "visibility": body.visibility,

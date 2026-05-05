@@ -67,6 +67,7 @@ from server import (
     VALID_ROLES,
     VALID_STATUSES,
 )
+from services import storage_r2  # R2 object delete (May 2026 organized layout)
 
 # Batch #7 \u2014 graceful fallback helper for dashboards (admin/overview,
 # admin/analytics). Any unhandled aggregation crash returns a
@@ -858,20 +859,42 @@ def _extract_local_upload_path(image_url: Optional[str]) -> Optional[_Path]:
     return candidate
 
 
-async def _hard_delete_upload_file(image_url: Optional[str], ignore_spot_id: Optional[str] = None) -> Dict[str, Any]:
-    """Unlink the local upload backing this URL, but only if no other
-    spot references it. Returns a dict explaining what happened, used
-    for the audit log."""
-    result = {"attempted": False, "deleted": False, "reason": None, "path": None}
-    fs_path = _extract_local_upload_path(image_url)
-    if not fs_path:
-        result["reason"] = "external_url_not_local"
-        return result
-    result["attempted"] = True
-    result["path"] = str(fs_path)
-    # Cross-check: is this URL still referenced by any OTHER spot (or
-    # the same spot — we were called AFTER the images[] update, so the
-    # current record shouldn't reference it any more)?
+async def _hard_delete_upload_file(
+    image_url: Optional[str],
+    ignore_spot_id: Optional[str] = None,
+    storage_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Unlink the underlying object for this image URL — either the R2
+    object identified by ``storage_key`` (new organized layout, May
+    2026) OR the local-disk file backing ``image_url`` (legacy path).
+
+    Always does the reference-count check first: if ANY other spot or
+    any remaining community upload still references the same URL, we
+    skip the delete and return a diagnostic `reason`.
+
+    R2 delete path (preferred):
+      • Uses the ``storage_key`` parameter verbatim — never reconstructs
+        the key from the URL. This is critical because the new
+        organized layout (``locations/{slug}_{spot_id}/gallery/...``)
+        carries spot metadata in the prefix and is not reversible from
+        a URL alone.
+      • ``delete_object`` is idempotent: a 404 on R2 returns ``ok=True``
+        with reason=``not_found``.
+    Local-disk path (fallback):
+      • Resolves the URL to a path under ``LUMASCOUT_UPLOADS_DIR`` and
+        unlinks. Path-traversal-guarded.
+
+    Returns a dict explaining what happened; used for the audit log.
+    """
+    result: Dict[str, Any] = {
+        "attempted": False,
+        "deleted": False,
+        "reason": None,
+        "path": None,
+        "storage": None,
+    }
+
+    # ---- reference-count guard (applies to both storage backends) ----
     ref_filter = {
         "$or": [
             {"images.image_url": image_url},
@@ -885,16 +908,42 @@ async def _hard_delete_upload_file(image_url: Optional[str], ignore_spot_id: Opt
     if other_ref:
         result["reason"] = f"still_referenced_by_spot_{other_ref.get('spot_id')}"
         return result
-    # Also check the community-upload surface so a file referenced
-    # only by a community post isn't prematurely unlinked.
     community_ref = await db.spot_community_uploads.find_one(
         {"image_url": image_url},
         {"_id": 1, "spot_id": 1},
     )
     if community_ref:
-        result["reason"] = f"still_referenced_by_community_upload"
+        result["reason"] = "still_referenced_by_community_upload"
         return result
-    # Nothing else points at this file — unlink.
+
+    # ---- R2 path (preferred when we have a storage_key) ------------------
+    if storage_key and storage_r2.r2_configured():
+        result["attempted"] = True
+        result["storage"] = "r2"
+        result["path"] = storage_key
+        try:
+            r2_res = storage_r2.delete_object(storage_key)
+            result["deleted"] = bool(r2_res.get("ok"))
+            if not result["deleted"]:
+                result["reason"] = r2_res.get("reason") or "r2_delete_failed"
+            elif r2_res.get("reason") == "not_found":
+                # Idempotent: the object was already gone. Still counts as
+                # "deleted" for the caller's purposes but we surface the
+                # subtlety in `reason` for audit clarity.
+                result["reason"] = "not_found"
+        except Exception as e:
+            result["reason"] = f"r2_exception:{e!r}"
+        return result
+
+    # ---- Local-disk fallback (legacy URLs / no storage_key) --------------
+    fs_path = _extract_local_upload_path(image_url)
+    if not fs_path:
+        result["reason"] = "external_url_not_local"
+        result["storage"] = "external"
+        return result
+    result["attempted"] = True
+    result["storage"] = "local"
+    result["path"] = str(fs_path)
     try:
         if fs_path.exists():
             fs_path.unlink()
@@ -1075,6 +1124,12 @@ async def admin_delete_spot_photo(
     # row behind in "Recent community uploads" / "Through the seasons"
     # rails. True hard delete has to purge all surfaces.
     community_cleanup: Dict[str, Any] = {"attempted": False}
+    # May 2026 — capture the R2 storage_key BEFORE we delete the
+    # community upload rows so the subsequent hard-delete-file step
+    # can address the exact R2 object. Without this, the row is gone
+    # by the time _hard_delete_upload_file runs and we'd have no way
+    # to resolve the organized-layout key from the URL alone.
+    resolved_storage_key: Optional[str] = None
     if removed_url:
         community_cleanup["attempted"] = True
         try:
@@ -1083,9 +1138,17 @@ async def admin_delete_spot_photo(
             # in the past could have created two).
             matching = await db.spot_community_uploads.find(
                 {"image_url": removed_url, "spot_id": spot_id},
-                {"_id": 0, "upload_id": 1, "batch_id": 1},
+                {"_id": 0, "upload_id": 1, "batch_id": 1, "storage_key": 1, "r2_key": 1},
             ).to_list(None)
             if matching:
+                # Prefer `r2_key` (new organized-layout field), fall
+                # back to `storage_key` (pre-May-2026 field name), then
+                # None for very-legacy local-disk rows.
+                for m in matching:
+                    k = m.get("r2_key") or m.get("storage_key")
+                    if k:
+                        resolved_storage_key = k
+                        break
                 res = await db.spot_community_uploads.delete_many({
                     "image_url": removed_url,
                     "spot_id": spot_id,
@@ -1093,15 +1156,29 @@ async def admin_delete_spot_photo(
                 community_cleanup["deleted"] = res.deleted_count
                 community_cleanup["upload_ids"] = [m.get("upload_id") for m in matching]
                 community_cleanup["batch_ids"] = list({m.get("batch_id") for m in matching if m.get("batch_id")})
+                community_cleanup["storage_key"] = resolved_storage_key
             else:
                 community_cleanup["deleted"] = 0
         except Exception as _e:
             community_cleanup["error"] = str(_e)
 
-    # ---- hard-delete the underlying file (if local + unreferenced) ----
-    # (Runs AFTER the community_uploads row is gone so the ref-count
-    # check sees no lingering references.)
-    file_cleanup = await _hard_delete_upload_file(removed_url, ignore_spot_id=spot_id)
+    # Also look for a storage_key carried on the spots.images[] entry
+    # (if this photo was part of the owner-uploaded gallery, not a
+    # community post). Older entries won't have it — fine, fall back
+    # to URL-based local-disk cleanup.
+    if not resolved_storage_key and isinstance(removed, dict):
+        ik = removed.get("storage_key") or removed.get("r2_key")
+        if ik:
+            resolved_storage_key = ik
+
+    # ---- hard-delete the underlying object (R2 or local disk) ----
+    # Runs AFTER the community_uploads row is gone so the ref-count
+    # check sees no lingering references.
+    file_cleanup = await _hard_delete_upload_file(
+        removed_url,
+        ignore_spot_id=spot_id,
+        storage_key=resolved_storage_key,
+    )
 
     # ---- audit ----
     await audit_log(

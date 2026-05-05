@@ -12,6 +12,198 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Organized R2 storage layout — locations/{slug}_{spot_id}/gallery/"
+    implemented: true
+    working: true
+    file: |
+      /app/backend/services/storage_r2.py    (added slugify, build_location_key_prefix, delete_object)
+      /app/backend/routes/uploads.py         (POST /api/uploads/image accepts ?spot_id=..., routes to location prefix; returns image_id, r2_key, size_bytes, content_type)
+      /app/backend/routes/spots.py           (SpotUploadImageIn extended with image_id/content_type/size_bytes/width/height; community-upload row stores uploaded_by/image_id/r2_key/image_type/width/height/size_bytes/content_type)
+      /app/backend/routes/admin.py           (_hard_delete_upload_file now accepts storage_key and routes to storage_r2.delete_object; caller resolves r2_key from spot_community_uploads BEFORE deletion)
+      /app/backend/scripts/r2_orphan_cleanup.py (docstring updated — operators must scan both `uploads/` and `locations/` prefixes)
+      /app/frontend/src/utils/upload-image.ts   (uploadImageAsset / uploadImageAssetWithProgress accept opts.spotId; UploadedImage exposes image_id/r2_key/size_bytes/content_type)
+      /app/frontend/app/spot/[id]/upload.tsx    (passes spotId to upload helper; QItem captures imageId/contentType/sizeBytes/width/height; submit body forwards them)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "needs_testing"
+        -agent: "main"
+        -comment: |
+          May 2026 organized R2 storage layout — backend + frontend wired.
+
+          New uploads land at:
+            locations/{slug}_{spot_id}/gallery/{uuid}.jpg
+          via build_location_key_prefix(spot_id, name). Slug rules:
+          lowercase, NFKD ASCII fold, non-alnum → '-', trim, ≤60 chars,
+          empty/None → "spot". Verified locally:
+            "Charro Ranch Park" → charro-ranch-park
+            "São Paulo Plaza"   → sao-paulo-plaza
+            "McAllister Park (TX)" → mcallister-park-tx
+
+          The community upload row now persists:
+            image_id, r2_key, storage_key, image_type="gallery",
+            content_type, size_bytes, width, height, uploaded_by
+          (in addition to all pre-existing fields). All new fields are
+          optional on the model — legacy payloads still validate.
+
+          Admin delete handler now:
+          1. Looks up r2_key (or storage_key fallback) from the
+             matching spot_community_uploads rows BEFORE deleting them.
+          2. Passes the resolved key to _hard_delete_upload_file which
+             chooses between R2 (preferred when key present) and the
+             legacy local-disk path (URL-based).
+          3. R2 delete is idempotent — 404 returns ok=True with
+             reason="not_found".
+
+          Backwards compatibility:
+            • existing R2 objects under uploads/YYYY/MM/* are NOT moved,
+              renamed, or deleted.
+            • legacy spot_community_uploads rows without r2_key /
+              storage_key fall back to the URL→local-disk path.
+            • POST /api/uploads/image still works WITHOUT ?spot_id —
+              falls back to the legacy date prefix.
+            • spot_id query param accepts unknown / soft-deleted ids
+              gracefully (logs and falls back) rather than failing
+              the upload.
+
+          Frontend scope-protection: only upload.tsx + upload-image.ts
+          touched. No changes to Home, Explore (map/list), Spot Detail
+          render path, Community, Profile, Marketplace, Messaging, or
+          paywall logic.
+
+          Verification done locally:
+            • slug + key prefix unit checks (10/10 cases pass)
+            • storage_r2.py / uploads.py / admin.py lint clean for
+              new code (E701/E702 warnings are pre-existing style)
+            • backend reloads cleanly (Stripe price map ready, R2
+              configured at startup)
+
+          Pending verification (needs deep_testing_backend_v2):
+            • End-to-end POST /api/uploads/image with ?spot_id, then
+              POST /api/spots/{id}/uploads, then admin delete →
+              R2 object gone, row gone, spot still renders.
+            • POST /api/uploads/image WITHOUT ?spot_id still routes
+              to legacy uploads/YYYY/MM/.
+            • Existing community uploads (legacy rows) still display
+              and can be deleted.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          Organized R2 storage layout — BACKEND CONTRACT TEST: 43/43 PASS.
+          Test script: /app/backend_test.py. Run 2026-05-05 against preview
+          backend https://photo-finder-60.preview.emergentagent.com.
+          Auth: kclarson187@gmail.com still returns 401 (already noted in
+          /app/memory/test_credentials.md), so used the seed super_admin
+          admin@lumascout.app / Grayson@1117!! — works fine. R2 is LIVE
+          (storage_r2 enabled — bucket=lumascout-uploads
+          public_base=https://pub-799be3bb95574d71ad3213680ce5e0c1.r2.dev).
+          Existing test spot used: spot_88a7cbd41ac1
+          ("QA Stability Pass Spot 1777661705").
+
+          Bucket 1 — Slug helpers ✅
+            slugify("Charro Ranch Park") = "charro-ranch-park"
+            slugify("São Paulo") = "sao-paulo"
+            slugify("") / slugify(None) = "spot"
+            slugify("McAllister Park (TX)") = "mcallister-park-tx"
+            build_location_key_prefix("spot_abc","McAllister Park (TX)")
+              = "locations/mcallister-park-tx_spot_abc/gallery"
+            All 6 cases match exactly.
+
+          Bucket 2 — NEW LAYOUT (POST /api/uploads/image?spot_id=...) ✅
+            HTTP 200. Response carries every required field:
+              image_url, image_id (img_f0535dc296), storage="r2",
+              storage_key, r2_key, width=640, height=480,
+              bytes=2345, size_bytes=2345, mime="image/jpeg",
+              content_type="image/jpeg", spot_id="spot_88a7cbd41ac1".
+            storage_key was:
+              locations/qa-stability-pass-spot-1777661705_spot_88a7cbd41ac1/
+                gallery/991511e247934052872fe227d4bec746.jpg
+            Slug "qa-stability-pass-spot-1777661705" matches
+            slugify(spot.title) byte-for-byte. r2_key === storage_key.
+            image_url starts with the R2 public base
+            "https://pub-799be3bb95574d71ad3213680ce5e0c1.r2.dev/" and
+            contains the storage_key suffix verbatim.
+            HEAD on image_url → 200 (object live in R2).
+            Backend log line confirmed:
+              upload_image.r2_ok ... key=locations/...
+                location_prefix=True spot_id='spot_88a7cbd41ac1'
+
+          Bucket 3 — LEGACY LAYOUT (POST /api/uploads/image, no spot_id) ✅
+            HTTP 200. storage_key:
+              uploads/2026/05/a28d259f082d4df097573f0a8c8c26df.jpg
+            Matches uploads/YYYY/MM/<uuid>.jpg pattern. image_url is the
+            full R2 public URL with the same storage_key suffix. spot_id
+            is null. r2_key === storage_key. image_id starts with "img_",
+            size_bytes is a positive int, content_type="image/jpeg".
+            HEAD → 200.
+            Backend log:
+              upload_image.r2_ok ... key=uploads/2026/05/...
+                location_prefix=False spot_id=None
+
+          Bucket 4 — UNKNOWN spot_id → graceful fallback ✅
+            POST with ?spot_id=spot_doesnotexist123 returned HTTP 200
+            (NOT 4xx). storage_key=uploads/2026/05/50300ca117b94...jpg
+            (legacy date prefix, NOT locations/). spot_id field on the
+            response is null. Backend log line confirmed:
+              upload_image.spot_id_unknown_or_deleted ... — using legacy
+              date prefix
+
+          Bucket 5 — FULL ROUND-TRIP ✅
+            POST /api/spots/<id>/uploads with the test-2 image_url +
+            storage_key + image_id + width/height/size_bytes/content_type
+            → HTTP 200, ok=true, count=1, auto_approved=true,
+            moderation_status=approved (super_admin gets auto-approve).
+            GET /api/spots/<id>/uploads found the row.
+            DELETE /api/admin/spots/<id>/images/<urlencoded image_url>
+            → HTTP 200. file_cleanup={"attempted":true,"deleted":true,
+            "reason":null,"path":"locations/qa-stability-pass-spot-
+            1777661705_spot_88a7cbd41ac1/gallery/991511e247934...jpg",
+            "storage":"r2"} — path EQUALS the storage_key. Returned
+            community_cleanup={"attempted":true,"deleted":1,
+            "upload_ids":["upl_d677e4e35c43"],
+            "storage_key":"locations/...jpg"}. HEAD on the original R2
+            URL after delete returned 404 — R2 object physically gone.
+
+          Bucket 6 — BACKWARDS COMPAT (legacy storage_key) ✅
+            Posted the test-3 legacy-key upload to the same spot; admin
+            DELETE returned ok=true with file_cleanup.storage="r2",
+            deleted=true, path equals legacy
+            "uploads/2026/05/a28d259f082d4df097573f0a8c8c26df.jpg".
+            HEAD after delete → 404. Confirms the new admin delete path
+            handles the OLD layout key shape with no special-casing.
+
+          Bucket 7 — BACKWARDS COMPAT (null storage_key, external URL) ✅
+            Posted an Unsplash https URL with storage_key=null → row
+            created. Admin DELETE returned ok=true with
+            file_cleanup={"attempted":false,"deleted":false,
+            "reason":"external_url_not_local","path":null,
+            "storage":"external"} — exactly the documented behavior. No
+            R2 call, no exception, no traceback in logs.
+
+          Bucket 8 — NO REGRESSIONS ✅
+            GET /api/spots?limit=5 → 200
+            GET /api/spots/markers?sw_lat=-90&sw_lng=-180&ne_lat=90&
+              ne_lng=180&limit=20 → 200
+            GET /api/spots/<id> → 200
+            GET /api/spots/<id>/uploads?limit=10 → 200
+
+          Cleanup: every R2 object created during the test was deleted —
+          three via the admin endpoint as part of the test flow, and the
+          test-4 unknown-spot orphan via storage_r2.delete_object()
+          directly (its image_url pointed at uploads/... and the row
+          never lived in spot_community_uploads, so the admin endpoint
+          had no row to key off — expected). Final HEAD on every test
+          URL returned 404. Bucket is clean.
+
+          VERDICT: Organized R2 storage layout is PRODUCTION-READY at
+          the backend API + storage layer. New uploads correctly land
+          under locations/{slug}_{spot_id}/gallery/, legacy uploads
+          continue to land under uploads/YYYY/MM/, the admin delete
+          path handles both layouts AND null storage_key external URLs
+          without regressions, and the existing read-side endpoints
+          (spots list, markers, detail, uploads listing) all 200.
+
   - task: "Final Polish — Map Image Refresh + Add Recent Photos UX"
     implemented: true
     working: "needs_user_verification"

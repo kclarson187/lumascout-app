@@ -1,337 +1,517 @@
 """
-Backend test - Founding Scout role implementation.
+Backend test for the Organized R2 storage layout (May 2026).
 
-Covers the 7 scenarios from the review request, run in an order that does
-NOT pollute earlier scenarios:
+Verifies:
+  1) Slug helpers (read-only)
+  2) NEW LAYOUT — POST /api/uploads/image WITH ?spot_id=...
+  3) LEGACY LAYOUT — POST /api/uploads/image WITHOUT spot_id
+  4) STALE / UNKNOWN spot_id falls back gracefully
+  5) FULL ROUND-TRIP — record + admin delete (R2 object deleted)
+  6) BACKWARDS COMPAT — legacy storage_key delete still works
+  7) BACKWARDS COMPAT — null storage_key still safe
+  8) NO REGRESSIONS — smoke tests on existing endpoints
 
-  Phase A (clean assign->remove cycle):
-    1. PATCH role=founding_scout -> 200
-    2. Verify plan=comp_elite, comped_reason/by/started_at set
-    4a. Audit shows before.role=user after.role=founding_scout
-    5. Negative auth: regular user PATCH -> 403
-    3. PATCH role=user -> plan reverts to free, comp markers cleared
-    4b. Audit shows before.role=founding_scout after.role=user
-
-  Phase B (plan_of() override check, separate cycle):
-    7. Re-assign founding_scout, manually set plan=free, confirm admin
-       sees plan=free + role=founding_scout (plan_of() override is
-       verified via code review since we cannot log in as the target).
-
-  Phase C: cleanup -> restore target to original snapshot.
-
-Auth: uses seed super_admin admin@lumascout.app / Grayson@1117!! because
-the user's primary super_admin (kclarson187@gmail.com / Pass123!) returns
-401 on this preview backend (per /app/memory/test_credentials.md note).
+Run from /app:  python3 backend_test.py
 """
+import io
+import json
 import sys
-import uuid
+import time
+import urllib.parse
+from typing import Optional, Tuple
 
 import requests
+from PIL import Image
 
-BASE = "https://photo-finder-60.preview.emergentagent.com"
-API = f"{BASE}/api"
-TIMEOUT = 30
+# ── Config ───────────────────────────────────────────────────────────────
+BACKEND = "https://photo-finder-60.preview.emergentagent.com"
+API = f"{BACKEND}/api"
 
-SUPER_EMAIL = "admin@lumascout.app"
-SUPER_PASSWORD = "Grayson@1117!!"
+PRIMARY_SUPER_ADMIN = ("kclarson187@gmail.com", "Pass123!")
+SEED_ADMIN = ("admin@lumascout.app", "Grayson@1117!!")
 
-results = []
-
-
-def log(name, ok, detail=""):
-    icon = "PASS" if ok is True else ("SKIP" if ok == "NA" else "FAIL")
-    print(f"[{icon}] {name}: {detail}")
-    results.append((name, ok, detail))
+RESULTS = []
+CREATED_UPLOADS = []  # list of dicts we may need to clean up
 
 
-def login(email, password):
-    r = requests.post(f"{API}/auth/login",
-                      json={"email": email, "password": password}, timeout=TIMEOUT)
+def log(name: str, ok: bool, detail: str = ""):
+    mark = "PASS" if ok else "FAIL"
+    line = f"[{mark}] {name}" + ((" — " + detail) if detail else "")
+    print(line, flush=True)
+    RESULTS.append((name, ok, detail))
+
+
+def auth_login() -> Tuple[str, dict]:
+    for email, pw in (PRIMARY_SUPER_ADMIN, SEED_ADMIN):
+        r = requests.post(
+            f"{API}/auth/login",
+            json={"email": email, "password": pw},
+            timeout=15,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            token = data.get("token") or data.get("access_token")
+            user = data.get("user") or {}
+            print(f"[auth] logged in as {email} (role={user.get('role')}, id={user.get('user_id')})")
+            return token, user
+        print(f"[auth] {email} → HTTP {r.status_code}: {r.text[:200]}")
+    raise RuntimeError("Could not authenticate as super_admin or seed admin")
+
+
+def make_jpeg(width: int = 320, height: int = 240, color=(220, 60, 60)) -> bytes:
+    img = Image.new("RGB", (width, height), color)
+    px = img.load()
+    px[0, 0] = (int(time.time() * 1000) % 255, 0, 0)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
+
+
+def head(url: str) -> int:
+    try:
+        r = requests.head(url, timeout=15, allow_redirects=True)
+        return r.status_code
+    except requests.RequestException as e:
+        print(f"[head] {url} → exception {e!r}")
+        return 0
+
+
+# ── Tests ────────────────────────────────────────────────────────────────
+
+
+def test_1_slug_helpers():
+    print("\n=== 1) Slug helpers ===")
+    sys.path.insert(0, "/app/backend")
+    try:
+        from services.storage_r2 import slugify, build_location_key_prefix
+    except Exception as e:
+        log("1.import", False, f"import failure: {e!r}")
+        return
+    cases = [
+        (slugify("Charro Ranch Park"), "charro-ranch-park"),
+        (slugify("São Paulo"), "sao-paulo"),
+        (slugify(""), "spot"),
+        (slugify(None), "spot"),
+        (slugify("McAllister Park (TX)"), "mcallister-park-tx"),
+        (
+            build_location_key_prefix("spot_abc", "McAllister Park (TX)"),
+            "locations/mcallister-park-tx_spot_abc/gallery",
+        ),
+    ]
+    all_ok = True
+    for got, want in cases:
+        ok = got == want
+        all_ok &= ok
+        print(f"   {'ok' if ok else 'FAIL'}: got={got!r} want={want!r}")
+    log("1.slug_helpers", all_ok)
+
+
+def get_existing_spot(token: str) -> Optional[dict]:
+    r = requests.get(
+        f"{API}/spots",
+        params={"limit": 1},
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=15,
+    )
     if r.status_code != 200:
-        return None, f"login {email} -> {r.status_code} {r.text[:200]}"
-    return r.json(), None
+        log("0.fetch_spot", False, f"HTTP {r.status_code}: {r.text[:200]}")
+        return None
+    j = r.json()
+    items = j.get("items") if isinstance(j, dict) else j
+    if not items:
+        log("0.fetch_spot", False, "no spots returned")
+        return None
+    spot = items[0]
+    print(f"[spot] using spot_id={spot.get('spot_id')} title={spot.get('title')!r}")
+    return spot
 
 
-def H(token):
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+def test_2_new_layout(token: str, spot: dict):
+    print("\n=== 2) NEW LAYOUT — POST /api/uploads/image with ?spot_id ===")
+    sys.path.insert(0, "/app/backend")
+    from services.storage_r2 import slugify
+
+    spot_id = spot["spot_id"]
+    title = spot.get("title") or ""
+    expected_slug = slugify(title)
+
+    blob = make_jpeg(640, 480)
+    files = {"file": ("test_new_layout.jpg", blob, "image/jpeg")}
+    r = requests.post(
+        f"{API}/uploads/image",
+        params={"spot_id": spot_id},
+        files=files,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=60,
+    )
+    if r.status_code != 200:
+        log("2.upload", False, f"HTTP {r.status_code}: {r.text[:300]}")
+        return None
+    body = r.json()
+    print(f"[upload] keys: {sorted(body.keys())}")
+    print(f"[upload] storage_key={body.get('storage_key')}")
+    print(f"[upload] image_url={body.get('image_url')}")
+
+    required = {"image_url", "image_id", "storage", "storage_key", "r2_key",
+                "width", "height", "bytes", "size_bytes", "mime", "content_type"}
+    missing = required - set(body.keys())
+    log("2.response_shape", len(missing) == 0, f"missing={missing}" if missing else "")
+
+    log("2.image_id_prefix", isinstance(body.get("image_id"), str) and body["image_id"].startswith("img_"),
+        f"image_id={body.get('image_id')}")
+    log("2.storage_r2", body.get("storage") == "r2", f"storage={body.get('storage')}")
+
+    sk = body.get("storage_key") or ""
+    expected_prefix = f"locations/{expected_slug}_{spot_id}/gallery/"
+    log("2.storage_key_prefix",
+        sk.startswith(expected_prefix) and sk.endswith(".jpg"),
+        f"sk={sk!r} expected_prefix={expected_prefix!r}")
+
+    log("2.r2_key_equals_storage_key", body.get("r2_key") == body.get("storage_key"))
+
+    iurl = body.get("image_url") or ""
+    log("2.image_url_pub_prefix", iurl.startswith("https://pub-") and sk in iurl,
+        f"image_url={iurl}")
+
+    code = head(iurl)
+    log("2.head_image_url_200", code == 200, f"HEAD={code}")
+
+    body["_spot_id"] = spot_id
+    CREATED_UPLOADS.append(body)
+    return body
+
+
+def test_3_legacy_layout(token: str):
+    print("\n=== 3) LEGACY LAYOUT — POST /api/uploads/image without spot_id ===")
+    blob = make_jpeg(320, 240, color=(60, 180, 60))
+    files = {"file": ("test_legacy.jpg", blob, "image/jpeg")}
+    r = requests.post(
+        f"{API}/uploads/image",
+        files=files,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=60,
+    )
+    if r.status_code != 200:
+        log("3.upload", False, f"HTTP {r.status_code}: {r.text[:300]}")
+        return None
+    body = r.json()
+    print(f"[legacy] storage_key={body.get('storage_key')}")
+    print(f"[legacy] image_url={body.get('image_url')}")
+
+    sk = body.get("storage_key") or ""
+    log("3.storage_key_uploads_prefix",
+        sk.startswith("uploads/") and sk.endswith(".jpg"),
+        f"sk={sk!r}")
+    parts = sk.split("/")
+    yyyy_mm_ok = (
+        len(parts) >= 4
+        and parts[0] == "uploads"
+        and parts[1].isdigit() and len(parts[1]) == 4
+        and parts[2].isdigit() and len(parts[2]) == 2
+    )
+    log("3.storage_key_yyyy_mm", yyyy_mm_ok, f"parts={parts[:4]}")
+
+    iurl = body.get("image_url") or ""
+    log("3.image_url_full_r2", iurl.startswith("https://pub-") and sk in iurl, f"image_url={iurl}")
+
+    log("3.spot_id_null", body.get("spot_id") in (None, ""), f"spot_id={body.get('spot_id')}")
+    log("3.r2_key_equals_storage_key", body.get("r2_key") == sk)
+    log("3.has_image_id", isinstance(body.get("image_id"), str) and body["image_id"].startswith("img_"))
+    log("3.has_size_bytes", isinstance(body.get("size_bytes"), int) and body["size_bytes"] > 0)
+    log("3.has_content_type", body.get("content_type") == "image/jpeg")
+
+    code = head(iurl)
+    log("3.head_image_url_200", code == 200, f"HEAD={code}")
+
+    body["_spot_id"] = None
+    CREATED_UPLOADS.append(body)
+    return body
+
+
+def test_4_unknown_spot_id(token: str):
+    print("\n=== 4) UNKNOWN spot_id — graceful fallback ===")
+    blob = make_jpeg(200, 200, color=(60, 60, 200))
+    files = {"file": ("test_unknown_spot.jpg", blob, "image/jpeg")}
+    r = requests.post(
+        f"{API}/uploads/image",
+        params={"spot_id": "spot_doesnotexist123"},
+        files=files,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=60,
+    )
+    if r.status_code != 200:
+        log("4.upload", False, f"HTTP {r.status_code}: {r.text[:300]}")
+        return None
+    body = r.json()
+    sk = body.get("storage_key") or ""
+    print(f"[unknown] storage_key={sk}")
+    log("4.no_4xx", True, "HTTP 200")
+    log("4.fallback_to_uploads_prefix",
+        sk.startswith("uploads/") and not sk.startswith("locations/"),
+        f"sk={sk!r}")
+    log("4.spot_id_null", body.get("spot_id") in (None, ""), f"spot_id={body.get('spot_id')}")
+
+    body["_spot_id"] = None
+    CREATED_UPLOADS.append(body)
+    return body
+
+
+def test_5_round_trip(token: str, spot: dict, upload: Optional[dict]):
+    print("\n=== 5) ROUND-TRIP — record + admin delete (R2 deleted) ===")
+    if upload is None:
+        log("5.precondition", False, "no upload from test 2")
+        return None
+
+    spot_id = spot["spot_id"]
+    image_url = upload["image_url"]
+    storage_key = upload["storage_key"]
+
+    body = {
+        "images": [{
+            "image_url": image_url,
+            "storage_key": storage_key,
+            "image_id": upload["image_id"],
+            "content_type": "image/jpeg",
+            "size_bytes": upload["bytes"],
+            "width": upload["width"],
+            "height": upload["height"],
+        }],
+        "caption": "r2 organized layout test",
+        "condition_tags": [],
+        "visibility": "public",
+    }
+    r = requests.post(
+        f"{API}/spots/{spot_id}/uploads",
+        json=body,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        log("5.post_upload", False, f"HTTP {r.status_code}: {r.text[:300]}")
+        return None
+    cu = r.json()
+    print(f"[round-trip] post: {cu}")
+    log("5.post.ok", cu.get("ok") is True)
+    log("5.post.count", cu.get("count") == 1, f"count={cu.get('count')}")
+    log("5.post.auto_approved", cu.get("auto_approved") is True, f"auto_approved={cu.get('auto_approved')}")
+
+    r = requests.get(
+        f"{API}/spots/{spot_id}/uploads",
+        params={"limit": 25},
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=15,
+    )
+    found = False
+    if r.status_code == 200:
+        items = r.json().get("items", [])
+        for it in items:
+            if it.get("image_url") == image_url:
+                found = True
+                break
+    log("5.uploads_listing_has_row", found, f"GET /uploads HTTP {r.status_code}")
+
+    enc = urllib.parse.quote(image_url, safe="")
+    r = requests.delete(
+        f"{API}/admin/spots/{spot_id}/images/{enc}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        log("5.delete", False, f"HTTP {r.status_code}: {r.text[:400]}")
+        return None
+    delr = r.json()
+    print(f"[round-trip] delete: {json.dumps(delr, indent=2)[:1000]}")
+    log("5.delete.ok", delr.get("ok") is True)
+
+    fc = delr.get("file_cleanup") or {}
+    log("5.file_cleanup.storage_r2", fc.get("storage") == "r2", f"storage={fc.get('storage')}")
+    log("5.file_cleanup.deleted", fc.get("deleted") is True, f"file_cleanup={fc}")
+    log("5.file_cleanup.path_eq_storage_key", fc.get("path") == storage_key,
+        f"path={fc.get('path')!r} sk={storage_key!r}")
+
+    cc = delr.get("community_cleanup") or {}
+    log("5.community_cleanup.deleted_ge_1", (cc.get("deleted") or 0) >= 1, f"community_cleanup={cc}")
+
+    code = head(image_url)
+    log("5.head_after_delete_404", code in (403, 404), f"HEAD after delete={code}")
+
+    upload["_cleaned"] = True
+    return delr
+
+
+def test_6_legacy_delete(token: str, spot: dict, legacy_upload: Optional[dict]):
+    print("\n=== 6) BACKWARDS COMPAT — legacy storage_key delete ===")
+    if legacy_upload is None:
+        log("6.precondition", False, "no legacy upload from test 3")
+        return None
+    spot_id = spot["spot_id"]
+    image_url = legacy_upload["image_url"]
+    storage_key = legacy_upload["storage_key"]
+
+    body = {
+        "images": [{
+            "image_url": image_url,
+            "storage_key": storage_key,
+            "image_id": legacy_upload["image_id"],
+            "content_type": "image/jpeg",
+            "size_bytes": legacy_upload["bytes"],
+            "width": legacy_upload["width"],
+            "height": legacy_upload["height"],
+        }],
+        "caption": "r2 legacy layout backwards-compat test",
+        "condition_tags": [],
+        "visibility": "public",
+    }
+    r = requests.post(
+        f"{API}/spots/{spot_id}/uploads", json=body,
+        headers={"Authorization": f"Bearer {token}"}, timeout=30,
+    )
+    log("6.post", r.status_code == 200, f"HTTP {r.status_code}")
+
+    enc = urllib.parse.quote(image_url, safe="")
+    r = requests.delete(
+        f"{API}/admin/spots/{spot_id}/images/{enc}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        log("6.delete", False, f"HTTP {r.status_code}: {r.text[:400]}")
+        return None
+    delr = r.json()
+    print(f"[legacy delete] {json.dumps(delr, indent=2)[:800]}")
+    log("6.delete.ok", delr.get("ok") is True)
+    fc = delr.get("file_cleanup") or {}
+    log("6.file_cleanup.storage_r2", fc.get("storage") == "r2", f"file_cleanup={fc}")
+    log("6.file_cleanup.deleted", fc.get("deleted") is True)
+    log("6.file_cleanup.path_eq_legacy_key", fc.get("path") == storage_key,
+        f"path={fc.get('path')!r} sk={storage_key!r}")
+
+    code = head(image_url)
+    log("6.head_after_delete_404", code in (403, 404), f"HEAD={code}")
+
+    legacy_upload["_cleaned"] = True
+    return delr
+
+
+def test_7_null_storage_key(token: str, spot: dict):
+    print("\n=== 7) BACKWARDS COMPAT — null storage_key external URL ===")
+    spot_id = spot["spot_id"]
+    external = f"https://images.unsplash.com/photo-1502082553048-f009c37129b9?w=800&q=80&t={int(time.time())}"
+    body = {
+        "images": [{
+            "image_url": external,
+            "storage_key": None,
+        }],
+        "caption": "external url null storage_key test",
+        "condition_tags": [],
+        "visibility": "public",
+    }
+    r = requests.post(
+        f"{API}/spots/{spot_id}/uploads", json=body,
+        headers={"Authorization": f"Bearer {token}"}, timeout=30,
+    )
+    if r.status_code != 200:
+        log("7.post", False, f"HTTP {r.status_code}: {r.text[:300]}")
+        return None
+    log("7.post.ok", r.json().get("ok") is True)
+
+    enc = urllib.parse.quote(external, safe="")
+    r = requests.delete(
+        f"{API}/admin/spots/{spot_id}/images/{enc}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        log("7.delete", False, f"HTTP {r.status_code}: {r.text[:400]}")
+        return None
+    delr = r.json()
+    print(f"[null sk delete] {json.dumps(delr, indent=2)[:600]}")
+    log("7.delete.ok", delr.get("ok") is True)
+    fc = delr.get("file_cleanup") or {}
+    log("7.file_cleanup.external_url_not_local",
+        fc.get("reason") == "external_url_not_local",
+        f"file_cleanup={fc}")
+    return delr
+
+
+def test_8_smoke(token: str, spot_id: str):
+    print("\n=== 8) NO REGRESSIONS — smoke tests ===")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    r = requests.get(f"{API}/spots", params={"limit": 5}, headers=headers, timeout=15)
+    log("8a.spots_list", r.status_code == 200, f"HTTP {r.status_code}")
+
+    r = requests.get(
+        f"{API}/spots/markers",
+        params={"sw_lat": -90, "sw_lng": -180, "ne_lat": 90, "ne_lng": 180, "limit": 20},
+        headers=headers, timeout=15,
+    )
+    log("8b.spots_markers", r.status_code == 200, f"HTTP {r.status_code}")
+
+    r = requests.get(f"{API}/spots/{spot_id}", headers=headers, timeout=15)
+    log("8c.spots_detail", r.status_code == 200, f"HTTP {r.status_code}")
+
+    r = requests.get(
+        f"{API}/spots/{spot_id}/uploads",
+        params={"limit": 10}, headers=headers, timeout=15,
+    )
+    log("8d.spots_uploads", r.status_code == 200, f"HTTP {r.status_code}")
+
+
+def cleanup_uploads(token: str):
+    headers = {"Authorization": f"Bearer {token}"}
+    for u in CREATED_UPLOADS:
+        if u.get("_cleaned"):
+            continue
+        spot_id = u.get("_spot_id")
+        url = u.get("image_url")
+        if not spot_id or not url:
+            print(f"[cleanup] orphan (no spot_id, won't try admin delete): {url}")
+            continue
+        enc = urllib.parse.quote(url, safe="")
+        try:
+            r = requests.delete(
+                f"{API}/admin/spots/{spot_id}/images/{enc}",
+                headers=headers, timeout=20,
+            )
+            print(f"[cleanup] DELETE {url[:80]} → {r.status_code}")
+        except Exception as e:
+            print(f"[cleanup] DELETE {url[:80]} → exception {e!r}")
 
 
 def main():
-    s_data, err = login(SUPER_EMAIL, SUPER_PASSWORD)
-    if err:
-        log("super_admin_login", False, err)
-        return
-    super_token = s_data["token"]
-    super_uid = s_data["user"]["user_id"]
-    log("super_admin_login", True,
-        f"role={s_data['user'].get('role')} uid={super_uid}")
+    print(f"Backend: {BACKEND}")
 
-    p_data, p_err = login("kclarson187@gmail.com", "Pass123!")
-    if p_err:
-        log("primary_super_admin_login_diagnostic", "NA",
-            "kclarson187@gmail.com / Pass123! returns 401 - using seed super_admin")
-    else:
-        log("primary_super_admin_login_diagnostic", True,
-            f"role={p_data['user'].get('role')}")
+    test_1_slug_helpers()
 
-    super_h = H(super_token)
+    token, _user = auth_login()
 
-    # Pick a non-staff free user
-    r = requests.get(f"{API}/admin/users?limit=50", headers=super_h, timeout=TIMEOUT)
-    if r.status_code != 200:
-        log("list_users", False, f"{r.status_code} {r.text[:200]}")
-        return
-    items = r.json().get("items", [])
-    log("list_users", True, f"got {len(items)} users")
+    spot = get_existing_spot(token)
+    if not spot:
+        print("Cannot proceed without an existing spot.")
+        sys.exit(1)
+    spot_id = spot["spot_id"]
 
-    target = None
-    admin_non_super = None
-    for u in items:
-        role = u.get("role") or "user"
-        uid = u["user_id"]
-        if uid == super_uid:
-            continue
-        if role == "user" and target is None and u.get("plan") in (None, "free"):
-            target = u
-        if role == "admin" and admin_non_super is None:
-            admin_non_super = u
-    if target is None:
-        for u in items:
-            if u["user_id"] != super_uid and (u.get("role") or "user") not in (
-                    "admin", "super_admin", "moderator", "support"):
-                target = u
-                break
-    if target is None:
-        log("pick_target_user", False, "no non-staff free user found")
-        return
-    target_uid = target["user_id"]
-    log("pick_target_user", True,
-        f"uid={target_uid} email={target.get('email')} "
-        f"role={target.get('role') or 'user'} plan={target.get('plan') or 'free'}")
+    new_upload = test_2_new_layout(token, spot)
+    legacy_upload = test_3_legacy_layout(token)
+    test_4_unknown_spot_id(token)
+    test_5_round_trip(token, spot, new_upload)
+    test_6_legacy_delete(token, spot, legacy_upload)
+    test_7_null_storage_key(token, spot)
+    test_8_smoke(token, spot_id)
 
-    r = requests.get(f"{API}/admin/users/{target_uid}", headers=super_h, timeout=TIMEOUT)
-    if r.status_code != 200:
-        log("snapshot_target", False, f"{r.status_code} {r.text[:200]}")
-        return
-    snapshot = r.json()
-    log("snapshot_target", True,
-        f"plan={snapshot.get('plan')} role={snapshot.get('role')}")
+    cleanup_uploads(token)
 
-    # ════════════════════════════════════════════════════════════════════
-    # Phase A — clean assign -> remove cycle
-    # ════════════════════════════════════════════════════════════════════
-
-    # Scenario 1: assign
-    r = requests.patch(
-        f"{API}/admin/users/{target_uid}", headers=super_h,
-        json={"role": "founding_scout", "reason": "qa_test_assign"}, timeout=TIMEOUT,
-    )
-    if r.status_code == 200:
-        body = r.json()
-        log("assign_founding_scout_200", True,
-            f"role={body.get('user', {}).get('role')} plan={body.get('user', {}).get('plan')}")
-    else:
-        log("assign_founding_scout_200", False, f"{r.status_code} {r.text[:300]}")
-
-    # Scenario 2: auto-comp
-    r = requests.get(f"{API}/admin/users/{target_uid}", headers=super_h, timeout=TIMEOUT)
-    if r.status_code == 200:
-        d = r.json()
-        plan_ok = d.get("plan") == "comp_elite"
-        reason_ok = d.get("comped_reason") == "founding_scout"
-        by_ok = d.get("comped_by") == super_uid
-        started_ok = bool(d.get("comped_started_at"))
-        log("auto_comp_elite_after_assign",
-            plan_ok and reason_ok and by_ok and started_ok,
-            f"plan={d.get('plan')} reason={d.get('comped_reason')} "
-            f"by={d.get('comped_by')} started_at={d.get('comped_started_at')}")
-    else:
-        log("auto_comp_elite_after_assign", False, f"{r.status_code} {r.text[:200]}")
-
-    # Scenario 4a: audit shows assign
-    r = requests.get(f"{API}/admin/users/{target_uid}", headers=super_h, timeout=TIMEOUT)
-    if r.status_code == 200:
-        audit = r.json().get("recent_audit") or []
-        found = next((a for a in audit if (a.get("after") or {}).get("role") == "founding_scout"), None)
-        log("audit_assign_logged", bool(found),
-            f"before.role={(found or {}).get('before', {}).get('role')} "
-            f"after.role={(found or {}).get('after', {}).get('role')}"
-            if found else "no entry found")
-    else:
-        log("audit_assign_logged", False, f"{r.status_code} {r.text[:200]}")
-
-    # Scenario 5: regular user PATCH 403
-    rand = uuid.uuid4().hex[:8]
-    reg_email = f"qa_fs_{rand}@example.com"
-    reg_pw = "TestPass123!"
-    r = requests.post(f"{API}/auth/register",
-                      json={"email": reg_email, "password": reg_pw,
-                            "name": f"QA Tester {rand}"}, timeout=TIMEOUT)
-    regular_token = None
-    regular_uid = None
-    if r.status_code != 200:
-        log("register_free_user", False, f"{r.status_code} {r.text[:200]}")
-    else:
-        regular_token = r.json()["token"]
-        regular_uid = r.json()["user"]["user_id"]
-        log("register_free_user", True, f"uid={regular_uid} email={reg_email}")
-
-    if regular_token:
-        r = requests.patch(
-            f"{API}/admin/users/{target_uid}", headers=H(regular_token),
-            json={"role": "founding_scout"}, timeout=TIMEOUT,
-        )
-        log("regular_user_patch_403", r.status_code == 403,
-            f"got {r.status_code} body={r.text[:200]}")
-
-    # Scenario 3: revert role -> plan reverts to free + comp cleared
-    r = requests.patch(
-        f"{API}/admin/users/{target_uid}", headers=super_h,
-        json={"role": "user", "reason": "qa_test_unassign"}, timeout=TIMEOUT,
-    )
-    if r.status_code == 200:
-        u = r.json().get("user") or {}
-        log("remove_founding_scout_200", True,
-            f"role={u.get('role')} plan={u.get('plan')}")
-    else:
-        log("remove_founding_scout_200", False, f"{r.status_code} {r.text[:300]}")
-
-    r = requests.get(f"{API}/admin/users/{target_uid}", headers=super_h, timeout=TIMEOUT)
-    if r.status_code == 200:
-        d = r.json()
-        plan_ok = d.get("plan") == "free"
-        reason_ok = d.get("comped_reason") in (None, "")
-        by_ok = d.get("comped_by") in (None, "")
-        log("plan_reverted_to_free_and_comp_cleared",
-            plan_ok and reason_ok and by_ok,
-            f"plan={d.get('plan')} reason={d.get('comped_reason')} by={d.get('comped_by')}")
-    else:
-        log("plan_reverted_to_free_and_comp_cleared", False, f"{r.status_code} {r.text[:200]}")
-
-    # Scenario 4b: audit shows BOTH assign and unassign
-    r = requests.get(f"{API}/admin/users/{target_uid}", headers=super_h, timeout=TIMEOUT)
-    if r.status_code == 200:
-        audit = r.json().get("recent_audit") or []
-        assign_found = False
-        unassign_found = False
-        for a in audit:
-            before = a.get("before") or {}
-            after = a.get("after") or {}
-            if before.get("role") == "founding_scout" and after.get("role") == "user":
-                unassign_found = True
-            if before.get("role") in (None, "user") and after.get("role") == "founding_scout":
-                assign_found = True
-        log("audit_assign_and_unassign_logged",
-            assign_found and unassign_found,
-            f"assign_found={assign_found} unassign_found={unassign_found} entries={len(audit)}")
-    else:
-        log("audit_assign_and_unassign_logged", False, f"{r.status_code} {r.text[:200]}")
-
-    # ════════════════════════════════════════════════════════════════════
-    # Phase B — plan_of() override check (separate clean cycle)
-    # ════════════════════════════════════════════════════════════════════
-
-    # Re-assign founding_scout
-    r = requests.patch(
-        f"{API}/admin/users/{target_uid}", headers=super_h,
-        json={"role": "founding_scout", "reason": "qa_test_phaseB"}, timeout=TIMEOUT,
-    )
-    phaseb_assigned = r.status_code == 200
-    log("phaseB_reassign_founding_scout", phaseb_assigned,
-        f"{r.status_code} {r.text[:200] if not phaseb_assigned else 'ok'}")
-
-    if phaseb_assigned:
-        # Manually set plan=free while role still founding_scout
-        r = requests.patch(
-            f"{API}/admin/users/{target_uid}", headers=super_h,
-            json={"plan": "free", "reason": "qa_test_plan_override"}, timeout=TIMEOUT,
-        )
-        plan_override_ok = r.status_code == 200
-        log("phaseB_manual_set_plan_free", plan_override_ok,
-            f"{r.status_code} {r.text[:200] if not plan_override_ok else 'ok'}")
-
-        if plan_override_ok:
-            r = requests.get(f"{API}/admin/users/{target_uid}", headers=super_h, timeout=TIMEOUT)
-            if r.status_code == 200:
-                d = r.json()
-                log("phaseB_admin_sees_plan_free_role_founding_scout",
-                    d.get("plan") == "free" and d.get("role") == "founding_scout",
-                    f"plan={d.get('plan')} role={d.get('role')}")
-            log("phaseB_plan_of_override_via_me", "NA",
-                "cannot login as target without password; verified by code review at "
-                "server.py L172: plan_of() returns 'comp_elite' for role=founding_scout when plan in (free, None, ...)")
-
-    # ════════════════════════════════════════════════════════════════════
-    # Scenario 6 — admin (non-super) assignment
-    # ════════════════════════════════════════════════════════════════════
-    if admin_non_super:
-        log("admin_non_super_assignment", "NA",
-            f"admin user found ({admin_non_super.get('email')}) but no known password - skipping live test")
-    else:
-        log("admin_non_super_assignment", "NA", "no non-super admin user found in first 50")
-
-    # ════════════════════════════════════════════════════════════════════
-    # Phase C — cleanup
-    # ════════════════════════════════════════════════════════════════════
-    desired_role = snapshot.get("role") or "user"
-    desired_plan = snapshot.get("plan") or "free"
-
-    # First: unset role -> back to user (which would normally also clear
-    # comped markers, BUT plan is currently "free" not "comp_elite" so the
-    # guard wont fire. We need to manually clear the markers + set role
-    # back). Trick: re-set plan to comp_elite first, then revert role.
-    cur = requests.get(f"{API}/admin/users/{target_uid}", headers=super_h, timeout=TIMEOUT).json()
-    if cur.get("role") == "founding_scout":
-        # Restore plan to comp_elite so the revert guard fires correctly.
-        requests.patch(
-            f"{API}/admin/users/{target_uid}", headers=super_h,
-            json={"plan": "comp_elite", "reason": "qa_cleanup_step1"}, timeout=TIMEOUT,
-        )
-        # Now revert role.
-        requests.patch(
-            f"{API}/admin/users/{target_uid}", headers=super_h,
-            json={"role": "user", "reason": "qa_cleanup_step2"}, timeout=TIMEOUT,
-        )
-
-    cur = requests.get(f"{API}/admin/users/{target_uid}", headers=super_h, timeout=TIMEOUT).json()
-    finalize = {}
-    if (cur.get("role") or "user") != desired_role:
-        finalize["role"] = desired_role
-    if (cur.get("plan") or "free") != desired_plan:
-        finalize["plan"] = desired_plan
-    if finalize:
-        finalize["reason"] = "qa_cleanup_finalize"
-        r = requests.patch(f"{API}/admin/users/{target_uid}",
-                           headers=super_h, json=finalize, timeout=TIMEOUT)
-        log("cleanup_restore_target", r.status_code == 200,
-            f"applied {finalize} -> {r.status_code}")
-    else:
-        log("cleanup_restore_target", True,
-            f"already at snapshot state plan={cur.get('plan')} role={cur.get('role')}")
-
-    # Final verification
-    cur = requests.get(f"{API}/admin/users/{target_uid}", headers=super_h, timeout=TIMEOUT).json()
-    log("final_state_verification", True,
-        f"plan={cur.get('plan')} role={cur.get('role')} "
-        f"comped_reason={cur.get('comped_reason')} comped_by={cur.get('comped_by')}")
-
-    if regular_uid:
-        log("note_test_user_left", "NA",
-            f"qa user remains uid={regular_uid} email={reg_email} (no admin self-delete used)")
-
-    # Summary
-    print()
-    print("=" * 70)
-    failed = [x for x in results if x[1] is False]
-    passed = [x for x in results if x[1] is True]
-    skipped = [x for x in results if x[1] == "NA"]
-    print(f"PASS={len(passed)}  FAIL={len(failed)}  SKIP/NA={len(skipped)}")
-    if failed:
-        print("\nFAILED:")
-        for n, _, d in failed:
-            print(f"  - {n}: {d}")
-    print("=" * 70)
-    sys.exit(0 if not failed else 1)
+    print("\n" + "=" * 60)
+    print("SUMMARY")
+    print("=" * 60)
+    fails = [(n, d) for n, ok, d in RESULTS if not ok]
+    passes = [(n, d) for n, ok, d in RESULTS if ok]
+    for name, ok, d in RESULTS:
+        mark = "PASS" if ok else "FAIL"
+        print(f"  [{mark}] {name}{(' — ' + d) if d and not ok else ''}")
+    print(f"\nTotal: {len(passes)} passed, {len(fails)} failed (of {len(RESULTS)})")
+    sys.exit(0 if not fails else 1)
 
 
 if __name__ == "__main__":
