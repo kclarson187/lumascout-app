@@ -61,7 +61,7 @@ except Exception:
     # below — at least the rest of the upload endpoint stays alive.
     pass
 
-from server import get_current_user, check_rate_limit  # reuse existing hooks
+from server import get_current_user, check_rate_limit, db  # reuse existing hooks
 from services import storage_r2  # R2 backend with local-disk fallback (May 2026)
 
 # Structured upload logger — separate from the root logger so prod
@@ -92,6 +92,7 @@ router = APIRouter(prefix="/api", tags=["uploads"])
 async def upload_image(
     request: Request,
     file: UploadFile = File(...),
+    spot_id: Optional[str] = None,  # May 2026 — organized R2 layout
     user: dict = Depends(get_current_user),
 ):
     """Accept a single image and return its hosted URL.
@@ -101,8 +102,26 @@ async def upload_image(
     orientation (common iOS rotation quirk), auto-downscale to keep
     Mongo / CDN / battery costs sane, and return a stable JSON shape:
 
-        { "image_url": "/api/uploads/2026/04/abcd.jpg",
-          "width": 2048, "height": 1365, "bytes": 412031, "mime": "image/jpeg" }
+        { "image_url": "<public-url>",
+          "image_id": "img_<hex>",
+          "storage": "r2" | "local",
+          "storage_key": "<r2-key>" | null,
+          "r2_key":      "<r2-key>" | null,   # alias for storage_key
+          "width": 2048, "height": 1365,
+          "bytes": 412031, "mime": "image/jpeg",
+          "size_bytes": 412031, "content_type": "image/jpeg" }
+
+    May 2026 — organized R2 layout:
+      • When ?spot_id=<id> is passed AND R2 is configured, the object
+        key is written under
+            locations/{location_slug}_{spot_id}/gallery/{uuid}.jpg
+        using `services.storage_r2.build_location_key_prefix`. If the
+        spot is unknown / soft-deleted we fall back to the legacy
+        date-partitioned prefix so the upload never fails just because
+        of a stale spot_id.
+      • When spot_id is absent (legacy callers, dev/Expo Go without a
+        spot context, or the local-disk fallback path) we keep the
+        original `uploads/YYYY/MM/uuid.jpg` layout untouched.
     """
     t0 = time.monotonic()
     user_id = user.get("user_id")
@@ -205,6 +224,11 @@ async def upload_image(
 
     now = datetime.now(timezone.utc)
     name = f"{uuid.uuid4().hex}.{ext}"
+    # May 2026 — stable image identifier returned to the client and
+    # stored on the spot_community_uploads row. The leading "img_"
+    # prefix matches the convention used elsewhere (DEMO_SPOTS,
+    # admin_spot_action, etc.) so per-image audit logs are uniform.
+    image_id = f"img_{uuid.uuid4().hex[:10]}"
 
     # ─── May 2026: route to Cloudflare R2 when configured ──────────────
     # /app/backend/uploads lives on the container's ephemeral local
@@ -213,9 +237,39 @@ async def upload_image(
     # object store + CDN delivery in one. When R2 env vars are absent
     # (dev / Expo Go), we fall back to the legacy on-disk path below.
     if storage_r2.r2_configured():
+        # Resolve the spot_id (if provided) to an organized key prefix.
+        # If the spot is unknown / soft-deleted, fall back to the
+        # legacy date-partitioned prefix so a stale spot_id in the
+        # client never blocks a successful upload.
+        key_prefix = f"uploads/{now.year:04d}/{now.month:02d}"
+        location_prefix_used = False
+        if spot_id:
+            try:
+                spot_doc = await db.spots.find_one(
+                    {"spot_id": spot_id},
+                    {"_id": 0, "spot_id": 1, "title": 1, "visibility_status": 1},
+                )
+                if spot_doc and spot_doc.get("visibility_status") != "deleted":
+                    key_prefix = storage_r2.build_location_key_prefix(
+                        spot_doc.get("spot_id") or spot_id,
+                        spot_doc.get("title"),
+                    )
+                    location_prefix_used = True
+                else:
+                    _upload_log.info(
+                        "upload_image.spot_id_unknown_or_deleted user_id=%s spot_id=%r — using legacy date prefix",
+                        user_id, spot_id,
+                    )
+            except Exception as e:
+                # Never block an upload on a spot-lookup failure — fall
+                # back to the legacy prefix and log for ops.
+                _upload_log.warning(
+                    "upload_image.spot_lookup_failed user_id=%s spot_id=%r err=%r — using legacy date prefix",
+                    user_id, spot_id, e,
+                )
         try:
             r2_res = storage_r2.put_object(
-                key_prefix=f"uploads/{now.year:04d}/{now.month:02d}",
+                key_prefix=key_prefix,
                 data=encoded,
                 extension=ext,
                 content_type="image/jpeg",
@@ -234,18 +288,27 @@ async def upload_image(
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         _upload_log.info(
             "upload_image.r2_ok user_id=%s filename=%r in_bytes=%d in_mime=%r "
-            "out_bytes=%d out_dim=%dx%d key=%s url=%s elapsed_ms=%d",
+            "out_bytes=%d out_dim=%dx%d key=%s url=%s elapsed_ms=%d "
+            "location_prefix=%s spot_id=%r",
             user_id, fname, size_in, ct_in, len(encoded),
             img.size[0], img.size[1], r2_res["key"], rel_url, elapsed_ms,
+            location_prefix_used, spot_id,
         )
         return {
             "image_url": rel_url,
+            "image_id": image_id,
             "storage": "r2",
             "storage_key": r2_res["key"],
+            # `r2_key` is a friendlier alias for callers / DB rows. Both
+            # fields carry the same value when storage == "r2".
+            "r2_key": r2_res["key"],
+            "spot_id": spot_id if location_prefix_used else None,
             "width": img.size[0],
             "height": img.size[1],
             "bytes": len(encoded),
+            "size_bytes": len(encoded),
             "mime": "image/jpeg",
+            "content_type": "image/jpeg",
         }
 
     # ─── Local-disk fallback (dev / Expo Go / R2 unconfigured) ─────────
@@ -274,12 +337,17 @@ async def upload_image(
     )
     return {
         "image_url": rel_url,
+        "image_id": image_id,
         "storage": "local",
         "storage_key": None,
+        "r2_key": None,
+        "spot_id": None,
         "width": img.size[0],
         "height": img.size[1],
         "bytes": len(encoded),
+        "size_bytes": len(encoded),
         "mime": "image/jpeg",
+        "content_type": "image/jpeg",
     }
 
 

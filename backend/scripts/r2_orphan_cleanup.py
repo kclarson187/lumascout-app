@@ -48,6 +48,19 @@ Usage
     python /app/backend/scripts/r2_orphan_cleanup.py --preview --max 1000
     python /app/backend/scripts/r2_orphan_cleanup.py --preview --prefix uploads/2025/
 
+May 2026 — organized R2 layout
+──────────────────────────────
+New uploads land under ``locations/{slug}_{spot_id}/gallery/...`` instead
+of the legacy date-partitioned ``uploads/YYYY/MM/...`` prefix. To
+generate a complete orphan report you must scan BOTH prefixes:
+
+    python /app/backend/scripts/r2_orphan_cleanup.py --preview --prefix uploads/
+    python /app/backend/scripts/r2_orphan_cleanup.py --preview --prefix locations/
+
+The mongo reference scan already covers both layouts because it reads
+``storage_key`` / ``r2_key`` verbatim — it doesn't care which prefix a
+key sits under.
+
 Exit codes
 ──────────
    0  success (preview or confirm)

@@ -68,6 +68,14 @@ type QItem = {
   // May 2026: R2 storage key echoed back alongside hostedUrl so we
   // can persist it with the spot_community_uploads row.
   storageKey?: string | null;
+  // May 2026 (organized R2 layout) — additional metadata returned by
+  // the server so the community upload row carries a stable image_id
+  // and real size/content_type/dim values without a second round-trip.
+  imageId?: string | null;
+  contentType?: string | null;
+  sizeBytes?: number | null;
+  imgWidth?: number | null;
+  imgHeight?: number | null;
   error?: string;
   errorName?: string;
   attempts: number; // how many upload attempts we've made so far
@@ -141,6 +149,10 @@ export default function UploadScreen() {
           const result: UploadedImage = await uploadImageAssetWithProgress(
             { uri: current.localUri, mimeType: current.mimeType, fileName: current.fileName },
             {
+              // May 2026 — pass spotId so the server writes the R2
+              // object under `locations/{slug}_{spot_id}/gallery/...`
+              // instead of the legacy date-partitioned prefix.
+              spotId: spotId || null,
               signal: controller.signal,
               onProgress: (p) => {
                 if (unmountedRef.current) return;
@@ -160,7 +172,12 @@ export default function UploadScreen() {
             status: 'success',
             progress: 1,
             hostedUrl: result.image_url,
-            storageKey: (result as any).storage_key || null,
+            storageKey: (result as any).storage_key || (result as any).r2_key || null,
+            imageId: (result as any).image_id || null,
+            contentType: (result as any).content_type || result.mime || null,
+            sizeBytes: (result as any).size_bytes || result.bytes || null,
+            imgWidth: result.width || null,
+            imgHeight: result.height || null,
             attempts: attemptNumber,
             error: undefined,
             errorName: undefined,
@@ -473,8 +490,17 @@ export default function UploadScreen() {
       images: successful.map((q) => ({
         image_url: q.hostedUrl!,
         // Forward R2 object key alongside the public URL so the
-        // spot_community_uploads row can re-sign / rewrite later.
+        // spot_community_uploads row can re-sign / rewrite later and
+        // the admin delete path can address the exact object.
         storage_key: q.storageKey || null,
+        // May 2026 — metadata enrichments so the upload row carries
+        // a stable image_id + real size / dim / content_type without
+        // a second round trip. All fields optional on the backend.
+        image_id: q.imageId || null,
+        content_type: q.contentType || null,
+        size_bytes: q.sizeBytes || null,
+        width: q.imgWidth || null,
+        height: q.imgHeight || null,
         caption: null,
       })),
       caption: caption.trim() || null,
