@@ -12,6 +12,112 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Member Profile Completion Flow"
+    implemented: true
+    working: true
+    file: |
+      /app/backend/server.py                                  (+`re` import; new `_compute_profile_complete` helper; /auth/me & PATCH /auth/me return / persist `profile_complete` + `profile_completed_at`)
+      /app/frontend/app/onboarding/profile-setup.tsx          (NEW — Complete Photographer Profile screen with required + optional sections + sticky Save bar)
+      /app/frontend/app/_layout.tsx                           (Gate now redirects logged-in users with profile_complete===false to /onboarding/profile-setup; loop-safe — exempts the screen itself + auth-callback)
+      /app/frontend/src/auth.tsx                              (User type extended with new fields + profile_complete/profile_completed_at)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          May 2026 — Member profile completion flow shipped.
+          Backend testing 75/75 PASS (deep_testing_backend_v2).
+
+          DELIVERABLES (per PRD)
+          ──────────────────────
+          1. Files changed:
+             • /app/backend/server.py
+             • /app/frontend/app/onboarding/profile-setup.tsx (NEW)
+             • /app/frontend/app/_layout.tsx
+             • /app/frontend/src/auth.tsx
+
+          2. New fields added: NONE on the user model — all PRD fields
+             already existed on the schema. Mapping (PRD → existing):
+                display_name → name
+                portfolio_url → website
+                years_in_business → years_experience  (0 valid)
+                accepting_bookings → booking_available
+                instagram_handle → instagram
+                available_as_second_shooter → available_for_second_shooter
+                open_to_mentoring → mentorship_available
+                service_radius_miles, facebook_url, tiktok_url,
+                specialties — already canonical
+             Two derived fields added: profile_complete (bool, computed),
+             profile_completed_at (datetime, set ONCE on false→true).
+
+          3. Backend endpoint: REUSED. `PATCH /api/auth/me` already
+             supported all the canonical fields. Extended to recompute
+             + persist the flag on every write. No new route.
+
+          4. Profile completeness logic: 5 required fields all
+             present and valid (name ≥2 chars / website matches
+             ^https?://...\....$ / non-empty city / non-empty state /
+             years_experience number ≥ 0). Optional fields NEVER
+             gate the flag (verified by bucket #4 — empty specialties,
+             null booking_available, null radius all leave flag true).
+
+          5. Signup/login prompt behavior:
+             • /onboarding/profile-setup (Stack screen, no tab nav)
+             • Gate watches `user.profile_complete === false` (strict
+               equality; undefined = "no opinion yet, don't redirect"
+               so first-paint never bounces).
+             • Loop-safe: redirect skipped when already on the
+               setup route (segments[1]==='profile-setup') or
+               on auth-callback.
+
+          6. Profile page display: existing /(tabs)/profile renders
+             from /auth/me — all PRD-listed fields surface
+             automatically since they're canonical user fields.
+             "Edit later" routes through the existing profile edit
+             flow per the PRD's "do not create duplicate paths" rule.
+
+          7. Validation: backend regex matches frontend regex
+             exactly. Frontend auto-prefixes `https://` for ergonomic
+             entry, optional URL fields validated only when filled.
+
+          8. Redirect-loop avoidance:
+             • Gate exits early when loading
+             • profile-setup screen is exempt from the "logged-in
+               user on onboarding → tabs" redirect
+             • Setup screen useEffect bounces to /(tabs) the moment
+               profile_complete flips true, removing back-button
+               re-entry into a satisfied form
+
+          9. Existing user/data protection (verified by bucket #7):
+             avatar_url / bio / language_hint / timezone /
+             location_prefs / gear_prefs all preserved across the
+             completion patch. PATCH /auth/me only $sets the keys
+             actually present in the request body.
+
+          10. iOS QA: needs device verification (KeyboardAvoidingView
+              padding behavior, sticky save bar over safe-area).
+          11. Android QA: needs device verification (Switch thumb
+              color tweak applied for AOSP look).
+          12. Web QA: route renders HTTP 200, full SSR HTML, no
+              bundle errors. Form is usable on web.
+
+          13. Remaining risks / follow-ups:
+              • The existing /(tabs)/profile may not yet surface the
+                three new badges (Accepting Bookings / 2nd Shooter /
+                Mentoring). PRD allows this for follow-up. Backend
+                fields are already returned, so a future small UI
+                polish can light them up without backend changes.
+              • The profile-setup screen does NOT enforce a country
+                non-US choice — only US 2-letter abbrevs in the
+                picker. International users can still type a state
+                manually OR (better follow-up) we add a country
+                picker that shows region options.
+              • Existing users who never set required fields will
+                see the gate on their next login. They retain ALL
+                their data (verified bucket #7).
+
   - task: "Profile Completion (May 2026) — GET/PATCH /api/auth/me profile_complete + profile_completed_at"
     implemented: true
     working: true
