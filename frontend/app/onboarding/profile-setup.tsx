@@ -38,10 +38,13 @@ import {
   Alert,
   ActivityIndicator,
   Pressable,
+  Image,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { Check } from 'lucide-react-native';
+import { Check, Camera, ImagePlus, Trash2, User as UserIcon } from 'lucide-react-native';
+import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 import { formatApiError } from '../../src/api';
@@ -111,6 +114,19 @@ export default function ProfileSetupScreen() {
   const [specialties, setSpecialties] = useState<string[]>(
     Array.isArray(user?.specialties) ? (user!.specialties as string[]) : [],
   );
+  // ─── Profile photo + Banner (May 2026, optional) ────────────────────
+  // Both store a data: URL while in-flight; we send them through to
+  // PATCH /auth/me on Save so the user's existing edit logic
+  // (avatar_image_url + avatar_url + banner_image_url) is reused
+  // verbatim. Prefilled from existing user fields so a re-prompted
+  // user never loses what they already had.
+  const [avatarUri, setAvatarUri] = useState<string | null>(
+    (user as any)?.avatar_image_url || user?.avatar_url || null,
+  );
+  const [bannerUri, setBannerUri] = useState<string | null>(
+    (user as any)?.banner_image_url || null,
+  );
+  const [uploadingKind, setUploadingKind] = useState<'avatar' | 'banner' | null>(null);
 
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -152,6 +168,64 @@ export default function ProfileSetupScreen() {
     setSpecialties((prev) => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]);
   };
 
+  // ─── Pick + manipulate avatar / banner (May 2026) ─────────────────
+  // Logic mirrors `pickAndUpload` on /(tabs)/profile.tsx so the
+  // resulting data: URLs are byte-compatible with the existing edit
+  // flow — the only difference is we hold them in component state
+  // until the user taps Save & Continue, instead of writing each
+  // upload immediately. This keeps the onboarding feel "everything
+  // saves together" and lets the user remove/replace before commit.
+  const pickAndStage = useCallback(async (kind: 'avatar' | 'banner') => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Allow photo access', 'LumaScout needs permission to read your photos for the profile picture.');
+        return;
+      }
+      const res = await ImagePicker.launchImageLibraryAsync({
+        // @ts-ignore — string union accepted by SDK 54
+        mediaTypes: ['images'],
+        quality: 1,
+        base64: false,
+        allowsEditing: true,
+        aspect: kind === 'banner' ? [3, 1] : [1, 1],
+      });
+      if (res.canceled) return;
+      const asset = res.assets[0];
+      setUploadingKind(kind);
+      const manipulated = await ImageManipulator.manipulateAsync(
+        asset.uri,
+        [{ resize: { width: kind === 'banner' ? 1400 : 600 } }],
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+      );
+      if (!manipulated.base64) {
+        Alert.alert('Could not process image');
+        return;
+      }
+      const dataUrl = `data:image/jpeg;base64,${manipulated.base64}`;
+      if (kind === 'avatar') setAvatarUri(dataUrl);
+      else setBannerUri(dataUrl);
+    } catch (e: any) {
+      Alert.alert('Couldn\'t add the image', formatApiError(e) || 'Please try again.');
+    } finally {
+      setUploadingKind(null);
+    }
+  }, []);
+
+  // Has user changed the avatar/banner relative to what's already on
+  // the user record? If unchanged, we skip those keys entirely on save
+  // so the backend $set never re-writes them (small bandwidth win,
+  // and avoids accidentally copying the existing value back into
+  // both `avatar_image_url` AND `avatar_url` when only one was set).
+  const avatarChanged = useMemo(() => {
+    const original = (user as any)?.avatar_image_url || user?.avatar_url || null;
+    return avatarUri !== original;
+  }, [avatarUri, user]);
+  const bannerChanged = useMemo(() => {
+    const original = (user as any)?.banner_image_url || null;
+    return bannerUri !== original;
+  }, [bannerUri, user]);
+
   const handleSave = async () => {
     const e = validate();
     setErrors(e);
@@ -184,6 +258,20 @@ export default function ProfileSetupScreen() {
         available_for_second_shooter: secondShooter,
         mentorship_available: mentoring,
         specialties,
+        // ── Profile photo + Banner (May 2026) ───────────────────────
+        // Only include when the user changed them in this session.
+        // When unchanged we OMIT the keys entirely so an existing
+        // server-side avatar / banner is never re-sent (and never
+        // accidentally overwritten on a future schema migration).
+        // avatar_image_url + avatar_url match the existing
+        // /(tabs)/profile.tsx contract — both fields are written so
+        // older readers of `avatar_url` continue to work.
+        ...(avatarChanged && avatarUri
+          ? { avatar_image_url: avatarUri, avatar_url: avatarUri }
+          : {}),
+        ...(bannerChanged && bannerUri
+          ? { banner_image_url: bannerUri }
+          : {}),
       } as any);
       // Hard refresh so /auth/me's recomputed `profile_complete`
       // arrives before the Gate re-evaluates on the next render.
@@ -312,6 +400,120 @@ export default function ProfileSetupScreen() {
               testID="profile-setup-years"
             />
           </Field>
+
+          {/* ───────────── PROFILE PHOTO (optional, encouraged) ─────
+              Sits between Required and Optional so it gets visual
+              prominence without blocking completion. PRD copy:
+              "Help other photographers recognize and trust you." */}
+          <View style={s.photoSection}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <Pressable
+                onPress={() => pickAndStage('avatar')}
+                style={s.avatarRing}
+                accessibilityLabel="Add a profile photo"
+                testID="profile-setup-avatar-pick"
+              >
+                {avatarUri ? (
+                  <Image source={{ uri: avatarUri }} style={s.avatarImg} />
+                ) : (
+                  <View style={s.avatarPlaceholder}>
+                    {uploadingKind === 'avatar'
+                      ? <ActivityIndicator color={colors.primary} />
+                      : <UserIcon size={28} color={colors.textTertiary} />}
+                  </View>
+                )}
+                <View style={s.avatarBadge}>
+                  <Camera size={11} color={colors.textInverse} />
+                </View>
+              </Pressable>
+              <View style={{ flex: 1 }}>
+                <Text style={s.photoTitle}>Add a profile photo</Text>
+                <Text style={s.photoHint}>
+                  Help other photographers recognize and trust you.{'  '}
+                  <Text style={s.optionalTag}>Optional</Text>
+                </Text>
+                <View style={s.photoBtnRow}>
+                  <TouchableOpacity
+                    onPress={() => pickAndStage('avatar')}
+                    style={s.photoPrimaryBtn}
+                    disabled={uploadingKind === 'avatar'}
+                    testID="profile-setup-avatar-upload"
+                  >
+                    <ImagePlus size={13} color={colors.textInverse} />
+                    <Text style={s.photoPrimaryTxt}>
+                      {avatarUri ? 'Replace photo' : 'Upload Photo'}
+                    </Text>
+                  </TouchableOpacity>
+                  {avatarUri ? (
+                    <TouchableOpacity
+                      onPress={() => setAvatarUri(null)}
+                      style={s.photoGhostBtn}
+                      hitSlop={6}
+                      testID="profile-setup-avatar-remove"
+                    >
+                      <Trash2 size={13} color={colors.textSecondary} />
+                      <Text style={s.photoGhostTxt}>Remove</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <Text style={s.photoGhostTxt}>or skip for now</Text>
+                  )}
+                </View>
+              </View>
+            </View>
+          </View>
+
+          {/* ───────────── BANNER IMAGE (optional) ───────────────────
+              Same pattern as the avatar but with a wider 3:1 aspect
+              and stacked layout so the preview reads at a glance. */}
+          <View style={s.photoSection}>
+            <Text style={s.photoTitle}>Add a banner image</Text>
+            <Text style={s.photoHint}>
+              Show off your photography style with a cover image.{'  '}
+              <Text style={s.optionalTag}>Optional</Text>
+            </Text>
+            <Pressable
+              onPress={() => pickAndStage('banner')}
+              style={[s.bannerWrap, !!bannerUri && { borderStyle: 'solid' }]}
+              testID="profile-setup-banner-pick"
+            >
+              {bannerUri ? (
+                <Image source={{ uri: bannerUri }} style={s.bannerImg} />
+              ) : (
+                <View style={s.bannerPlaceholder}>
+                  {uploadingKind === 'banner'
+                    ? <ActivityIndicator color={colors.primary} />
+                    : <ImagePlus size={26} color={colors.textTertiary} />}
+                  <Text style={s.bannerHint}>Tap to choose a wide cover photo</Text>
+                </View>
+              )}
+            </Pressable>
+            <View style={[s.photoBtnRow, { marginTop: 10 }]}>
+              <TouchableOpacity
+                onPress={() => pickAndStage('banner')}
+                style={s.photoPrimaryBtn}
+                disabled={uploadingKind === 'banner'}
+                testID="profile-setup-banner-upload"
+              >
+                <ImagePlus size={13} color={colors.textInverse} />
+                <Text style={s.photoPrimaryTxt}>
+                  {bannerUri ? 'Replace banner' : 'Upload Banner'}
+                </Text>
+              </TouchableOpacity>
+              {bannerUri ? (
+                <TouchableOpacity
+                  onPress={() => setBannerUri(null)}
+                  style={s.photoGhostBtn}
+                  hitSlop={6}
+                  testID="profile-setup-banner-remove"
+                >
+                  <Trash2 size={13} color={colors.textSecondary} />
+                  <Text style={s.photoGhostTxt}>Remove</Text>
+                </TouchableOpacity>
+              ) : (
+                <Text style={s.photoGhostTxt}>or skip</Text>
+              )}
+            </View>
+          </View>
 
           {/* ───────────── OPTIONAL ───────────── */}
           <Text style={[s.sectionLabel, { marginTop: space.xl }]}>OPTIONAL</Text>
@@ -520,4 +722,61 @@ const s = StyleSheet.create({
   saveTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 15 },
 
   signOut: { color: colors.textTertiary, fontFamily: font.body, fontSize: 13, textDecorationLine: 'underline' },
+
+  // ─── Profile photo + Banner sections (May 2026) ─────────────────
+  photoSection: {
+    marginTop: space.lg,
+    padding: space.md,
+    backgroundColor: colors.surface1,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radii.md,
+  },
+  photoTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14, lineHeight: 18 },
+  photoHint: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17, marginTop: 4 },
+  photoBtnRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' },
+  photoPrimaryBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 12, paddingVertical: 8,
+    borderRadius: radii.pill, backgroundColor: colors.primary,
+  },
+  photoPrimaryTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 12 },
+  photoGhostBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 4 },
+  photoGhostTxt: { color: colors.textTertiary, fontFamily: font.body, fontSize: 12 },
+
+  // Avatar ring
+  avatarRing: {
+    width: 76, height: 76, borderRadius: 38,
+    borderWidth: 2, borderColor: colors.primary,
+    padding: 3,
+    overflow: 'visible',
+  },
+  avatarImg: { width: '100%', height: '100%', borderRadius: 999 },
+  avatarPlaceholder: {
+    width: '100%', height: '100%', borderRadius: 999,
+    backgroundColor: colors.surface2,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  avatarBadge: {
+    position: 'absolute', right: -2, bottom: -2,
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: colors.primary,
+    borderWidth: 2, borderColor: colors.bg,
+    alignItems: 'center', justifyContent: 'center',
+  },
+
+  // Banner — 3:1 aspect, dashed when empty so it reads as a drop zone
+  bannerWrap: {
+    marginTop: 10,
+    width: '100%', aspectRatio: 3,
+    borderRadius: radii.md,
+    borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed',
+    backgroundColor: colors.surface2,
+    overflow: 'hidden',
+  },
+  bannerImg: { width: '100%', height: '100%' },
+  bannerPlaceholder: {
+    flex: 1, alignItems: 'center', justifyContent: 'center', gap: 6,
+  },
+  bannerHint: { color: colors.textTertiary, fontFamily: font.body, fontSize: 12 },
 });
