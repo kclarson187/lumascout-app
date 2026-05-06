@@ -12,8 +12,8 @@ import {
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Camera, Map, Lock, Compass, Check } from 'lucide-react-native';
-import { colors, font, space, radii, SHOOT_TYPES } from '../src/theme';
-import { Button } from '../src/components/Button';
+import { colors, font, space, radii, SHOOT_TYPES } from '../../src/theme';
+import { Button } from '../../src/components/Button';
 
 const { width: W } = Dimensions.get('window');
 
