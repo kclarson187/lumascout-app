@@ -12,6 +12,119 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Profile Completion (May 2026) — GET/PATCH /api/auth/me profile_complete + profile_completed_at"
+    implemented: true
+    working: true
+    file: |
+      /app/backend/server.py (new _compute_profile_complete() + _PORTFOLIO_URL_RE; /auth/me read returns profile_complete + profile_completed_at; /auth/me PATCH recomputes flag against merged doc and sets profile_completed_at on first false→true)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          Profile Completion logic — BACKEND CONTRACT TEST: 75/75 PASS.
+          Test script: /app/backend_test.py. Run 2026-05-06 against
+          https://photo-finder-60.preview.emergentagent.com.
+
+          Auth: kclarson187@gmail.com still returns 401 (per
+          /app/memory/test_credentials.md); test users registered fresh
+          via POST /api/auth/register (throwaway pc_test_<ts>@example.com,
+          safety_test_<ts>, clobber_test_<ts>, url_test_<ts>). Super
+          admin admin@lumascout.app / Grayson@1117!! — works.
+
+          Bucket 1 — Fresh registration ✅
+            POST /api/auth/register → 200, returns token. GET /api/auth/me
+            returns profile_complete=False, profile_completed_at=None.
+            All required keys (user_id, email, name, plan, limits, usage,
+            stats) present.
+
+          Bucket 2 — Single PATCH completion ✅
+            PATCH with all 5 required (name, website https://, city,
+            state, years_experience=0) → 200 with profile_complete=true
+            and profile_completed_at=ISO ('2026-05-06T17:10:48.339000').
+            GET confirms persistence.
+
+          Bucket 3 — years_experience=0 valid ✅
+            PATCH years_experience=0 keeps profile_complete=true (the
+            "just starting out" case).
+
+          Bucket 4 — Optional fields never unflag ✅
+            • {service_radius_miles: null, booking_available: null} —
+              nulls dropped by UserUpdateIn, flag stays true.
+            • specialties=[] keeps flag true.
+            • Full optional bundle (instagram, facebook_url, tiktok_url,
+              available_for_second_shooter, mentorship_available,
+              service_radius_miles=50, booking_available=true) keeps
+              flag true and ALL fields persisted (verified via GET).
+
+          Bucket 5 — Required fields invalid → flag flips false ✅
+            (a) name="A" (1 char) → false ✅
+            (b) website="not-a-url" → false ✅
+            (c) city="" → false ✅
+            (d) state="" → false ✅
+            (e) years_experience=-1 → false ✅
+            (e2) years_experience=null → 200 no-crash (UserUpdateIn drops)
+            Restore valid 5 fields → flag flips back to true ✅.
+
+          Bucket 6 — profile_completed_at sticky ✅
+            After bouncing through all of bucket 5 (multiple
+            false→true→false→true cycles), GET /api/auth/me shows
+            profile_completed_at === ORIGINAL timestamp from bucket 2:
+            '2026-05-06T17:10:48.339000' === '2026-05-06T17:10:48.339000'
+            — NOT updated to "now". Sticky behavior confirmed exactly
+            as PRD specifies.
+
+          Bucket 7 — Existing-user safety ✅
+            Fresh user. PATCH avatar_url, bio, language_hint, timezone
+            BEFORE completion → profile_complete=false (correct). Then
+            PATCH 5 required → profile_complete=true. GET confirms
+            avatar_url='https://example.com/a.jpg', bio='hi',
+            language_hint='es', timezone='America/Chicago' all
+            preserved verbatim. Completion patch did NOT clobber
+            non-required fields.
+
+          Bucket 8 — Partial PATCH preserves untouched fields ✅
+            Set 8 fields (name, website, city, state, years_experience,
+            instagram, facebook_url, service_radius_miles). Then
+            PATCH {name: "New Name"} only. GET confirms name updated to
+            "New Name", all 7 other fields byte-for-byte unchanged,
+            profile_complete still true.
+
+          Bucket 9 — URL validation ✅
+            ACCEPTED (regex /^https?://[^\s]+\.[^\s]+$/i):
+              • https://myportfolio.com → true ✅
+              • https://www.instagram.com/username → true ✅
+              • https://portfolio.adobe.com/example → true ✅
+              • http://example.org → true ✅
+            REJECTED:
+              • "myportfolio.com" (no scheme) → false ✅
+              • "https://" (no host) → false ✅
+              • "" (empty) → false ✅
+
+          Bucket 10 — Smoke / no regressions ✅
+            GET /api/spots?limit=5 → 200
+            GET /api/spots/markers (full bbox) → 200
+            POST /api/auth/login (super admin) → 200
+            GET /api/auth/me as super admin → 200, response includes
+              both profile_complete (False, since admin's website is
+              empty) and profile_completed_at (None) keys — new fields
+              are present on existing accounts as expected.
+
+          Backend log audit during test window — no 5xx, no tracebacks.
+
+          VERDICT: Profile Completion logic is PRODUCTION-READY.
+          _compute_profile_complete() correctly enforces all 5 required
+          fields (name >=2 chars trimmed, website matching the http(s)
+          regex, non-empty city, non-empty state, years_experience >=0
+          including 0). The flag flips on every PATCH (false↔true),
+          profile_completed_at is set ONCE on first transition and
+          stays sticky. Optional fields never gate the flag. Partial
+          PATCHes don't clobber untouched fields. No regressions on
+          /spots, /spots/markers, or login.
+
+
   - task: "Admin description editing + Responsive Spot Detail + Take-Photo-Now GPS fallback"
     implemented: true
     working: true

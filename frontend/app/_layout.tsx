@@ -108,14 +108,40 @@ function Gate() {
   useEffect(() => {
     if (loading) return;
     const seg0 = segments[0] as string | undefined;
+    const seg1 = segments[1] as string | undefined;
     const inAuth = seg0 === '(auth)';
     const inOnboarding = seg0 === 'onboarding';
     const inAuthCb = seg0 === 'auth-callback';
+    // May 2026 — profile-setup route lives at /onboarding/profile-setup
+    const onProfileSetup = inOnboarding && seg1 === 'profile-setup';
 
     if (!user && !inAuth && !inOnboarding && !inAuthCb) {
       router.replace('/onboarding');
-    } else if (user && (inAuth || inOnboarding || !seg0)) {
-      router.replace('/(tabs)');
+      return;
+    }
+
+    if (user) {
+      // ─── Profile-completion gate (PRD May 2026) ───────────────────
+      // Redirect logged-in users whose required photographer fields
+      // are missing to the profile-setup screen — UNLESS they're
+      // already there (avoids a redirect loop). Auth-callback is
+      // also exempt so the post-Google-OAuth handoff never bounces.
+      // The flag is computed server-side; if /auth/me hasn't been
+      // re-fetched yet it'll be undefined — we treat undefined as
+      // "no opinion yet, don't redirect" so the user isn't yanked
+      // around during boot.
+      const needsSetup = user.profile_complete === false;
+      if (needsSetup && !onProfileSetup && !inAuthCb) {
+        router.replace('/onboarding/profile-setup' as any);
+        return;
+      }
+      // Already-complete users sitting on the auth/welcome carousel
+      // bounce to the app. Profile-setup is intentionally excluded
+      // from this rule so an admin / debugging visit to the screen
+      // doesn't slingshot back instantly.
+      if ((inAuth || (inOnboarding && !onProfileSetup) || !seg0) && !needsSetup) {
+        router.replace('/(tabs)');
+      }
     }
   }, [user, loading, segments, router]);
 

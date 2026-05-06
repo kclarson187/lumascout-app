@@ -36,6 +36,20 @@ export type User = {
     uploads?: number;
     outbound_threads_30d?: number;
   };
+  // ─── Photographer profile fields (May 2026) ────────────────────────
+  // Existing canonical names on the user document. Adding them to the
+  // type so the new profile-setup screen can read prefill values
+  // without `as any` casts. All optional — legacy users have nulls.
+  years_experience?: number | null;
+  service_radius_miles?: number | null;
+  booking_available?: boolean | null;
+  facebook_url?: string | null;
+  tiktok_url?: string | null;
+  available_for_second_shooter?: boolean | null;
+  mentorship_available?: boolean | null;
+  // Profile-completion flag (computed server-side; read-only here).
+  profile_complete?: boolean;
+  profile_completed_at?: string | null;
 };
 
 type AuthState = {

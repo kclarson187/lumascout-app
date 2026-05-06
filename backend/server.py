@@ -8,6 +8,7 @@ import os
 import uuid
 import math
 import logging
+import re
 # Batch #7 — graceful fallback wrapper. See /app/backend/common/graceful.py
 # for docs. Used to keep high-traffic endpoints from returning raw 500s on
 # aggregation failures / flaky third-party sub-calls.
@@ -927,10 +928,60 @@ async def reset_password(body: ResetPasswordIn):
 
 
 
+# ─── Profile completion helper (May 2026) ─────────────────────────────────
+# Centralised so `auth/me` (read), `update_me` (write), and any future
+# admin / batch tools agree on a single definition. The PRD mandates
+# only the 5 required fields below — service_radius_miles,
+# booking_available, social handles, mentoring flags, specialties
+# remain *optional* and never gate the flag.
+#
+# Field-name mapping (PRD → existing User schema):
+#   • display_name        → user.name
+#   • portfolio_url       → user.website
+#   • years_in_business   → user.years_experience  (preferred over the
+#                            legacy `years_shooting` so existing UIs
+#                            already wired to years_experience continue
+#                            to work). years_experience == 0 is valid
+#                            ("just starting out") per the PRD.
+_PORTFOLIO_URL_RE = re.compile(r"^https?://[^\s]+\.[^\s]+$", re.IGNORECASE)
+
+
+def _compute_profile_complete(user: dict) -> bool:
+    """Return True when the user's photographer profile has all
+    required onboarding fields. Optional fields are intentionally NOT
+    consulted — adding them later must never silently flip the flag.
+    """
+    if not user:
+        return False
+    name = (user.get("name") or "").strip()
+    if len(name) < 2:
+        return False
+    website = (user.get("website") or "").strip()
+    if not website or not _PORTFOLIO_URL_RE.match(website):
+        return False
+    if not (user.get("city") or "").strip():
+        return False
+    if not (user.get("state") or "").strip():
+        return False
+    yrs = user.get("years_experience")
+    # Allow 0 ("just starting out"). Reject None / negative / non-int.
+    if yrs is None or not isinstance(yrs, (int, float)) or yrs < 0:
+        return False
+    return True
+
+
 @api.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
     user["plan"] = plan_of(user)
     user["limits"] = limits_for(user)
+    # ─── Profile completion flag (May 2026) ────────────────────────────
+    # Computed every read so an admin who manually back-fills the
+    # required fields via Mongo or admin tools immediately sees the
+    # gate clear without forcing a re-login. Persisted alongside
+    # `profile_completed_at` on the user row by `update_me` (below)
+    # so analytics / segments can query without re-running the logic.
+    user["profile_complete"] = _compute_profile_complete(user)
+    user["profile_completed_at"] = user.get("profile_completed_at")
     uid = user["user_id"]
     # FIX(membership conversion update): expose `uploads` and
     # `outbound_threads_30d` so the frontend can show tasteful upgrade
@@ -1042,8 +1093,26 @@ async def list_plans():
 async def update_me(body: UserUpdateIn, user: dict = Depends(get_current_user)):
     updates = {k: v for k, v in body.dict().items() if v is not None}
     updates["updated_at"] = utcnow()
+
+    # ─── Profile completion lifecycle (May 2026) ───────────────────────
+    # Recompute the flag against the *merged* (existing + incoming)
+    # user document so a single PATCH that fills the last missing
+    # required field flips the flag in the same write — no second
+    # request needed. We only set `profile_completed_at` on the FIRST
+    # transition false→true so analytics see a stable acquisition
+    # timestamp; later edits don't reset it.
+    merged = {**user, **updates}
+    became_complete = _compute_profile_complete(merged)
+    updates["profile_complete"] = became_complete
+    if became_complete and not user.get("profile_completed_at"):
+        updates["profile_completed_at"] = utcnow()
+
     await db.users.update_one({"user_id": user["user_id"]}, {"$set": updates})
     updated = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "password_hash": 0})
+    # Mirror the same surface as /auth/me so clients can read the flag
+    # off the response without a follow-up GET.
+    if updated is not None:
+        updated["profile_complete"] = _compute_profile_complete(updated)
     return updated
 
 

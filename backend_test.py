@@ -1,504 +1,447 @@
 """
-Backend contract test for the new admin description-edit endpoint.
+Backend test for the May 2026 Profile Completion logic on LumaScout.
 
-PATCH /api/admin/spots/{spot_id}/description
-
-Test plan implements all 11 buckets from the May 2026 review request.
-Run against the preview backend defined by REACT_APP_BACKEND_URL.
+Tests GET /api/auth/me + PATCH /api/auth/me for:
+  - profile_complete flag computation (5 required fields)
+  - profile_completed_at sticky timestamp on first false→true transition
+  - optional fields never gating the flag
+  - URL validation positives + negatives
+  - non-required fields untouched on completion
+  - smoke-tests on /api/spots, /api/spots/markers, super-admin /me
 """
 
-import os
+import sys
 import time
-import json
 import uuid
 import requests
-from copy import deepcopy
-from typing import Any, Optional
-from urllib.parse import urljoin
+from datetime import datetime
 
-# ---------------------------------------------------------------- config -----
-def _frontend_env_url() -> str:
-    p = "/app/frontend/.env"
-    with open(p) as fh:
-        for line in fh:
-            line = line.strip()
-            if line.startswith("EXPO_PACKAGER_PROXY_URL=") or line.startswith(
-                "EXPO_PUBLIC_BACKEND_URL="
-            ):
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
-    raise RuntimeError("backend URL not found")
+BASE = "https://photo-finder-60.preview.emergentagent.com"
+API = f"{BASE}/api"
+
+SUPER_ADMIN_EMAIL = "admin@lumascout.app"
+SUPER_ADMIN_PW = "Grayson@1117!!"
+
+results = []
 
 
-BACKEND = _frontend_env_url().rstrip("/")
-API = BACKEND + "/api"
-
-SUPER_EMAIL = "admin@lumascout.app"
-SUPER_PASS = "Grayson@1117!!"
-
-# Track results
-RESULTS: list[tuple[str, bool, str]] = []
+def record(name, ok, detail=""):
+    status = "PASS" if ok else "FAIL"
+    print(f"[{status}] {name}" + (f" :: {detail}" if detail else ""))
+    results.append((name, ok, detail))
 
 
-def record(name: str, ok: bool, detail: str = "") -> None:
-    RESULTS.append((name, ok, detail))
-    print(f"  {'OK ' if ok else 'FAIL'}  {name}{(' — ' + detail) if detail else ''}")
-
-
-def heading(s: str) -> None:
-    print()
-    print("=" * 78)
-    print(s)
-    print("=" * 78)
-
-
-def login(email: str, password: str) -> Optional[dict]:
-    r = requests.post(
-        f"{API}/auth/login",
-        json={"email": email, "password": password},
-        timeout=20,
-    )
-    if r.status_code != 200:
-        print(f"   login fail {email}: HTTP {r.status_code} {r.text[:200]}")
-        return None
-    return r.json()
-
-
-def auth(token: str) -> dict:
+def auth_hdr(token):
     return {"Authorization": f"Bearer {token}"}
 
 
-def register(role_label: str) -> Optional[dict]:
-    """Register a fresh user and return {token, user}.  role_label is for
-    naming only; role still 'user' until we promote via super_admin."""
-    email = f"qa_descedit_{role_label}_{uuid.uuid4().hex[:8]}@example.com"
-    r = requests.post(
-        f"{API}/auth/register",
-        json={
-            "email": email,
-            "password": "TestPass123!",
-            "name": f"QA Desc {role_label}",
-        },
-        timeout=20,
-    )
-    if r.status_code != 200:
-        print(f"   register fail: {r.status_code} {r.text[:200]}")
-        return None
-    return r.json()
+def register(email, password, name="Test User"):
+    return requests.post(f"{API}/auth/register",
+                         json={"email": email, "password": password, "name": name},
+                         timeout=20)
 
 
-def set_role(super_token: str, target_user_id: str, role: str) -> bool:
-    r = requests.patch(
-        f"{API}/admin/users/{target_user_id}",
-        json={"role": role},
-        headers=auth(super_token),
-        timeout=20,
-    )
-    if r.status_code != 200:
-        print(f"   set_role({role}) fail: {r.status_code} {r.text[:200]}")
+def login(email, password):
+    return requests.post(f"{API}/auth/login",
+                         json={"email": email, "password": password}, timeout=20)
+
+
+def get_me(token):
+    return requests.get(f"{API}/auth/me", headers=auth_hdr(token), timeout=20)
+
+
+def patch_me(token, body):
+    return requests.patch(f"{API}/auth/me", headers=auth_hdr(token), json=body, timeout=20)
+
+
+def is_iso_ts(s):
+    if not isinstance(s, str):
         return False
-    return True
+    try:
+        datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return True
+    except Exception:
+        return False
 
 
-def patch_desc(token: str, spot_id: str, body: Any) -> requests.Response:
-    return requests.patch(
-        f"{API}/admin/spots/{spot_id}/description",
-        json=body,
-        headers=auth(token),
-        timeout=20,
-    )
+def make_email(prefix):
+    return f"{prefix}_{int(time.time())}_{uuid.uuid4().hex[:6]}@example.com"
 
 
-def get_spot(spot_id: str, token: Optional[str] = None) -> Optional[dict]:
-    headers = auth(token) if token else {}
-    r = requests.get(f"{API}/spots/{spot_id}", headers=headers, timeout=20)
-    if r.status_code != 200:
-        print(f"   get_spot {spot_id} → HTTP {r.status_code}")
-        return None
-    return r.json()
+PASSWORD = "TestPass123!"
 
 
-def list_audit(super_token: str, target_id: str, action: str = "spot.description") -> list[dict]:
-    r = requests.get(
-        f"{API}/admin/audit-logs",
-        params={"action": action, "target_id": target_id, "limit": 50},
-        headers=auth(super_token),
-        timeout=20,
-    )
-    if r.status_code != 200:
-        return []
-    return r.json().get("items") or []
+def test_1_fresh_registration():
+    email = make_email("pc_test")
+    rr = register(email, PASSWORD, name="A")
+    if rr.status_code != 200:
+        record("1.0 register fresh user", False, f"HTTP {rr.status_code} body={rr.text[:300]}")
+        return None, None
+    record("1.0 register fresh user", True, f"email={email}")
+    token = rr.json().get("token")
+    if not token:
+        record("1.0a token returned", False, str(rr.json()))
+        return None, None
+
+    me = get_me(token)
+    if me.status_code != 200:
+        record("1.1 GET /auth/me", False, f"HTTP {me.status_code} body={me.text[:300]}")
+        return token, email
+    body = me.json()
+    record("1.1 GET /auth/me", True)
+
+    pc = body.get("profile_complete")
+    record("1.2 profile_complete === false", pc is False, f"got={pc!r}")
+    pca = body.get("profile_completed_at")
+    record("1.3 profile_completed_at is null/absent", pca in (None, ""), f"got={pca!r}")
+
+    for k in ("user_id", "email", "name", "plan", "limits", "usage", "stats"):
+        ok = k in body
+        record(f"1.4.{k} present", ok, f"keys={list(body.keys())[:20]}" if not ok else "")
+
+    return token, email
 
 
-# -------------------------------------------------------------- main test -----
-def main() -> int:
-    heading(f"Admin description edit — backend contract test\n         backend = {BACKEND}")
-
-    # 0. login super_admin
-    s = login(SUPER_EMAIL, SUPER_PASS)
-    if not s:
-        record("super_admin login", False, "could not log in seed admin")
-        return 1
-    super_tok = s["token"]
-    super_uid = s["user"]["user_id"]
-    record("super_admin login", True, f"role={s['user'].get('role')} uid={super_uid}")
-
-    # pick an existing spot via /api/spots?limit=10
-    r = requests.get(f"{API}/spots", params={"limit": 10}, timeout=20)
-    if r.status_code != 200:
-        record("GET /api/spots", False, f"HTTP {r.status_code}")
-        return 1
-    raw = r.json()
-    if isinstance(raw, dict):
-        spots = raw.get("items") or raw.get("spots") or []
-    else:
-        spots = raw if isinstance(raw, list) else []
-    if not isinstance(spots, list) or not spots:
-        record("GET /api/spots", False, "no spots returned")
-        return 1
-    spot = spots[0]
-    spot_id = spot["spot_id"]
-    record("GET /api/spots — pick a spot", True, f"spot_id={spot_id} title={spot.get('title')!r}")
-
-    # snapshot full spot view (used for data-safety check)
-    snap_full = get_spot(spot_id, super_tok)
-    if not snap_full:
-        record("GET /api/spots/{id} (snapshot)", False)
-        return 1
-    original_description = snap_full.get("description")
-    print(f"   original description={original_description!r}")
-
-    # =====================================================================
-    # 1. Happy path super_admin
-    # =====================================================================
-    heading("Bucket 1 — Happy path super_admin")
-    new_desc = f"Brand-new write-up — {int(time.time())}"
-    r = patch_desc(super_tok, spot_id, {"description": new_desc})
-    ok = r.status_code == 200
-    body = r.json() if ok else None
-    record(
-        "PATCH 200 super_admin",
-        ok and body and body.get("ok") is True
-        and body.get("description") == new_desc
-        and body.get("changed") is True,
-        f"status={r.status_code} body={r.text[:200]}",
-    )
-    fresh = get_spot(spot_id, super_tok)
-    record(
-        "GET shows new description",
-        bool(fresh) and fresh.get("description") == new_desc,
-        f"got={fresh.get('description') if fresh else None!r}",
-    )
-
-    # audit log row
-    items = list_audit(super_tok, spot_id, "spot.description.update")
-    latest = items[0] if items else None
-    has_audit = (
-        latest is not None
-        and latest.get("action") == "spot.description.update"
-        and latest.get("target_id") == spot_id
-        and latest.get("admin_user_id") == super_uid
-        and isinstance(latest.get("before"), dict)
-        and isinstance(latest.get("after"), dict)
-        and latest.get("after", {}).get("description") == new_desc
-    )
-    record(
-        "audit_logs row created (before/after)",
-        has_audit,
-        f"latest action={latest.get('action') if latest else None} after.desc={latest.get('after', {}).get('description') if latest else None!r}",
-    )
-    audit_count_after_b1 = len(items)
-
-    # =====================================================================
-    # 2. Happy path admin (promote a fresh user to admin via super_admin)
-    # =====================================================================
-    heading("Bucket 2 — Happy path admin")
-    admin_acct = register("admin")
-    admin_ok = bool(admin_acct) and set_role(super_tok, admin_acct["user"]["user_id"], "admin")
-    if admin_ok:
-        admin_tok = admin_acct["token"]
-        # IMPORTANT: token was minted while role=user. JWT typically only
-        # carries user_id; backend re-reads role on each request, so it's fine.
-        # But to be safe, re-login to refresh user payload.
-        re = login(admin_acct["user"]["email"], "TestPass123!")
-        if re:
-            admin_tok = re["token"]
-        new_desc2 = f"Admin edit pass — {int(time.time())}"
-        r = patch_desc(admin_tok, spot_id, {"description": new_desc2})
-        record(
-            "PATCH 200 admin",
-            r.status_code == 200 and r.json().get("ok") is True and r.json().get("changed") is True,
-            f"status={r.status_code} body={r.text[:200]}",
-        )
-    else:
-        record("PATCH 200 admin", False, "could not provision admin user")
-
-    # =====================================================================
-    # 3. RBAC denials — user, founding_scout, moderator, support → 403
-    # =====================================================================
-    heading("Bucket 3 — RBAC denials (CRITICAL)")
-    rbac_roles = ["user", "founding_scout", "moderator", "support"]
-    for r_label in rbac_roles:
-        acct = register(r_label)
-        if not acct:
-            record(f"403 for role={r_label}", False, "could not register account")
-            continue
-        if r_label != "user":
-            if not set_role(super_tok, acct["user"]["user_id"], r_label):
-                record(f"403 for role={r_label}", False, "could not promote to role")
-                continue
-        # refresh token (role re-read on auth, but be safe)
-        re = login(acct["user"]["email"], "TestPass123!")
-        tok = (re or acct)["token"]
-        rr = patch_desc(tok, spot_id, {"description": f"Should be denied — {r_label}"})
-        is_403 = rr.status_code == 403
-        record(
-            f"403 for role={r_label}",
-            is_403,
-            f"status={rr.status_code} body={rr.text[:200]}",
-        )
-
-    # =====================================================================
-    # 4. 404 — non-existent spot
-    # =====================================================================
-    heading("Bucket 4 — 404 non-existent spot")
-    rr = patch_desc(super_tok, "spot_does_not_exist", {"description": "test"})
-    record(
-        "404 with 'Spot not found'",
-        rr.status_code == 404 and "Spot not found" in rr.text,
-        f"status={rr.status_code} body={rr.text[:200]}",
-    )
-
-    # =====================================================================
-    # 5. Whitespace + paragraph normalization
-    # =====================================================================
-    heading("Bucket 5 — Whitespace / paragraph normalization")
-    raw = "   leading spaces  \n\n\n\n big gap\n\n trailing  "
-    rr = patch_desc(super_tok, spot_id, {"description": raw})
-    out = rr.json().get("description") if rr.status_code == 200 else None
-    # Implementation: normalize \r\n→\n, strip both ends, collapse \n\n\n+ → \n\n.
-    # Internal spaces are NOT collapsed (the impl never touches non-newline runs).
-    # So we expect: "leading spaces  \n\n big gap\n\n trailing".
-    expected = "leading spaces  \n\n big gap\n\n trailing"
-    record(
-        "PATCH 200",
-        rr.status_code == 200,
-        f"status={rr.status_code}",
-    )
-    record(
-        "trim+collapse triple-newline (start/end stripped, paragraph preserved)",
-        out == expected,
-        f"got={out!r} expected={expected!r}",
-    )
-
-    # =====================================================================
-    # 6. Empty / whitespace-only → null
-    # =====================================================================
-    heading("Bucket 6 — Empty/whitespace-only → null")
-    # First make sure the field is not already null
-    pre = get_spot(spot_id, super_tok)
-    if pre.get("description") is None:
-        # Set to a real value first so changed=true on the null transition
-        patch_desc(super_tok, spot_id, {"description": "non-null bridge"})
-    rr = patch_desc(super_tok, spot_id, {"description": "   \n\n  "})
-    body = rr.json() if rr.status_code == 200 else {}
-    record(
-        "empty/whitespace → null",
-        rr.status_code == 200
-        and body.get("description") is None
-        and body.get("changed") is True,
-        f"status={rr.status_code} body={rr.text[:200]}",
-    )
-    after = get_spot(spot_id, super_tok)
-    record(
-        "GET shows description null/absent",
-        after is not None and (after.get("description") is None),
-        f"got={after.get('description') if after else None!r}",
-    )
-
-    # =====================================================================
-    # 7. Length cap at 4000
-    # =====================================================================
-    heading("Bucket 7 — Length cap @ 4000")
-    big = "a" * 5000
-    rr = patch_desc(super_tok, spot_id, {"description": big})
-    body = rr.json() if rr.status_code == 200 else {}
-    record(
-        "PATCH 200 — 5000 char input capped to 4000",
-        rr.status_code == 200 and isinstance(body.get("description"), str)
-        and len(body["description"]) == 4000,
-        f"status={rr.status_code} len={len(body.get('description') or '')}",
-    )
-
-    # =====================================================================
-    # 8. No-op handling
-    # =====================================================================
-    heading("Bucket 8 — No-op handling (changed=false on identical re-PATCH)")
-    cur = get_spot(spot_id, super_tok).get("description")
-    audit_before = len(list_audit(super_tok, spot_id, "spot.description.update"))
-    r1 = patch_desc(super_tok, spot_id, {"description": cur})
-    r2 = patch_desc(super_tok, spot_id, {"description": cur})
-    audit_after = len(list_audit(super_tok, spot_id, "spot.description.update"))
-    j1 = r1.json() if r1.status_code == 200 else {}
-    j2 = r2.json() if r2.status_code == 200 else {}
-    record(
-        "first identical PATCH returns 200 with changed=false",
-        r1.status_code == 200 and j1.get("changed") is False,
-        f"status={r1.status_code} body={r1.text[:200]}",
-    )
-    record(
-        "second identical PATCH returns 200 with changed=false",
-        r2.status_code == 200 and j2.get("changed") is False,
-        f"status={r2.status_code} body={r2.text[:200]}",
-    )
-    record(
-        "no extra audit row written for no-op",
-        audit_after == audit_before,
-        f"before={audit_before} after={audit_after}",
-    )
-
-    # =====================================================================
-    # 9. Data safety — other fields untouched (CRITICAL)
-    # =====================================================================
-    heading("Bucket 9 — Data safety (CRITICAL): other fields untouched")
-    snap_before = get_spot(spot_id, super_tok)
-    new_desc9 = f"Safety check — {int(time.time())}"
-    rr = patch_desc(super_tok, spot_id, {"description": new_desc9})
-    record(
-        "Safety PATCH 200",
-        rr.status_code == 200 and rr.json().get("description") == new_desc9,
-        f"status={rr.status_code}",
-    )
-    snap_after = get_spot(spot_id, super_tok)
-    # diff every key, ignoring description + updated_at
-    # NOTE: quality_score / is_new / is_fresh / is_trending / freshness*
-    # are computed at READ time by hydrate logic in server.py
-    # (server.py:477-572 — desc_len >= 80 gives +10, >= 200 gives +3, etc.).
-    # A description change is *expected* to nudge quality_score because
-    # description length is one of the inputs. The DB-side $set is still
-    # narrow ({description, updated_at}) — confirmed by reading the route.
-    ignored_keys = {
-        "description", "updated_at",
-        "quality_score", "is_new", "is_fresh", "is_trending",
-        "is_verified", "freshness", "freshness_label",
+def test_2_single_patch_completion(token):
+    full = {
+        "name": "Test Photog",
+        "website": "https://myportfolio.example/test",
+        "city": "Austin",
+        "state": "TX",
+        "years_experience": 0,
     }
-    differences: list[str] = []
-    keys = set(snap_before.keys()) | set(snap_after.keys())
-    for k in sorted(keys):
-        if k in ignored_keys:
+    p = patch_me(token, full)
+    if p.status_code != 200:
+        record("2.1 PATCH full required set", False, f"HTTP {p.status_code} body={p.text[:300]}")
+        return None
+    body = p.json()
+    record("2.1 PATCH full required set", True)
+
+    pc = body.get("profile_complete")
+    record("2.2 response.profile_complete === true", pc is True, f"got={pc!r}")
+    pca = body.get("profile_completed_at")
+    pca_ok = is_iso_ts(pca)
+    record("2.3 profile_completed_at is valid ISO timestamp", pca_ok, f"got={pca!r}")
+
+    me = get_me(token)
+    if me.status_code != 200:
+        record("2.4 GET /auth/me persistence", False, f"HTTP {me.status_code}")
+        return pca
+    mbody = me.json()
+    record("2.4 GET profile_complete still true", mbody.get("profile_complete") is True,
+           f"got={mbody.get('profile_complete')!r}")
+    pca2 = mbody.get("profile_completed_at")
+    record("2.5 GET profile_completed_at persists", is_iso_ts(pca2), f"got={pca2!r}")
+    return pca2
+
+
+def test_3_years_zero(token):
+    p = patch_me(token, {"years_experience": 0})
+    if p.status_code != 200:
+        record("3.1 PATCH years_experience=0", False, f"HTTP {p.status_code}")
+        return
+    pc = p.json().get("profile_complete")
+    record("3.1 years_experience=0 keeps profile_complete=true", pc is True, f"got={pc!r}")
+
+
+def test_4_optional_fields(token):
+    p1 = patch_me(token, {"service_radius_miles": None, "booking_available": None})
+    record("4.1 PATCH null optional fields", p1.status_code == 200, f"HTTP {p1.status_code}")
+    if p1.status_code == 200:
+        pc = p1.json().get("profile_complete")
+        record("4.1a flag still true (nulls dropped)", pc is True, f"got={pc!r}")
+
+    p2 = patch_me(token, {"specialties": []})
+    record("4.2 PATCH specialties=[]", p2.status_code == 200, f"HTTP {p2.status_code}")
+    if p2.status_code == 200:
+        pc = p2.json().get("profile_complete")
+        record("4.2a flag still true with empty specialties", pc is True, f"got={pc!r}")
+
+    p3 = patch_me(token, {
+        "instagram": "@me",
+        "facebook_url": "https://fb.com/me",
+        "tiktok_url": "https://tiktok.com/@me",
+        "available_for_second_shooter": True,
+        "mentorship_available": True,
+        "service_radius_miles": 50,
+        "booking_available": True,
+    })
+    record("4.3 PATCH full optional bundle", p3.status_code == 200, f"HTTP {p3.status_code}")
+    if p3.status_code == 200:
+        pc = p3.json().get("profile_complete")
+        record("4.3a flag still true after optional bundle", pc is True, f"got={pc!r}")
+
+    me = get_me(token)
+    if me.status_code == 200:
+        b = me.json()
+        record("4.4 instagram persisted", b.get("instagram") == "@me", f"got={b.get('instagram')!r}")
+        record("4.4 facebook_url persisted", b.get("facebook_url") == "https://fb.com/me",
+               f"got={b.get('facebook_url')!r}")
+        record("4.4 tiktok_url persisted", b.get("tiktok_url") == "https://tiktok.com/@me",
+               f"got={b.get('tiktok_url')!r}")
+        record("4.4 available_for_second_shooter persisted",
+               b.get("available_for_second_shooter") is True,
+               f"got={b.get('available_for_second_shooter')!r}")
+        record("4.4 mentorship_available persisted", b.get("mentorship_available") is True,
+               f"got={b.get('mentorship_available')!r}")
+        record("4.4 service_radius_miles persisted", b.get("service_radius_miles") == 50,
+               f"got={b.get('service_radius_miles')!r}")
+        record("4.4 booking_available persisted", b.get("booking_available") is True,
+               f"got={b.get('booking_available')!r}")
+
+
+def test_5_invalid_fields(token):
+    p = patch_me(token, {"name": "A"})
+    record("5a PATCH name=A (1 char)", p.status_code == 200, f"HTTP {p.status_code}")
+    if p.status_code == 200:
+        pc = p.json().get("profile_complete")
+        record("5a profile_complete=false after 1-char name", pc is False, f"got={pc!r}")
+
+    p = patch_me(token, {"name": "Test Photog", "website": "not-a-url"})
+    record("5b PATCH website=not-a-url", p.status_code == 200, f"HTTP {p.status_code}")
+    if p.status_code == 200:
+        pc = p.json().get("profile_complete")
+        record("5b profile_complete=false after invalid url", pc is False, f"got={pc!r}")
+
+    p = patch_me(token, {"website": "https://myportfolio.example/test", "city": ""})
+    record("5c PATCH city=''", p.status_code == 200, f"HTTP {p.status_code}")
+    if p.status_code == 200:
+        pc = p.json().get("profile_complete")
+        record("5c profile_complete=false after empty city", pc is False, f"got={pc!r}")
+
+    p = patch_me(token, {"city": "Austin", "state": ""})
+    record("5d PATCH state=''", p.status_code == 200, f"HTTP {p.status_code}")
+    if p.status_code == 200:
+        pc = p.json().get("profile_complete")
+        record("5d profile_complete=false after empty state", pc is False, f"got={pc!r}")
+
+    p = patch_me(token, {"state": "TX", "years_experience": -1})
+    record("5e PATCH years_experience=-1", p.status_code == 200, f"HTTP {p.status_code}")
+    if p.status_code == 200:
+        pc = p.json().get("profile_complete")
+        record("5e profile_complete=false after negative years", pc is False, f"got={pc!r}")
+
+    p = patch_me(token, {"years_experience": None})
+    record("5e2 PATCH years_experience=null no-crash", p.status_code == 200,
+           f"HTTP {p.status_code} body={p.text[:200] if p.status_code != 200 else ''}")
+
+    p = patch_me(token, {
+        "name": "Test Photog",
+        "website": "https://myportfolio.example/test",
+        "city": "Austin",
+        "state": "TX",
+        "years_experience": 0,
+    })
+    if p.status_code == 200:
+        pc = p.json().get("profile_complete")
+        record("5.restore profile_complete=true after re-completing", pc is True, f"got={pc!r}")
+    else:
+        record("5.restore PATCH full required", False, f"HTTP {p.status_code}")
+
+
+def test_6_sticky_timestamp(token, original_ts):
+    me = get_me(token)
+    if me.status_code != 200:
+        record("6.1 GET /auth/me", False, f"HTTP {me.status_code}")
+        return
+    pca_now = me.json().get("profile_completed_at")
+    record("6.1 profile_completed_at unchanged across re-completions",
+           pca_now == original_ts,
+           f"original={original_ts!r} now={pca_now!r}")
+
+
+def test_7_existing_user_safety():
+    email = make_email("safety_test")
+    rr = register(email, PASSWORD, name="X")
+    if rr.status_code != 200:
+        record("7.0 register safety user", False, f"HTTP {rr.status_code} body={rr.text[:300]}")
+        return
+    record("7.0 register safety user", True, f"email={email}")
+    token = rr.json().get("token")
+
+    p = patch_me(token, {
+        "avatar_url": "https://example.com/a.jpg",
+        "bio": "hi",
+        "language_hint": "es",
+        "timezone": "America/Chicago",
+    })
+    record("7.1 PATCH non-required pre-completion", p.status_code == 200, f"HTTP {p.status_code}")
+    if p.status_code == 200:
+        pc = p.json().get("profile_complete")
+        record("7.1a profile_complete still false", pc is False, f"got={pc!r}")
+
+    p = patch_me(token, {
+        "name": "Safety Tester",
+        "website": "https://safety.example.com",
+        "city": "San Antonio",
+        "state": "TX",
+        "years_experience": 5,
+    })
+    if p.status_code != 200:
+        record("7.2 PATCH 5 required fields", False, f"HTTP {p.status_code}")
+        return
+    pc = p.json().get("profile_complete")
+    record("7.2 profile_complete=true after completion", pc is True, f"got={pc!r}")
+
+    me = get_me(token)
+    if me.status_code != 200:
+        record("7.3 GET /auth/me", False, f"HTTP {me.status_code}")
+        return
+    b = me.json()
+    record("7.3 avatar_url preserved", b.get("avatar_url") == "https://example.com/a.jpg",
+           f"got={b.get('avatar_url')!r}")
+    record("7.3 bio preserved", b.get("bio") == "hi", f"got={b.get('bio')!r}")
+    record("7.3 language_hint preserved", b.get("language_hint") == "es",
+           f"got={b.get('language_hint')!r}")
+    record("7.3 timezone preserved", b.get("timezone") == "America/Chicago",
+           f"got={b.get('timezone')!r}")
+
+
+def test_8_no_clobber():
+    email = make_email("clobber_test")
+    rr = register(email, PASSWORD, name="Z")
+    if rr.status_code != 200:
+        record("8.0 register clobber user", False, f"HTTP {rr.status_code}")
+        return
+    token = rr.json().get("token")
+
+    initial = {
+        "name": "Initial Name",
+        "website": "https://portfolio.example.com",
+        "city": "Dallas",
+        "state": "TX",
+        "years_experience": 3,
+        "instagram": "@dallas_shooter",
+        "facebook_url": "https://fb.com/x",
+        "service_radius_miles": 25,
+    }
+    p = patch_me(token, initial)
+    if p.status_code != 200:
+        record("8.1 PATCH initial bundle", False, f"HTTP {p.status_code}")
+        return
+    record("8.1 PATCH initial bundle", True)
+
+    p = patch_me(token, {"name": "New Name"})
+    record("8.2 PATCH name only", p.status_code == 200, f"HTTP {p.status_code}")
+    if p.status_code != 200:
+        return
+
+    me = get_me(token)
+    b = me.json()
+    record("8.3 name updated", b.get("name") == "New Name", f"got={b.get('name')!r}")
+    record("8.3 website unchanged", b.get("website") == initial["website"],
+           f"got={b.get('website')!r}")
+    record("8.3 city unchanged", b.get("city") == initial["city"], f"got={b.get('city')!r}")
+    record("8.3 state unchanged", b.get("state") == initial["state"], f"got={b.get('state')!r}")
+    record("8.3 years_experience unchanged",
+           b.get("years_experience") == initial["years_experience"],
+           f"got={b.get('years_experience')!r}")
+    record("8.3 instagram unchanged", b.get("instagram") == initial["instagram"],
+           f"got={b.get('instagram')!r}")
+    record("8.3 facebook_url unchanged", b.get("facebook_url") == initial["facebook_url"],
+           f"got={b.get('facebook_url')!r}")
+    record("8.3 service_radius_miles unchanged",
+           b.get("service_radius_miles") == initial["service_radius_miles"],
+           f"got={b.get('service_radius_miles')!r}")
+    record("8.4 profile_complete still true after partial PATCH",
+           b.get("profile_complete") is True, f"got={b.get('profile_complete')!r}")
+
+
+def test_9_url_validation():
+    email = make_email("url_test")
+    rr = register(email, PASSWORD, name="U")
+    if rr.status_code != 200:
+        record("9.0 register url user", False, f"HTTP {rr.status_code}")
+        return
+    token = rr.json().get("token")
+
+    base = {"name": "URL Tester", "city": "Houston", "state": "TX", "years_experience": 1}
+    p = patch_me(token, base)
+    if p.status_code != 200:
+        record("9.0a PATCH base", False, f"HTTP {p.status_code}")
+        return
+
+    accepted = [
+        "https://myportfolio.com",
+        "https://www.instagram.com/username",
+        "https://portfolio.adobe.com/example",
+        "http://example.org",
+    ]
+    rejected = [
+        "myportfolio.com",
+        "https://",
+        "",
+    ]
+
+    for url in accepted:
+        p = patch_me(token, {"website": url})
+        if p.status_code != 200:
+            record(f"9.acc PATCH website={url!r}", False, f"HTTP {p.status_code}")
             continue
-        if snap_before.get(k) != snap_after.get(k):
-            differences.append(
-                f"{k}: BEFORE={json.dumps(snap_before.get(k), default=str)[:120]} "
-                f"AFTER={json.dumps(snap_after.get(k), default=str)[:120]}"
-            )
-    record(
-        "ALL fields except description + updated_at byte-for-byte identical",
-        not differences,
-        ("clean" if not differences else f"DIFFS: {differences}"),
-    )
-    # specific assertions (subset of the catch-all above, but logged separately)
-    record(
-        "images array identical",
-        snap_before.get("images") == snap_after.get("images"),
-        f"before_len={len(snap_before.get('images') or [])} after_len={len(snap_after.get('images') or [])}",
-    )
-    record(
-        "admin_cover_override identical",
-        snap_before.get("admin_cover_override") == snap_after.get("admin_cover_override"),
-    )
-    record(
-        "pin (lat/lng) identical",
-        snap_before.get("latitude") == snap_after.get("latitude")
-        and snap_before.get("longitude") == snap_after.get("longitude"),
-        f"({snap_before.get('latitude')},{snap_before.get('longitude')}) → ({snap_after.get('latitude')},{snap_after.get('longitude')})",
-    )
+        pc = p.json().get("profile_complete")
+        record(f"9.acc accepts {url!r}", pc is True, f"got={pc!r}")
 
-    # =====================================================================
-    # 10. Pydantic validation
-    # =====================================================================
-    heading("Bucket 10 — Pydantic / validation")
-    rr = patch_desc(super_tok, spot_id, {})
-    record(
-        "PATCH {} → 422",
-        rr.status_code == 422,
-        f"status={rr.status_code} body={rr.text[:200]}",
-    )
-    rr = patch_desc(super_tok, spot_id, {"description": 12345})
-    body = rr.json() if rr.status_code == 200 else {}
-    coerced_ok = rr.status_code == 200 and body.get("description") == "12345"
-    record(
-        "PATCH {description: 12345} → 200 coerced to '12345' (or 422 acceptable)",
-        coerced_ok or rr.status_code == 422,
-        f"status={rr.status_code} body={rr.text[:200]}",
-    )
-    rr = patch_desc(super_tok, spot_id, {"description": None})
-    body = rr.json() if rr.status_code == 200 else {}
-    record(
-        "PATCH {description: null} → 200 with description=null",
-        rr.status_code == 200 and body.get("description") is None,
-        f"status={rr.status_code} body={rr.text[:200]}",
-    )
+    for url in rejected:
+        p = patch_me(token, {"website": url})
+        if p.status_code != 200:
+            record(f"9.rej PATCH website={url!r}", False, f"HTTP {p.status_code}")
+            continue
+        pc = p.json().get("profile_complete")
+        record(f"9.rej rejects {url!r}", pc is False, f"got={pc!r}")
 
-    # =====================================================================
-    # 11. Smoke — no regressions
-    # =====================================================================
-    heading("Bucket 11 — Smoke / regression checks")
-    r1 = requests.get(f"{API}/spots", params={"limit": 5}, timeout=20)
-    record("GET /api/spots?limit=5 → 200", r1.status_code == 200, f"status={r1.status_code}")
-    r2 = requests.get(
-        f"{API}/spots/markers",
-        params={"sw_lat": -90, "sw_lng": -180, "ne_lat": 90, "ne_lng": 180, "limit": 20},
-        timeout=20,
-    )
-    record(
-        "GET /api/spots/markers (full bbox) → 200",
-        r2.status_code == 200,
-        f"status={r2.status_code}",
-    )
-    r3 = requests.get(f"{API}/spots/{spot_id}", timeout=20)
-    has_desc = r3.status_code == 200 and "description" in r3.json()
-    record(
-        "GET /api/spots/{id} → 200, includes description field",
-        has_desc,
-        f"status={r3.status_code}",
-    )
 
-    # =====================================================================
-    # Restore original description
-    # =====================================================================
-    heading("Cleanup — restore original description")
-    if original_description is None:
-        # set to whitespace → null
-        patch_desc(super_tok, spot_id, {"description": ""})
-    else:
-        patch_desc(super_tok, spot_id, {"description": original_description})
-    final = get_spot(spot_id, super_tok)
-    final_desc = final.get("description") if final else None
-    if (final_desc == original_description) or (
-        original_description is None and final_desc is None
-    ):
-        record("description restored", True, f"now={final_desc!r}")
-    else:
-        record(
-            "description restored",
-            False,
-            f"expected={original_description!r} got={final_desc!r}",
-        )
+def test_10_smoke():
+    r = requests.get(f"{API}/spots", params={"limit": 5}, timeout=20)
+    record("10.1 GET /api/spots?limit=5 -> 200", r.status_code == 200, f"HTTP {r.status_code}")
 
-    # =====================================================================
-    # Summary
-    # =====================================================================
-    heading("RESULTS")
-    passed = sum(1 for _, ok, _ in RESULTS if ok)
-    total = len(RESULTS)
-    print(f"   {passed}/{total} checks passed")
-    fails = [r for r in RESULTS if not r[1]]
-    if fails:
-        print("\n   FAILED CHECKS:")
-        for name, _, detail in fails:
-            print(f"     - {name}: {detail}")
-    return 0 if not fails else 2
+    r = requests.get(f"{API}/spots/markers",
+                     params={"sw_lat": -90, "sw_lng": -180, "ne_lat": 90, "ne_lng": 180,
+                             "limit": 50}, timeout=20)
+    record("10.2 GET /api/spots/markers -> 200", r.status_code == 200, f"HTTP {r.status_code}")
+
+    sl = login(SUPER_ADMIN_EMAIL, SUPER_ADMIN_PW)
+    record("10.3 super admin login -> 200", sl.status_code == 200,
+           f"HTTP {sl.status_code} body={sl.text[:300] if sl.status_code != 200 else ''}")
+    if sl.status_code != 200:
+        return
+    sbody = sl.json()
+    token = sbody.get("token")
+    me = get_me(token)
+    record("10.4 super admin /auth/me -> 200", me.status_code == 200, f"HTTP {me.status_code}")
+    if me.status_code == 200:
+        b = me.json()
+        record("10.4a super admin /auth/me has profile_complete key",
+               "profile_complete" in b, f"value={b.get('profile_complete')!r}")
+        record("10.4b super admin /auth/me has profile_completed_at key",
+               "profile_completed_at" in b, f"value={b.get('profile_completed_at')!r}")
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    print(f"Testing {API}")
+    print("=" * 70)
+
+    token, email = test_1_fresh_registration()
+    original_ts = None
+    if token:
+        original_ts = test_2_single_patch_completion(token)
+        test_3_years_zero(token)
+        test_4_optional_fields(token)
+        test_5_invalid_fields(token)
+        if original_ts:
+            test_6_sticky_timestamp(token, original_ts)
+    test_7_existing_user_safety()
+    test_8_no_clobber()
+    test_9_url_validation()
+    test_10_smoke()
+
+    print("=" * 70)
+    passed = sum(1 for _, ok, _ in results if ok)
+    failed = sum(1 for _, ok, _ in results if not ok)
+    print(f"PASSED: {passed}/{len(results)}   FAILED: {failed}")
+    if failed:
+        print("\nFAILURES:")
+        for name, ok, detail in results:
+            if not ok:
+                print(f"  - {name} :: {detail}")
+        sys.exit(1)
+    sys.exit(0)
