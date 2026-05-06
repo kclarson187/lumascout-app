@@ -351,6 +351,24 @@ function ProfileImpl() {
             >
               <Share2 size={16} color={colors.text} />
             </TouchableOpacity>
+            {/* May 2026 — PRD: "View as Public" / 3rd-person preview
+                of the user's own profile. Routes to /user/[id] with a
+                `preview=1` query param so the UserProfile screen hides
+                owner-only controls and shows a "PREVIEWING YOUR PUBLIC
+                PROFILE" ribbon. Gracefully a no-op when user is
+                missing (still loading). */}
+            <TouchableOpacity
+              style={styles.kickerIconBtn}
+              onPress={() => {
+                if (!user?.user_id) return;
+                router.push({ pathname: '/user/[id]', params: { id: user.user_id, preview: '1' } } as any);
+              }}
+              testID="profile-kicker-preview"
+              hitSlop={8}
+              accessibilityLabel="Preview public profile"
+            >
+              <Eye size={16} color={colors.text} />
+            </TouchableOpacity>
             <TouchableOpacity
               style={styles.kickerIconBtn}
               onPress={() => router.push('/settings')}
