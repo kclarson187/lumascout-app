@@ -42,24 +42,34 @@ import SpotCard from '../../src/components/SpotCard';
 import FeaturedBadge from '../../src/components/FeaturedBadge';
 import UserBadge from '../../src/components/UserBadge';
 
-type TabKey = 'posts' | 'spots' | 'photos' | 'reviews' | 'about';
+// May 2026 — PRD-aligned tab set: About / Spots / Posts / Reviews.
+// `photos` dropped; the user's photos are visible inline on each of
+// their Spots anyway, so a dedicated tab was low-signal. Default tab
+// is `about` so public viewers land on the photographer's identity
+// card first, not a possibly-empty Spots grid.
+type TabKey = 'about' | 'spots' | 'posts' | 'reviews';
 const TABS: { key: TabKey; label: string }[] = [
-  { key: 'posts', label: 'Posts' },
-  { key: 'spots', label: 'Spots' },
-  { key: 'photos', label: 'Photos' },
-  { key: 'reviews', label: 'Reviews' },
   { key: 'about', label: 'About' },
+  { key: 'spots', label: 'Spots' },
+  { key: 'posts', label: 'Posts' },
+  { key: 'reviews', label: 'Reviews' },
 ];
 
 export default function UserProfile() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, preview } = useLocalSearchParams<{ id: string; preview?: string }>();
   const { user: me } = useAuth();
   const [profile, setProfile] = useState<any | null>(null);
   const [spots, setSpots] = useState<any[]>([]);
   const [posts, setPosts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabKey>('spots');
+  const [activeTab, setActiveTab] = useState<TabKey>('about');
+  // May 2026 — public-profile preview mode. When the user navigates
+  // from their own profile tab with `?preview=1`, we force-hide
+  // owner-only controls (Edit Profile banner) and show a prominent
+  // "Previewing your public profile" ribbon so the context is
+  // always unambiguous. Non-self viewers never see this ribbon.
+  const isPreviewMode = preview === '1' || preview === 'public';
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -409,8 +419,20 @@ export default function UserProfile() {
           ) : null}
           {isSelf && (
             <View style={styles.selfNotice}>
-              <Text style={styles.selfNoticeTxt}>This is how your profile appears to other photographers.</Text>
-              <Button title="Edit your profile" variant="secondary" onPress={() => router.push('/(tabs)/profile')} />
+              {isPreviewMode ? (
+                <>
+                  <Text style={styles.selfNoticeKicker}>PREVIEWING YOUR PUBLIC PROFILE</Text>
+                  <Text style={styles.selfNoticeTxt}>
+                    This is how other photographers see your profile.
+                  </Text>
+                  <Button title="Back to My Profile" variant="secondary" onPress={() => router.replace('/(tabs)/profile')} />
+                </>
+              ) : (
+                <>
+                  <Text style={styles.selfNoticeTxt}>This is how your profile appears to other photographers.</Text>
+                  <Button title="Edit your profile" variant="secondary" onPress={() => router.push('/(tabs)/profile')} />
+                </>
+              )}
             </View>
           )}
         </View>
@@ -461,33 +483,79 @@ export default function UserProfile() {
               : spots.slice(0, 30).map((s) => <SpotCard key={s.spot_id} spot={s} width={undefined as any} />)
           )}
 
-          {activeTab === 'photos' && (
-            photos.length === 0
-              ? <EmptyState title="No photos yet" subtitle="Photos this photographer uploads to their spots will show up here." icon={<ShieldCheck size={26} color={colors.textSecondary} />} />
-              : (
-                <View style={styles.photoGrid}>
-                  {photos.slice(0, 30).map((p, idx) => (
-                    <TouchableOpacity key={`${p.spot_id}-${idx}`} onPress={() => router.push(`/spot/${p.spot_id}`)} style={styles.photoTile}>
-                      <Image source={{ uri: p.url }} style={StyleSheet.absoluteFillObject} />
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )
-          )}
-
           {activeTab === 'reviews' && (
             <EmptyState
-              title={`${stats.reviews_received ?? 0} review${stats.reviews_received === 1 ? '' : 's'} received`}
-              subtitle="Full review feed coming soon."
+              title="No reviews yet"
+              subtitle="Reviews from photographers and clients will appear here."
               icon={<ShieldCheck size={26} color={colors.textSecondary} />}
             />
           )}
 
+          {/* About tab — PRD May 2026. Shows the full photographer
+              identity card: location, portfolio, years in business,
+              booking availability, specialties, social handles, and
+              the quiet "available as 2nd shooter / open to mentoring"
+              flags. All rows are conditional so an under-filled
+              profile never shows empty rows. */}
           {activeTab === 'about' && (
             <View style={styles.aboutCard}>
+              {!!profile.name && <AboutRow label="Name" value={profile.name} />}
+              {(!!profile.city || !!profile.state) && (
+                <AboutRow
+                  label="Based in"
+                  value={[profile.city, profile.state].filter(Boolean).join(', ')}
+                />
+              )}
+              {!!profile.website && (
+                <AboutRow
+                  label="Portfolio"
+                  value={profile.website}
+                  onPress={() => Linking.openURL(profile.website).catch(() => {})}
+                />
+              )}
+              {profile.years_experience != null && (
+                <AboutRow label="Years in business" value={String(profile.years_experience)} />
+              )}
+              {profile.service_radius_miles != null && (
+                <AboutRow label="Service radius" value={`${profile.service_radius_miles} mi`} />
+              )}
+              {profile.booking_available != null && (
+                <AboutRow
+                  label="Bookings"
+                  value={profile.booking_available ? 'Currently accepting bookings' : 'Not accepting bookings'}
+                />
+              )}
+              {Array.isArray(profile.specialties) && profile.specialties.length > 0 && (
+                <AboutRow label="Specialties" value={(profile.specialties as string[]).join(' · ')} />
+              )}
+              {!!profile.instagram && (
+                <AboutRow
+                  label="Instagram"
+                  value={profile.instagram}
+                  onPress={() => Linking.openURL(`https://instagram.com/${String(profile.instagram).replace(/^@/, '')}`).catch(() => {})}
+                />
+              )}
+              {!!profile.facebook_url && (
+                <AboutRow
+                  label="Facebook"
+                  value={profile.facebook_url}
+                  onPress={() => Linking.openURL(profile.facebook_url).catch(() => {})}
+                />
+              )}
+              {!!profile.tiktok_url && (
+                <AboutRow
+                  label="TikTok"
+                  value={profile.tiktok_url}
+                  onPress={() => Linking.openURL(profile.tiktok_url).catch(() => {})}
+                />
+              )}
+              {profile.available_for_second_shooter === true && (
+                <AboutRow label="Collabs" value="Available as 2nd shooter" />
+              )}
+              {profile.mentorship_available === true && (
+                <AboutRow label="Mentoring" value="Open to mentoring" />
+              )}
               {!!profile.bio && <AboutRow label="Bio" value={profile.bio} />}
-              {!!profile.years_experience && <AboutRow label="Years shooting" value={String(profile.years_experience)} />}
-              {!!profile.service_radius_miles && <AboutRow label="Service radius" value={`${profile.service_radius_miles} mi`} />}
               {!!profile.primary_country && <AboutRow label="Country" value={profile.primary_country} />}
               {!!profile.timezone && <AboutRow label="Timezone" value={profile.timezone} />}
               <AboutRow label="Joined" value={profile.created_at ? new Date(profile.created_at).toLocaleDateString() : '—'} />
@@ -508,13 +576,16 @@ function StatCell({ label, value }: { label: string; value: number }) {
   );
 }
 
-function AboutRow({ label, value }: { label: string; value: string }) {
-  return (
+function AboutRow({ label, value, onPress }: { label: string; value: string; onPress?: () => void }) {
+  const body = (
     <View style={styles.aboutRow}>
       <Text style={styles.aboutLabel}>{label}</Text>
-      <Text style={styles.aboutVal}>{value}</Text>
+      <Text style={[styles.aboutVal, !!onPress && { color: colors.primary }]} numberOfLines={3}>{value}</Text>
     </View>
   );
+  return onPress ? (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.65}>{body}</TouchableOpacity>
+  ) : body;
 }
 
 const styles = StyleSheet.create({
@@ -596,7 +667,8 @@ const styles = StyleSheet.create({
   },
 
   ctaRow: { flexDirection: 'row', gap: 8, marginTop: space.lg, width: '100%' },
-  selfNotice: { marginTop: space.lg, gap: 8, alignItems: 'stretch', width: '100%' },
+  selfNotice: { marginTop: space.lg, gap: 8, alignItems: 'stretch', width: '100%', paddingHorizontal: space.md, paddingVertical: space.md, borderRadius: radii.md, backgroundColor: 'rgba(245,166,35,0.08)', borderWidth: 1, borderColor: 'rgba(245,166,35,0.25)' },
+  selfNoticeKicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 1.2, textAlign: 'center' },
   selfNoticeTxt: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, textAlign: 'center' },
   // PRD #12: Block / unblock UI
   blockedBanner: {

@@ -303,7 +303,7 @@ export default function ProfileSetupScreen() {
       >
         <ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={[s.scroll, { paddingBottom: 120 + insets.bottom }]}
+          contentContainerStyle={[s.scroll, { paddingBottom: space.xl }]}
           keyboardShouldPersistTaps="handled"
         >
           <Text style={s.kicker}>WELCOME TO LUMASCOUT</Text>
@@ -596,7 +596,16 @@ export default function ProfileSetupScreen() {
           </TouchableOpacity>
         </ScrollView>
 
-        {/* ───────── Sticky bottom Save bar ───────── */}
+        {/* ───────── Sticky bottom Save bar ─────────
+            May 2026 fix — the bar used to be `position: absolute`
+            inside the KeyboardAvoidingView. On iOS with
+            `behavior="padding"` the KAV pads its bottom by keyboard
+            height, which pushed the absolutely-pinned bar BELOW the
+            keyboard (and out of view) until the user hit Return to
+            dismiss the keyboard. Switching to a flex-layout sibling
+            of the ScrollView lets the bar ride the KAV's natural
+            compression — so it stays above the keyboard on iOS and
+            above the OS nav on Android without any absolute math. */}
         <View style={[s.bottomBar, { paddingBottom: Math.max(insets.bottom, space.md) }]}>
           <TouchableOpacity
             onPress={handleSave}
@@ -703,7 +712,11 @@ const s = StyleSheet.create({
   specChipTxtOn: { color: colors.textInverse },
 
   bottomBar: {
-    position: 'absolute', left: 0, right: 0, bottom: 0,
+    // May 2026 — NOT absolute. Flex-sibling of the ScrollView so the
+    // KeyboardAvoidingView's natural compression on iOS lifts the
+    // bar above the keyboard without any manual offset math. The
+    // scroll view above it still takes `flex: 1` so the bar always
+    // sticks to the bottom of the visible area.
     paddingHorizontal: space.lg, paddingTop: space.md,
     backgroundColor: colors.bg,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border,
