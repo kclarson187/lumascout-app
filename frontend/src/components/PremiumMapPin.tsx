@@ -12,11 +12,20 @@
  * is a real React Native View tree (free interactions, no PNG export).
  */
 import React, { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Animated, Easing } from 'react-native';
+import { View, Text, StyleSheet, Animated, Easing, Platform } from 'react-native';
 import { Camera, Bookmark, Gem, Flame } from 'lucide-react-native';
 import { colors, font } from '../theme';
 
 export type PinTier = 'default' | 'elite' | 'trending' | 'saved' | 'verified-proven' | 'low';
+
+// ANDROID STABILIZATION (June 2025): Animated.loop running with
+// useNativeDriver inside <Marker> children has been a recurring
+// crash vector on react-native-maps Android (the AnimationDriver
+// callback fires after the Marker's native view has been recycled
+// by GoogleMap, throwing a NullPointerException). Disabling pulse
+// animations on Android removes this attack surface entirely.
+// iOS is unaffected.
+const PULSE_ANIM_ENABLED = Platform.OS !== 'android';
 
 export function pinTierOf(spot: any): PinTier {
   const verified = spot?.owner?.verification_status === 'verified';
