@@ -12,6 +12,62 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "CROSS-PLATFORM CRASH FIX — 'Cannot access cover before initialization' TDZ in SpotCard"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/src/components/SpotCard.tsx (moved `const cover = resolveSpotCoverForListCard(spot)` ABOVE the useEffect that depends on it)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          User reported "Explore had a hiccup — Cannot access 'cover' before
+          initialization" crash on BOTH iOS and Android (cross-platform JS
+          runtime bug, not Android-only). The ExploreErrorBoundary caught
+          the error and showed the friendly fallback screen.
+
+          ROOT CAUSE: classic Temporal Dead Zone (TDZ) error in
+          /app/frontend/src/components/SpotCard.tsx — the `useEffect` that
+          resets the image-loaded/error state on cover URL change had its
+          dependency array `[cover]` declared at line 104, but the
+          `const cover = resolveSpotCoverForListCard(spot)` initializer
+          was 23 lines below it at line 127. Whenever React invoked the
+          render function, the JS engine hit `[cover]` BEFORE the const
+          binding was initialized → ReferenceError → ExploreErrorBoundary
+          fallback. The bug was masked on iOS in some test runs because
+          the previous render was cached, but cold-launch + log-out flows
+          consistently triggered it.
+
+          FIX: moved the `const cover = ...` declaration (and `isPremium`,
+          `isHydrated`) ABOVE the `useEffect` that references `cover` in
+          its dependency array. No behavior change — same code, correct
+          execution order.
+
+          Also audited every other `cover` declaration in:
+            /app/frontend/app/(tabs)/explore.tsx
+            /app/frontend/app/(tabs)/index.tsx
+            /app/frontend/app/(tabs)/add.tsx
+            /app/frontend/app/admin/spots.tsx
+            /app/frontend/src/utils/spot-cover.ts
+            /app/frontend/src/components/SpotCardCompact.tsx
+            /app/frontend/src/components/CommunityView.tsx
+            /app/frontend/src/components/FreshlyUpdatedRail.tsx
+            /app/frontend/src/components/PremiumProfileExtras.tsx
+            /app/frontend/src/components/spot-detail/useSpotDetail.ts
+          → All other declarations are correctly placed BEFORE their
+            usages. SpotCard.tsx was the only TDZ.
+
+          NEEDS RETEST on real device (both platforms):
+            • Logged-out user → Explore tab → no "hiccup" screen
+            • Logged-in user → Explore tab → spots list renders
+            • Hot tab-switch repeatedly → no crash
+            • Reload via "Reload Explore" button still works as a
+              safety net for any future render-time exceptions
+
+
   - task: "ANDROID STABILIZATION ROUND 2 — Map crash deep dive + Messaging composer fix"
     implemented: true
     working: "NA"
