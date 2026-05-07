@@ -1258,12 +1258,40 @@ export default function Explore() {
               ref: mapRef,
               style: { flex: 1 },
               initialRegion: initialRegion,
-              userInterfaceStyle: 'dark',
-              showsUserLocation: true,
+              // ANDROID STABILIZATION (June 2025): three native props
+              // were strongly suspected as the Android crash trigger:
+              //
+              //   1. `userInterfaceStyle: 'dark'` — this is iOS-only on
+              //      react-native-maps. On Android the prop is ignored
+              //      by docs but in 1.20.1 has been observed to crash
+              //      when combined with custom marker children under
+              //      Fabric. We now omit it on Android.
+              //
+              //   2. `customMapStyle: MAP_STYLE_DARK` — Google Maps SDK
+              //      on Android parses the JSON style array natively.
+              //      A malformed entry (or one referencing a feature
+              //      type not supported on the device's Play Services
+              //      version) can crash the GoogleMap surface. We omit
+              //      on Android until we can validate the style on
+              //      multiple Android Play Services builds.
+              //
+              //   3. `showsUserLocation: true` mounted BEFORE the
+              //      ACCESS_FINE_LOCATION runtime permission grant.
+              //      On Android this can crash the FusedLocationProvider
+              //      attachment on the GoogleMap surface — gating it
+              //      on `gpsState === 'granted'` ensures the prop is
+              //      only set after the user explicitly accepts.
+              //
+              // iOS keeps all three props (still wanted there for the
+              // premium dark theme and one-tap re-center button).
+              userInterfaceStyle: Platform.OS === 'ios' ? 'dark' : undefined,
+              showsUserLocation: Platform.OS === 'ios' ? true : (gpsState === 'granted'),
               showsMyLocationButton: false,
               // Premium dark theme — only applies on Standard map type;
               // Apple/Google ignore custom styles in hybrid/satellite modes.
-              customMapStyle: mapType === 'standard' ? MAP_STYLE_DARK : undefined,
+              // Android: omitted entirely until we can rule it out as a
+              // crash trigger and re-enable in a controlled rollout.
+              customMapStyle: (Platform.OS === 'ios' && mapType === 'standard') ? MAP_STYLE_DARK : undefined,
               mapType: mapType,
               // Clustering options (no-ops on plain MapView fallback)
               clusterColor: colors.primary,

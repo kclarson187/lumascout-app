@@ -55,6 +55,7 @@ function PremiumMapPinInner({ tier = 'default' }: { tier?: PinTier }) {
   // Soft pulse animation for trending / elite tiers
   const pulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
+    if (!PULSE_ANIM_ENABLED) return; // ANDROID: pulse disabled
     if (tier !== 'trending' && tier !== 'elite') return;
     const loop = Animated.loop(
       Animated.sequence([
@@ -138,6 +139,7 @@ function PremiumMapPinInner({ tier = 'default' }: { tier?: PinTier }) {
 function PremiumMapClusterInner({ count }: { count: number }) {
   const pulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
+    if (!PULSE_ANIM_ENABLED) return; // ANDROID: pulse disabled
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, {
