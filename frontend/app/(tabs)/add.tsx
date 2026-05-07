@@ -407,21 +407,43 @@ function AddSpotImpl() {
     }
     const asset = res.assets[0];
 
-    // 3. Compress + encode base64 (same pipeline as pickImages).
+    // 3. Compress + upload via multipart (NOT base64 — that's an
+    //    Android OOM crash trigger for high-res photos). We use the
+    //    same hosted-URL pipeline as `pickImages` so the captured
+    //    photo lands in Cloudflare R2 and only the public URL ends
+    //    up in `draft.images`.
+    //
+    //    ANDROID STABILIZATION (June 2025): replaced legacy base64
+    //    in-memory data-URI with `uploadImageAsset`. On Android,
+    //    base64 of a 12MP capture allocated >40MB on the JS heap
+    //    AND on the native side (re-decoded by RN's <Image> for the
+    //    thumbnail), reliably crashing devices with <4GB RAM. The
+    //    multipart upload path is bytes-only on the wire and never
+    //    decodes the JPEG twice.
     let imageUrl: string | null = null;
     try {
       const manipulated = await ImageManipulator.manipulateAsync(
         asset.uri,
         [{ resize: { width: 1280 } }],
-        { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+        { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG, base64: false },
       );
-      if (manipulated.base64) {
-        imageUrl = `data:image/jpeg;base64,${manipulated.base64}`;
-      }
-    } catch {}
+      const uploaded = await uploadImageAsset({
+        uri: manipulated.uri,
+        mimeType: 'image/jpeg',
+        fileName: `spot_camera_${Date.now()}.jpg`,
+      });
+      imageUrl = uploaded.image_url;
+    } catch (e) {
+      // Network or auth failure on upload — surface a friendly
+      // message but don't crash the flow.
+      console.warn('[add] camera upload failed', e);
+    }
 
     if (!imageUrl) {
-      Alert.alert('Photo failed', 'Could not process the captured photo. Try again.');
+      Alert.alert(
+        'Photo upload failed',
+        'We captured the photo but couldn\u2019t upload it. Please check your connection and try again.',
+      );
       return;
     }
 

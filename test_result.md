@@ -12,6 +12,80 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "ANDROID STABILIZATION — P0 navigation + keyboard + map + camera fixes"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app.json (softwareKeyboardLayoutMode: resize → pan)
+      /app/frontend/app/(tabs)/_layout.tsx (useSafeAreaInsets → dynamic Android paddingBottom + tab height)
+      /app/frontend/app/(tabs)/explore.tsx (Android map prewarm DISABLED + 350ms post-tap defer + loading placeholder)
+      /app/frontend/app/(tabs)/add.tsx (camera capture: base64 data-URI → uploadImageAsset multipart)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          ANDROID-ONLY FIXES (June 2025 P0 stabilization pass) — iOS untouched.
+
+          Fix 1 — Bottom navigation cut off
+          • Root cause: `edgeToEdgeEnabled: true` in app.json puts the OS
+            gesture/3-button nav bar OVER the app, but tab bar had a fixed
+            `paddingBottom: 12` for Android.
+          • Fix: imported `useSafeAreaInsets()`; tab bar paddingBottom now =
+            `Math.max(12, insets.bottom + 8)`, height grows by the same
+            amount. iOS unchanged (still 92 / 30).
+
+          Fix 2 — Keyboard hides typed text
+          • Root cause: app.json had `softwareKeyboardLayoutMode: "resize"`
+            combined with edge-to-edge — the activity resizes but TextInputs
+            sometimes end up below the IME on Android 14+.
+          • Fix: switched to `"pan"` so the system pans the activity above
+            the keyboard automatically, which composes correctly with the
+            existing KeyboardAvoidingView wrappers across login / add /
+            messages / comments / search forms.
+
+          Fix 3 — Explore map crash on Android
+          • Root cause: react-native-maps under New Architecture (Fabric)
+            is fragile when mounted off-screen on Android. The 1.2-second
+            prewarm timer was allocating the GoogleMap surface while the
+            JS thread was still busy hydrating sibling tabs, sometimes
+            crashing the Android activity.
+          • Fix: prewarm timer is now `Platform.OS === 'android'` short-
+            circuit (lazy mount on user tap only). Tapping Map on Android
+            also defers the actual `setMapEverMounted(true)` flip by 350ms
+            so the segmented toggle paint + SafeAreaView reflow finish
+            BEFORE map allocation. Added an `ActivityIndicator + "Loading
+            map…"` placeholder during the defer window so the user never
+            sees a blank surface. iOS keeps the synchronous mount.
+
+          Fix 4 — Add Location camera crash
+          • Root cause: `takePhotoWithGPS()` was using `base64: true` and
+            stuffing a `data:image/jpeg;base64,…` data URI directly into
+            `draft.images`. On Android, that allocates >40MB on the JS
+            heap AND on the native side (RN's <Image> re-decodes the b64
+            for the thumbnail), reliably OOM-crashing devices with <4GB
+            RAM. Was also blowing the JSON payload size when the user
+            hit Publish.
+          • Fix: replaced base64 capture with `uploadImageAsset()` (the
+            same multipart pipeline `pickImages` uses) — captured photo
+            now lands in Cloudflare R2 immediately and only the public
+            URL is stored in `draft.images`. Failure surfaces a friendly
+            "Photo upload failed — check connection" alert instead of
+            crashing the activity.
+
+          Sanity: bundle compiles cleanly (3313 modules, no errors), web
+          render verified at /, onboarding paints fine. NEEDS RETEST on
+          a real Android device (Android 14 / Pixel + Samsung) for:
+            • Bottom nav fully visible across gesture + 3-button nav modes
+            • Keyboard does not hide TextInputs (login, add, search, DMs)
+            • Explore Map opens without crashing (cold start + hot tab switch)
+            • Add Location → "Take photo now" captures + uploads + advances
+              to step 2 (Location) without OOM crash
+            • iOS regression check (no behavior changes expected on iOS)
+
+
   - task: "REGRESSION — Auth + Upload flow after May 2026 frontend storage hardening"
     implemented: true
     working: true
