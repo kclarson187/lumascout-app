@@ -12,6 +12,74 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "ANDROID STABILIZATION ROUND 2 — Map crash deep dive + Messaging composer fix"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app.json (softwareKeyboardLayoutMode: pan → REVERTED to resize — pan was making the messaging composer worse)
+      /app/frontend/app/(tabs)/explore.tsx (Strip 3 Android-risky map props: customMapStyle, userInterfaceStyle, showsUserLocation pre-permission)
+      /app/frontend/src/components/PremiumMapPin.tsx (Disable Animated.loop pulse on Android — known Marker child crash vector)
+      /app/frontend/app/inbox/[id].tsx (Track keyboard HEIGHT + lift composer with marginBottom on Android; KAV behavior height instead of undefined)
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          ROUND 2 fixes after user reported Round 1 didn't resolve crash + composer.
+
+          Map Crash — three suspected native-prop crash triggers stripped on Android:
+          • `userInterfaceStyle: 'dark'` was set globally — it's an iOS-only
+            prop on react-native-maps; on Android 1.20.1 with custom Marker
+            children under Fabric, it's been observed to crash GoogleMap surface.
+            → Now `Platform.OS === 'ios' ? 'dark' : undefined`.
+          • `customMapStyle: MAP_STYLE_DARK` was applied unconditionally —
+            Google Maps Android SDK parses the JSON style natively, and a
+            single unsupported feature type crashes the surface on certain
+            Play Services builds.
+            → Now omitted on Android (only iOS keeps the dark theme).
+          • `showsUserLocation: true` was set BEFORE permission grant —
+            on Android this can crash the FusedLocationProvider attachment.
+            → Now gated on `gpsState === 'granted'` for Android only.
+
+          Marker animation — Animated.loop with useNativeDriver inside
+          <Marker> children is a documented crash vector on Android
+          react-native-maps (AnimationDriver callback fires after Marker
+          native view recycled by GoogleMap → NPE).
+          → PULSE_ANIM_ENABLED = Platform.OS !== 'android' guards both
+            PremiumMapPinInner and PremiumMapClusterInner pulse loops.
+
+          Messaging Composer (inbox/[id].tsx) — user reported Send
+          button under keyboard, can't see typed text:
+          • Reverted app.json `softwareKeyboardLayoutMode` to "resize"
+            (the standard adjustResize behavior). "pan" was making the
+            problem worse because pan only ensures the focused TextInput
+            is visible — the composer's parent View wasn't getting lifted.
+          • Track exact keyboard pixel height via Keyboard.addListener
+            ('keyboardDidShow' on Android, 'keyboardWillShow' on iOS).
+          • Lift composer container with `marginBottom: kbHeight` on
+            Android only. iOS keeps its existing KAV-based padding.
+          • Switched `behavior` on KeyboardAvoidingView from `undefined`
+            on Android to `"height"` — a no-op when system already does
+            adjustResize but ensures the composer reflow happens.
+
+          iOS guarantees:
+          • All map props that work on iOS are still applied on iOS.
+          • PremiumMapPin pulse animations untouched on iOS.
+          • Messaging composer lift logic is `Platform.OS === 'android'`
+            gated; iOS uses the existing flow.
+
+          Web bundle compiles cleanly (3313 modules), no syntax errors.
+          NEEDS RETEST on real Android device:
+            • Explore tap Map → no crash (expect plain map without dark
+              theme, that's intentional fallback)
+            • Hot-switch List ↔ Map repeatedly without crash
+            • Messaging open → tap input → keyboard rises → input + Send
+              both visible above keyboard → tap Send works
+            • iOS regression check (no behavior change expected)
+
+
   - task: "ANDROID STABILIZATION — P0 navigation + keyboard + map + camera fixes"
     implemented: true
     working: "NA"

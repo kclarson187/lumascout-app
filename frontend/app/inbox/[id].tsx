@@ -49,13 +49,31 @@ function ThreadScreenImpl() {
   // and the iOS keyboard. Track keyboard state so when it's up we drop
   // the bottom inset entirely (KAV already lifts us past it), and when
   // it's down we honour the home-indicator safe area.
+  //
+  // ANDROID STABILIZATION (June 2025): also track the keyboard HEIGHT
+  // (not just shown/hidden). On Android with edge-to-edge enabled +
+  // softwareKeyboardLayoutMode "resize", KeyboardAvoidingView's
+  // `behavior=undefined` was a no-op and the composer ended up under
+  // the keyboard. We now measure the keyboard exactly via the
+  // keyboardDidShow event and lift the composer with a `marginBottom`
+  // matching the keyboard height so the TextInput + Send button stay
+  // fully visible and tappable while typing. iOS keeps its KAV-based
+  // padding behavior (which has always worked correctly there).
   const insets = useSafeAreaInsets();
   const [kbShown, setKbShown] = useState(false);
+  const [kbHeight, setKbHeight] = useState(0);
   useEffect(() => {
     const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const s1 = Keyboard.addListener(showEvt, () => setKbShown(true));
-    const s2 = Keyboard.addListener(hideEvt, () => setKbShown(false));
+    const s1 = Keyboard.addListener(showEvt, (e: any) => {
+      setKbShown(true);
+      const h = e?.endCoordinates?.height;
+      if (typeof h === 'number' && Number.isFinite(h)) setKbHeight(h);
+    });
+    const s2 = Keyboard.addListener(hideEvt, () => {
+      setKbShown(false);
+      setKbHeight(0);
+    });
     return () => { s1.remove(); s2.remove(); };
   }, []);
 
@@ -107,7 +125,7 @@ function ThreadScreenImpl() {
   return (
     <KeyboardAvoidingView
       style={s.root}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={0}
     >
       <SafeAreaView style={{ flex: 1 }} edges={['top', 'left', 'right']}>
@@ -229,7 +247,22 @@ function ThreadScreenImpl() {
                 );
               }}
             />
-            <View style={[s.composer, { paddingBottom: kbShown ? 10 : Math.max(insets.bottom, 10) }]}>
+            <View
+              style={[
+                s.composer,
+                {
+                  paddingBottom: kbShown ? 10 : Math.max(insets.bottom, 10),
+                  // ANDROID: lift composer above the keyboard manually
+                  // because adjustResize + edge-to-edge sometimes does
+                  // not fully shrink the activity in time, leaving the
+                  // composer under the keyboard. Measured kbHeight is
+                  // the exact pixel height we need to clear. iOS keeps
+                  // its KAV-based padding (kbHeight stays 0 on iOS by
+                  // virtue of KAV consuming the keyboard show event).
+                  marginBottom: Platform.OS === 'android' ? kbHeight : 0,
+                },
+              ]}
+            >
               <Pressable onPress={sendImage} style={s.attachBtn} testID="thread-image"><ImagePlus size={20} color={colors.text}/></Pressable>
               <TextInput
                 value={text}
