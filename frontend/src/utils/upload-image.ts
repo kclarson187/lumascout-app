@@ -267,7 +267,30 @@ export async function uploadImageAssetWithProgress(
       try { detail = (JSON.parse(xhr.responseText)?.detail || '').toString().trim(); } catch {}
       let name = 'UnknownError';
       let fallback = "We couldn't upload this photo. Please try again.";
-      if (status === 401 || status === 403) { name = 'AuthError'; fallback = 'Your session has expired. Please log in again.'; }
+      if (status === 401 || status === 403) {
+        name = 'AuthError';
+        fallback = 'Your session has expired. Please log in again.';
+        // May 2026 — fire the shared auth-expired handler so the app
+        // clears the persisted token AND bounces to login, just like
+        // an expired axios request would. Without this the user would
+        // see "Your session has expired" repeatedly on every upload
+        // retry because nothing was actively signing them out.
+        (async () => {
+          try {
+            const { api, onUnauthorized: _oua } = await import('../api');
+            await api.setToken(null);
+          } catch {}
+          // Defer to the Api module's own unauth handler (wired by
+          // AuthProvider at boot) — it already knows how to clear
+          // user state and router.replace('/(auth)/login').
+          try {
+            const mod = await import('../api');
+            // trigger a throwaway axios 401 so the interceptor fires
+            // the same code path email/password users get.
+            mod.api.get('/auth/me').catch(() => {});
+          } catch {}
+        })();
+      }
       else if (status === 408) { name = 'TimeoutError'; fallback = 'Photo upload timed out. Please try again.'; }
       else if (status === 413) { name = 'PayloadTooLargeError'; fallback = 'This photo is too large. Please choose a smaller image.'; }
       else if (status === 415) { name = 'UnsupportedMediaError'; fallback = "This image format isn't supported. Please pick a JPEG, PNG, or HEIC photo."; }
