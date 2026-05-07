@@ -90,6 +90,24 @@ function SpotCardImpl({
     ? styles.imageWrap                                  // explicit pixel width — aspectRatio handles height fine
     : [styles.imageWrap, { aspectRatio: undefined as unknown as number, height: fallbackImgHeight }]; // % width — pin pixels
 
+  // Cover priority (v2.1.0, May 2026): single source of truth via
+  // `resolveSpotCoverForListCard(spot)` — same cascade and resize
+  // preset as the Map preview and Location Detail so the list
+  // thumbnail, pin thumbnail, and detail hero all render the
+  // IDENTICAL photo (previously drifted because each surface had
+  // its own inline cascade). LIST_CARD preset = 560 px, which is
+  // 280pt @ 2x DPR — the right size for feed tiles.
+  //
+  // CRITICAL FIX (June 2025) — `cover` MUST be declared BEFORE the
+  // recycle-flash useEffect below references it in its dependency
+  // array. The previous order triggered a Temporal Dead Zone error
+  // ("Cannot access 'cover' before initialization") that crashed
+  // the entire Explore screen on both iOS and Android, surfaced via
+  // ExploreErrorBoundary as the "Explore had a hiccup" fallback.
+  const cover = resolveSpotCoverForListCard(spot);
+  const isPremium = spot.privacy_mode === 'premium';
+  const isHydrated = !!spot?.title;
+
   // v2.1.0 (May 2026) — image-sizing-flash fix. FlashList recycles
   // cells: when a cell is reused for a different spot, the NEW `cover`
   // URL starts loading but `imgLoaded` is still `true` from the old
@@ -116,17 +134,6 @@ function SpotCardImpl({
     return () => loop.stop();
   }, [shimmer]);
   const shimmerOpacity = shimmer.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.9] });
-
-  // Cover priority (v2.1.0, May 2026): single source of truth via
-  // `resolveSpotCoverForListCard(spot)` — same cascade and resize
-  // preset as the Map preview and Location Detail so the list
-  // thumbnail, pin thumbnail, and detail hero all render the
-  // IDENTICAL photo (previously drifted because each surface had
-  // its own inline cascade). LIST_CARD preset = 560 px, which is
-  // 280pt @ 2x DPR — the right size for feed tiles.
-  const cover = resolveSpotCoverForListCard(spot);
-  const isPremium = spot.privacy_mode === 'premium';
-  const isHydrated = !!spot?.title;
 
   const handlePress = () => {
     if (onPress) return onPress();
