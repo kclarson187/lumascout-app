@@ -467,12 +467,13 @@ export default function Explore() {
         params.lat = userCoords!.lat;
         params.lng = userCoords!.lng;
       }
-      // axios.get supports AbortSignal — see api.ts. We pass the signal
-      // through `params` only as a no-op since the underlying client
-      // doesn't expose `config`; instead we attach the signal directly
-      // by inlining the axios call equivalent. Falling back to manual
-      // abort-check below since `api.get` doesn't forward the signal.
-      const data = await api.get('/spots', params);
+      // FIX(2026-05) — bump timeout for /spots specifically. The
+      // markers endpoint is a slim payload; /spots with limit=200
+      // and full metadata can take 5-10s in production, breaching
+      // the default 15s axios timeout when the network is slow on
+      // TestFlight. Production users were seeing the red "Couldn't
+      // load spots" banner even though map markers loaded fine.
+      const data = await api.get('/spots', params, { timeout: 25000 });
       // If a newer request was started, drop this stale response.
       if (controller.signal.aborted) {
         exploreLog('debug', 'load_aborted_pre_set');
@@ -1161,10 +1162,18 @@ export default function Explore() {
         </ScrollView>
       ) : null}
 
-      {/* (FIX P1-5 pre-release audit) Persistent error pill — appears when
-          a /spots fetch fails. Keeps last-known good data visible while
-          giving the user a one-tap retry path instead of a silent freeze. */}
-      {loadError ? (
+      {/* (FIX 2026-05) Persistent error pill — appears when a /spots
+          fetch fails. PRD requirement: "If a secondary request fails,
+          show a smaller non-blocking warning only where appropriate."
+          On the MAP view the markers are served by a separate slim
+          endpoint (/spots/markers) — when those have loaded the pins
+          are already visible and useful, so a /spots failure here is
+          purely a metadata-layer miss and should NOT block the user
+          with a big red banner. We hide the banner on map view when
+          markers are present; we still show it on list view (where
+          /spots IS the primary data) and on map when markers also
+          haven't loaded yet (true offline / hard failure). */}
+      {loadError && !(view === 'map' && mapMarkers.length > 0) ? (
         <TouchableOpacity
           onPress={load}
           activeOpacity={0.8}
