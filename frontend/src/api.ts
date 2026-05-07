@@ -1,6 +1,7 @@
 import axios, { AxiosInstance } from 'axios';
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { resolveBackendUrl } from './constants/config';
 
 // Backend base URL resolution (V3, May 2026 — production fix 2).
@@ -14,6 +15,24 @@ import { resolveBackendUrl } from './constants/config';
 //   • Any future build-config drift
 const BASE_URL = resolveBackendUrl() + '/api';
 const TOKEN_KEY = 'photoscout_token';
+// May 2026 — TestFlight incident: some devices reported Google sign-in
+// prompting repeatedly AND uploads failing with 401. Root cause: on
+// TestFlight provisioning profiles without a keychain access group, or
+// when the device has been restored from backup without unlocking,
+// `SecureStore.setItemAsync` silently fails. The old implementation
+// swallowed that failure inside a try/catch and returned — the token
+// was never persisted, the next launch had no token, and authenticated
+// requests (including uploads) went out without an Authorization
+// header. The fix: dual-write to SecureStore AND AsyncStorage. Read
+// from SecureStore first (keychain is the durable store on iOS) and
+// fall through to AsyncStorage when SecureStore returns null — this
+// catches the silent-write-failed case on re-open.
+const _tokenLog = (msg: string, data?: any) => {
+  try {
+    // eslint-disable-next-line no-console
+    console.log(`[auth.storage] ${msg}`, data ?? '');
+  } catch {}
+};
 
 // Global listeners for paywall triggers (402 responses)
 //
@@ -40,26 +59,78 @@ type UnauthHandler = () => void;
 let unauthHandler: UnauthHandler | null = null;
 export function onUnauthorized(fn: UnauthHandler) { unauthHandler = fn; }
 
-// Web-safe token storage: SecureStore on native, localStorage on web
+// Web-safe token storage: SecureStore + AsyncStorage dual-write on
+// native, localStorage on web.
+//
+// DUAL-WRITE RATIONALE (May 2026 TestFlight fix)
+// ──────────────────────────────────────────────
+// Keychain access on iOS can silently fail in rare provisioning /
+// device-restore scenarios (error is swallowed by the SecureStore
+// SDK). When it does, the old single-store implementation returned
+// silently and the user was prompted to re-authenticate on next
+// launch. By ALSO writing to AsyncStorage we guarantee at least one
+// side sees the token, and by reading SecureStore first we keep the
+// keychain as the durable source of truth when it works. Both sides
+// are kept in sync on every set / delete.
 async function storageGet(key: string): Promise<string | null> {
   if (Platform.OS === 'web') {
     try { return typeof window !== 'undefined' ? window.localStorage.getItem(key) : null; } catch { return null; }
   }
-  try { return await SecureStore.getItemAsync(key); } catch { return null; }
+  // 1) SecureStore (iOS Keychain / Android Keystore) — preferred.
+  let secure: string | null = null;
+  try {
+    secure = await SecureStore.getItemAsync(key);
+  } catch (e) {
+    _tokenLog('SecureStore.get failed', (e as any)?.message);
+  }
+  if (secure) return secure;
+  // 2) AsyncStorage fallback — resilient to keychain access failures.
+  try {
+    const fallback = await AsyncStorage.getItem(key);
+    if (fallback) {
+      // Heal the keychain silently for next call — a one-time best
+      // effort so we don't hit the AsyncStorage branch every request.
+      try { await SecureStore.setItemAsync(key, fallback); } catch {}
+    }
+    return fallback;
+  } catch (e) {
+    _tokenLog('AsyncStorage.get failed', (e as any)?.message);
+    return null;
+  }
 }
 async function storageSet(key: string, value: string) {
   if (Platform.OS === 'web') {
     try { if (typeof window !== 'undefined') window.localStorage.setItem(key, value); } catch {}
     return;
   }
-  try { await SecureStore.setItemAsync(key, value); } catch {}
+  // Dual-write: both stores, parallel. Failures on either side are
+  // logged but non-fatal — as long as ONE side writes, the next
+  // launch can recover the token. We verify by reading SecureStore
+  // back after the write so a silent-failure surfaces in logs.
+  let secureOk = false;
+  try {
+    await SecureStore.setItemAsync(key, value);
+    const verify = await SecureStore.getItemAsync(key);
+    secureOk = verify === value;
+    if (!secureOk) {
+      _tokenLog('SecureStore.set readback mismatch — keychain write silently failed');
+    }
+  } catch (e) {
+    _tokenLog('SecureStore.set failed', (e as any)?.message);
+  }
+  try {
+    await AsyncStorage.setItem(key, value);
+  } catch (e) {
+    _tokenLog('AsyncStorage.set failed', (e as any)?.message);
+  }
 }
 async function storageDelete(key: string) {
   if (Platform.OS === 'web') {
     try { if (typeof window !== 'undefined') window.localStorage.removeItem(key); } catch {}
     return;
   }
-  try { await SecureStore.deleteItemAsync(key); } catch {}
+  try { await SecureStore.deleteItemAsync(key); } catch (e) { _tokenLog('SecureStore.delete failed', (e as any)?.message); }
+  try { await AsyncStorage.removeItem(key); } catch (e) { _tokenLog('AsyncStorage.delete failed', (e as any)?.message); }
 }
 
 class Api {

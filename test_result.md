@@ -12,6 +12,101 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "REGRESSION — Auth + Upload flow after May 2026 frontend storage hardening"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/src/api.ts (frontend dual-write SecureStore + AsyncStorage; backend untouched)
+      /app/frontend/src/utils/upload-image.ts (frontend 401-handler also calls api.setToken(null) + global unauth handler)
+      Backend endpoints exercised: POST /api/auth/login, GET /api/auth/me, GET /api/spots, POST /api/uploads/image (with + without auth, with bad bearer), POST /api/spots/{id}/uploads, DELETE /api/admin/spots/{id}/images/{url}, POST /api/auth/google/session, GET /api/spots/markers, GET /api/feed/home.
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          REGRESSION CHECK (2026-05-07) — 14/14 PASS. Test script:
+          /app/backend_test.py. Run against
+          https://photo-finder-60.preview.emergentagent.com.
+
+          Auth: kclarson187@gmail.com still 401 (per
+          /app/memory/test_credentials.md); used seed super_admin
+          admin@lumascout.app / Grayson@1117!! — works.
+
+          Bucket 1 — Email/password login → upload round-trip ✅
+            • POST /api/auth/login (admin@lumascout.app) → 200, token returned.
+            • GET /api/auth/me → 200, response includes profile_complete=true,
+              email=admin@lumascout.app, plus user_id and other expected keys.
+            • GET /api/spots?limit=1 → 200, spot_id=spot_88a7cbd41ac1
+              ("QA Stability Pass Spot 1777661705").
+            • POST /api/uploads/image?spot_id=spot_88a7cbd41ac1 with multipart
+              JPEG (Authorization: Bearer <token>) → 200. Response carries
+              storage="r2", image_id=img_969d8ab5d7,
+              r2_key=locations/qa-stability-pass-spot-1777661705_spot_88a7cbd41ac1/
+              gallery/44c3469eb01d4dcabfd4a68d988f1e30.jpg, image_url on the
+              R2 public base. Backend log line confirmed:
+                upload_image.r2_ok ... key=locations/...
+                location_prefix=True spot_id='spot_88a7cbd41ac1'
+            • POST /api/spots/spot_88a7cbd41ac1/uploads with body
+              {"images":[{image_url, storage_key, image_id, content_type,
+              size_bytes, width, height}], "caption":"..."} → 200 with
+              {"ok":true, "auto_approved":true, "count":1,
+              "moderation_status":"approved",
+              "batch_id":"batch_e7df486d6680"}.
+              NOTE: contract requires the body to wrap a single image as
+              `images:[{...}]` (SpotCommunityUploadIn at routes/spots.py:255-265).
+              First test draft sent the image dict at the top level and
+              correctly received 422; corrected to wrap in `images` and
+              the call passes — frontend already sends the wrapped shape
+              (verified upload.tsx submit body), no backend bug here.
+            • DELETE /api/admin/spots/spot_88a7cbd41ac1/images/<urlencoded image_url>
+              → 200 with file_cleanup={"attempted":true, "deleted":true,
+              "reason":null, "storage":"r2", path=storage_key}. R2 object
+              physically gone.
+
+          Bucket 2 — Upload WITHOUT Authorization header ✅ (CRITICAL)
+            POST /api/uploads/image (multipart JPEG, no Authorization) → 401
+            with Content-Type: application/json, body={"detail":"Not authenticated"}.
+            Confirms the path the new frontend error handler hits when
+            token persistence fails will receive a clean structured 401.
+
+          Bucket 3 — Upload WITH BAD bearer ✅
+            POST /api/uploads/image with `Authorization: Bearer not_a_real_jwt`
+            → 401 application/json, body={"detail":"Invalid token"}.
+
+          Bucket 4 — GET /api/auth/me with bad bearer ✅
+            GET /api/auth/me with `Authorization: Bearer not_a_real_jwt`
+            → 401 application/json, body={"detail":"Invalid token"}.
+
+          Bucket 5 — Google session hardening retained ✅
+            POST /api/auth/google/session with {"session_id":"INVALID_SESSION_ABCDEF"}
+            → 401 application/json, body={"detail":"Invalid session"} —
+            NOT 500, NOT 502. Backend log line emitted as documented:
+              google_session.invalid_session sid=INVALID_SE… status=404
+              body_snippet='{"detail":{"error":"user_data_not_found",...}}'
+            Confirmed in /var/log/supervisor/backend.err.log tail.
+
+          Bucket 6 — Smoke / no regression on unrelated endpoints ✅
+            • GET /api/spots?limit=5 → 200
+            • GET /api/spots/markers (full bbox, limit=50) → 200
+            • GET /api/feed/home (with valid bearer) → 200
+
+          Backend log audit during test window — no 5xx, no tracebacks.
+          Only the expected 401 / 422 entries from the negative-path tests.
+
+          VERDICT: Auth + upload backend contracts are intact after the
+          May 2026 frontend storage hardening. The 401 paths the new
+          upload-image.ts error handler relies on return clean JSON
+          with a structured `detail` field, the email/password →
+          /auth/me → upload → attach → admin-delete round-trip works
+          end-to-end on R2's organized layout, the Google-session
+          hardening (401 "Invalid session" + structured logging) is
+          still in place, and unrelated read endpoints (spots list,
+          markers, feed/home) are unaffected. NO REGRESSION DETECTED.
+
+
+
   - task: "POST /api/auth/google/session — May 2026 production-520 hardening"
     implemented: true
     working: true
