@@ -2,6 +2,7 @@ import React from 'react';
 import { Tabs } from 'expo-router';
 import { Home, Map, Plus, Users, User } from 'lucide-react-native';
 import { View, StyleSheet, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, font } from '../../src/theme';
 import { useUnreadMessages } from '../../src/hooks/useUnreadMessages';
 import { useWebStyles } from '../../src/webStyles';
@@ -28,6 +29,16 @@ function ProfileTabIcon({ color }: { color: string }) {
 }
 
 export default function TabsLayout() {
+  const insets = useSafeAreaInsets();
+  // Android edge-to-edge fix: the OS gesture/3-button nav bar overlays
+  // the app, so we must add insets.bottom to the tab bar's height +
+  // paddingBottom so the tab labels remain visible above the system
+  // nav bar. iOS already handles its home-indicator via the static 30px.
+  // Minimum padding (12) ensures legacy 3-button-nav devices still
+  // have a comfortable tap zone. Android tab bar grows with the inset
+  // so the icons + labels never get clipped by the system chrome.
+  const androidBottomPad = Math.max(12, insets.bottom + 8);
+  const tabHeight = Platform.OS === 'ios' ? 92 : 64 + androidBottomPad;
   return (
     <Tabs
       screenOptions={{
@@ -37,9 +48,9 @@ export default function TabsLayout() {
           backgroundColor: 'rgba(20,20,22,0.98)',
           borderTopColor: colors.border,
           borderTopWidth: 1,
-          height: Platform.OS === 'ios' ? 92 : 74,
+          height: tabHeight,
           paddingTop: 10,
-          paddingBottom: Platform.OS === 'ios' ? 30 : 12,
+          paddingBottom: Platform.OS === 'ios' ? 30 : androidBottomPad,
         },
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textTertiary,

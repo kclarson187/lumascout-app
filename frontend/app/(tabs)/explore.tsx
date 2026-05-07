@@ -172,8 +172,18 @@ export default function Explore() {
   // the first tap of "Map" feels instant. The map is removed from the
   // tree if the user actively switches back; this preload only
   // reserves the JS module + the markers-bbox query.
+  //
+  // ANDROID STABILIZATION (June 2025): the prewarm is DISABLED on
+  // Android. react-native-maps under New Architecture / Fabric on
+  // Android is fragile when mounted off-screen (occasional native
+  // crashes during initial GoogleMap surface allocation while the
+  // JS thread is still busy hydrating other tabs). On Android the
+  // map mounts only when the user explicitly taps the Map toggle,
+  // which gives the JS thread a clean slate. iOS keeps the prewarm
+  // for instant-feel tab switching.
   useEffect(() => {
     if (mapEverMounted) return;
+    if (Platform.OS === 'android') return; // lazy on tap only
     const t = setTimeout(() => setMapEverMounted(true), 1200);
     return () => clearTimeout(t);
   }, [mapEverMounted]);
@@ -190,7 +200,17 @@ export default function Explore() {
     Haptics.selectionAsync().catch(() => {});
     setView(next);
     if (next === 'map') {
-      setMapEverMounted(true);
+      // ANDROID STABILIZATION: defer the map mount slightly so the
+      // segmented toggle paint and the SafeAreaView reflow finish
+      // BEFORE the GoogleMap surface is allocated. Without this, on
+      // Android Fabric the JS thread is still mid-transaction when
+      // the native map tries to attach, which can crash the activity.
+      // iOS keeps the synchronous mount (no observed Fabric race).
+      if (Platform.OS === 'android') {
+        setTimeout(() => setMapEverMounted(true), 350);
+      } else {
+        setMapEverMounted(true);
+      }
       mapOpenAt.current = performance.now();
       // Use console.log directly here — exploreLog requires the
       // surrounding hooks to have initialized which isn't guaranteed
@@ -1216,6 +1236,18 @@ export default function Explore() {
           </Text>
           <Text style={styles.locOffHintCta}>Enable</Text>
         </Pressable>
+      ) : null}
+
+      {view === 'map' && Platform.OS !== 'web' && !mapEverMounted ? (
+        // Android stabilization: show a clean loading state during the
+        // 350ms post-toggle defer window so the user sees immediate
+        // feedback instead of a momentarily blank surface.
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bg }}>
+          <ActivityIndicator color={colors.primary} />
+          <Text style={{ color: colors.textTertiary, fontFamily: font.body, fontSize: 12, marginTop: 10 }}>
+            Loading map…
+          </Text>
+        </View>
       ) : null}
 
       {view === 'map' && mapEverMounted && Platform.OS !== 'web' && (ClusteredMapView || MapView) ? (
