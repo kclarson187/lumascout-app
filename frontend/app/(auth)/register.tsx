@@ -52,23 +52,14 @@ export default function Register() {
   };
 
   const onGoogle = async () => {
-    try {
-      // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
-      const redirectUrl = Linking.createURL('/auth-callback');
-      const authUrl = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUrl);
-      if (result.type === 'success' && result.url) {
-        const hash = result.url.split('#')[1] || '';
-        const params = new URLSearchParams(hash);
-        const session_id = params.get('session_id');
-        if (session_id) {
-          await googleExchange(session_id);
-          router.replace('/(tabs)');
-        }
-      }
-    } catch (e) {
-      Alert.alert('Google sign-in failed', formatApiError(e));
-    }
+    // May 2026 — routes all Google sign-in failures through the
+    // shared helper (see src/google-signin.ts). User-cancel is
+    // silent. 520/5xx maps to a friendly "try email" message.
+    const { runGoogleSignIn } = await import('../../src/google-signin');
+    const res = await runGoogleSignIn({ surface: 'register', exchange: googleExchange });
+    if (res.kind === 'ok') { router.replace('/(tabs)'); return; }
+    if (res.kind === 'cancelled') return;
+    Alert.alert(res.title, res.message);
   };
 
   return (

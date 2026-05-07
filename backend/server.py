@@ -1268,61 +1268,160 @@ async def verify_email_change(token: str):
 @api.post("/auth/google/session")
 async def google_session(body: GoogleSessionIn):
     """Exchange Emergent session_id for our app JWT.
-    REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH"""
+
+    REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR
+    REDIRECT URLS, THIS BREAKS THE AUTH.
+
+    Production incident (May 2026, TestFlight):
+      Users reported "Request failed with status code 520" on iOS
+      production builds when tapping "Continue with Google". 520 is a
+      Cloudflare edge code — the Emergent OAuth proxy
+      (demobackend.emergentagent.com) was intermittently timing out
+      during cold-starts, and our backend's unhandled
+      `r.json()` / `httpx.HTTPError` was bubbling a raw 500/520 to
+      the client.
+
+    Hardening applied here:
+      • Structured logging at every step (token present/missing,
+        upstream status, JSON decode, user lookup/create, JWT mint).
+      • One automatic retry on upstream 5xx after a 400ms backoff —
+        Cloudflare edge cold-starts usually recover within 1-2s.
+      • HTTP error taxonomy the client can switch on: 401 = bad
+        session, 502 = upstream unavailable (friendly retry CTA),
+        400 = missing email, 500 only for truly unknown faults.
+      • JSON decode failures are caught and treated as 502 so the
+        error surface is consistent regardless of whether the
+        upstream returned HTML (typical Cloudflare 5xx body).
+    """
+    _glog = logging.getLogger("auth.google")
+    session_preview = (body.session_id or "")[:10] + "…" if body.session_id else "<empty>"
+    if not body.session_id:
+        _glog.warning("google_session.missing_session_id")
+        raise HTTPException(status_code=400, detail="Missing session id")
+
     url = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.get(url, headers={"X-Session-ID": body.session_id})
-            if r.status_code != 200:
-                raise HTTPException(status_code=401, detail="Invalid session")
-            data = r.json()
-    except httpx.HTTPError:
-        raise HTTPException(status_code=500, detail="Google auth service error")
+    data: Optional[Dict[str, Any]] = None
+    last_status = 0
+    last_body_preview = ""
+    for attempt in (1, 2):
+        try:
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get(url, headers={"X-Session-ID": body.session_id})
+                last_status = r.status_code
+                last_body_preview = (r.text or "")[:160]
+                if r.status_code == 200:
+                    try:
+                        data = r.json()
+                        break
+                    except ValueError as je:
+                        _glog.warning(
+                            "google_session.upstream_json_decode_failed attempt=%d sid=%s err=%r body_snippet=%r",
+                            attempt, session_preview, je, last_body_preview,
+                        )
+                elif 500 <= r.status_code < 600 and attempt == 1:
+                    _glog.warning(
+                        "google_session.upstream_5xx attempt=%d sid=%s status=%d body_snippet=%r — retrying",
+                        attempt, session_preview, r.status_code, last_body_preview,
+                    )
+                    await asyncio.sleep(0.4)
+                    continue
+                else:
+                    break
+        except httpx.HTTPError as he:
+            _glog.warning(
+                "google_session.upstream_transport_error attempt=%d sid=%s err=%r",
+                attempt, session_preview, he,
+            )
+            if attempt == 1:
+                await asyncio.sleep(0.4)
+                continue
+            raise HTTPException(
+                status_code=502,
+                detail="Google sign-in service is temporarily unavailable. Please try again in a moment.",
+            )
+
+    if data is None:
+        # Differentiate between "invalid session" (401) and "upstream
+        # unavailable" (502) so the client can route the error copy.
+        if 500 <= last_status < 600 or last_status == 0:
+            _glog.error(
+                "google_session.upstream_unavailable sid=%s status=%d body_snippet=%r",
+                session_preview, last_status, last_body_preview,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="Google sign-in service is temporarily unavailable. Please try again in a moment.",
+            )
+        _glog.info(
+            "google_session.invalid_session sid=%s status=%d body_snippet=%r",
+            session_preview, last_status, last_body_preview,
+        )
+        raise HTTPException(status_code=401, detail="Invalid session")
 
     email = (data.get("email") or "").lower().strip()
     if not email:
+        _glog.warning("google_session.no_email sid=%s payload_keys=%r", session_preview, list(data.keys()))
         raise HTTPException(status_code=400, detail="No email from Google")
 
-    user = await db.users.find_one({"email": email})
-    if user is None:
-        user_id = f"user_{uuid.uuid4().hex[:12]}"
-        username = email.split("@")[0]
-        user = {
-            "user_id": user_id,
-            "email": email,
-            "name": data.get("name") or username,
-            "username": username,
-            "avatar_url": data.get("picture"),
-            "avatar_image_url": data.get("picture"),
-            "banner_image_url": None,
-            "bio": "",
-            "city": "",
-            "state": "",
-            "specialties": [],
-            "website": "",
-            "instagram": "",
-            "facebook_url": "",
-            "tiktok_url": "",
-            "role": "user",
-            "verification_status": "unverified",
-            "auth_provider": "google",
-            "plan": "free",
-            "billing_cycle": None,
-            "primary_country": "US",
-            "primary_region": None,
-            "timezone": None,
-            "language_hint": "en",
-            "created_at": utcnow(),
-            "updated_at": utcnow(),
-        }
-        await db.users.insert_one(user)
-    else:
-        # update picture if changed
-        if data.get("picture") and user.get("avatar_url") != data.get("picture"):
-            await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"avatar_url": data.get("picture")}})
-            user["avatar_url"] = data.get("picture")
+    try:
+        user = await db.users.find_one({"email": email})
+        if user is None:
+            user_id = f"user_{uuid.uuid4().hex[:12]}"
+            username = email.split("@")[0]
+            user = {
+                "user_id": user_id,
+                "email": email,
+                "name": data.get("name") or username,
+                "username": username,
+                "avatar_url": data.get("picture"),
+                "avatar_image_url": data.get("picture"),
+                "banner_image_url": None,
+                "bio": "",
+                "city": "",
+                "state": "",
+                "specialties": [],
+                "website": "",
+                "instagram": "",
+                "facebook_url": "",
+                "tiktok_url": "",
+                "role": "user",
+                "verification_status": "unverified",
+                "auth_provider": "google",
+                "plan": "free",
+                "billing_cycle": None,
+                "primary_country": "US",
+                "primary_region": None,
+                "timezone": None,
+                "language_hint": "en",
+                "created_at": utcnow(),
+                "updated_at": utcnow(),
+            }
+            await db.users.insert_one(user)
+            _glog.info("google_session.new_user email=%s user_id=%s", email, user_id)
+        else:
+            # update picture if changed
+            if data.get("picture") and user.get("avatar_url") != data.get("picture"):
+                await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"avatar_url": data.get("picture")}})
+                user["avatar_url"] = data.get("picture")
+            _glog.info("google_session.existing_user email=%s user_id=%s", email, user.get("user_id"))
+    except HTTPException:
+        raise
+    except Exception as e:
+        _glog.exception("google_session.user_persist_failed email=%s err=%r", email, e)
+        raise HTTPException(
+            status_code=500,
+            detail="We couldn't finish signing you in. Please try again.",
+        )
 
-    token = create_access_token(user["user_id"], email)
+    try:
+        token = create_access_token(user["user_id"], email)
+    except Exception as e:
+        _glog.exception("google_session.jwt_mint_failed user_id=%s err=%r", user.get("user_id"), e)
+        raise HTTPException(
+            status_code=500,
+            detail="We couldn't finish signing you in. Please try again.",
+        )
+    _glog.info("google_session.ok user_id=%s", user.get("user_id"))
     return {"token": token, "user": clean_doc(user)}
 
 

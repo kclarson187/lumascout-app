@@ -12,6 +12,95 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "POST /api/auth/google/session — May 2026 production-520 hardening"
+    implemented: true
+    working: true
+    file: |
+      /app/backend/server.py (lines 1268-1425; new auth.google logger; retry-once-on-5xx; error taxonomy 400/401/502/500; JSON-decode failures treated as 502)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          POST /api/auth/google/session hardening — BACKEND CONTRACT TEST: 10/10 PASS.
+          Test script: /app/backend_test.py. Run 2026-05-07 against
+          https://photo-finder-60.preview.emergentagent.com.
+
+          Auth: super_admin admin@lumascout.app / Grayson@1117!! used for the
+          regression smoke (kclarson187@gmail.com still 401 per
+          /app/memory/test_credentials.md — fall-back used as documented).
+          Google OAuth itself was driven only with synthetic invalid
+          session_ids, per the review's instructions.
+
+          Bucket 1 — Missing session_id ✅
+            POST /api/auth/google/session with body {} → 422 (Pydantic
+            "Field required" on session_id). Response is application/json
+            with structured detail list. NOT 500. Acceptable per review.
+
+          Bucket 2 — Empty-string session_id ✅
+            POST {"session_id": ""} → 400 with detail="Missing session id"
+            (exact match — uses the explicit early-return path at
+            server.py:1298-1300 before the upstream call).
+
+          Bucket 3 — Invalid session_id ✅
+            POST {"session_id": "NOT_A_REAL_SESSION_12345"} → 401 with
+            detail="Invalid session" (exact match). Body is valid JSON,
+            no HTML leakage. Backend log captured:
+              google_session.invalid_session sid=NOT_A_REAL… status=404
+              body_snippet='{"detail":{"error":"user_data_not_found",
+              "error_description":"User data not found or expired"}}'
+            Confirms upstream returned 4xx (404 here, not 5xx) and our
+            taxonomy correctly mapped it to 401 "Invalid session".
+
+          Bucket 4 — JSON body shape consistency ✅
+            All 3 buckets above returned application/json with a string-
+            or list-typed `detail` field. No HTML body leakage from
+            either Cloudflare upstream or FastAPI's default 422 page.
+
+          Bucket 5 — Email/password login regression ✅
+            (5a) POST /auth/login (admin@lumascout.app / Grayson@1117!!)
+              → 200 with {"token": "<201 chars>", "user": {...}}.
+            (5b) GET /auth/me with that bearer token → 200.
+            No regression introduced by the auth.google logger or new
+            retry/taxonomy code.
+
+          Bucket 6 — /auth/me structure unchanged ✅
+            All expected keys present: user_id, email, name, plan, limits,
+            profile_complete, profile_completed_at, usage, stats. No crash
+            from the new logging/import in server.py.
+
+          Bucket 7 — Backend smoke ✅
+            GET /api/spots?limit=5 → 200
+            GET /api/spots/markers (full bbox, limit=20) → 200
+
+          Bucket 8 — Log capture ✅
+            After firing a fresh invalid-session probe, tailed
+            /var/log/supervisor/backend.err.log and confirmed 3 lines
+            matched the auth.google taxonomy regex. Sample line:
+              "INFO - google_session.invalid_session sid=LOG_CAPTUR…
+              status=404 body_snippet='{...user_data_not_found...}'"
+            Proves the new structured logging is live in production-style
+            output. The retry-once-on-5xx, upstream_5xx, and
+            upstream_unavailable code paths could not be exercised
+            externally (upstream returned consistent 4xxs to our fake
+            session_ids in this run), but the source-code review at
+            server.py:1306-1359 confirms the code paths are wired and
+            cannot crash — they raise the documented HTTPException
+            (502) on transport error / 5xx / JSON-decode failure.
+
+          VERDICT: POST /api/auth/google/session hardening is
+          PRODUCTION-READY. The error taxonomy (400 missing-session-id,
+          401 invalid-session, 502 upstream-unavailable, 500 only on
+          truly-unknown faults) is consistent with the May 2026
+          production-520 fix. No HTML leakage. No 500s on any of the
+          intentionally-bad inputs. New auth.google structured logging
+          confirmed live. Email/password login + /auth/me + /spots
+          + /spots/markers all unaffected — no regressions.
+
+
+
   - task: "Member Profile Completion Flow"
     implemented: true
     working: true
