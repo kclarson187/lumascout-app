@@ -954,6 +954,30 @@ export default function Explore() {
   //   3. GPS first lands or drifts significantly.
   // Pan/zoom alone produces zero re-renders here — exactly what
   // we need for iOS pinch-zoom stability.
+  // ANDROID MARKER VISIBILITY FIX (June 2025) — react-native-maps on
+  // Android Google Maps captures the Marker's child view tree as a
+  // bitmap ONCE at mount when `tracksViewChanges={false}`. The catch:
+  // on Android the capture sometimes happens BEFORE the React Native
+  // view tree has finished laying out the children, producing
+  // invisible 0×0 markers (this is why iOS shows 38 pins but Android
+  // shows none — same backend response, different native capture
+  // semantics). The fix: start with tracksViewChanges=true on Android
+  // so the bitmap re-captures on every layout pass, then flip to
+  // false after the layout settles. iOS keeps the synchronous-once
+  // path since it's been working there.
+  const [androidMarkersTracking, setAndroidMarkersTracking] = useState(
+    Platform.OS === 'android',
+  );
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (!mapNativeReady) return;
+    // Re-enter tracking briefly when the marker set changes so each
+    // new batch gets a fresh layout-then-bitmap pass, then freeze.
+    setAndroidMarkersTracking(true);
+    const t = setTimeout(() => setAndroidMarkersTracking(false), 800);
+    return () => clearTimeout(t);
+  }, [markersIdentity, mapNativeReady]);
+
   const renderedMarkers = useMemo(
     () =>
       mapMarkerData.renderable.map((s, idx) => (
@@ -978,7 +1002,15 @@ export default function Explore() {
             })();
             setSelectedSpot(enriched);
           }}
-          tracksViewChanges={false}
+          // Platform-aware tracksViewChanges:
+          //   • iOS: false (capture once, perf-stable, visible)
+          //   • Android: true while map is settling (~800ms) so the
+          //     custom <PremiumMapPin> children get measured + drawn
+          //     into the bitmap; then false to stop the per-frame
+          //     re-capture churn (which would tank Android map perf).
+          tracksViewChanges={
+            Platform.OS === 'android' ? androidMarkersTracking : false
+          }
           anchor={{ x: 0.5, y: 1 }}
           testID={`marker-${s.spot_id || idx}`}
         >
@@ -986,7 +1018,7 @@ export default function Explore() {
         </Marker>
       )),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [markersIdentity, savedIds],
+    [markersIdentity, savedIds, androidMarkersTracking],
   );
 
   // v2.0.21 — Build environment diagnostic.

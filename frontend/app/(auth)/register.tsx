@@ -19,6 +19,7 @@ import { colors, font, space } from '../../src/theme';
 import { Button } from '../../src/components/Button';
 import { Input } from '../../src/components/ui';
 import { formatApiError } from '../../src/api';
+import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
 
 export default function Register() {
   const { register, googleExchange } = useAuth();
@@ -29,6 +30,7 @@ export default function Register() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const kbHeight = useKeyboardHeight();
 
   const onSubmit = async () => {
     setError('');
@@ -66,7 +68,12 @@ export default function Register() {
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
         <ScrollView
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[
+            styles.scrollContent,
+            Platform.OS === 'android' && kbHeight > 0
+              ? { paddingBottom: kbHeight + space.xxxl }
+              : null,
+          ]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
