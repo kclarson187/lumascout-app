@@ -7,6 +7,7 @@ import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ArrowLeft, Mail, CheckCircle2 } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
+import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
 import { colors, font, space, radii } from '../../src/theme';
 import { Button } from '../../src/components/Button';
 import { Input } from '../../src/components/ui';
@@ -29,6 +30,7 @@ export default function ForgotPassword() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [sent, setSent] = useState<SentState | null>(null);
+  const kbHeight = useKeyboardHeight();
 
   const isValidEmail = useMemo(() => /^\S+@\S+\.\S+$/.test(email.trim()), [email]);
 
@@ -58,7 +60,12 @@ export default function ForgotPassword() {
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
         <ScrollView
-          contentContainerStyle={{ padding: space.xl, paddingBottom: space.xxxl }}
+          contentContainerStyle={[
+            { padding: space.xl, paddingBottom: space.xxxl },
+            Platform.OS === 'android' && kbHeight > 0
+              ? { paddingBottom: kbHeight + space.xxxl }
+              : null,
+          ]}
           keyboardShouldPersistTaps="handled"
         >
           <TouchableOpacity onPress={() => router.back()} style={styles.back} testID="fp-back">

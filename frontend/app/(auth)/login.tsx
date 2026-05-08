@@ -19,6 +19,7 @@ import { colors, font, space } from '../../src/theme';
 import { Button } from '../../src/components/Button';
 import { Input } from '../../src/components/ui';
 import { formatApiError } from '../../src/api';
+import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
 
 export default function Login() {
   const { login, googleExchange } = useAuth();
@@ -26,6 +27,10 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // Android keyboard pad: ensures the "Sign in" button + Google CTA
+  // remain reachable inside the ScrollView when the keyboard pushes
+  // the activity up under softwareKeyboardLayoutMode "resize".
+  const kbHeight = useKeyboardHeight();
 
   const onSubmit = async () => {
     setError('');
@@ -60,7 +65,15 @@ export default function Login() {
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
         <ScrollView
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[
+            styles.scrollContent,
+            // Android: extend the bottom of the scroll content by the
+            // keyboard height so the Sign-in button + Google button +
+            // sign-up link remain scrollable above the keyboard.
+            Platform.OS === 'android' && kbHeight > 0
+              ? { paddingBottom: kbHeight + space.xxxl }
+              : null,
+          ]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >

@@ -12,6 +12,74 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "ANDROID STABILIZATION ROUND 5 — Markers visible + Auth keyboard parity"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app/(tabs)/explore.tsx (Android-aware tracksViewChanges: true initially → false after 800ms)
+      /app/frontend/src/hooks/useKeyboardHeight.ts (NEW — reusable Android keyboard pad hook)
+      /app/frontend/app/(auth)/login.tsx (kbHeight applied to scrollContent paddingBottom)
+      /app/frontend/app/(auth)/register.tsx (kbHeight applied)
+      /app/frontend/app/(auth)/forgot-password.tsx (kbHeight applied)
+      /app/frontend/app/(auth)/reset-password.tsx (kbHeight applied)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Android no longer crashing after Option B (newArchEnabled=false +
+          react-native-maps@1.20.1 stayed). Two remaining issues fixed:
+
+          1. ANDROID MAP MARKERS NOT VISIBLE — root cause: `tracksViewChanges={false}`
+             on a <Marker> with custom <PremiumMapPin> children captures the
+             marker bitmap ONCE at mount. On Android Google Maps the capture
+             happens before the React Native view tree finishes laying out the
+             children, leaving invisible 0×0 markers. iOS Apple Maps captures
+             AFTER layout, so iOS shows 38 pins fine.
+
+             FIX: platform-aware `tracksViewChanges`:
+               • iOS: false (capture once, perf-stable, visible — unchanged)
+               • Android: starts true (re-captures on every layout pass so the
+                 child PremiumMapPin gets drawn into the bitmap correctly),
+                 then flips to false after 800ms via useEffect to stop
+                 per-frame churn. State-controlled via `androidMarkersTracking`
+                 which re-enters tracking briefly when markersIdentity changes.
+
+          2. ANDROID KEYBOARD HIDING SUBMIT BUTTONS — root cause: form ScrollViews
+             have `paddingBottom: space.xxxl` (~32pt) + `minHeight: 100%`. When
+             the activity shrinks (softwareKeyboardLayoutMode "resize"), the
+             minHeight follows, so the bottom button sits flush against the
+             keyboard with no scroll room.
+
+             FIX: created reusable `useKeyboardHeight()` hook in
+             /app/frontend/src/hooks/useKeyboardHeight.ts. Returns the live
+             keyboard pixel height. Applied to login.tsx, register.tsx,
+             forgot-password.tsx, reset-password.tsx by adding
+             `paddingBottom: kbHeight + space.xxxl` to scrollContent on
+             Android only (iOS already lifts via KAV behavior="padding").
+
+             Auth screens chosen as priority because they're the first
+             touchpoint after install. Same hook ready to apply to
+             onboarding/profile-setup, add.tsx, profile.tsx, etc. in a
+             follow-up if needed.
+
+          iOS untouched: the <Marker> tracksViewChanges path branches per
+          Platform.OS, the keyboard pad branches per Platform.OS, and the
+          react-native-maps version is unchanged.
+
+          Bundle compiles cleanly. Web preview boots.
+
+          NEEDS RETEST on real Android device (after fresh EAS build):
+            • Explore Map → tap Map → pins now render visibly with custom
+              gold/teal/elite styling
+            • Tap pin → preview opens
+            • Login/Signup/Forgot/Reset → fill all fields → primary button
+              remains visible above keyboard
+            • iOS regression check — Map still shows 38 pins, login still works
+
+
   - task: "ANDROID STABILIZATION ROUND 4 — react-native-maps 1.20→1.27 Fabric upgrade + PROVIDER_GOOGLE + KAV parity"
     implemented: true
     working: "NA"

@@ -6,6 +6,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ArrowLeft, KeyRound, CheckCircle2 } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
+import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
 import { colors, font, space, radii } from '../../src/theme';
 import { Button } from '../../src/components/Button';
 import { Input } from '../../src/components/ui';
@@ -18,6 +19,7 @@ export default function ResetPassword() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [done, setDone] = useState(false);
+  const kbHeight = useKeyboardHeight();
 
   const canSubmit = useMemo(() => {
     return token.trim().length > 10 && pw.length >= 8 && pw === pw2 && !loading;
@@ -41,7 +43,12 @@ export default function ResetPassword() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ padding: space.xl, paddingBottom: space.xxxl }} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[
+          { padding: space.xl, paddingBottom: space.xxxl },
+          Platform.OS === 'android' && kbHeight > 0
+            ? { paddingBottom: kbHeight + space.xxxl }
+            : null,
+        ]} keyboardShouldPersistTaps="handled">
           <TouchableOpacity onPress={() => router.back()} style={styles.back} testID="rp-back">
             <ArrowLeft color={colors.text} size={22} />
           </TouchableOpacity>
