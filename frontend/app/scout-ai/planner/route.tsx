@@ -82,7 +82,7 @@ export default function RoutePlanner() {
         <View style={{ width: 40 }} />
       </View>
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <ScrollView contentContainerStyle={{ padding: space.xl, paddingBottom: space.xxxl }} keyboardShouldPersistTaps="handled">
           <View style={styles.iconBubble}><MapPinned size={20} color="#6aa9ff" /></View>
           <Text style={styles.head}>Build a one-day route</Text>

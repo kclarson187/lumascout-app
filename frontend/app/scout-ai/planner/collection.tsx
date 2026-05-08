@@ -82,7 +82,7 @@ export default function CollectionPlanner() {
         <View style={{ width: 40 }} />
       </View>
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <ScrollView contentContainerStyle={{ padding: space.xl, paddingBottom: space.xxxl }} keyboardShouldPersistTaps="handled">
           <View style={styles.iconBubble}><FolderPlus size={20} color="#74d88f" /></View>
           <Text style={styles.head}>What kind of collection?</Text>

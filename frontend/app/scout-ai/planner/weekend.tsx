@@ -62,7 +62,7 @@ export default function WeekendPlanner() {
         <View style={{ width: 40 }} />
       </View>
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <ScrollView contentContainerStyle={{ padding: space.xl, paddingBottom: space.xxxl }} keyboardShouldPersistTaps="handled">
           <View style={styles.iconBubble}><CalendarDays size={20} color="#ffb547" /></View>
           <Text style={styles.head}>Plan a shoot weekend</Text>

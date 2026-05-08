@@ -8,3 +8,8 @@ const clustering = require('react-native-map-clustering');
 export const MapView: any = maps.default;
 export const ClusteredMapView: any = clustering.default;
 export const Marker: any = maps.Marker;
+// Google Maps provider — required on Android (default provider is the
+// legacy native module that's incompatible with Fabric / New Architecture).
+// On iOS this is unused (we let react-native-maps default to Apple Maps).
+export const PROVIDER_GOOGLE: any = maps.PROVIDER_GOOGLE;
+export const PROVIDER_DEFAULT: any = maps.PROVIDER_DEFAULT;

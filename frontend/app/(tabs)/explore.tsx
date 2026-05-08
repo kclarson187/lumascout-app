@@ -39,7 +39,7 @@ import {
 import MAP_STYLE_DARK from '../../src/components/mapStyleDark';
 
 // Native-only map wrapper with web stub (Metro / codegenNativeCommands safety).
-import { MapView, ClusteredMapView, Marker } from '../../src/components/maps-module';
+import { MapView, ClusteredMapView, Marker, PROVIDER_GOOGLE } from '../../src/components/maps-module';
 import SafeClusteredMapView from '../../src/components/SafeClusteredMapView';
 import { Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -1258,6 +1258,14 @@ export default function Explore() {
               ref: mapRef,
               style: { flex: 1 },
               initialRegion: initialRegion,
+              // ANDROID STABILIZATION (June 2025): explicitly use the
+              // Google Maps provider on Android. The default provider
+              // is a legacy native module that's incompatible with
+              // Fabric / New Architecture and crashes the activity on
+              // physical Android devices despite working in emulators.
+              // iOS is left undefined so react-native-maps falls back
+              // to the native Apple Maps provider (default behavior).
+              provider: Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined,
               // ANDROID STABILIZATION (June 2025): three native props
               // were strongly suspected as the Android crash trigger:
               //
