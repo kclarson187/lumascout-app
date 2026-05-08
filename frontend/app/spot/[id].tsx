@@ -13,7 +13,7 @@ import React, { useState, useCallback, useEffect, useMemo } from 'react';import 
   DeviceEventEmitter,
   useWindowDimensions,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as ExpoLinking from 'expo-linking';
 import Head from 'expo-router/head';
@@ -99,6 +99,7 @@ function SpotDetailImpl() {
   const id = String(Array.isArray(rawId) ? rawId[0] || '' : rawId || '').trim();
   const { user } = useAuth();
   const isAdminUser = user?.role === 'admin' || user?.role === 'super_admin';
+  const insets = useSafeAreaInsets();
 
   // v2.0.25 refactor — all async state (spot / loading / community
   // uploads / error category / ordered images / galleryIdx clamping +
@@ -569,7 +570,7 @@ function SpotDetailImpl() {
           ) : null}
         </Head>
       ) : null}
-      <ScrollView contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 120 + insets.bottom }} showsVerticalScrollIndicator={false}>
         <View style={[styles.heroWrap, heroDynamic]}>
           <ScrollView
             horizontal
@@ -1236,7 +1237,20 @@ function SpotDetailImpl() {
       </ScrollView>
 
       {user && (
-        <View style={styles.actionBar}>
+        <View
+          style={[
+            styles.actionBar,
+            {
+              // ANDROID safe-area fix (June 2025): respect the system
+              // gesture / 3-button navigation bar inset so Saved / Add /
+              // Check-in buttons sit ABOVE the system controls instead
+              // of behind them. iOS home-indicator inset is also honored
+              // here. Math.max ensures we never reduce the original
+              // visual padding (space.xl = 24pt).
+              paddingBottom: Math.max(insets.bottom + 8, 24),
+            },
+          ]}
+        >
           <TouchableOpacity style={styles.actBtn} onPress={toggleSave} testID="spot-action-save">
             <Bookmark size={20} color={spot.is_saved ? colors.primary : colors.text} fill={spot.is_saved ? colors.primary : 'transparent'} />
             <Text style={[styles.actTxt, spot.is_saved && { color: colors.primary }]}>Saved</Text>
