@@ -125,7 +125,17 @@ function ThreadScreenImpl() {
   return (
     <KeyboardAvoidingView
       style={s.root}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      // ANDROID FIX (June 2025 v3 — composer gap):
+      //   • iOS: 'padding' lifts the whole view above the keyboard
+      //     (KAV measures the keyboard and adds padding to the bottom).
+      //   • Android: undefined → KAV is a no-op so it does NOT
+      //     reserve keyboard height. softwareKeyboardLayoutMode
+      //     "resize" already shrinks the activity above the keyboard,
+      //     so the composer naturally docks above the IME without
+      //     double-spacing. Previously behavior="height" was adding
+      //     an EXTRA keyboard-height worth of empty space, leaving
+      //     a giant gap between the message thread and the keyboard.
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={0}
     >
       <SafeAreaView style={{ flex: 1 }} edges={['top', 'left', 'right']}>

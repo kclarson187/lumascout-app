@@ -7,12 +7,13 @@ import {
   Dimensions,
   ScrollView,
   TouchableOpacity,
+  Platform,
 } from 'react-native';
 // SafeAreaView from `react-native-safe-area-context` (NOT react-native)
 // because the legacy RN SafeAreaView does not respect Android's system
 // gesture / 3-button navigation bar inset under edge-to-edge mode —
 // causing the bottom "I already have an account" link to be clipped.
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Camera, Map, Lock, Compass, Check } from 'lucide-react-native';
@@ -51,6 +52,15 @@ const slides = [
 export default function Onboarding() {
   const scrollRef = useRef<ScrollView>(null);
   const [index, setIndex] = useState(0);
+  // ANDROID FIX (June 2025 v2 — touch-target above gesture zone):
+  // Even with SafeAreaView, Android's gesture-exclusion area extends
+  // ~24-32dp ABOVE the visible system nav bar — so the tappable area
+  // of "I already have an account" was being silently consumed by the
+  // OS even though the visual hit-box looked right. Adding an extra
+  // 24dp on Android (on top of the SafeAreaView inset) lifts the
+  // touch target clear of the gesture zone.
+  const insets = useSafeAreaInsets();
+  const extraBottomPad = Platform.OS === 'android' ? 24 : 0;
   const [selectedSpecialties, setSelectedSpecialties] = useState<string[]>([]);
   const [showSpecialties, setShowSpecialties] = useState(false);
 
