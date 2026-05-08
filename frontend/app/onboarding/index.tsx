@@ -7,8 +7,12 @@ import {
   Dimensions,
   ScrollView,
   TouchableOpacity,
-  SafeAreaView,
 } from 'react-native';
+// SafeAreaView from `react-native-safe-area-context` (NOT react-native)
+// because the legacy RN SafeAreaView does not respect Android's system
+// gesture / 3-button navigation bar inset under edge-to-edge mode —
+// causing the bottom "I already have an account" link to be clipped.
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Camera, Map, Lock, Compass, Check } from 'lucide-react-native';

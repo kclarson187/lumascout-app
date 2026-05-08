@@ -252,14 +252,18 @@ function ThreadScreenImpl() {
                 s.composer,
                 {
                   paddingBottom: kbShown ? 10 : Math.max(insets.bottom, 10),
-                  // ANDROID: lift composer above the keyboard manually
-                  // because adjustResize + edge-to-edge sometimes does
-                  // not fully shrink the activity in time, leaving the
-                  // composer under the keyboard. Measured kbHeight is
-                  // the exact pixel height we need to clear. iOS keeps
-                  // its KAV-based padding (kbHeight stays 0 on iOS by
-                  // virtue of KAV consuming the keyboard show event).
-                  marginBottom: Platform.OS === 'android' ? kbHeight : 0,
+                  // ANDROID FIX (June 2025 v2 — composer overlift bug):
+                  // The previous version added `marginBottom: kbHeight`
+                  // on Android. Combined with softwareKeyboardLayoutMode
+                  // "resize" (which already shrinks the activity above
+                  // the keyboard), this DOUBLE-lifted the composer to
+                  // the TOP of the screen with a giant black gap below.
+                  // The correct Android pattern is to let adjustResize
+                  // handle everything — the activity shrinks, the
+                  // composer stays at the bottom of the shrunk activity,
+                  // which is exactly above the keyboard. No manual lift
+                  // needed. iOS continues to use KAV behavior="padding".
+                  marginBottom: 0,
                 },
               ]}
             >
