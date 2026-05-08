@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, TextInput, ActivityIndicator, Alert, Platform, Keyboard, KeyboardAvoidingView } from 'react-native';
+import { View, Text, StyleSheet, FlatList, Pressable, TextInput, ActivityIndicator, Alert, Platform, Keyboard } from 'react-native';
 import SafeImage from '../../src/components/SafeImage';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -123,20 +123,24 @@ function ThreadScreenImpl() {
   };
 
   return (
-    <KeyboardAvoidingView
-      style={s.root}
-      // ANDROID FIX (June 2025 v3 — composer gap):
-      //   • iOS: 'padding' lifts the whole view above the keyboard
-      //     (KAV measures the keyboard and adds padding to the bottom).
-      //   • Android: undefined → KAV is a no-op so it does NOT
-      //     reserve keyboard height. softwareKeyboardLayoutMode
-      //     "resize" already shrinks the activity above the keyboard,
-      //     so the composer naturally docks above the IME without
-      //     double-spacing. Previously behavior="height" was adding
-      //     an EXTRA keyboard-height worth of empty space, leaving
-      //     a giant gap between the message thread and the keyboard.
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={0}
+    // ANDROID DM FIX (June 2025 v6 — KeyboardAvoidingView completely
+    // removed):
+    //   KeyboardAvoidingView is unreliable on Android in this project
+    //   (edgeToEdgeEnabled=true + adjustResize together don't shrink
+    //   the activity properly under Fabric or Paper). We replaced it
+    //   with a plain <View> and apply manual `paddingBottom: kbHeight`
+    //   computed from Keyboard.addListener. The FlatList (flex:1)
+    //   shrinks by exactly the keyboard height and the composer
+    //   docks flush above the keyboard.
+    //
+    //   iOS: paddingBottom stays 0 because we don't apply it on iOS;
+    //   the SafeAreaView edges handle iOS home-indicator on its own
+    //   and softwareKeyboard there is platform-handled correctly.
+    <View
+      style={[
+        s.root,
+        { paddingBottom: Platform.OS === 'android' ? kbHeight : 0 },
+      ]}
     >
       <SafeAreaView style={{ flex: 1 }} edges={['top', 'left', 'right']}>
       <View style={s.header}>
@@ -315,7 +319,7 @@ function ThreadScreenImpl() {
         )}
       </View>
       </SafeAreaView>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
