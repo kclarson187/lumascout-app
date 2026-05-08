@@ -164,25 +164,16 @@ function ThreadScreenImpl() {
           own Messages.app effectively uses and the one that eliminates
           the last of the double-counted padding.
 
-          ANDROID FIX (June 2025 v4 — keyboard covering composer):
-          Even with softwareKeyboardLayoutMode "resize", on devices
-          with edgeToEdgeEnabled=true the activity often does NOT
-          shrink when the keyboard opens (resize + edge-to-edge has a
-          known conflict). Result: composer sits at the bottom of the
-          full-height activity, behind the keyboard. We manually
-          apply `paddingBottom: kbHeight` to this wrapper on Android
-          when the keyboard is visible. The FlatList (flex:1) shrinks
-          by exactly the keyboard height, and the composer (its
-          sibling) ends up flush against the keyboard top — exactly
-          where adjustResize was supposed to put it. iOS keeps its
-          KAV-padding behavior (kbHeight stays 0 there).
+          ANDROID DM FIX (June 2025 v5): KAV is now configured with
+          behavior="padding" on BOTH platforms (see the comment block
+          on the KeyboardAvoidingView above). KAV itself adds the
+          keyboard-height padding to the wrapper, so we no longer
+          need the manual `paddingBottom: kbHeight` we previously
+          applied here — keeping it would double-count the keyboard
+          height and push the composer 2x too high. Reverted to a
+          plain flex:1 wrapper.
       */}
-      <View
-        style={{
-          flex: 1,
-          paddingBottom: Platform.OS === 'android' ? kbHeight : 0,
-        }}
-      >
+      <View style={{ flex: 1 }}>
         {loading ? (
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
             <ActivityIndicator color={colors.primary}/>
