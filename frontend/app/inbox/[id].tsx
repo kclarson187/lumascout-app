@@ -162,8 +162,27 @@ function ThreadScreenImpl() {
           screen so RN's internal layout can position the composer
           flush against the keyboard top. This is the pattern Apple's
           own Messages.app effectively uses and the one that eliminates
-          the last of the double-counted padding. */}
-      <View style={{ flex: 1 }}>
+          the last of the double-counted padding.
+
+          ANDROID FIX (June 2025 v4 — keyboard covering composer):
+          Even with softwareKeyboardLayoutMode "resize", on devices
+          with edgeToEdgeEnabled=true the activity often does NOT
+          shrink when the keyboard opens (resize + edge-to-edge has a
+          known conflict). Result: composer sits at the bottom of the
+          full-height activity, behind the keyboard. We manually
+          apply `paddingBottom: kbHeight` to this wrapper on Android
+          when the keyboard is visible. The FlatList (flex:1) shrinks
+          by exactly the keyboard height, and the composer (its
+          sibling) ends up flush against the keyboard top — exactly
+          where adjustResize was supposed to put it. iOS keeps its
+          KAV-padding behavior (kbHeight stays 0 there).
+      */}
+      <View
+        style={{
+          flex: 1,
+          paddingBottom: Platform.OS === 'android' ? kbHeight : 0,
+        }}
+      >
         {loading ? (
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
             <ActivityIndicator color={colors.primary}/>
