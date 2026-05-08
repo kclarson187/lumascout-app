@@ -31,7 +31,7 @@
     "android": {
       "package": "com.lumascout.app",
       "versionCode": 1,
-      "newArchEnabled": true,
+      "newArchEnabled": false,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#0A0A0A"
