@@ -145,7 +145,24 @@ export default function Onboarding() {
               style={styles.gradient}
               locations={[0.2, 0.55, 0.95]}
             />
-            <SafeAreaView style={styles.textLayer} pointerEvents="box-none">
+            <SafeAreaView
+              style={[
+                styles.textLayer,
+                // ANDROID FIX (June 2025 v3 — gesture-exclusion zone):
+                // With edgeToEdgeEnabled=true, useSafeAreaInsets().bottom
+                // can return 0 on Android because the gesture/3-button
+                // nav bar is "transparent" to RN's safe-area system —
+                // so SafeAreaView's edges={['bottom']} provides ZERO
+                // clearance. We hard-floor the bottom padding at 80dp
+                // on Android, which is well above the ~32dp gesture
+                // exclusion area on every modern device, guaranteeing
+                // the "I already have an account" link is above the
+                // OS touch-priority zone. iOS keeps space.xxl (32pt).
+                Platform.OS === 'android' ? { paddingBottom: 80 } : null,
+              ]}
+              edges={['bottom']}
+              pointerEvents="box-none"
+            >
               <View style={{ flex: 1 }} />
               <View style={styles.slideIcon}>{s.icon}</View>
               <Text style={styles.title}>{s.title}</Text>
@@ -164,7 +181,14 @@ export default function Onboarding() {
                 testID={`onboarding-next-${i}`}
                 style={{ marginBottom: space.md }}
               />
-              <TouchableOpacity onPress={() => router.push('/(auth)/login')}>
+              <TouchableOpacity
+                onPress={() => router.push('/(auth)/login')}
+                // Larger hitSlop so the touch target extends 12dp in
+                // every direction beyond the visible text — bullet-
+                // proofing tap reliability on dense Android nav bars.
+                hitSlop={{ top: 12, bottom: 12, left: 24, right: 24 }}
+                style={{ paddingVertical: 8 }}
+              >
                 <Text style={styles.skip}>I already have an account</Text>
               </TouchableOpacity>
             </SafeAreaView>

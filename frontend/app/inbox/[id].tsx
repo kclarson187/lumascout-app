@@ -174,8 +174,18 @@ function ThreadScreenImpl() {
               ref={listRef}
               data={messages}
               keyExtractor={(m) => m.message_id}
+              // ANDROID FIX (June 2025 v3 — composer gap): the previous
+              // version had no `style` prop on FlatList, so when the
+              // message list was empty (or sparse) the FlatList sized
+              // itself to its content height — causing the composer to
+              // jump up right under the header on Android, with a giant
+              // black void between composer and keyboard. Explicit
+              // flex:1 forces the FlatList to fill the available space
+              // above the composer regardless of message count, so the
+              // composer always docks flush above the keyboard.
+              style={{ flex: 1 }}
               onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
-              contentContainerStyle={{ padding: space.md, gap: 8, paddingBottom: 90 }}
+              contentContainerStyle={{ padding: space.md, gap: 8, paddingBottom: 90, flexGrow: 1 }}
               ListEmptyComponent={
                 <View style={s.emptyWrap}>
                   <Text style={s.emptyTitle}>Say hi 👋</Text>
