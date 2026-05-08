@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react';import {
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';import {
   View,
   Text,
   StyleSheet,
@@ -100,6 +100,12 @@ function SpotDetailImpl() {
   const { user } = useAuth();
   const isAdminUser = user?.role === 'admin' || user?.role === 'super_admin';
   const insets = useSafeAreaInsets();
+  // Hero carousel scroll ref — used by the left/right arrow buttons
+  // (June 2025) to programmatically advance the paging ScrollView
+  // without forcing the user to swipe. Swipe still works as before;
+  // arrows are an additive affordance for users who don't realize
+  // the hero is swipeable.
+  const heroScrollRef = useRef<any>(null);
 
   // v2.0.25 refactor — all async state (spot / loading / community
   // uploads / error category / ordered images / galleryIdx clamping +
@@ -573,6 +579,7 @@ function SpotDetailImpl() {
       <ScrollView contentContainerStyle={{ paddingBottom: 120 + insets.bottom }} showsVerticalScrollIndicator={false}>
         <View style={[styles.heroWrap, heroDynamic]}>
           <ScrollView
+            ref={heroScrollRef}
             horizontal
             pagingEnabled
             showsHorizontalScrollIndicator={false}
@@ -665,6 +672,49 @@ function SpotDetailImpl() {
                 {Math.min(galleryIdx + 1, orderedImages.length)} / {orderedImages.length}
               </Text>
             </View>
+          ) : null}
+          {/* Hero arrow buttons (June 2025) — additive affordance for
+              users who don't realize the hero is swipeable. Only render
+              when there are 2+ images. The buttons sit vertically
+              centered on the hero, semi-transparent so they don't
+              fight the image, and disabled (faded) at the edges. They
+              programmatically scrollTo() the inner ScrollView while
+              the swipe gesture remains available everywhere else. */}
+          {orderedImages.length > 1 ? (
+            <>
+              {galleryIdx > 0 ? (
+                <TouchableOpacity
+                  style={[styles.heroArrow, styles.heroArrowLeft]}
+                  onPress={() => {
+                    const next = Math.max(0, galleryIdx - 1);
+                    heroScrollRef.current?.scrollTo({ x: next * winW, animated: true });
+                    setGalleryIdx(next);
+                  }}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+                  accessibilityLabel="Previous photo"
+                  testID="spot-hero-prev"
+                >
+                  <ChevronLeft size={22} color="#fff" />
+                </TouchableOpacity>
+              ) : null}
+              {galleryIdx < orderedImages.length - 1 ? (
+                <TouchableOpacity
+                  style={[styles.heroArrow, styles.heroArrowRight]}
+                  onPress={() => {
+                    const next = Math.min(orderedImages.length - 1, galleryIdx + 1);
+                    heroScrollRef.current?.scrollTo({ x: next * winW, animated: true });
+                    setGalleryIdx(next);
+                  }}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+                  accessibilityLabel="Next photo"
+                  testID="spot-hero-next"
+                >
+                  <ChevronRight size={22} color="#fff" />
+                </TouchableOpacity>
+              ) : null}
+            </>
           ) : null}
           {/* Hero Carousel CR (June 2025 v2.0.20) — when the active hero
               slide is a community upload, surface a subtle "Community"

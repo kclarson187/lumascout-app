@@ -675,26 +675,33 @@ export default function UploadScreen() {
             ))}
 
             {queue.length < MAX_PHOTOS ? (
-              <TouchableOpacity
-                onPress={pickPhotos}
-                disabled={picking}
-                style={[styles.addBtn, picking && { opacity: 0.6 }]}
-                testID="pick-photos"
-                accessibilityLabel="Select photos"
-              >
-                {picking ? (
-                  <ActivityIndicator color={colors.primary} />
-                ) : (
-                  <>
-                    <ImagePlus size={18} color={colors.primary} />
-                    <Text style={styles.addBtnTxt}>
-                      {queue.length === 0
-                        ? 'Select photos'
-                        : `Add photos (${remainingSlots} remaining)`}
-                    </Text>
-                  </>
-                )}
-              </TouchableOpacity>
+              <>
+                <TouchableOpacity
+                  onPress={pickPhotos}
+                  disabled={picking}
+                  style={[styles.addBtn, picking && { opacity: 0.6 }]}
+                  testID="pick-photos"
+                  accessibilityLabel="Select photos"
+                >
+                  {picking ? (
+                    <ActivityIndicator color={colors.primary} />
+                  ) : (
+                    <>
+                      <ImagePlus size={18} color={colors.primary} />
+                      <Text style={styles.addBtnTxt}>
+                        {queue.length === 0
+                          ? 'Select photos'
+                          : `Add photos (${remainingSlots} remaining)`}
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+                {/* Helpful upload sizing hint — appears on both iOS and
+                    Android. Soft tip, not a hard limit. (June 2025) */}
+                <Text style={styles.sizeHint}>
+                  Ideal image size: under 10 MB per photo for faster uploads.
+                </Text>
+              </>
             ) : (
               <View style={styles.maxNotice}>
                 <Text style={styles.maxNoticeText}>Maximum {MAX_PHOTOS} photos per post. Remove one to add another.</Text>
@@ -1081,6 +1088,16 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(245,166,35,0.06)',
   },
   addBtnTxt: { color: colors.primary, fontFamily: font.bodySemibold, fontSize: 13 },
+  // Soft hint shown beneath the "Select photos" / "Add photos" button.
+  // Gentle helper styling — not error-styled — so it reads as guidance.
+  sizeHint: {
+    color: colors.textTertiary,
+    fontFamily: font.body,
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 8,
+    paddingHorizontal: 12,
+  },
 
   maxNotice: {
     paddingVertical: 10,

@@ -122,7 +122,22 @@ export default function KeyboardSafe({
       behavior={behavior}
       keyboardVerticalOffset={keyboardVerticalOffset}
     >
-      {disableTapToDismiss ? body : (
+      {/* ANDROID SCROLL FIX (June 2025): the previous version wrapped
+          the body in a single TouchableWithoutFeedback so any tap on
+          empty area dismisses the keyboard. On iOS this works fine
+          because the iOS gesture system passes pan gestures through
+          to descendants, but on Android the Touchable claims the
+          touch FIRST and only releases it on tap, blocking pan
+          gestures from reaching the ScrollView. The user-visible
+          symptom: pages like "Keep this spot alive" couldn't be
+          scrolled unless the user started the gesture inside a
+          caption box or pill (those are their own touchables that
+          intercept before the wrapper). On Android we now skip the
+          tap-to-dismiss wrapper entirely — ScrollView's
+          `keyboardDismissMode="on-drag"` already dismisses the
+          keyboard on any scroll gesture, which is the standard
+          Android pattern (used by Gmail, Instagram, etc.). */}
+      {(disableTapToDismiss || Platform.OS === 'android') ? body : (
         // accessible={false} keeps the wrapper out of the accessibility tree
         // so VoiceOver doesn't announce it as tappable.
         <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>

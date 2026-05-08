@@ -74,6 +74,28 @@ export const styles = StyleSheet.create({
     fontSize: 11,
     letterSpacing: 0.5,
   },
+  // Hero swipe-arrow buttons (June 2025) — additive UX on top of the
+  // existing pagingEnabled ScrollView. Centered vertically on the
+  // hero with a soft 50%-opacity black circle so the arrow remains
+  // readable on bright photos but doesn't fight the image. Only
+  // rendered when there are 2+ photos AND the user isn't at the
+  // respective edge (left arrow hides at index 0; right arrow
+  // hides at the last index).
+  heroArrow: {
+    position: 'absolute',
+    top: '50%',
+    marginTop: -22, // half of height to true-center
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroArrowLeft: { left: space.md },
+  heroArrowRight: { right: space.md },
   // Hero Carousel CR (June 2025 v2.0.20) — community attribution pill.
   // Bottom-left corner, well clear of the admin DELETE pill (which
   // sits at bottom: space.lg + 16, left: space.md). We position
