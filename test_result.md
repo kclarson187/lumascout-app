@@ -12,6 +12,98 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "ANDROID STABILIZATION ROUND 4 — react-native-maps 1.20→1.27 Fabric upgrade + PROVIDER_GOOGLE + KAV parity"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/package.json (react-native-maps 1.20.1 → ^1.26.1, resolved to 1.27.2)
+      /app/frontend/src/components/maps-module.ts (added PROVIDER_GOOGLE + PROVIDER_DEFAULT exports)
+      /app/frontend/app/(tabs)/explore.tsx (added provider={PROVIDER_GOOGLE} on Android, undefined on iOS)
+      /app/frontend/app.json (added android.config.googleMaps.apiKey placeholder)
+      /app/frontend/app/settings/email.tsx (KAV behavior undefined → 'height' on Android)
+      /app/frontend/app/community/post/[id].tsx (KAV behavior undefined → 'height' on Android)
+      /app/frontend/app/help/index.tsx (KAV behavior undefined → 'height' on Android)
+      /app/frontend/app/admin/user/[id].tsx (KAV behavior undefined → 'height' on Android)
+      /app/frontend/app/scout-ai/planner/weekend.tsx (KAV behavior undefined → 'height' on Android)
+      /app/frontend/app/scout-ai/planner/route.tsx (KAV behavior undefined → 'height' on Android)
+      /app/frontend/app/scout-ai/planner/collection.tsx (KAV behavior undefined → 'height' on Android)
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          DEFINITIVE ROOT CAUSE FOUND via troubleshoot_agent investigation
+          (10-step deep dive):
+
+          react-native-maps 1.20.1 does NOT support React Native's New
+          Architecture (Fabric / TurboModules) on Android. This project
+          has `newArchEnabled: true` globally + per-platform in app.json.
+          Fabric support was added in react-native-maps 1.26.1+. Every
+          previous "fix" we shipped (TDZ, prop strip, marker pulse off,
+          PULSE_ANIM_ENABLED, defer mount) was treating downstream JS
+          symptoms — the underlying NATIVE crash was the Fabric interop
+          failure inside the GoogleMap surface allocation.
+
+          PRIMARY FIX — react-native-maps upgrade
+          • yarn add react-native-maps@^1.26.1 → resolved to 1.27.2
+            (current latest, fully Fabric-compatible)
+          • react-native-map-clustering@4.0.0 left as-is (not actively
+            used — SafeClusteredMapView forces PlainMapView path)
+
+          SECONDARY FIX — explicit Google provider on Android
+          • maps-module.ts now exports PROVIDER_GOOGLE + PROVIDER_DEFAULT
+          • explore.tsx uses provider={PROVIDER_GOOGLE} on Android only
+          • iOS keeps provider undefined → react-native-maps defaults to
+            native Apple Maps surface (intentional, working baseline)
+
+          TERTIARY FIX — Android Google Maps API key configuration
+          • app.json android.config.googleMaps.apiKey added with a
+            PLACEHOLDER value. The Fabric upgrade alone should stop the
+            crash; the API key only governs whether tiles render in
+            production EAS builds.
+          • USER ACTION REQUIRED: replace
+              "GOOGLE_MAPS_ANDROID_API_KEY_PLACEHOLDER"
+            with the real Google Maps Android API key from
+            https://console.cloud.google.com/google/maps-apis/credentials
+            BEFORE the next EAS Android production build. Without it
+            the map will render blank tiles in production (no crash).
+
+          KEYBOARD PARITY — 7 screens standardized
+          Found 7 screens using `behavior={Platform.OS === 'ios' ? 'padding' : undefined}`
+          The `undefined` on Android made KeyboardAvoidingView a no-op,
+          leaving submit buttons + bottom inputs hidden behind the IME.
+          Standardized all 7 to `'height'` which composes correctly with
+          softwareKeyboardLayoutMode "resize" + edge-to-edge.
+
+          Files patched (all use 'height' on Android, 'padding' on iOS):
+            settings/email.tsx, community/post/[id].tsx, help/index.tsx,
+            admin/user/[id].tsx, scout-ai/planner/{weekend,route,collection}.tsx
+
+          Other auth + form screens already had correct 'height' behavior
+          (login.tsx, register.tsx, forgot-password.tsx, reset-password.tsx,
+          add.tsx, profile-setup.tsx, profile.tsx, etc.).
+
+          inbox/[id].tsx retains its custom kbHeight tracking (Round 2
+          fix) — gold standard for chat-style composers.
+
+          Bundle compiles cleanly. Web preview boots without errors.
+
+          NEEDS RETEST on real Android device:
+            • Explore tap Map → no crash, pins render with Google Maps tiles
+            • Hot-switch List ↔ Map repeatedly → no crash
+            • Tap a pin → preview opens → tap "View Details" → spot detail
+            • All form screens (Login, Signup, Add Spot, Profile Setup,
+              Comments, Edit Profile, Settings) — keyboard never covers
+              submit buttons
+          
+          iOS regression check expected to be fully clean — only
+          reactnativemaps version was bumped which adds Fabric support
+          and is a backward-compatible API for our usage. PROVIDER_GOOGLE
+          is gated to Android-only so iOS keeps its working Apple Maps.
+
+
   - task: "CROSS-PLATFORM CRASH FIX — 'Cannot access cover before initialization' TDZ in SpotCard"
     implemented: true
     working: "NA"

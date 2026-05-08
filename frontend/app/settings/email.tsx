@@ -67,7 +67,7 @@ export default function EmailSettingsScreen() {
         <View style={{ width: 40 }} />
       </View>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={{ flex: 1 }}
       >
         <ScrollView contentContainerStyle={{ padding: space.xl, gap: 14 }}>
