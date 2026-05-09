@@ -4,352 +4,882 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0A0A0A">
-<title>LumaScout — Find better light. Save better locations.</title>
-<meta name="description" content="LumaScout is your photography scouting companion. Discover spots, save coordinates and light notes, plan with Scout AI, and share what's worth shooting.">
+<title>LumaScout — Find better photo locations. Plan smarter shoots.</title>
+<meta name="description" content="LumaScout is a scouting, planning, and community platform for photographers. Discover shoot-worthy locations, save favorite spots, and connect with photographers around you.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
+<div class="toast-container" id="toasts"></div>
 
-<header class="nav" id="top">
+<!-- ═══════════════ NAVIGATION ═══════════════ -->
+<header class="nav" id="site-nav">
   <div class="nav-inner">
-    <a class="brand" href="#top" aria-label="LumaScout home">
-      <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 32 32" width="28" height="28"><defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#F5A623"/><stop offset="1" stop-color="#D04848"/></linearGradient></defs><circle cx="16" cy="16" r="14" fill="url(#g)"/><circle cx="16" cy="16" r="5" fill="#0A0A0A"/><circle cx="22" cy="10" r="2" fill="#0A0A0A"/></svg>
-      </span>
-      <span class="brand-word">LumaScout</span>
+    <a class="nav-brand" href="#" aria-label="LumaScout home">
+      <svg class="nav-logo-icon" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">
+        <defs><linearGradient id="lg" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#F5A623"/><stop offset="1" stop-color="#D04848"/></linearGradient></defs>
+        <circle cx="16" cy="16" r="14" fill="url(#lg)"/>
+        <circle cx="16" cy="16" r="5" fill="#0A0A0A"/>
+        <circle cx="22" cy="10" r="2.5" fill="#0A0A0A"/>
+      </svg>
+      <span class="nav-brand-word">LumaScout</span>
     </a>
-    <nav class="nav-links" aria-label="Primary">
-      <a href="#discover">Discover</a>
-      <a href="#features">Features</a>
-      <a href="#scout-ai">Scout AI</a>
-      <a href="#community">Community</a>
-      <a href="#pricing">Pricing</a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="#features" class="nav-link">Features</a>
+      <a href="#how-it-works" class="nav-link">How It Works</a>
+      <a href="#desktop-app" class="nav-link">Desktop</a>
+      <a href="#pricing" class="nav-link">Pricing</a>
     </nav>
-    <div class="nav-cta">
-      <a class="btn btn-ghost" href="#download">Sign in</a>
-      <a class="btn btn-primary" href="#download">Get the app</a>
+    <div class="nav-actions" id="nav-auth">
+      <button class="btn btn-ghost" onclick="openModal('login-modal')">Sign In</button>
+      <button class="btn btn-primary" onclick="openModal('reg-modal')">Get Started</button>
     </div>
-    <button class="nav-toggle" aria-label="Open menu" aria-expanded="false" aria-controls="mobile-menu">
+    <button class="nav-hamburger" id="nav-toggle" aria-label="Toggle menu" aria-expanded="false" aria-controls="mobile-nav">
       <span></span><span></span><span></span>
     </button>
   </div>
-  <div class="mobile-menu" id="mobile-menu" hidden>
-    <a href="#discover">Discover</a>
+  <div class="mobile-nav" id="mobile-nav" hidden>
     <a href="#features">Features</a>
-    <a href="#scout-ai">Scout AI</a>
-    <a href="#community">Community</a>
+    <a href="#how-it-works">How It Works</a>
+    <a href="#desktop-app">Desktop</a>
     <a href="#pricing">Pricing</a>
-    <a class="btn btn-primary mobile-cta" href="#download">Get the app</a>
+    <button class="btn btn-ghost mobile-btn" onclick="openModal('login-modal');closeMobileNav()">Sign In</button>
+    <button class="btn btn-primary mobile-btn" onclick="openModal('reg-modal');closeMobileNav()">Get Started</button>
   </div>
 </header>
 
-<main id="main">
+<!-- ═══════════════ LANDING PAGE ═══════════════ -->
+<main id="main" class="landing" id="landing">
 
-<section class="hero">
-  <div class="hero-bg" aria-hidden="true"></div>
-  <div class="hero-grain" aria-hidden="true"></div>
-  <div class="container hero-inner">
-    <div class="hero-copy">
-      <span class="eyebrow"><span class="dot"></span>For photographers, by photographers</span>
-      <h1 class="display">Find better light.<br><em>Save better locations.</em></h1>
-      <p class="lede">LumaScout is your photography scouting companion — discover spots, capture exact coordinates and light notes, plan shoots with Scout AI, and share what's worth shooting.</p>
-      <div class="hero-cta">
-        <a class="btn btn-primary btn-lg" href="#download">Get LumaScout</a>
-        <a class="btn btn-ghost btn-lg" href="#scout-ai">Meet Scout AI →</a>
+  <!-- ── HERO ── -->
+  <section class="hero" id="hero">
+    <div class="hero-glow" aria-hidden="true"></div>
+    <div class="hero-grid" aria-hidden="true"></div>
+    <div class="hero-noise" aria-hidden="true"></div>
+    <div class="hero-inner container">
+      <div class="hero-copy">
+        <div class="hero-eyebrow">
+          <span class="eyebrow-dot"></span>
+          <span>For photographers, by photographers</span>
+        </div>
+        <h1 class="hero-title">Find better photo locations.<br><em>Plan smarter shoots.</em></h1>
+        <p class="hero-lede">LumaScout helps photographers discover shoot-worthy locations, explore real community insights, save favorite spots, and build a stronger creative network — all in one premium platform.</p>
+        <div class="hero-cta-row">
+          <button class="btn btn-primary btn-lg" onclick="scrollTo({top:document.getElementById('features').offsetTop-80,behavior:'smooth'})">Explore LumaScout</button>
+          <button class="btn btn-outline btn-lg" onclick="openModal('login-modal')">Sign In</button>
+        </div>
+        <div class="hero-trust">
+          <div class="trust-item"><span class="trust-num">8</span><span class="trust-label">Shoot specialties</span></div>
+          <div class="trust-div"></div>
+          <div class="trust-item"><span class="trust-num">4</span><span class="trust-label">Privacy modes</span></div>
+          <div class="trust-div"></div>
+          <div class="trust-item"><span class="trust-num">1</span><span class="trust-label">Scout AI planner</span></div>
+        </div>
       </div>
-      <ul class="hero-stats">
-        <li><strong>8</strong><span>Shoot specialties</span></li>
-        <li><strong>4</strong><span>Privacy modes</span></li>
-        <li><strong>1</strong><span>AI planner</span></li>
-      </ul>
-    </div>
-    <div class="hero-phone" aria-hidden="true">
-      <div class="phone">
-        <div class="phone-screen">
-          <div class="app-statusbar"><span>9:41</span><span class="sb-icons">●●●●●</span></div>
-          <div class="app-header">
-            <div class="app-title"><span class="app-bm"></span><span>LumaScout</span></div>
-            <div class="app-actions"><span class="icn">⚲</span><span class="icn">☰</span></div>
-          </div>
-          <div class="app-search"><span>🔍</span><em>Search Austin, Hill Country…</em></div>
-          <div class="app-chips">
-            <span class="chip chip-active">Golden Hour</span>
-            <span class="chip">Nature</span>
-            <span class="chip">Urban</span>
-            <span class="chip">Wedding</span>
-          </div>
-          <div class="app-card">
-            <div class="card-img card-img-1"><span class="pin pin-premium">★ Premium</span><span class="badge-time">Sunset · 7:42 PM</span></div>
-            <div class="card-body">
-              <div class="card-title">Bluebonnet Ridge</div>
-              <div class="card-meta">Texas Hill Country · 0.6 mi walk</div>
-              <div class="card-tags"><span>Nature</span><span>Sunset</span><span>Dog Friendly</span></div>
+      <div class="hero-visual" aria-hidden="true">
+        <div class="desktop-mockup">
+          <div class="dm-titlebar"><span class="dm-dot dm-red"></span><span class="dm-dot dm-yellow"></span><span class="dm-dot dm-green"></span><span class="dm-url">lumascout.app</span></div>
+          <div class="dm-body">
+            <div class="dm-sidebar">
+              <div class="dm-sb-brand">
+                <svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="10" fill="#F5A623"/><circle cx="12" cy="12" r="4" fill="#0A0A0A"/><circle cx="16.5" cy="7.5" r="1.8" fill="#0A0A0A"/></svg>
+                <span>LumaScout</span>
+              </div>
+              <nav class="dm-nav">
+                <div class="dm-nav-item dm-active"><span>◉</span> Explore</div>
+                <div class="dm-nav-item"><span>☆</span> Saved</div>
+                <div class="dm-nav-item"><span>◈</span> Network</div>
+                <div class="dm-nav-item"><span>◇</span> Community</div>
+                <div class="dm-nav-item"><span>✉</span> Messages</div>
+                <div class="dm-nav-item"><span>△</span> Marketplace</div>
+              </nav>
+            </div>
+            <div class="dm-main">
+              <div class="dm-search-bar"><span class="dm-search-icon">⌕</span><span class="dm-search-ph">Search locations, spots, photographers…</span></div>
+              <div class="dm-chips">
+                <span class="dm-chip dm-chip-on">Golden Hour</span>
+                <span class="dm-chip">Nature</span>
+                <span class="dm-chip">Urban</span>
+                <span class="dm-chip">Portraits</span>
+              </div>
+              <div class="dm-cards">
+                <div class="dm-spot-card">
+                  <div class="dm-card-img dm-img-1">
+                    <span class="dm-badge">★ Premium</span>
+                    <span class="dm-time-badge">Sunset · 7:42 PM</span>
+                  </div>
+                  <div class="dm-card-body">
+                    <div class="dm-card-title">Bluebonnet Ridge</div>
+                    <div class="dm-card-loc">Texas Hill Country · 0.6 mi</div>
+                    <div class="dm-card-tags"><span>Nature</span><span>Sunset</span></div>
+                  </div>
+                </div>
+                <div class="dm-spot-card">
+                  <div class="dm-card-img dm-img-2">
+                    <span class="dm-time-badge">Golden Hour</span>
+                  </div>
+                  <div class="dm-card-body">
+                    <div class="dm-card-title">River Walk South</div>
+                    <div class="dm-card-loc">San Antonio · Downtown</div>
+                    <div class="dm-card-tags"><span>Urban</span><span>Wedding</span></div>
+                  </div>
+                </div>
+                <div class="dm-spot-card">
+                  <div class="dm-card-img dm-img-3">
+                    <span class="dm-time-badge">Sunrise</span>
+                  </div>
+                  <div class="dm-card-body">
+                    <div class="dm-card-title">Enchanted Rock</div>
+                    <div class="dm-card-loc">Fredericksburg · 2.1 mi</div>
+                    <div class="dm-card-tags"><span>Landscape</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="dm-map-panel">
+              <div class="dm-map-bg"></div>
+              <div class="dm-pin dm-p1"></div>
+              <div class="dm-pin dm-p2"></div>
+              <div class="dm-pin dm-p3 dm-pin-premium"></div>
+              <div class="dm-map-label">Explore Map</div>
             </div>
           </div>
-          <div class="app-card app-card-2">
-            <div class="card-img card-img-2"><span class="pin pin-public">○ Public</span><span class="badge-time">Golden Hour</span></div>
-            <div class="card-body">
-              <div class="card-title">San Antonio River Walk</div>
-              <div class="card-meta">Downtown · Permits OK</div>
-              <div class="card-tags"><span>Urban</span><span>Wedding</span></div>
-            </div>
+        </div>
+        <div class="hero-float-card hero-fc1">
+          <div class="hfc-icon">📍</div>
+          <div class="hfc-text">
+            <div class="hfc-title">Golden hour detected</div>
+            <div class="hfc-sub">7:38 PM · Fredericksburg</div>
           </div>
-          <div class="app-tabbar">
-            <span class="tab tab-active">⌖<em>Explore</em></span>
-            <span class="tab">⚲<em>Network</em></span>
-            <span class="tab tab-add">+</span>
-            <span class="tab">☆<em>Saved</em></span>
-            <span class="tab">○<em>Profile</em></span>
+        </div>
+        <div class="hero-float-card hero-fc2">
+          <div class="hfc-icon">🤝</div>
+          <div class="hfc-text">
+            <div class="hfc-title">New connection request</div>
+            <div class="hfc-sub">Marcus Holt · Portrait</div>
           </div>
         </div>
       </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<section class="strip">
-  <div class="container strip-inner">
-    <span>Loved by photographers shooting</span>
-    <ul>
-      <li>Family</li><li>Pet</li><li>Wedding</li><li>Portrait</li><li>Seniors</li><li>Branding</li><li>Nature</li><li>Urban</li>
-    </ul>
-  </div>
-</section>
-
-<section class="section" id="discover">
-  <div class="container">
-    <div class="section-head">
-      <span class="eyebrow">Discover</span>
-      <h2 class="h2">A scouting network built around <em>real</em> spots.</h2>
-      <p class="section-sub">Browse community-shared locations or unlock private gems from creators you follow. Every spot includes coordinates, best times, light notes, parking, and permits — the stuff you actually need on shoot day.</p>
-    </div>
-    <div class="grid-3">
-      <article class="feature-card">
-        <div class="f-icon f-icon-pin">◉</div>
-        <h3>Map-first browsing</h3>
-        <p>Pan the map, drop into a region, and surface every spot worth shooting nearby — with sunrise, sunset, and golden-hour timing baked in.</p>
-      </article>
-      <article class="feature-card">
-        <div class="f-icon f-icon-light">◐</div>
-        <h3>Light-aware filters</h3>
-        <p>Filter by Sunrise, Morning, Golden Hour, Afternoon, Sunset, or Evening. Combine with shoot type to find the right place at the right hour.</p>
-      </article>
-      <article class="feature-card">
-        <div class="f-icon f-icon-lock">◈</div>
-        <h3>Private by default, public on purpose</h3>
-        <p>Public, Followers, Private, or Premium — four privacy modes let you share generously without giving away your secret meadow.</p>
-      </article>
-    </div>
-  </div>
-</section>
-
-<section class="section section-alt" id="features">
-  <div class="container">
-    <div class="section-head">
-      <span class="eyebrow">The four pillars</span>
-      <h2 class="h2">Everything a working photographer needs <em>before</em> the shoot.</h2>
-    </div>
-    <div class="pillars">
-      <article class="pillar">
-        <div class="pillar-num">01</div>
-        <h3>Welcome to LumaScout</h3>
-        <p>Discover better light and better locations. LumaScout is your photography scouting companion — find, save, plan, and share places worth shooting.</p>
-      </article>
-      <article class="pillar">
-        <div class="pillar-num">02</div>
-        <h3>Save every location</h3>
-        <p>Capture exact coordinates, light notes, parking, permits, and your own shoot intelligence for next time.</p>
-      </article>
-      <article class="pillar">
-        <div class="pillar-num">03</div>
-        <h3>Public spots. Private spots.</h3>
-        <p>Keep your secret meadow private. Share community gems publicly. You decide what stays yours.</p>
-      </article>
-      <article class="pillar">
-        <div class="pillar-num">04</div>
-        <h3>Plan smarter with Scout AI</h3>
-        <p>Your official LumaScout assistant. Weekend itineraries, driving routes, theme-matched collections — built from real spots.</p>
-      </article>
-    </div>
-  </div>
-</section>
-
-<section class="section showcase" id="scout-ai">
-  <div class="container showcase-grid">
-    <div class="showcase-copy">
-      <span class="eyebrow"><span class="dot dot-amber"></span>Scout AI</span>
-      <h2 class="h2">Plan a weekend in <em>seconds</em>, not hours.</h2>
-      <p class="section-sub">Tell Scout AI what you're shooting and when. It turns hundreds of community spots into an ordered itinerary — with driving times between locations, ideal arrival windows, and backup spots if light shifts.</p>
-      <ul class="check-list">
-        <li>Theme-matched collections from real spots</li>
-        <li>Driving routes that respect golden-hour timing</li>
-        <li>Weekend itineraries with backup locations</li>
-        <li>Smart recommendations from creators you follow</li>
+  <!-- ── SPECIALTY STRIP ── -->
+  <div class="specialty-strip">
+    <div class="strip-inner container">
+      <span class="strip-label">Built for photographers shooting</span>
+      <ul class="strip-list">
+        <li>Family</li><li>Pet</li><li>Wedding</li><li>Portrait</li><li>Seniors</li><li>Branding</li><li>Nature</li><li>Urban</li>
       </ul>
-      <a class="btn btn-primary" href="#download">Try Scout AI</a>
     </div>
-    <div class="showcase-visual">
-      <div class="chat">
-        <div class="chat-msg chat-user">Plan a Saturday around Fredericksburg. Family portraits, golden hour priority.</div>
-        <div class="chat-msg chat-ai">
-          <span class="chat-ai-name">Scout AI</span>
-          <p>Built you a 3-stop itinerary — 17 mi total, ending at peak golden hour at Wildseed Farms.</p>
-          <ol class="chat-route">
-            <li><b>10:30 AM</b> — Cross Mountain Park <span class="sm">Soft side-light, easy parking</span></li>
-            <li><b>2:15 PM</b> — Lyndon B. Johnson Park <span class="sm">Shaded oaks for high sun</span></li>
-            <li><b>7:38 PM</b> — Wildseed Farms <span class="sm">Wildflower field · golden hour peak</span></li>
-          </ol>
-        </div>
-        <div class="chat-msg chat-user chat-user-2">Add a sunrise option for Sunday.</div>
+  </div>
+
+  <!-- ── FEATURE OVERVIEW ── -->
+  <section class="section" id="features">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">Features</span>
+        <h2 class="sec-title">Everything a serious photographer<br><em>needs in one place.</em></h2>
+        <p class="sec-sub">From discovery to community, LumaScout is built around the full photographer workflow — scouting, planning, connecting, and creating.</p>
+      </div>
+      <div class="features-grid">
+        <article class="feat-card">
+          <div class="feat-icon">◉</div>
+          <h3 class="feat-title">Explore Photo Spots</h3>
+          <p class="feat-desc">Discover locations nearby, browse curated spot details, and see what makes each place worth shooting — with light timing, parking, and permits included.</p>
+          <span class="feat-tag">Map &amp; List view</span>
+        </article>
+        <article class="feat-card">
+          <div class="feat-icon">☆</div>
+          <h3 class="feat-title">Save &amp; Organize Locations</h3>
+          <p class="feat-desc">Build a personal scouting library. Save favorite spots, group them into collections, and revisit with all your notes intact — ready for the next session.</p>
+          <span class="feat-tag">Collections &amp; saves</span>
+        </article>
+        <article class="feat-card">
+          <div class="feat-icon">◈</div>
+          <h3 class="feat-title">Rich Spot Details</h3>
+          <p class="feat-desc">Each location is a designated spot page — imagery, community context, light schedules, difficulty, access notes, and planning details all in one view.</p>
+          <span class="feat-tag">Deep location data</span>
+        </article>
+        <article class="feat-card">
+          <div class="feat-icon">◇</div>
+          <h3 class="feat-title">Photographer Network</h3>
+          <p class="feat-desc">Discover photographers near you, explore their profiles and specialties, and connect with creatives who know your area better than any guide.</p>
+          <span class="feat-tag">Local connections</span>
+        </article>
+        <article class="feat-card">
+          <div class="feat-icon">◌</div>
+          <h3 class="feat-title">Community Feed</h3>
+          <p class="feat-desc">A place for photographers to share location insights, ask questions, post updates, and learn from each other's experience in the field.</p>
+          <span class="feat-tag">Shared knowledge</span>
+        </article>
+        <article class="feat-card">
+          <div class="feat-icon">✉</div>
+          <h3 class="feat-title">Direct Messaging</h3>
+          <p class="feat-desc">Communicate with photographers directly. Coordinate shoots, share location tips, and build working relationships through the platform.</p>
+          <span class="feat-tag">In-app messaging</span>
+        </article>
+        <article class="feat-card">
+          <div class="feat-icon">△</div>
+          <h3 class="feat-title">Marketplace</h3>
+          <p class="feat-desc">Discover photographer-focused resources: curated location packs, presets, and digital tools from creators who've done the scouting work for you.</p>
+          <span class="feat-tag">Location packs &amp; tools</span>
+        </article>
+        <article class="feat-card feat-card-gold">
+          <div class="feat-icon feat-icon-gold">★</div>
+          <h3 class="feat-title">Pro &amp; Elite Access</h3>
+          <p class="feat-desc">Unlock more powerful planning tools, enhanced discovery, premium spots from verified creators, and the full LumaScout experience for serious photographers.</p>
+          <span class="feat-tag feat-tag-gold">Pro &amp; Elite tiers</span>
+        </article>
       </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<section class="section section-alt" id="community">
-  <div class="container">
-    <div class="section-head">
-      <span class="eyebrow">Community</span>
-      <h2 class="h2">Follow the photographers who <em>actually</em> know your area.</h2>
-      <p class="section-sub">A creator-led network with profiles, groups, marketplaces, and referrals — so good intel travels with the people you trust.</p>
-    </div>
-    <div class="grid-4">
-      <article class="mini-card"><div class="mc-icon">◈</div><h4>Profiles</h4><p>Curated portfolios with verified spot lists.</p></article>
-      <article class="mini-card"><div class="mc-icon">◇</div><h4>Groups</h4><p>Private circles for crews, agencies, and local guilds.</p></article>
-      <article class="mini-card"><div class="mc-icon">△</div><h4>Marketplace</h4><p>Buy and sell location packs from trusted creators.</p></article>
-      <article class="mini-card"><div class="mc-icon">◌</div><h4>Referrals</h4><p>Pass jobs to nearby photographers — without losing the lead.</p></article>
-    </div>
-  </div>
-</section>
-
-<section class="section pricing" id="pricing">
-  <div class="container">
-    <div class="section-head">
-      <span class="eyebrow">Pricing</span>
-      <h2 class="h2">Free to start. <em>Premium</em> when you're ready.</h2>
-    </div>
-    <div class="price-grid">
-      <article class="price-card">
-        <div class="price-tier">Scout</div>
-        <div class="price-amount"><span class="price-currency">$</span>0<span class="price-period">/mo</span></div>
-        <p class="price-tag">Everything you need to discover and save spots.</p>
-        <ul>
-          <li>Browse public spots, unlimited</li>
-          <li>Save spots with full notes &amp; coords</li>
-          <li>Follow creators &amp; join groups</li>
-          <li>3 Scout AI plans / month</li>
+  <!-- ── BENEFITS ── -->
+  <section class="section section-dark" id="benefits">
+    <div class="container">
+      <div class="benefits-layout">
+        <div class="benefits-copy">
+          <span class="eyebrow">Why LumaScout</span>
+          <h2 class="sec-title">A better way to discover,<br><em>plan, and connect.</em></h2>
+          <p class="sec-sub">Stop guessing where to shoot. Stop scrolling Instagram for location ideas. Stop planning in spreadsheets. LumaScout brings the full scouting workflow together.</p>
+          <a class="btn btn-primary" href="#" onclick="event.preventDefault();openModal('reg-modal')">Join the Photographer Network</a>
+        </div>
+        <ul class="benefits-list">
+          <li class="benefit-item">
+            <div class="benefit-check">✓</div>
+            <div>
+              <div class="benefit-title">Spend less time guessing where to shoot</div>
+              <div class="benefit-desc">Community-verified spots with real photographer insights, not generic travel guides.</div>
+            </div>
+          </li>
+          <li class="benefit-item">
+            <div class="benefit-check">✓</div>
+            <div>
+              <div class="benefit-title">Discover better locations faster</div>
+              <div class="benefit-desc">Map-first browsing with light-aware filters so you find the right spot at the right hour.</div>
+            </div>
+          </li>
+          <li class="benefit-item">
+            <div class="benefit-check">✓</div>
+            <div>
+              <div class="benefit-title">Plan sessions with more confidence</div>
+              <div class="benefit-desc">Sun timing, parking, access notes, and community context — everything you need before you leave home.</div>
+            </div>
+          </li>
+          <li class="benefit-item">
+            <div class="benefit-check">✓</div>
+            <div>
+              <div class="benefit-title">Build a network of local photographers</div>
+              <div class="benefit-desc">Connect with creatives who shoot in your area, share knowledge, and grow together.</div>
+            </div>
+          </li>
+          <li class="benefit-item">
+            <div class="benefit-check">✓</div>
+            <div>
+              <div class="benefit-title">Save and revisit trusted spots</div>
+              <div class="benefit-desc">Your personal scouting library, organized by collections and always available.</div>
+            </div>
+          </li>
+          <li class="benefit-item">
+            <div class="benefit-check">✓</div>
+            <div>
+              <div class="benefit-title">One platform for the full workflow</div>
+              <div class="benefit-desc">Scouting, community, messaging, and marketplace — no more juggling apps and tabs.</div>
+            </div>
+          </li>
         </ul>
-        <a class="btn btn-ghost" href="#download">Get started</a>
-      </article>
-      <article class="price-card price-card-featured">
-        <div class="price-flag">Most popular</div>
-        <div class="price-tier">Pro</div>
-        <div class="price-amount"><span class="price-currency">$</span>9<span class="price-period">/mo</span></div>
-        <p class="price-tag">For working photographers who shoot weekly.</p>
-        <ul>
-          <li>Unlimited Scout AI itineraries</li>
-          <li>Premium spots from verified creators</li>
-          <li>Marketplace selling &amp; referrals</li>
-          <li>Creator dashboard &amp; analytics</li>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── HOW IT WORKS ── -->
+  <section class="section" id="how-it-works">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">How It Works</span>
+        <h2 class="sec-title">Scout smarter in<br><em>three steps.</em></h2>
+      </div>
+      <div class="steps-grid">
+        <div class="step-card">
+          <div class="step-num">01</div>
+          <h3 class="step-title">Discover</h3>
+          <p class="step-desc">Find shoot-worthy locations using the map, list view, and community-driven spot data. Filter by shoot type, time of day, and distance.</p>
+        </div>
+        <div class="step-card">
+          <div class="step-num">02</div>
+          <h3 class="step-title">Plan</h3>
+          <p class="step-desc">Review spot details, check light schedules, save favorites to collections, and prepare for upcoming sessions — all before you leave home.</p>
+        </div>
+        <div class="step-card">
+          <div class="step-num">03</div>
+          <h3 class="step-title">Connect</h3>
+          <p class="step-desc">Meet other photographers, join the community feed, message creators, and build a network of local talent that makes every shoot better.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── SPOT DISCOVERY PREVIEW ── -->
+  <section class="section section-dark" id="discover">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">Discover</span>
+        <h2 class="sec-title">A scouting network built around<br><em>real spots.</em></h2>
+        <p class="sec-sub">Browse community-shared locations filtered by light, shoot type, and distance. Every spot includes the details you actually need on shoot day.</p>
+      </div>
+      <div class="spots-grid" id="spots-grid">
+        <div class="spot-card"><div class="spot-img sk-img"></div><div class="spot-body"><div class="skeleton sk-line"></div><div class="skeleton sk-line sk-short"></div></div></div>
+        <div class="spot-card"><div class="spot-img sk-img"></div><div class="spot-body"><div class="skeleton sk-line"></div><div class="skeleton sk-line sk-short"></div></div></div>
+        <div class="spot-card"><div class="spot-img sk-img"></div><div class="spot-body"><div class="skeleton sk-line"></div><div class="skeleton sk-line sk-short"></div></div></div>
+        <div class="spot-card"><div class="spot-img sk-img"></div><div class="spot-body"><div class="skeleton sk-line"></div><div class="skeleton sk-line sk-short"></div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── DESKTOP WEB APP ── -->
+  <section class="section desktop-section" id="desktop-app">
+    <div class="container desktop-layout">
+      <div class="desktop-copy">
+        <span class="eyebrow">Desktop Web App</span>
+        <h2 class="sec-title">Use LumaScout from<br><em>your desktop.</em></h2>
+        <p class="sec-sub">Plan shoots, review saved locations, explore the photographer network, and manage your scouting workflow from a larger screen. The full LumaScout experience — built for desktop.</p>
+        <ul class="desktop-features">
+          <li><span class="df-check">✓</span> Sidebar navigation with quick access to every feature</li>
+          <li><span class="df-check">✓</span> Side-by-side spot list and map panel</li>
+          <li><span class="df-check">✓</span> Full dashboard with saved spots and network activity</li>
+          <li><span class="df-check">✓</span> Community feed and direct messaging</li>
+          <li><span class="df-check">✓</span> Marketplace browsing and management</li>
         </ul>
-        <a class="btn btn-primary" href="#download">Go Pro</a>
-      </article>
-      <article class="price-card">
-        <div class="price-tier">Studio</div>
-        <div class="price-amount"><span class="price-currency">$</span>29<span class="price-period">/mo</span></div>
-        <p class="price-tag">For agencies and multi-shooter teams.</p>
-        <ul>
-          <li>Up to 5 team seats</li>
-          <li>Shared collections &amp; private groups</li>
-          <li>Advanced analytics &amp; exports</li>
-          <li>Priority support</li>
-        </ul>
-        <a class="btn btn-ghost" href="#download">Talk to sales</a>
-      </article>
+        <button class="btn btn-primary btn-lg" onclick="openModal('login-modal')">Sign In to Web App</button>
+      </div>
+      <div class="desktop-visual" aria-hidden="true">
+        <div class="dv-frame">
+          <div class="dv-header">
+            <div class="dv-header-left">
+              <div class="dv-dots"><span></span><span></span><span></span></div>
+              <div class="dv-url-bar">lumascout.app/explore</div>
+            </div>
+          </div>
+          <div class="dv-layout">
+            <div class="dv-sidebar">
+              <div class="dv-sb-logo">
+                <svg viewBox="0 0 20 20" width="16" height="16"><circle cx="10" cy="10" r="9" fill="#F5A623"/><circle cx="10" cy="10" r="3.5" fill="#0A0A0A"/><circle cx="14" cy="6" r="1.5" fill="#0A0A0A"/></svg>
+                <span>LumaScout</span>
+              </div>
+              <div class="dv-nav-items">
+                <div class="dv-ni active">◉ Explore</div>
+                <div class="dv-ni">☆ Saved</div>
+                <div class="dv-ni">◈ Network</div>
+                <div class="dv-ni">◇ Community</div>
+                <div class="dv-ni">✉ Messages</div>
+              </div>
+            </div>
+            <div class="dv-content">
+              <div class="dv-search">
+                <div class="dv-search-bar">⌕ Search spots…</div>
+                <div class="dv-filters"><span class="dv-f active">All</span><span class="dv-f">Sunrise</span><span class="dv-f">Golden Hour</span></div>
+              </div>
+              <div class="dv-spot-list">
+                <div class="dv-spot"><div class="dv-spot-img dv-si-1"></div><div class="dv-spot-info"><div class="dv-spot-name">Bluebonnet Ridge</div><div class="dv-spot-meta">Sunset · 0.6 mi</div></div><div class="dv-spot-score">98</div></div>
+                <div class="dv-spot"><div class="dv-spot-img dv-si-2"></div><div class="dv-spot-info"><div class="dv-spot-name">Enchanted Rock</div><div class="dv-spot-meta">Sunrise · 2.1 mi</div></div><div class="dv-spot-score">95</div></div>
+                <div class="dv-spot"><div class="dv-spot-img dv-si-3"></div><div class="dv-spot-info"><div class="dv-spot-name">River Walk South</div><div class="dv-spot-meta">Blue Hour · 0.3 mi</div></div><div class="dv-spot-score">92</div></div>
+              </div>
+            </div>
+            <div class="dv-map">
+              <div class="dv-map-bg"></div>
+              <div class="dv-map-pin dv-mp1"></div>
+              <div class="dv-map-pin dv-mp2"></div>
+              <div class="dv-map-pin dv-mp3 gold"></div>
+              <div class="dv-map-overlay">Map view</div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<section class="section testimonial">
-  <div class="container t-grid">
-    <figure class="t-card">
-      <blockquote>“I used to keep a Google Doc with parking notes for every spot. Now LumaScout just <em>has</em> all of it — plus better light timing than I'd ever bother to calculate.”</blockquote>
-      <figcaption><span class="avatar avatar-1"></span><span><b>Sophie Reyes</b><em>Wedding photographer · Austin, TX</em></span></figcaption>
-    </figure>
-    <figure class="t-card">
-      <blockquote>“Scout AI turned a vague ‘let's shoot Saturday’ into a real itinerary. We hit three spots, all in perfect light. Worth it on day one.”</blockquote>
-      <figcaption><span class="avatar avatar-2"></span><span><b>Marcus Holt</b><em>Family + Pet · Hill Country</em></span></figcaption>
-    </figure>
-    <figure class="t-card">
-      <blockquote>“The privacy modes are the killer feature. I can share 80% of my list and still keep my actual hero spots private.”</blockquote>
-      <figcaption><span class="avatar avatar-3"></span><span><b>Priya Anand</b><em>Branding + Editorial · San Antonio</em></span></figcaption>
-    </figure>
-  </div>
-</section>
+  <!-- ── PRICING ── -->
+  <section class="section" id="pricing">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">Membership</span>
+        <h2 class="sec-title">Free to start.<br><em>Premium when you're ready.</em></h2>
+        <p class="sec-sub">Start scouting for free. Upgrade when you're ready for more powerful tools and access to the full LumaScout experience.</p>
+      </div>
+      <div class="price-grid">
+        <article class="price-card">
+          <div class="price-tier-name">Free</div>
+          <div class="price-amount"><span class="price-symbol">$</span>0<span class="price-period">/mo</span></div>
+          <p class="price-tagline">Everything you need to start discovering and saving spots.</p>
+          <ul class="price-list">
+            <li>Explore core location discovery</li>
+            <li>Join the photographer network</li>
+            <li>Save and organize basic spots</li>
+            <li>Browse the community feed</li>
+            <li>Direct messaging</li>
+          </ul>
+          <button class="btn btn-ghost price-btn" onclick="openModal('reg-modal')">Get started free</button>
+        </article>
+        <article class="price-card price-card-pro">
+          <div class="price-popular">Most popular</div>
+          <div class="price-tier-name">Pro</div>
+          <div class="price-amount"><span class="price-symbol">$</span>9<span class="price-period">/mo</span></div>
+          <p class="price-tagline">More powerful planning tools for photographers who shoot weekly.</p>
+          <ul class="price-list">
+            <li>Everything in Free</li>
+            <li>Enhanced discovery features</li>
+            <li>More professional workflow tools</li>
+            <li>Premium spots from verified creators</li>
+            <li>Marketplace selling &amp; purchasing</li>
+          </ul>
+          <button class="btn btn-primary price-btn" onclick="openModal('reg-modal')">Go Pro</button>
+        </article>
+        <article class="price-card">
+          <div class="price-tier-name">Elite</div>
+          <div class="price-amount"><span class="price-symbol">$</span>29<span class="price-period">/mo</span></div>
+          <p class="price-tagline">The full premium experience for serious photographers and teams.</p>
+          <ul class="price-list">
+            <li>Everything in Pro</li>
+            <li>Advanced insights and analytics</li>
+            <li>Best tools for serious photographers</li>
+            <li>Priority support</li>
+            <li>Early access to new features</li>
+          </ul>
+          <button class="btn btn-ghost price-btn" onclick="openModal('reg-modal')">Get Elite</button>
+        </article>
+      </div>
+    </div>
+  </section>
 
-<section class="section faq">
-  <div class="container faq-grid">
-    <div>
-      <span class="eyebrow">FAQ</span>
-      <h2 class="h2">Questions, answered.</h2>
-      <p class="section-sub">Still curious? Reach us at <a href="mailto:support@lumascout.app">support@lumascout.app</a>.</p>
+  <!-- ── TESTIMONIALS ── -->
+  <section class="section section-dark testimonials">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">From the community</span>
+        <h2 class="sec-title"><em>What photographers say.</em></h2>
+      </div>
+      <div class="t-grid">
+        <figure class="t-card">
+          <blockquote>"I used to keep a Google Doc with parking notes for every spot. Now LumaScout just <em>has</em> all of it — plus better light timing than I'd ever bother to calculate."</blockquote>
+          <figcaption><div class="t-avatar t-av1">SR</div><div><strong>Sophie Reyes</strong><em>Wedding photographer · Austin, TX</em></div></figcaption>
+        </figure>
+        <figure class="t-card">
+          <blockquote>"The desktop app is a game changer for planning. I can pull up saved spots, check the map, and plan the full shoot route before I even pick up my camera."</blockquote>
+          <figcaption><div class="t-avatar t-av2">MH</div><div><strong>Marcus Holt</strong><em>Family &amp; Pet · Hill Country, TX</em></div></figcaption>
+        </figure>
+        <figure class="t-card">
+          <blockquote>"The privacy modes are the killer feature. I can share 80% of my list publicly and still keep my actual hero spots completely private."</blockquote>
+          <figcaption><div class="t-avatar t-av3">PA</div><div><strong>Priya Anand</strong><em>Branding &amp; Editorial · San Antonio, TX</em></div></figcaption>
+        </figure>
+      </div>
     </div>
-    <div class="faq-list">
-      <details><summary>Is LumaScout available on iPhone and Android?</summary><p>Yes. LumaScout is built with Expo and ships natively on iOS and Android. A web companion is in private beta.</p></details>
-      <details><summary>Do I have to share my spots publicly?</summary><p>Never. Every spot you save defaults to Private. You opt-in to Followers, Public, or Premium on a per-spot basis.</p></details>
-      <details><summary>How does Scout AI build itineraries?</summary><p>Scout AI uses real spots from the LumaScout community, your saved list, and creators you follow. It accounts for sun position, drive time, and your stated shoot type.</p></details>
-      <details><summary>Can I sell location packs as a creator?</summary><p>Yes. Creators on the Pro and Studio plans can list curated packs in the Marketplace and earn from purchases.</p></details>
-      <details><summary>What does “Premium” on a spot mean?</summary><p>Premium spots are paid drops from verified creators. Subscribers see them; non-subscribers see a teaser pin.</p></details>
-    </div>
-  </div>
-</section>
+  </section>
 
-<section class="cta" id="download">
-  <div class="container cta-inner">
-    <h2 class="h2">Your next great shoot starts with the right spot.</h2>
-    <p class="section-sub">Download LumaScout free. Bring your camera, leave the spreadsheet behind.</p>
-    <div class="cta-buttons">
-      <a class="store-btn" href="#" aria-label="Download on the App Store">
-        <span class="store-glyph"></span>
-        <span class="store-meta"><em>Download on the</em><b>App Store</b></span>
-      </a>
-      <a class="store-btn" href="#" aria-label="Get it on Google Play">
-        <span class="store-glyph">▶</span>
-        <span class="store-meta"><em>Get it on</em><b>Google Play</b></span>
-      </a>
+  <!-- ── FINAL CTA ── -->
+  <section class="final-cta" id="cta">
+    <div class="cta-glow" aria-hidden="true"></div>
+    <div class="container cta-inner">
+      <span class="eyebrow">Ready to scout smarter?</span>
+      <h2 class="cta-title">Start scouting smarter<br><em>with LumaScout.</em></h2>
+      <p class="cta-sub">Built for photographers who care about location, timing, and community. Your scouting workflow, organized.</p>
+      <div class="cta-btns">
+        <button class="btn btn-primary btn-lg" onclick="openModal('login-modal')">Sign In</button>
+        <button class="btn btn-outline btn-lg" onclick="scrollTo({top:document.getElementById('features').offsetTop-80,behavior:'smooth'})">Explore Features</button>
+      </div>
+      <div class="cta-app-links">
+        <span class="cta-or">Also available on</span>
+        <div class="app-badges">
+          <a class="app-badge" href="#" aria-label="Download on the App Store">
+            <svg class="badge-platform-icon" viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+            <div><div class="badge-small">Download on the</div><div class="badge-large">App Store</div></div>
+          </a>
+          <a class="app-badge" href="#" aria-label="Get it on Google Play">
+            <svg class="badge-platform-icon" viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M3,20.5v-17c0-0.83,0.94-1.3,1.6-0.8L20.6,11.2c0.6,0.45,0.6,1.35,0,1.8L4.6,21.3C3.94,21.8,3,21.33,3,20.5z"/></svg>
+            <div><div class="badge-small">Get it on</div><div class="badge-large">Google Play</div></div>
+          </a>
+        </div>
+      </div>
     </div>
-  </div>
-</section>
+  </section>
 
 </main>
 
-<footer class="footer">
-  <div class="container footer-inner">
-    <div class="footer-brand">
-      <div class="brand">
-        <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 32 32" width="24" height="24"><circle cx="16" cy="16" r="14" fill="#F5A623"/><circle cx="16" cy="16" r="5" fill="#0A0A0A"/><circle cx="22" cy="10" r="2" fill="#0A0A0A"/></svg>
-        </span>
-        <span class="brand-word">LumaScout</span>
+<!-- ═══════════════ APP SHELL (shown after sign-in) ═══════════════ -->
+<div class="app-shell" id="app-shell">
+  <div class="app-layout">
+    <!-- Left Sidebar -->
+    <aside class="app-sidebar" id="app-sidebar">
+      <div class="sb-brand">
+        <svg viewBox="0 0 24 24" width="22" height="22"><defs><linearGradient id="lg2" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#F5A623"/><stop offset="1" stop-color="#D04848"/></linearGradient></defs><circle cx="12" cy="12" r="10" fill="url(#lg2)"/><circle cx="12" cy="12" r="3.8" fill="#0A0A0A"/><circle cx="16.5" cy="7.5" r="1.7" fill="#0A0A0A"/></svg>
+        <span class="sb-brand-name">LumaScout</span>
       </div>
-      <p>Find better light. Save better locations.</p>
+      <nav class="sb-nav" aria-label="App navigation">
+        <a href="#" class="sb-item sb-active" data-view="home" onclick="return switchView('home',this)">
+          <span class="sb-icon">⌖</span><span>Home</span>
+        </a>
+        <a href="#" class="sb-item" data-view="explore" onclick="return switchView('explore',this)">
+          <span class="sb-icon">◉</span><span>Explore</span>
+        </a>
+        <a href="#" class="sb-item" data-view="saved" onclick="return switchView('saved',this)">
+          <span class="sb-icon">☆</span><span>Saved</span>
+        </a>
+        <a href="#" class="sb-item" data-view="network" onclick="return switchView('network',this)">
+          <span class="sb-icon">◈</span><span>Network</span>
+        </a>
+        <a href="#" class="sb-item" data-view="community" onclick="return switchView('community',this)">
+          <span class="sb-icon">◇</span><span>Community</span>
+        </a>
+        <a href="#" class="sb-item" data-view="messages" onclick="return switchView('messages',this)">
+          <span class="sb-icon">✉</span><span>Messages</span>
+          <span class="sb-badge" id="unread-badge" hidden>0</span>
+        </a>
+        <a href="#" class="sb-item" data-view="marketplace" onclick="return switchView('marketplace',this)">
+          <span class="sb-icon">△</span><span>Marketplace</span>
+        </a>
+      </nav>
+      <div class="sb-bottom">
+        <a href="#" class="sb-item" data-view="profile" onclick="return switchView('profile',this)">
+          <span class="sb-icon">○</span><span>Profile</span>
+        </a>
+        <button class="sb-signout" onclick="handleLogout()">Sign Out</button>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="app-main" id="app-main">
+
+      <!-- HOME VIEW -->
+      <div class="view-panel" id="view-home">
+        <div class="view-header">
+          <div>
+            <div class="view-greeting" id="dash-greeting">Welcome back,</div>
+            <h1 class="view-title" id="dash-name">Photographer</h1>
+          </div>
+          <div class="view-header-actions">
+            <div class="user-avatar-btn" id="user-avatar" onclick="switchView('profile',null)">P</div>
+          </div>
+        </div>
+
+        <div class="feed-sections">
+          <!-- Continue Exploring -->
+          <div class="feed-section" id="feed-continue">
+            <div class="feed-sec-header">
+              <h2 class="feed-sec-title">Continue exploring</h2>
+              <button class="feed-see-all" onclick="switchView('explore',null)">See all →</button>
+            </div>
+            <div class="continue-grid" id="continue-grid">
+              <div class="cont-skeleton"><div class="skeleton" style="height:100%;border-radius:12px;"></div></div>
+              <div class="cont-skeleton"><div class="skeleton" style="height:100%;border-radius:12px;"></div></div>
+              <div class="cont-skeleton"><div class="skeleton" style="height:100%;border-radius:12px;"></div></div>
+              <div class="cont-skeleton"><div class="skeleton" style="height:100%;border-radius:12px;"></div></div>
+            </div>
+          </div>
+
+          <!-- Nearby Spots -->
+          <div class="feed-section">
+            <div class="feed-sec-header">
+              <h2 class="feed-sec-title">Best near you <span class="feed-badge" id="nearby-count"></span></h2>
+              <button class="feed-see-all" onclick="switchView('explore',null)">View all →</button>
+            </div>
+            <div class="nearby-scroll" id="nearby-scroll">
+              <div class="nb-skeleton skeleton"></div>
+              <div class="nb-skeleton skeleton"></div>
+              <div class="nb-skeleton skeleton"></div>
+            </div>
+          </div>
+
+          <!-- Trending -->
+          <div class="feed-section">
+            <div class="feed-sec-header">
+              <h2 class="feed-sec-title">Trending this week</h2>
+              <button class="feed-see-all" onclick="switchView('explore',null)">View all →</button>
+            </div>
+            <div class="trending-list" id="trending-list">
+              <div class="trend-skeleton skeleton"></div>
+              <div class="trend-skeleton skeleton"></div>
+              <div class="trend-skeleton skeleton"></div>
+            </div>
+          </div>
+
+          <!-- Marketplace Banner -->
+          <div class="mkt-promo-banner" onclick="switchView('marketplace',null)">
+            <div class="mkt-promo-text">
+              <div class="mkt-promo-label">Marketplace</div>
+              <div class="mkt-promo-title">Discover curated location packs</div>
+              <div class="mkt-promo-sub">Premium spots from verified photographers, ready to buy.</div>
+            </div>
+            <div class="mkt-promo-arrow">→</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- EXPLORE VIEW -->
+      <div class="view-panel hidden" id="view-explore">
+        <div class="view-header">
+          <h1 class="view-title">Explore</h1>
+        </div>
+        <div class="explore-layout">
+          <div class="explore-list-panel">
+            <div class="explore-search">
+              <input class="explore-input" type="text" placeholder="Search spots, cities, specialties…" oninput="filterSpots(this.value)">
+            </div>
+            <div class="explore-chips">
+              <button class="xchip xchip-active" onclick="filterByType(this,'')">All</button>
+              <button class="xchip" onclick="filterByType(this,'Nature')">Nature</button>
+              <button class="xchip" onclick="filterByType(this,'Urban')">Urban</button>
+              <button class="xchip" onclick="filterByType(this,'Wedding')">Wedding</button>
+              <button class="xchip" onclick="filterByType(this,'Family')">Family</button>
+            </div>
+            <div class="explore-results" id="explore-results">
+              <div class="explore-loading">
+                <div class="trend-skeleton skeleton"></div>
+                <div class="trend-skeleton skeleton"></div>
+                <div class="trend-skeleton skeleton"></div>
+                <div class="trend-skeleton skeleton"></div>
+                <div class="trend-skeleton skeleton"></div>
+              </div>
+            </div>
+          </div>
+          <div class="explore-map-panel">
+            <div class="map-placeholder">
+              <div class="map-ph-bg"></div>
+              <div class="map-ph-content">
+                <div class="map-ph-icon">◉</div>
+                <div class="map-ph-title">Interactive Map</div>
+                <div class="map-ph-sub">Full map view available in the mobile app.<br>Download on iOS or Android for the complete experience.</div>
+                <div class="map-app-links">
+                  <a href="#" class="map-app-btn">App Store</a>
+                  <a href="#" class="map-app-btn">Google Play</a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SAVED VIEW -->
+      <div class="view-panel hidden" id="view-saved">
+        <div class="view-header">
+          <h1 class="view-title">Saved Spots</h1>
+        </div>
+        <div class="coming-soon-state" id="saved-content">
+          <div class="cs-icon">☆</div>
+          <div class="cs-title">Your saved spots live here.</div>
+          <div class="cs-sub">Save spots while exploring to build your personal scouting library. They'll appear here, organized by your collections.</div>
+          <button class="btn btn-primary" onclick="switchView('explore',null)">Start exploring</button>
+        </div>
+      </div>
+
+      <!-- NETWORK VIEW -->
+      <div class="view-panel hidden" id="view-network">
+        <div class="view-header">
+          <h1 class="view-title">Photographer Network</h1>
+        </div>
+        <div class="network-content" id="network-content">
+          <div class="explore-loading">
+            <div class="trend-skeleton skeleton"></div>
+            <div class="trend-skeleton skeleton"></div>
+            <div class="trend-skeleton skeleton"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- COMMUNITY VIEW -->
+      <div class="view-panel hidden" id="view-community">
+        <div class="view-header">
+          <h1 class="view-title">Community</h1>
+        </div>
+        <div class="coming-soon-state">
+          <div class="cs-icon">◇</div>
+          <div class="cs-title">Community feed</div>
+          <div class="cs-sub">The full community feed experience is coming to desktop soon. For the complete community experience, use the LumaScout mobile app.</div>
+          <div class="cs-badge">Coming soon to desktop</div>
+        </div>
+      </div>
+
+      <!-- MESSAGES VIEW -->
+      <div class="view-panel hidden" id="view-messages">
+        <div class="view-header">
+          <h1 class="view-title">Messages</h1>
+        </div>
+        <div class="coming-soon-state">
+          <div class="cs-icon">✉</div>
+          <div class="cs-title">Direct messaging</div>
+          <div class="cs-sub">Desktop messaging is coming soon. Connect with photographers and manage your conversations from any device.</div>
+          <div class="cs-badge">Coming soon to desktop</div>
+        </div>
+      </div>
+
+      <!-- MARKETPLACE VIEW -->
+      <div class="view-panel hidden" id="view-marketplace">
+        <div class="view-header">
+          <h1 class="view-title">Marketplace</h1>
+        </div>
+        <div class="marketplace-content" id="marketplace-content">
+          <div class="explore-loading">
+            <div class="trend-skeleton skeleton"></div>
+            <div class="trend-skeleton skeleton"></div>
+            <div class="trend-skeleton skeleton"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PROFILE VIEW -->
+      <div class="view-panel hidden" id="view-profile">
+        <div class="view-header">
+          <h1 class="view-title">Profile</h1>
+        </div>
+        <div class="profile-content" id="profile-content">
+          <div class="explore-loading">
+            <div class="skeleton" style="height:180px;border-radius:16px;margin-bottom:16px;"></div>
+            <div class="trend-skeleton skeleton"></div>
+            <div class="trend-skeleton skeleton"></div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- Right Rail -->
+    <aside class="app-rail" id="app-rail">
+      <div class="rail-user-card" id="rail-user-card">
+        <div class="rail-avatar" id="rail-avatar">?</div>
+        <div class="rail-user-info">
+          <div class="rail-name" id="rail-name">Loading…</div>
+          <div class="rail-handle" id="rail-handle">@—</div>
+        </div>
+      </div>
+      <div class="rail-stats" id="rail-stats">
+        <div class="rail-stat">
+          <div class="rail-stat-num" id="stat-spots">—</div>
+          <div class="rail-stat-lbl">Spots</div>
+        </div>
+        <div class="rail-stat">
+          <div class="rail-stat-num" id="stat-saves">—</div>
+          <div class="rail-stat-lbl">Saves</div>
+        </div>
+        <div class="rail-stat">
+          <div class="rail-stat-num" id="stat-followers">—</div>
+          <div class="rail-stat-lbl">Followers</div>
+        </div>
+      </div>
+      <div class="rail-plan-badge" id="rail-plan-badge">
+        <span class="rpb-icon">★</span>
+        <span class="rpb-text">Free plan</span>
+      </div>
+      <div class="rail-section-title">Quick links</div>
+      <div class="rail-quick-links">
+        <button class="rail-ql" onclick="switchView('explore',null)">◉ Explore spots</button>
+        <button class="rail-ql" onclick="switchView('network',null)">◈ Find photographers</button>
+        <button class="rail-ql" onclick="switchView('marketplace',null)">△ Browse marketplace</button>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- ═══════════════ FOOTER ═══════════════ -->
+<footer class="site-footer" id="site-footer">
+  <div class="container footer-inner">
+    <div class="footer-brand-col">
+      <div class="footer-brand">
+        <svg viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="10" fill="#F5A623"/><circle cx="12" cy="12" r="3.8" fill="#0A0A0A"/><circle cx="16.5" cy="7.5" r="1.7" fill="#0A0A0A"/></svg>
+        <span>LumaScout</span>
+      </div>
+      <p class="footer-tagline">Photographer scouting platform.</p>
+      <p class="footer-sub">Find better photo locations.<br>Plan smarter shoots.</p>
     </div>
-    <div class="footer-cols">
-      <div><h5>Product</h5><a href="#discover">Discover</a><a href="#features">Features</a><a href="#scout-ai">Scout AI</a><a href="#pricing">Pricing</a></div>
-      <div><h5>Community</h5><a href="#community">Creators</a><a href="#community">Marketplace</a><a href="#community">Groups</a><a href="#community">Referrals</a></div>
-      <div><h5>Company</h5><a href="#">About</a><a href="#">Blog</a><a href="#">Press</a><a href="mailto:support@lumascout.app">Support</a></div>
-      <div><h5>Legal</h5><a href="#">Privacy</a><a href="#">Terms</a><a href="#">Cookies</a></div>
+    <div class="footer-col">
+      <h4>Product</h4>
+      <a href="#features">Features</a>
+      <a href="#desktop-app">Desktop App</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#" onclick="event.preventDefault();openModal('login-modal')">Sign In</a>
+    </div>
+    <div class="footer-col">
+      <h4>Community</h4>
+      <a href="#benefits">Network</a>
+      <a href="#features">Marketplace</a>
+      <a href="#features">Community Feed</a>
+      <a href="#features">Messages</a>
+    </div>
+    <div class="footer-col">
+      <h4>Support</h4>
+      <a href="mailto:support@lumascout.app">Contact</a>
+      <a href="#">Help Center</a>
+      <a href="#">Privacy Policy</a>
+      <a href="#">Terms of Service</a>
     </div>
   </div>
   <div class="footer-bottom">
-    <div class="container"><span>© 2026 LumaScout. Made for photographers.</span><span>support@lumascout.app</span></div>
+    <div class="container footer-bottom-inner">
+      <span>© 2026 LumaScout. Made for photographers.</span>
+      <span>support@lumascout.app</span>
+    </div>
   </div>
 </footer>
 
+<!-- ═══════════════ SIGN IN MODAL ═══════════════ -->
+<div class="modal-overlay" id="login-modal" role="dialog" aria-modal="true" aria-label="Sign in to LumaScout">
+  <div class="modal-card">
+    <button class="modal-close" onclick="closeModal('login-modal')" aria-label="Close">✕</button>
+    <div class="modal-logo">
+      <svg viewBox="0 0 24 24" width="32" height="32"><defs><linearGradient id="ml" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#F5A623"/><stop offset="1" stop-color="#D04848"/></linearGradient></defs><circle cx="12" cy="12" r="10" fill="url(#ml)"/><circle cx="12" cy="12" r="3.8" fill="#0A0A0A"/><circle cx="16.5" cy="7.5" r="1.7" fill="#0A0A0A"/></svg>
+      <span>LumaScout</span>
+    </div>
+    <h2 class="modal-title">Welcome back</h2>
+    <p class="modal-sub">Sign in to your account to continue scouting.</p>
+    <form id="login-form" class="auth-form" novalidate>
+      <div class="form-group">
+        <label class="form-label" for="login-email">Email</label>
+        <input class="form-input" type="email" id="login-email" name="email" placeholder="you@example.com" autocomplete="email" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="login-pw">Password</label>
+        <input class="form-input" type="password" id="login-pw" name="password" placeholder="Your password" autocomplete="current-password" required>
+      </div>
+      <div class="form-error" id="login-err" aria-live="polite"></div>
+      <button class="btn btn-primary btn-full" type="submit" id="login-submit">Sign In</button>
+    </form>
+    <div class="modal-divider"><span>New to LumaScout?</span></div>
+    <button class="btn btn-ghost btn-full" onclick="closeModal('login-modal');openModal('reg-modal')">Create a free account</button>
+  </div>
+</div>
+
+<!-- ═══════════════ REGISTER MODAL ═══════════════ -->
+<div class="modal-overlay" id="reg-modal" role="dialog" aria-modal="true" aria-label="Create a LumaScout account">
+  <div class="modal-card">
+    <button class="modal-close" onclick="closeModal('reg-modal')" aria-label="Close">✕</button>
+    <div class="modal-logo">
+      <svg viewBox="0 0 24 24" width="32" height="32"><defs><linearGradient id="mr" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#F5A623"/><stop offset="1" stop-color="#D04848"/></linearGradient></defs><circle cx="12" cy="12" r="10" fill="url(#mr)"/><circle cx="12" cy="12" r="3.8" fill="#0A0A0A"/><circle cx="16.5" cy="7.5" r="1.7" fill="#0A0A0A"/></svg>
+      <span>LumaScout</span>
+    </div>
+    <h2 class="modal-title">Join LumaScout</h2>
+    <p class="modal-sub">Create your free account and start scouting smarter.</p>
+    <form id="reg-form" class="auth-form" novalidate>
+      <div class="form-group">
+        <label class="form-label" for="reg-name">Full Name</label>
+        <input class="form-input" type="text" id="reg-name" name="name" placeholder="Your name" autocomplete="name" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="reg-email">Email</label>
+        <input class="form-input" type="email" id="reg-email" name="email" placeholder="you@example.com" autocomplete="email" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="reg-pw">Password</label>
+        <input class="form-input" type="password" id="reg-pw" name="password" placeholder="Create a password" autocomplete="new-password" required minlength="8">
+      </div>
+      <div class="form-error" id="reg-err" aria-live="polite"></div>
+      <button class="btn btn-primary btn-full" type="submit" id="reg-submit">Create Account</button>
+    </form>
+    <div class="modal-divider"><span>Already have an account?</span></div>
+    <button class="btn btn-ghost btn-full" onclick="closeModal('reg-modal');openModal('login-modal')">Sign in instead</button>
+  </div>
+</div>
+
+<script src="app.js" defer></script>
 <script src="script.js" defer></script>
 </body>
 </html>
