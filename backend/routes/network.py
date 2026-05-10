@@ -1442,6 +1442,20 @@ async def directory_browse(
     has_more = len(rows) > limit
     items = rows[:limit]
 
+    # June 2025 — directory needs a live "238 photographers" count line.
+    # We run a separate count_documents on the same `base` filter so the
+    # frontend can render that without paginating the entire result set.
+    # Capped at 5000 so a wildly-permissive filter can't slow this down.
+    try:
+        total = await db.users.count_documents(base, limit=5001)
+        # Sentinel for "more than 5000" so the frontend can display "5000+".
+        total_capped = total > 5000
+        if total_capped:
+            total = 5000
+    except Exception:
+        total = None
+        total_capped = False
+
     # Hydrate is_following + is_blocked for the viewer (lightweight set lookup)
     if viewer and items:
         ids = [r["user_id"] for r in items]
@@ -1465,6 +1479,8 @@ async def directory_browse(
         "items": items,
         "next_cursor": (cursor + limit) if has_more else None,
         "has_more": has_more,
+        "total": total,
+        "total_capped": total_capped,
         "sort": sort_key,
         "filter": f,
     }

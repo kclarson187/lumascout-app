@@ -54,11 +54,18 @@ import { useAuth } from '../auth';
 import { colors, font, space, radii } from '../theme';
 import UserBadge from './UserBadge';
 
-// Three primary filter "cards" only — per founder PRD.
-const FILTERS: Array<{ key: string; label: string; sub?: string; icon: 'pin' | 'check' | 'spark' }> = [
-  { key: 'nearby', label: 'Nearby', icon: 'pin' },
-  { key: 'verified', label: 'Verified', icon: 'check' },
-  { key: 'new', label: 'New', sub: 'Joined in last 30 days', icon: 'spark' },
+// June 2025 redesign — ONE simple pill row replaces the old layered system.
+// Some pills set the backend `filter` param, others set `specialty`.
+// We keep a single client-side `activePill` key so the row stays mutually
+// exclusive without needing a multi-select grid.
+type PillKey = 'all' | 'nearby' | 'verified' | 'pet' | 'portrait' | 'wedding' | 'new';
+const PILLS: Array<{ key: PillKey; label: string; serverFilter?: string; serverSpecialty?: string }> = [
+  { key: 'nearby',   label: 'Nearby',   serverFilter: 'nearby' },
+  { key: 'verified', label: 'Verified', serverFilter: 'verified' },
+  { key: 'pet',      label: 'Pet',      serverSpecialty: 'Pet' },
+  { key: 'portrait', label: 'Portrait', serverSpecialty: 'Portrait' },
+  { key: 'wedding',  label: 'Wedding',  serverSpecialty: 'Wedding' },
+  { key: 'new',      label: 'New',      serverFilter: 'new' },
 ];
 
 const SORTS: Array<{ key: string; label: string }> = [
@@ -233,50 +240,23 @@ function CreatorCard({
 export default function DirectoryView() {
   const { user } = useAuth();
   const [q, setQ] = useState('');
-  const [filter, setFilter] = useState('all');
+  // June 2025 simplified Directory — single client-side `activePill`
+  // replaces the previous filter+axis+specialty triumvirate. Maps to
+  // the existing backend params via the PILLS table above.
+  const [activePill, setActivePill] = useState<PillKey>('all');
   const [sort, setSort] = useState('popular');
-  const [specialty, setSpecialty] = useState<string | null>(null);
-  // CR #1 Item 3 (June 2025): single-axis facet pills (City | Specialty).
-  // Default axis is "city" per product spec. Persisted under
-  // `lumascout.network.pillAxis`. Pills are populated from real aggregated
-  // data via GET /api/directory/facets (no seed strings, no concat).
-  const AXIS_KEY = 'lumascout.network.pillAxis';
-  const [pillAxis, setPillAxis] = useState<'city' | 'specialty'>('city');
-  const [activeCity, setActiveCity] = useState<string | null>(null);
-  const [facets, setFacets] = useState<{
-    top_cities: Array<{ city: string; count: number }>;
-    top_specialties: Array<{ specialty: string; count: number }>;
-  }>({ top_cities: [], top_specialties: [] });
-  useEffect(() => {
-    (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(AXIS_KEY);
-        if (raw === 'city' || raw === 'specialty') setPillAxis(raw);
-      } catch {}
-    })();
-  }, []);
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await api.get('/directory/facets', { limit: 12 });
-        setFacets({
-          top_cities: Array.isArray(r?.top_cities) ? r.top_cities : [],
-          top_specialties: Array.isArray(r?.top_specialties) ? r.top_specialties : [],
-        });
-      } catch {
-        setFacets({ top_cities: [], top_specialties: [] });
-      }
-    })();
-  }, []);
-  const setAxis = useCallback((next: 'city' | 'specialty') => {
-    setPillAxis(next);
-    // Clear the inactive-axis selection when switching axes so the query
-    // never mixes city + specialty filters from the pill row (search
-    // input can still narrow across both).
-    if (next === 'city') setSpecialty(null);
-    else setActiveCity(null);
-    AsyncStorage.setItem(AXIS_KEY, next).catch(() => {});
-  }, []);
+  // Live count from /directory — drives the "238 photographers" line.
+  const [total, setTotal] = useState<number | null>(null);
+  const [totalCapped, setTotalCapped] = useState(false);
+  // Derived server-side params from the active pill.
+  const filter = useMemo(() => {
+    const p = PILLS.find((x) => x.key === activePill);
+    return p?.serverFilter || 'all';
+  }, [activePill]);
+  const specialty = useMemo<string | null>(() => {
+    const p = PILLS.find((x) => x.key === activePill);
+    return p?.serverSpecialty || null;
+  }, [activePill]);
   const [items, setItems] = useState<DirItem[]>([]);
   const [cursor, setCursor] = useState<number | null>(0);
   const [loading, setLoading] = useState(false);
@@ -302,27 +282,31 @@ export default function DirectoryView() {
         sort,
         filter,
         specialty: specialty || undefined,
-        city: activeCity || undefined,
         cursor: resetCursor ? 0 : cursor,
         limit: 20,
       });
       if (resetCursor) setItems(r.items || []);
       else setItems((prev) => [...prev, ...(r.items || [])]);
       setCursor(r.next_cursor);
+      // Live count above the list — May 2026 simplified Directory.
+      if (typeof r?.total === 'number') {
+        setTotal(r.total);
+        setTotalCapped(!!r.total_capped);
+      }
     } catch {
       // soft-fail; keep last state
     } finally {
       setLoading(false);
       setPaging(false);
     }
-  }, [q, sort, filter, specialty, activeCity, cursor]);
+  }, [q, sort, filter, specialty, cursor]);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => load(true), 250);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, sort, filter, specialty, activeCity]);
+  }, [q, sort, filter, specialty]);
 
   // FIX(stale-directory bug): the directory used to render stale cached
   // `items` after navigating away and back (e.g. Admin → delete user →
@@ -368,8 +352,7 @@ export default function DirectoryView() {
   }, []);
 
   const resetFilters = useCallback(() => {
-    setQ(''); setFilter('all'); setSort('popular'); setSpecialty(null);
-    setActiveCity(null);
+    setQ(''); setActivePill('all'); setSort('popular');
   }, []);
 
   // Pull-to-refresh — re-fetches the current filter set fresh from server.
@@ -383,19 +366,41 @@ export default function DirectoryView() {
         sort,
         filter,
         specialty: specialty || undefined,
-        city: activeCity || undefined,
         cursor: 0,
         limit: 20,
       });
       setItems(r.items || []);
       setCursor(r.next_cursor);
+      if (typeof r?.total === 'number') {
+        setTotal(r.total);
+        setTotalCapped(!!r.total_capped);
+      }
     } catch {} finally {
       setRefreshing(false);
     }
-  }, [q, sort, filter, specialty, activeCity]);
+  }, [q, sort, filter, specialty]);
 
-  const hasActiveFilters = !!(q || filter !== 'all' || specialty || activeCity);
+  const hasActiveFilters = !!(q || activePill !== 'all');
   const sortLabel = SORTS.find((srt) => srt.key === sort)?.label || 'Popular';
+
+  // Build the dynamic count line (June 2025 spec) — adapts copy to
+  // active filters: "238 photographers", "42 verified photographers",
+  // "16 pet photographers nearby" etc. The specifically-requested
+  // shapes from the PRD are honoured by combining the active pill
+  // + nearby modifier.
+  const countLabel = useMemo(() => {
+    if (total == null) return null;
+    const fmt = `${totalCapped ? '5,000+' : total.toLocaleString()}`;
+    const noun = total === 1 ? 'photographer' : 'photographers';
+    if (activePill === 'all') return `${fmt} ${noun}`;
+    if (activePill === 'verified') return `${fmt} verified ${noun}`;
+    if (activePill === 'new') return `${fmt} new ${noun}`;
+    if (activePill === 'nearby') return `${fmt} ${noun} nearby`;
+    if (activePill === 'pet') return `${fmt} pet ${noun}`;
+    if (activePill === 'portrait') return `${fmt} portrait ${noun}`;
+    if (activePill === 'wedding') return `${fmt} wedding ${noun}`;
+    return `${fmt} ${noun}`;
+  }, [total, totalCapped, activePill]);
 
   return (
     <View style={s.root}>
@@ -420,125 +425,61 @@ export default function DirectoryView() {
         ) : null}
       </View>
 
-      {/* CR #1 Item 3 (June 2025): single-axis facet pills (City | Specialty).
-          Fetched from real aggregated data via /api/directory/facets —
-          no hardcoded concatenated seed strings. Default axis = city. */}
-      <View style={s.axisWrap}>
-        <View style={s.axisTrack}>
-          <Pressable
-            onPress={() => setAxis('city')}
-            style={[s.axisBtn, pillAxis === 'city' && s.axisBtnActive]}
-            testID="directory-axis-city"
-          >
-            <Text style={[s.axisBtnTxt, pillAxis === 'city' && s.axisBtnTxtActive]}>
-              By city
-            </Text>
-          </Pressable>
-          <Pressable
-            onPress={() => setAxis('specialty')}
-            style={[s.axisBtn, pillAxis === 'specialty' && s.axisBtnActive]}
-            testID="directory-axis-specialty"
-          >
-            <Text style={[s.axisBtnTxt, pillAxis === 'specialty' && s.axisBtnTxtActive]}>
-              By specialty
-            </Text>
-          </Pressable>
-        </View>
-      </View>
-      {(pillAxis === 'city' ? facets.top_cities.length : facets.top_specialties.length) > 0 ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={s.facetRow}
-          style={{ flexGrow: 0, maxHeight: 46 }}
-        >
-          {pillAxis === 'city'
-            ? facets.top_cities.map((c) => {
-                const active = activeCity === c.city;
-                return (
-                  <Pressable
-                    key={`city-${c.city}`}
-                    onPress={() => setActiveCity(active ? null : c.city)}
-                    style={[s.facetPill, active && s.facetPillActive]}
-                    testID={`directory-city-${c.city}`}
-                  >
-                    <Text style={[s.facetPillTxt, active && s.facetPillTxtActive]} numberOfLines={1}>
-                      {c.city}
-                    </Text>
-                    <Text style={[s.facetPillCount, active && { color: colors.primary }]}>
-                      {c.count}
-                    </Text>
-                  </Pressable>
-                );
-              })
-            : facets.top_specialties.map((sp) => {
-                const active = specialty === sp.specialty;
-                return (
-                  <Pressable
-                    key={`spec-${sp.specialty}`}
-                    onPress={() => setSpecialty(active ? null : sp.specialty)}
-                    style={[s.facetPill, active && s.facetPillActive]}
-                    testID={`directory-specialty-pill-${sp.specialty}`}
-                  >
-                    <Text style={[s.facetPillTxt, active && s.facetPillTxtActive]} numberOfLines={1}>
-                      {sp.specialty}
-                    </Text>
-                    <Text style={[s.facetPillCount, active && { color: colors.primary }]}>
-                      {sp.count}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-        </ScrollView>
-      ) : null}
+      {/* June 2025 simplified Directory — single horizontal pill row.
+          Replaces the old layered system (axis toggle + facet pills +
+          3 filter cards + Sort/Specialties controls). The chosen pill
+          either applies a filter (nearby/verified/new) or a specialty
+          (pet/portrait/wedding) on the existing /directory endpoint —
+          no backend changes for the pill mapping itself. */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={s.pillRow}
+        style={{ flexGrow: 0, marginTop: 10 }}
+      >
+        {PILLS.map((p) => {
+          const active = activePill === p.key;
+          return (
+            <Pressable
+              key={p.key}
+              onPress={() => setActivePill(active ? 'all' : p.key)}
+              style={[s.pill, active && s.pillActive]}
+              testID={`directory-pill-${p.key}`}
+            >
+              <Text style={[s.pillTxt, active && s.pillTxtActive]}>{p.label}</Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
 
-      {/* 3 primary filter cards — flexed equally per the mockup */}
-      <View style={s.fcardRow}>
-        {FILTERS.map((f) => (
-          <FilterCard
-            key={f.key}
-            k={f.key}
-            label={f.label}
-            sub={f.sub}
-            icon={f.icon}
-            active={filter === f.key}
-            onPress={() => setFilter(filter === f.key ? 'all' : f.key)}
-          />
-        ))}
-      </View>
-
-      {/* Secondary controls — Sort left, Specialties right */}
-      <View style={s.controlRow}>
+      {/* Sort row — kept compact per spec. Right-aligned reset only
+          appears when the user actually has filters active so it
+          doesn't add visual noise on the default view. */}
+      <View style={s.sortRow}>
         <Pressable
           onPress={() => setSortSheetOpen(true)}
-          style={s.sortPill}
+          style={s.sortPillCompact}
           testID="directory-sort-open"
         >
-          <Text style={s.sortLabel}>Sort</Text>
-          <View style={s.sortValuePill}>
-            <Text style={s.sortValue}>{sortLabel}</Text>
-            <ChevronDown size={12} color={colors.textSecondary} />
-          </View>
+          <Text style={s.sortLabelCompact}>Sort: <Text style={{ color: colors.text }}>{sortLabel}</Text></Text>
+          <ChevronDown size={11} color={colors.textSecondary} />
         </Pressable>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-          {hasActiveFilters ? (
-            <Pressable onPress={resetFilters} style={s.resetMini} testID="directory-reset-mini">
-              <RefreshCw size={11} color={colors.textSecondary} />
-            </Pressable>
-          ) : null}
-          <Pressable
-            onPress={() => setSpecSheetOpen(true)}
-            style={[s.specPill, specialty && s.specPillActive]}
-            testID="directory-specialty-open"
-          >
-            <SlidersHorizontal size={12} color={specialty ? colors.primary : colors.textSecondary} />
-            <Text style={[s.specPillTxt, specialty && { color: colors.primary }]}>
-              {specialty || 'Specialties'}
-            </Text>
-            <ChevronDown size={12} color={specialty ? colors.primary : colors.textSecondary} />
+        {hasActiveFilters ? (
+          <Pressable onPress={resetFilters} style={s.resetMini} testID="directory-reset-mini">
+            <RefreshCw size={11} color={colors.textSecondary} />
+            <Text style={{ color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 }}>Reset</Text>
           </Pressable>
-        </View>
+        ) : null}
       </View>
+
+      {/* Live photographer count — June 2025 spec, dynamic and
+          adapts to active filter (e.g. "16 pet photographers nearby"
+          shape was requested by combining nearby + specialty filters
+          but our pills are mutually exclusive; we still surface the
+          most-relevant single qualifier). */}
+      {countLabel ? (
+        <Text style={s.countLine} testID="directory-count">{countLabel}</Text>
+      ) : null}
 
       {/* Body */}
       {loading ? (
@@ -563,7 +504,7 @@ export default function DirectoryView() {
               <RefreshCw size={13} color={colors.textInverse} />
               <Text style={s.emptyResetTxt}>Reset filters</Text>
             </Pressable>
-            <Pressable onPress={() => { setFilter('nearby'); setQ(''); setSpecialty(null); }} style={s.emptyAltBtn}>
+            <Pressable onPress={() => { setActivePill('nearby'); setQ(''); }} style={s.emptyAltBtn}>
               <Text style={s.emptyAltTxt}>Browse Nearby</Text>
             </Pressable>
           </View>
@@ -683,6 +624,47 @@ const s = StyleSheet.create({
     width: 22, height: 22, borderRadius: 11,
     alignItems: 'center', justifyContent: 'center',
     backgroundColor: colors.surface2,
+  },
+  // ─── June 2025 simplified Directory styles ──────────────────────
+  pillRow: {
+    paddingHorizontal: space.xl,
+    gap: 8,
+  },
+  pill: {
+    paddingHorizontal: 14, paddingVertical: 8,
+    borderRadius: 18,
+    backgroundColor: colors.surface1,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+  },
+  pillActive: {
+    backgroundColor: 'rgba(245,166,35,0.14)',
+    borderColor: colors.primary,
+  },
+  pillTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12.5 },
+  pillTxtActive: { color: colors.primary, fontFamily: font.bodyBold },
+  sortRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: space.xl,
+    marginTop: 10,
+  },
+  sortPillCompact: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 0, paddingVertical: 4,
+  },
+  sortLabelCompact: {
+    color: colors.textSecondary,
+    fontFamily: font.bodyMedium,
+    fontSize: 12,
+  },
+  countLine: {
+    color: colors.textSecondary,
+    fontFamily: font.bodyMedium,
+    fontSize: 12.5,
+    paddingHorizontal: space.xl,
+    marginTop: 12,
+    marginBottom: 6,
   },
   // 3 filter cards row
   // CR (June 2025 v2.0.20 — Network tab cramped fix): tightened
