@@ -31,6 +31,7 @@ import ManualLocationSheet, { ManualLocation } from '../../src/components/Manual
 import MapPreviewCard from '../../src/components/MapPreviewCard';
 import { Input, Chip } from '../../src/components/ui';
 import ScoutAICard from '../../src/components/ScoutAICard';
+import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
 
 const STEPS = ['Photos', 'Location', 'Details', 'Ratings', 'Privacy', 'Review'];
 
@@ -150,6 +151,7 @@ export default function AddSpot() {
 
 function AddSpotImpl() {
   const { user } = useAuth();
+  const kbHeight = useKeyboardHeight();
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState<Draft>(initialDraft);
   const [submitting, setSubmitting] = useState(false);
@@ -793,7 +795,7 @@ function AddSpotImpl() {
 
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <View style={styles.header}>
           <TouchableOpacity onPress={prev} testID="add-back">
             <ChevronLeft color={colors.text} size={24} />
@@ -811,7 +813,7 @@ function AddSpotImpl() {
             Android drag-to-dismiss. Combined with keyboardShouldPersistTaps
             means taps on buttons/labels still work while the keyboard is up. */}
         <ScrollView
-          contentContainerStyle={{ padding: space.xl, paddingBottom: 120 }}
+          contentContainerStyle={{ padding: space.xl, paddingBottom: 120 + (Platform.OS === 'android' ? kbHeight : 0) }}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
         >

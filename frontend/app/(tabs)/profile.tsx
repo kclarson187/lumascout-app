@@ -54,6 +54,7 @@ import SpotCard from '../../src/components/SpotCard';
 import VerifiedBadge from '../../src/components/VerifiedBadge';
 import UserBadge from '../../src/components/UserBadge';
 import PremiumProfileExtras from '../../src/components/PremiumProfileExtras';
+import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
 
 
 type TabKey = 'posts' | 'spots' | 'photos' | 'reviews' | 'collections' | 'about';
@@ -96,6 +97,7 @@ export default function Profile() {
 
 function ProfileImpl() {
   const { user, logout, updateProfile, refresh } = useAuth();
+  const kbHeight = useKeyboardHeight();
   const [mySpots, setMySpots] = useState<any[]>([]);
   const [myPosts, setMyPosts] = useState<any[]>([]);
   const [collections, setCollections] = useState<any[]>([]);
@@ -321,10 +323,10 @@ function ProfileImpl() {
     <SafeAreaView style={styles.root} edges={['top']}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView
-          contentContainerStyle={{ paddingBottom: 60 }}
+          contentContainerStyle={{ paddingBottom: 60 + (Platform.OS === 'android' ? kbHeight : 0) }}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}

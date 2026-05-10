@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from PIL import Image, ImageOps
 
 # CRITICAL (June 2025): register the HEIF/HEIC opener with Pillow at
@@ -366,12 +366,32 @@ async def serve_upload(year: str, month: str, filename: str):
     if safe_name != filename:
         raise HTTPException(status_code=404, detail="Not found")
     p = UPLOADS_ROOT / year / month / safe_name
-    if not p.is_file():
-        raise HTTPException(status_code=404, detail="Not found")
-    # 30-day immutable cache — uploaded files are content-addressed
-    # (UUID filename) so they never change under a URL.
-    return FileResponse(
-        str(p),
-        media_type="image/jpeg" if p.suffix.lower() in (".jpg", ".jpeg") else None,
-        headers={"Cache-Control": "public, max-age=2592000, immutable"},
-    )
+    if p.is_file():
+        # 30-day immutable cache — uploaded files are content-addressed
+        # (UUID filename) so they never change under a URL.
+        return FileResponse(
+            str(p),
+            media_type="image/jpeg" if p.suffix.lower() in (".jpg", ".jpeg") else None,
+            headers={"Cache-Control": "public, max-age=2592000, immutable"},
+        )
+
+    # June 2025 — Legacy URL fallback to R2.
+    # Container disk is ephemeral (every pod restart wipes it), so old
+    # /api/uploads/<y>/<m>/<file> URLs still embedded in DB rows or
+    # social-share previews would 404 after a redeploy. If R2 is
+    # configured AND the same key exists in R2 (the backfill script
+    # puts them at the same key), 302-redirect to the R2 public URL.
+    # The 302 lets clients & caches keep using the legacy URL while
+    # we transparently serve from R2. Browsers/CDNs treat 302s as
+    # cacheable per Cache-Control here.
+    if storage_r2.r2_configured():
+        candidate_key = f"uploads/{year}/{month}/{safe_name}"
+        meta = storage_r2.head_object(candidate_key)
+        if meta is not None:
+            target = storage_r2.public_url_for(candidate_key)
+            return RedirectResponse(
+                url=target,
+                status_code=302,
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+    raise HTTPException(status_code=404, detail="Not found")

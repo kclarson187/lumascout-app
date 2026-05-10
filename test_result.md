@@ -17084,3 +17084,182 @@ agent_communication:
       exceptions, returns no rows when no candidate spot exists).
       cover_image_url field shape is locked down (string|null,
       never empty / relative / data-URI).
+
+
+  - task: "DEPLOYMENT BLOCKER FIXES + P1/P2/P3 CLEANUP — June 2025"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/.gitignore (cleaned 20+ duplicate .env entries; .env files now tracked for Emergent pipeline)
+      /app/backend/server.py (verified CORS middleware already at line 3886 — false alarm)
+      /app/frontend/app/(tabs)/add.tsx (useKeyboardHeight applied; behavior=undefined on Android)
+      /app/frontend/app/(tabs)/profile.tsx (useKeyboardHeight applied)
+      /app/frontend/app/onboarding/profile-setup.tsx (useKeyboardHeight + intl state mode)
+      /app/frontend/app/community/compose.tsx (useKeyboardHeight applied)
+      /app/backend/scripts/backfill_disk_to_r2.py (NEW — one-shot disk→R2 migration script; ran with --apply --rewrite-db: 98 files uploaded, 8 community URLs rewritten)
+      /app/backend/routes/uploads.py (serve_upload now 302-redirects to R2 when local file missing — covers any future legacy URLs after pod restart)
+      /app/backend/routes/admin.py (fixed 3x F821 undefined `payload` lint errors at line 1385)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          P0 #1 — CORS middleware: verified already correctly configured
+          at server.py:3886 with allow_origins=["*"], allow_credentials,
+          allow_methods, allow_headers. The deployment_agent flag was a
+          false positive.
+
+          P0 #2 — .gitignore polluted with duplicate `.env` blocks:
+          rewrote /app/.gitignore from scratch removing 20+ accidentally
+          appended `-e \n.env\n.env.*` blocks (looked like a botched
+          `echo -e` loop). The header explicitly states `.env` files
+          must NOT be ignored for the Emergent deploy pipeline; verified
+          `git check-ignore backend/.env frontend/.env` exits 1 (not
+          ignored) post-fix.
+
+          P1 — useKeyboardHeight applied to 4 remaining form screens
+          (add, profile, onboarding profile-setup, community compose).
+          Pattern: Android-only kbHeight added to the existing
+          contentContainerStyle.paddingBottom; KAV behavior switched
+          from "height" to undefined on Android so it no longer fights
+          the keyboard. iOS retains behavior="padding" — unchanged.
+
+          P1 — Historical backfill: built and ran
+          backend/scripts/backfill_disk_to_r2.py. Iterated
+          /app/backend/uploads/**, head_object skip, then put_object
+          with the SAME key (uploads/YYYY/MM/<file>) so existing legacy
+          URLs continue to resolve. Result: 98 files migrated, 0 errors.
+          DB-rewrite pass updated 8 spot_community_uploads rows to R2
+          public URLs directly.
+
+          P2 — Server-side redirect for legacy URLs: serve_upload now
+          falls back to a 302 RedirectResponse to the R2 public URL
+          when the local file is missing AND R2 has the same key.
+          Browsers/CDNs honour the 302 plus Cache-Control:
+          public,max-age=86400. Means even pre-backfill DB rows that
+          point at /api/uploads/... keep working forever.
+
+          P2 — admin.py F821: a stray `return {...}` block sat ABOVE
+          the slim-payload helper that referenced `payload`. Replaced
+          with `payload = {...}` then `_slim_feed_payload(...)` then
+          `return payload`. ruff now passes (only 3 unrelated E70x
+          warnings remain at lines 725/733/895, intentional one-liners).
+
+          P3 — International state picker: profile-setup now has a
+          🌍 "Other / Intl." chip at the end of the US-state strip.
+          Tapping it switches `intlMode=true`, swaps the state pill
+          for a free-text region input (max 40 chars, words
+          autoCapitalize), and disables the toUpperCase() coercion
+          on save. Existing users with a non-US state are auto-detected
+          on mount and start in intl mode.
+
+          Backend logs healthy after all changes; frontend bundles
+          cleanly. No regressions to existing flows expected.
+        -working: true
+        -agent: "main"
+        -comment: |
+          Backfill applied and DB rewrite committed. Deployment blockers
+          resolved. Ready for backend testing on the new redirect logic
+          and the unchanged endpoints.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          DEPLOYMENT BLOCKER FIXES — BACKEND CONTRACT TEST: 10/11 PASS
+          (1 failure is a known-non-existent endpoint, not a regression).
+          Test script: /app/backend_test.py. Run 2026-05-09 against
+          https://photo-finder-60.preview.emergentagent.com.
+
+          Auth: kclarson187@gmail.com still 401 (per
+          /app/memory/test_credentials.md); used seed admin
+          admin@lumascout.app / Grayson@1117!! — works (token len=201).
+
+          ── BUCKET 1: NEW BEHAVIOR — Legacy upload URL fallback to R2 ──
+          Endpoint: GET /api/uploads/{year}/{month}/{filename}
+          Test file: /app/backend/uploads/2026/04/1507e924ed2940c8b5453add08436584.jpg
+            (212,860 bytes, also confirmed live in R2 at the same key).
+
+          1a) Local file PRESENT → 200 ✅
+              GET https://photo-finder-60.preview.emergentagent.com
+                  /api/uploads/2026/04/1507e924ed2940c8b5453add08436584.jpg
+              → 200, content-type=image/jpeg, bytes=212860, JPEG magic
+                ok. Existing FileResponse path still works.
+
+          1b) Local file MISSING → 302 to R2 ✅ (CRITICAL — the new behavior)
+              Renamed local file to 1507e924…jpg.bak_test, hit the same
+              URL with allow_redirects=False:
+              → 302 Redirect, Location header =
+                "https://pub-799be3bb95574d71ad3213680ce5e0c1.r2.dev/
+                 uploads/2026/04/1507e924ed2940c8b5453add08436584.jpg"
+              → followed the redirect manually, R2 HEAD returned 200
+                (the object is live in R2 from the backfill).
+              Then restored the local file. Verified the legacy URL
+              served by FileResponse again (200, 212,860 bytes — case
+              1d in the harness). No file was lost.
+
+          1c) Bogus filename → 404 ✅
+              GET /api/uploads/2026/04/totally_bogus_does_not_exist_zzz.jpg
+              → 404 with detail="Not found". The R2 head_object miss
+              path correctly bubbles the 404 (no spurious redirects
+              for missing keys).
+
+          ── BUCKET 2: REGRESSION — auth + core endpoints intact ──────
+          POST /api/auth/login (admin@lumascout.app / Grayson@1117!!)
+            → 200 ✅, token returned.
+          GET  /api/spots?paginated=1&limit=5
+            → 200 ✅, 5 spots returned in page.
+          GET  /api/feed/home (with admin bearer)
+            → 200 ✅.
+          GET  /api/img/stats
+            → 200 ✅.
+          GET  /api/admin/spots/spot_88a7cbd41ac1/cover-editor
+            (the SPECIFIC endpoint that was edited at admin.py:1362-1389)
+            → 200 ✅. Response contains spot{}, images[], admin_cover_override.
+            The restructured `payload = {...}` + `_slim_feed_payload(payload)`
+            + `return payload` block compiles & runs cleanly with no F821
+            crash on the slim_payload call. The endpoint hit DURING the
+            refactor zone is healthy.
+          GET  /api/admin/diagnostics (admin bearer)
+            → 404 ❌ — endpoint does NOT exist in the codebase
+              (verified via grep -rn '@router.*diagnostics' over
+              /app/backend — no matches; only docstring/comment references
+              in storage_r2.py and push.py). This is the review request
+              listing a hypothetical endpoint, NOT a regression. Replaced
+              with cover-editor hit above which IS in the touched zone.
+
+          ── BUCKET 3: REGRESSION — backfilled R2 community URLs resolve ──
+          GET /api/spots?paginated=1&limit=50 → 38 spots returned.
+          Walked /api/spots/{id}/uploads on first 30 spots, inspected 3
+          community-upload rows. Of those:
+            • 2 had image_url on https://pub-…r2.dev/uploads/... (the
+              backfilled R2 public URLs).
+            • 0 had legacy /api/uploads/... paths (the rewrite did its
+              job).
+            • HEAD on each URL returned ≤2xx/3xx — 0 broken URLs.
+          The 8-row backfill claim is not directly contradicted (sample
+          inspected only 3 rows but all resolved).
+
+          ── Backend log scan during test window ──────────────────────
+          Tailed /var/log/supervisor/backend.out.log and
+                /var/log/supervisor/backend.err.log:
+            • Zero 5xx responses.
+            • Zero tracebacks/exceptions during the test run.
+            • Only expected 200/302/404 lines.
+
+          VERDICT: All three review items VERIFIED PASS:
+            1) New legacy-URL → R2 redirect: cases (a), (b), (c) all
+               behave per spec. Case (b) — the headline new behavior —
+               returned 302 with the correct Location and R2 served the
+               file at the redirect target.
+            2) admin.py edit zone (cover-editor) returns 200 with no
+               errors; auth/login/spots/feed/home/img/stats all 200.
+            3) Backfilled community URLs resolve to R2 public base.
+          
+          NOTE for main agent: /api/admin/diagnostics in the review
+          request does not exist in this codebase (no @router.*
+          definition anywhere). If you want a real diagnostics surface,
+          the cover-editor endpoint at /api/admin/spots/{id}/cover-editor
+          IS the endpoint that was actually refactored at lines
+          1362-1389 and is the correct regression target — and it
+          returns 200 cleanly.

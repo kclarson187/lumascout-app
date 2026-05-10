@@ -48,6 +48,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 import { formatApiError } from '../../src/api';
+import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
 
 // US state abbreviations + a sentinel for "Other / international" so
 // we never block a user who's outside the US. The full picker is a
@@ -83,6 +84,7 @@ function isValidUrlSoft(s: string): boolean {
 export default function ProfileSetupScreen() {
   const { user, loading, refresh, updateProfile, logout } = useAuth();
   const insets = useSafeAreaInsets();
+  const kbHeight = useKeyboardHeight();
 
   // ───── form state — prefilled from existing user so re-prompted
   // users (incomplete legacy accounts) keep all data they already
@@ -92,6 +94,12 @@ export default function ProfileSetupScreen() {
   const [city, setCity] = useState((user?.city || '').trim());
   const [state, setState] = useState((user?.state || '').trim().toUpperCase());
   const [statePickerOpen, setStatePickerOpen] = useState(false);
+  // June 2025 — international support: when true, the state field
+  // becomes a free-text input (e.g. "Bavaria", "ON", "São Paulo") and
+  // we skip the US-state-list constraint. Auto-detected on mount when
+  // the existing user.state isn't a recognised US abbrev.
+  const initialIntl = !!(user?.state && !US_STATES.includes((user.state || '').trim().toUpperCase()));
+  const [intlMode, setIntlMode] = useState(initialIntl);
   const [years, setYears] = useState<string>(
     user?.years_experience != null ? String(user.years_experience) : '',
   );
@@ -153,14 +161,14 @@ export default function ProfileSetupScreen() {
     if (!w) e.website = 'Add a portfolio or social link.';
     else if (!URL_RE.test(w)) e.website = 'That doesn\'t look like a valid link.';
     if (!city.trim()) e.city = 'Where are you based?';
-    if (!state.trim()) e.state = 'Pick a state.';
+    if (!state.trim()) e.state = intlMode ? 'Enter your region.' : 'Pick a state.';
     const yn = Number(years);
     if (years === '' || !Number.isFinite(yn) || yn < 0) e.years = 'Use 0 if you\'re just starting out.';
     // Optional URL validations
     if (facebook && !isValidUrlSoft(facebook)) e.facebook = 'Invalid URL.';
     if (tiktok && !isValidUrlSoft(tiktok)) e.tiktok = 'Invalid URL.';
     return e;
-  }, [name, website, city, state, years, facebook, tiktok]);
+  }, [name, website, city, state, years, facebook, tiktok, intlMode]);
 
   const canSave = useMemo(() => Object.keys(validate()).length === 0 && !submitting, [validate, submitting]);
 
@@ -243,7 +251,7 @@ export default function ProfileSetupScreen() {
         name: name.trim(),
         website: autoPrefixUrl(website),
         city: city.trim(),
-        state: state.trim().toUpperCase(),
+        state: intlMode ? state.trim() : state.trim().toUpperCase(),
         years_experience: Number.isFinite(yn) ? yn : 0,
         // Optional — only send the ones the user actually engaged with.
         // Empty strings stay as empty strings so the backend $set
@@ -299,11 +307,11 @@ export default function ProfileSetupScreen() {
     <SafeAreaView style={s.safe} edges={['top']}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={[s.scroll, { paddingBottom: space.xl }]}
+          contentContainerStyle={[s.scroll, { paddingBottom: space.xl + (Platform.OS === 'android' ? kbHeight : 0) }]}
           keyboardShouldPersistTaps="handled"
         >
           <Text style={s.kicker}>WELCOME TO LUMASCOUT</Text>
@@ -358,21 +366,34 @@ export default function ProfileSetupScreen() {
               </Field>
             </View>
             <View style={{ flex: 1 }}>
-              <Field label="State" error={errors.state}>
-                <TouchableOpacity
-                  style={[s.input, s.statePill, errors.state && s.inputError]}
-                  onPress={() => setStatePickerOpen((v) => !v)}
-                  testID="profile-setup-state"
-                >
-                  <Text style={[s.stateTxt, !state && { color: colors.textTertiary }]}>
-                    {state || 'TX'}
-                  </Text>
-                </TouchableOpacity>
+              <Field label={intlMode ? 'Region' : 'State'} error={errors.state}>
+                {intlMode ? (
+                  <TextInput
+                    style={[s.input, errors.state && s.inputError]}
+                    value={state}
+                    onChangeText={setState}
+                    placeholder="Region"
+                    placeholderTextColor={colors.textTertiary}
+                    autoCapitalize="words"
+                    maxLength={40}
+                    testID="profile-setup-state-intl"
+                  />
+                ) : (
+                  <TouchableOpacity
+                    style={[s.input, s.statePill, errors.state && s.inputError]}
+                    onPress={() => setStatePickerOpen((v) => !v)}
+                    testID="profile-setup-state"
+                  >
+                    <Text style={[s.stateTxt, !state && { color: colors.textTertiary }]}>
+                      {state || 'TX'}
+                    </Text>
+                  </TouchableOpacity>
+                )}
               </Field>
             </View>
           </View>
 
-          {statePickerOpen ? (
+          {statePickerOpen && !intlMode ? (
             <View style={s.statePicker}>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingHorizontal: 4 }}>
                 {US_STATES.map((st) => (
@@ -384,8 +405,27 @@ export default function ProfileSetupScreen() {
                     <Text style={[s.stateChipTxt, state === st && s.stateChipTxtActive]}>{st}</Text>
                   </TouchableOpacity>
                 ))}
+                <TouchableOpacity
+                  key="__intl"
+                  onPress={() => { setIntlMode(true); setState(''); setStatePickerOpen(false); }}
+                  style={[s.stateChip, { paddingHorizontal: 12 }]}
+                  testID="profile-setup-state-intl-toggle"
+                >
+                  <Text style={s.stateChipTxt}>🌍 Other / Intl.</Text>
+                </TouchableOpacity>
               </ScrollView>
             </View>
+          ) : null}
+
+          {intlMode ? (
+            <TouchableOpacity
+              onPress={() => { setIntlMode(false); setState(''); }}
+              style={{ alignSelf: 'flex-start', paddingVertical: 4 }}
+            >
+              <Text style={{ color: colors.primary, fontFamily: font.bodyBold, fontSize: 12 }}>
+                ← Back to US states
+              </Text>
+            </TouchableOpacity>
           ) : null}
 
           <Field label="Years in business" error={errors.years} hint="Use 0 if you're just starting out.">

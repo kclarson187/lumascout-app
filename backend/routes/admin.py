@@ -1359,7 +1359,7 @@ async def admin_spot_cover_editor(
             "contributor": contribs.get(u.get("user_id")),
         })
 
-    return {
+    payload = {
         "spot": {
             "spot_id": spot["spot_id"],
             "title": spot.get("title"),

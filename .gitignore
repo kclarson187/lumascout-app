@@ -30,11 +30,6 @@ next-env.d.ts
 dist/
 dist
 
-# Environment files (comprehensive coverage)
-
-*token.json*
-*credentials.json*
-
 # Logs and debug files
 npm-debug.log*
 yarn-debug.log*
@@ -44,7 +39,6 @@ dump.rdb
 
 # System files
 .DS_Store
-*.pem
 
 # Python
 __pycache__/
@@ -76,177 +70,31 @@ agenthub/agents/youtube/db
 # Build caches
 .cache/
 
+# Test credentials (per Emergent platform conventions)
 memory/test_credentials.md
 
-# Mobile development
+# Mobile development noise
 android-sdk/web/node_modules/@next/swc-linux-arm64-musl/next-swc.linux-arm64-musl.node
 web/node_modules/@next/swc-linux-arm64-gnu/next-swc.linux-arm64-gnu.node
 web/node_modules/@next/swc-linux-arm64-musl/next-swc.linux-arm64-musl.node
 
-# Credentials only — .env files are intentionally NOT ignored
-# because the Emergent deployment pipeline needs them at build time.
+# ----------------------------------------------------------------------------
+# Credentials & secrets
+# NOTE: .env files are intentionally NOT ignored — the Emergent deployment
+# pipeline needs them at build time. Real production secrets live in the
+# platform secret store, NOT in committed .env files.
+# ----------------------------------------------------------------------------
 credentials.json
+*token.json*
+*credentials.json*
 *.pem
 *.key
 .credentials
-
-# Allow EAS local credentials.json for iOS build pipeline
-!frontend/credentials.json
 
 # Apple ASC API Key + secrets
 secrets/
 *.p8
 credentials*.disabled-*
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
+
+# Allow EAS local credentials.json for iOS build pipeline
+!frontend/credentials.json

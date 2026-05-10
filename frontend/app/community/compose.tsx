@@ -8,6 +8,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
+import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
 
 const CATEGORIES: { k: string; label: string; hint: string; placeholder: string }[] = [
   { k: 'win',      label: 'Win',      hint: '🎉 Celebrate a recent shoot, booking, or milestone',        placeholder: 'What made this week a win for you?' },
@@ -25,6 +26,7 @@ const CATEGORIES: { k: string; label: string; hint: string; placeholder: string 
 
 export default function Compose() {
   const { user } = useAuth();
+  const kbHeight = useKeyboardHeight();
   const params = useLocalSearchParams<{ group_id?: string }>();
   const groupId = params.group_id ? String(params.group_id) : null;
   const [category, setCategory] = useState('win');
@@ -86,7 +88,7 @@ export default function Compose() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <View style={styles.head}>
           <TouchableOpacity onPress={() => router.back()} hitSlop={12}><X size={22} color={colors.text} /></TouchableOpacity>
           <Text style={styles.title}>New post</Text>
@@ -104,7 +106,7 @@ export default function Compose() {
 
         <ScrollView
         keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag" contentContainerStyle={{ padding: space.xl, gap: space.lg, paddingBottom: 80 }}>
+        keyboardDismissMode="on-drag" contentContainerStyle={{ padding: space.xl, gap: space.lg, paddingBottom: 80 + (Platform.OS === 'android' ? kbHeight : 0) }}>
           <View style={styles.tipCard}>
             <Sparkles size={14} color={colors.primary} />
             <Text style={styles.tipTxt}>Be specific. “Need family photog in Austin May 20 — 2hr session” beats “need referral.”</Text>
