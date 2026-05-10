@@ -467,6 +467,26 @@ export const styles = StyleSheet.create({
     fontSize: 10.5,
     marginTop: 1,
   },
+  // June 2025 — inline "Enable" pill shown in the Drive-time column
+  // when location permission is missing. Tiny gold outline that won't
+  // disturb the visual rhythm of the 3-column card. Becomes "Settings"
+  // when Android/iOS marks the permission as canAskAgain=false.
+  lightDriveEnableBtn: {
+    alignSelf: 'flex-start',
+    marginTop: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: 'rgba(245,166,35,0.10)',
+  },
+  lightDriveEnableTxt: {
+    color: colors.primary,
+    fontFamily: font.bodyBold,
+    fontSize: 11,
+    letterSpacing: 0.2,
+  },
   lightDriveDivider: {
     width: StyleSheet.hairlineWidth,
     backgroundColor: 'rgba(255,255,255,0.08)',

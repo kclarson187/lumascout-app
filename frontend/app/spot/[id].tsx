@@ -52,6 +52,7 @@ import { goldenHourLabel } from '../../src/utils/sun';
 import { goldenHourBrief, blueHourBrief, goldenHourPlanning, blueHourPlanning } from '../../src/utils/sun-windows';
 import { driveTimeEstimate } from '../../src/utils/drive-time';
 import useGps from '../../src/hooks/useGps';
+import * as Location from 'expo-location';
 import {
   Sparkles, Coffee, ParkingCircle, Mountain, Heart as HeartIcon, Zap,
 } from 'lucide-react-native';
@@ -149,6 +150,51 @@ function SpotDetailImpl() {
     const id = setInterval(() => setPlanningTick((n) => n + 1), 60_000);
     return () => clearInterval(id);
   }, []);
+
+  // June 2025 — inline "Enable" button for Location permission.
+  // useGps auto-runs once on mount but doesn't re-prompt after a
+  // denial. This local override coords + requesting flag lets the
+  // Drive-time card surface a tiny "Enable" pill that asks for
+  // permission on demand and falls back gracefully if the user
+  // denied it permanently (we can't bypass system prefs from JS;
+  // we surface a one-line hint when that happens).
+  const [overrideCoords, setOverrideCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [locRequesting, setLocRequesting] = useState(false);
+  const [locDeniedHard, setLocDeniedHard] = useState(false);
+  const requestLocation = useCallback(async () => {
+    if (locRequesting) return;
+    setLocRequesting(true);
+    try {
+      const { status, canAskAgain } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        // Permanently denied → user must enable it from system settings.
+        if (!canAskAgain) {
+          setLocDeniedHard(true);
+          Alert.alert(
+            'Location turned off',
+            'Open Settings to enable location for LumaScout so we can show drive time and personalised sun events.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Open Settings', onPress: () => Linking.openSettings?.() },
+            ],
+          );
+        }
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      setOverrideCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      setLocDeniedHard(false);
+    } catch {
+      // Best-effort; the next minute's tick or pull-to-refresh will retry.
+    } finally {
+      setLocRequesting(false);
+    }
+  }, [locRequesting]);
+
+  // Effective coords used for drive-time. Live useGps coords win;
+  // overrideCoords (returned from the inline Enable button) fill the
+  // gap when useGps couldn't resolve on initial mount.
+  const effectiveDriveCoords = userCoords ?? overrideCoords;
 
   // ─── Responsive Hero Sizing (May 2026) ───────────────────────────────
   // Pre-refactor the hero was a static `width: W, height: W` square
@@ -946,7 +992,7 @@ function SpotDetailImpl() {
             // eslint-disable-next-line react-hooks/exhaustive-deps
             const blueP = hasCoords ? blueHourPlanning(lat, lng) : null;
             const drive = driveTimeEstimate(
-              userCoords ? { latitude: userCoords.lat, longitude: userCoords.lng } : null,
+              effectiveDriveCoords ? { latitude: effectiveDriveCoords.lat, longitude: effectiveDriveCoords.lng } : null,
               hasCoords ? { latitude: lat, longitude: lng } : null,
             );
             // Drive time formatter — strips the "Approx." prefix and
@@ -959,9 +1005,12 @@ function SpotDetailImpl() {
             // June 2025 — copy the user requested explicitly:
             //   "Location unavailable" when GPS is denied/missing
             // (NOT "enable location", which felt unfinished/broken).
+            // When location is denied AND the user can no longer be
+            // reprompted, hint at Settings instead of a no-op pill.
             const driveSub = drive
               ? 'from your location'
-              : (userCoords ? 'unavailable for this spot' : 'Location unavailable');
+              : (effectiveDriveCoords ? 'unavailable for this spot' : 'Location unavailable');
+            const showEnable = !drive && !effectiveDriveCoords;
             return (
               <View style={styles.lightDriveCard} testID="spot-light-drive-card">
                 <View style={styles.lightDriveCol}>
@@ -1019,6 +1068,19 @@ function SpotDetailImpl() {
                   <Text style={styles.lightDriveSub} numberOfLines={1}>
                     {driveSub}
                   </Text>
+                  {showEnable ? (
+                    <TouchableOpacity
+                      onPress={requestLocation}
+                      disabled={locRequesting}
+                      style={styles.lightDriveEnableBtn}
+                      hitSlop={6}
+                      testID="spot-enable-location"
+                    >
+                      <Text style={styles.lightDriveEnableTxt}>
+                        {locRequesting ? 'Requesting…' : (locDeniedHard ? 'Settings' : 'Enable')}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : null}
                 </View>
               </View>
             );
