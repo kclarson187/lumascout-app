@@ -70,24 +70,59 @@ function timeOfDayGreeting(now: Date = new Date()): string {
 }
 
 /** Returns { text, gold } where `gold` is the countdown chunk to highlight,
- *  e.g. text="Golden hour starts in" gold="42 min". Returns null if no
- *  evening golden hour today. */
-function goldenCountdownParts(coords?: { latitude: number; longitude: number } | null, now: Date = new Date()): { text: string; gold: string } | null {
+ *  e.g. text="Golden hour starts in" gold="42 min". Supports:
+ *    • "Golden hour starts in 42 min"  (pre-evening-golden)
+ *    • "Golden hour ends in 18 min"    (during evening golden hour)
+ *    • "Blue hour happening now"       (sunset → civil dusk)
+ *    • "Sunrise in 1h 12m"             (overnight, before morning golden)
+ *    • "Plan today's shoot"            (fallback when nothing else fits)
+ *
+ *  All windows are computed in the SPOT'S local time via SunCalc;
+ *  `goldenHour` = 6° above horizon, `goldenHourEnd` = morning end.
+ *  `dusk` = civil dusk (when blue hour ends).
+ */
+function goldenCountdownParts(
+  coords?: { latitude: number; longitude: number } | null,
+  now: Date = new Date(),
+): { text: string; gold: string } | null {
   if (!coords) return null;
   try {
     const SunCalc = require('suncalc');
     const t = SunCalc.getTimes(now, coords.latitude, coords.longitude);
-    const start: Date | undefined = t.goldenHour;
-    const end: Date | undefined = t.sunsetStart || t.sunset;
-    if (start && now < start) {
-      const mins = Math.max(1, Math.round((start.getTime() - now.getTime()) / 60000));
-      if (mins < 60) return { text: 'Golden hour starts in', gold: `${mins} min` };
+    const eveningStart: Date | undefined = t.goldenHour;     // sun at +6° (evening)
+    const eveningEnd: Date | undefined = t.sunsetStart || t.sunset;
+    const blueEnd: Date | undefined = t.dusk;                // civil dusk
+    const morningStart: Date | undefined = t.sunriseEnd || t.sunrise;
+    const morningEnd: Date | undefined = t.goldenHourEnd;
+
+    const fmtMins = (ms: number): string => {
+      const mins = Math.max(1, Math.round(ms / 60000));
+      if (mins < 60) return `${mins} min`;
       const h = Math.floor(mins / 60);
       const m = mins % 60;
-      return { text: 'Golden hour in', gold: m === 0 ? `${h}h` : `${h}h ${m}m` };
+      return m === 0 ? `${h}h` : `${h}h ${m}m`;
+    };
+
+    // Morning golden hour (rare for "starts in" branch — usually after sunrise).
+    if (morningStart && morningEnd && now >= morningStart && now < morningEnd) {
+      return { text: 'Golden hour ends in', gold: fmtMins(morningEnd.getTime() - now.getTime()) };
     }
-    if (start && end && now >= start && now < end) {
-      return { text: 'Golden hour is', gold: 'now' };
+    // Evening golden hour active right now.
+    if (eveningStart && eveningEnd && now >= eveningStart && now < eveningEnd) {
+      return { text: 'Golden hour ends in', gold: fmtMins(eveningEnd.getTime() - now.getTime()) };
+    }
+    // Blue hour active (sunset → civil dusk).
+    if (eveningEnd && blueEnd && now >= eveningEnd && now < blueEnd) {
+      return { text: 'Blue hour', gold: 'happening now' };
+    }
+    // Pre-evening-golden — most common label during the day.
+    if (eveningStart && now < eveningStart) {
+      return { text: 'Golden hour starts in', gold: fmtMins(eveningStart.getTime() - now.getTime()) };
+    }
+    // Overnight — show countdown to sunrise so users planning early shoots
+    // can see how long they have.
+    if (morningStart && now < morningStart) {
+      return { text: 'Sunrise in', gold: fmtMins(morningStart.getTime() - now.getTime()) };
     }
     return null;
   } catch {
@@ -161,8 +196,6 @@ export default function HomeMinimal() {
     if (!n) return null;
     return n.split(/\s+/)[0];
   }, [user]);
-
-  const goldenParts = useMemo(() => goldenCountdownParts(coords as any), [coords]);
 
   // Notif poll deferred 500ms.
   useEffect(() => {
@@ -290,16 +323,7 @@ export default function HomeMinimal() {
               {firstName ? `${greeting}, ${firstName}` : greeting}
             </Text>
             <Text style={s.headline}>Scout. Plan. Shoot.</Text>
-            <View style={s.subRow}>
-              <Sun size={13} color={colors.primary} />
-              {goldenParts ? (
-                <Text style={s.subText}>
-                  {goldenParts.text} <Text style={s.subTextGold}>{goldenParts.gold}</Text>
-                </Text>
-              ) : (
-                <Text style={s.subText}>Plan today\u2019s shoot</Text>
-              )}
-            </View>
+            <GoldenHourLine coords={coords as any} />
           </View>
           <View style={s.headerRight}>
             <TouchableOpacity
@@ -496,6 +520,36 @@ export default function HomeMinimal() {
 }
 
 // ─── Sub-components ────────────────────────────────────────────────────
+
+/** Self-updating golden-hour line. Re-evaluates `goldenCountdownParts`
+ *  every 60 seconds so the countdown ticks down without forcing a
+ *  re-render of the whole Home tab. The interval is also refreshed
+ *  if `coords` change (user GPS resolves later). */
+function GoldenHourLine({ coords }: { coords?: { latitude: number; longitude: number } | null }) {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    // Only need a ticker when we actually have coords.
+    if (!coords) return;
+    const id = setInterval(() => setTick((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, [coords]);
+  // The `tick` dependency is intentional — it forces re-computation on
+  // every minute without altering coords.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const parts = useMemo(() => goldenCountdownParts(coords as any), [coords, tick]);
+  return (
+    <View style={s.subRow}>
+      <Sun size={13} color={colors.primary} />
+      {parts ? (
+        <Text style={s.subText}>
+          {parts.text} <Text style={s.subTextGold}>{parts.gold}</Text>
+        </Text>
+      ) : (
+        <Text style={s.subText}>Plan today\u2019s shoot</Text>
+      )}
+    </View>
+  );
+}
 
 function Stat({ icon, bg, label, value, valueColor }: {
   icon: React.ReactNode; bg: string; label: string; value: string; valueColor: string;
