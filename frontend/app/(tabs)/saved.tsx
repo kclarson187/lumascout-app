@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -10,10 +10,12 @@ import {
   Modal,
   Alert,
   TextInput,
+  Linking,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
-import { FolderPlus, Bookmark, Lock, X, MapPin, Sparkles, Clock, ChevronRight, Users as UsersIcon, Eye, EyeOff, AlertCircle, RefreshCcw, Compass } from 'lucide-react-native';
+import { FolderPlus, Bookmark, Lock, X, MapPin, Sparkles, Clock, ChevronRight, Users as UsersIcon, Eye, EyeOff, AlertCircle, RefreshCcw, Compass, Navigation, Sun } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
@@ -24,6 +26,9 @@ import UpgradeBanner from '../../src/components/UpgradeBanner';
 import ScoutAICard from '../../src/components/ScoutAICard';
 import { SpotCardSkeleton } from '../../src/components/Skeleton';
 import { BrandedRefreshControl, useBrandedRefresh } from '../../src/theme/refresh';
+import useGps from '../../src/hooks/useGps';
+import { goldenHourBrief } from '../../src/utils/sun-windows';
+import { driveTimeEstimate } from '../../src/utils/drive-time';
 
 type SortKey = 'recent' | 'score' | 'distance' | 'city' | 'shoot_type';
 const SORT_LABELS: Record<SortKey, string> = {
@@ -46,6 +51,131 @@ function relativeTime(iso?: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
 }
 
+/**
+ * CompactSavedCard — June 2025 Saved redesign.
+ * Replaces the large vertical SpotCard for the Favorites list. Layout:
+ *   [64×64 thumb]  Name
+ *                  City, State
+ *                  Golden hour in 42m   · 18 min away
+ *                                                        [Directions ↗]
+ * - Thumbnail is 1:1 rounded for premium feel.
+ * - Whole row tappable → opens spot detail.
+ * - Right-side "Directions" tap intercepts and launches the system map app.
+ * - Per-card 60s ticker is intentionally NOT used here — instead the
+ *   parent screen passes a single shared `tick` so 50+ cards don't each
+ *   spawn an interval. Memo'd by spot_id + tick + userCoords presence.
+ */
+const CompactSavedCard = React.memo(function CompactSavedCard({
+  spot,
+  userCoords,
+  tick,
+}: {
+  spot: any;
+  userCoords?: { lat: number; lng: number } | null;
+  tick: number;
+}) {
+  const lat = spot.latitude;
+  const lng = spot.longitude;
+  const hasCoords = typeof lat === 'number' && typeof lng === 'number';
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const golden = useMemo(
+    () => (hasCoords ? goldenHourBrief(lat, lng) : null),
+    [lat, lng, tick],
+  );
+  const drive = useMemo(
+    () => driveTimeEstimate(
+      userCoords ? { latitude: userCoords.lat, longitude: userCoords.lng } : null,
+      hasCoords ? { latitude: lat, longitude: lng } : null,
+    ),
+    [userCoords?.lat, userCoords?.lng, lat, lng, hasCoords],
+  );
+
+  const openDirections = useCallback(() => {
+    if (!hasCoords) {
+      Alert.alert('Directions unavailable', 'This spot has no precise pin yet.');
+      return;
+    }
+    const label = encodeURIComponent(
+      [spot.title, spot.city].filter(Boolean).join(' · ') || 'Spot'
+    );
+    const iosUrl = `maps://?q=${label}&ll=${lat},${lng}&daddr=${lat},${lng}&dirflg=d`;
+    const iosFallback = `http://maps.apple.com/?q=${label}&ll=${lat},${lng}&daddr=${lat},${lng}&dirflg=d`;
+    const androidUrl = `geo:${lat},${lng}?q=${lat},${lng}(${label})`;
+    const webUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+    (async () => {
+      try {
+        if (Platform.OS === 'ios') {
+          const ok = await Linking.canOpenURL(iosUrl).catch(() => false);
+          return Linking.openURL(ok ? iosUrl : iosFallback);
+        }
+        if (Platform.OS === 'android') {
+          const ok = await Linking.canOpenURL(androidUrl).catch(() => false);
+          return Linking.openURL(ok ? androidUrl : webUrl);
+        }
+        return Linking.openURL(webUrl);
+      } catch {
+        Alert.alert('Could not open maps', 'Please try again.');
+      }
+    })();
+  }, [hasCoords, lat, lng, spot.title, spot.city]);
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.85}
+      onPress={() => router.push(`/spot/${spot.spot_id}` as any)}
+      style={savedStyles.card}
+      testID={`saved-card-${spot.spot_id}`}
+    >
+      <View style={savedStyles.thumbWrap}>
+        {spot.hero_cover_image_url ? (
+          <Image source={{ uri: spot.hero_cover_image_url }} style={savedStyles.thumb} />
+        ) : (
+          <View style={[savedStyles.thumb, { backgroundColor: colors.surface2 }]}>
+            <MapPin size={20} color={colors.textTertiary} />
+          </View>
+        )}
+      </View>
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <Text style={savedStyles.cardTitle} numberOfLines={1}>{spot.title || 'Untitled spot'}</Text>
+        <Text style={savedStyles.cardCity} numberOfLines={1}>
+          {[spot.city, spot.state].filter(Boolean).join(', ') || '—'}
+        </Text>
+        <View style={savedStyles.metaRow}>
+          {golden ? (
+            <View style={savedStyles.metaChunk}>
+              <Sun size={10} color={colors.primary} />
+              <Text style={savedStyles.metaGold} numberOfLines={1}>{golden}</Text>
+            </View>
+          ) : null}
+          {drive ? (
+            <View style={savedStyles.metaChunk}>
+              <Clock size={10} color={colors.textSecondary} />
+              <Text style={savedStyles.metaDrive} numberOfLines={1}>
+                {drive.label.replace(/^Approx\. /, '').replace(/ drive$/, '')} away
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      </View>
+      <TouchableOpacity
+        onPress={openDirections}
+        hitSlop={8}
+        style={savedStyles.directionsBtn}
+        testID={`saved-directions-${spot.spot_id}`}
+      >
+        <Navigation size={14} color="#1a1300" />
+      </TouchableOpacity>
+    </TouchableOpacity>
+  );
+}, (prev, next) =>
+  prev.spot.spot_id === next.spot.spot_id &&
+  prev.spot.hero_cover_image_url === next.spot.hero_cover_image_url &&
+  prev.spot.title === next.spot.title &&
+  prev.tick === next.tick &&
+  prev.userCoords?.lat === next.userCoords?.lat &&
+  prev.userCoords?.lng === next.userCoords?.lng,
+);
+
 export default function Saved() {
   const { user } = useAuth();
   const [tab, setTab] = useState<'favorites' | 'collections' | 'private'>('favorites');
@@ -54,8 +184,18 @@ export default function Saved() {
   const [collections, setCollections] = useState<any[]>([]);
   const [showNewCol, setShowNewCol] = useState(false);
   const [newColName, setNewColName] = useState('');
-  const [sort, setSort] = useState<SortKey>('recent');
-  const [filterShoot, setFilterShoot] = useState<string | null>(null);
+  // June 2025 — sort + shoot-type filter rails fully removed per redesign
+  // CR. Default sort is "Recently saved"; users can re-sort from the
+  // overflow menu in a future iteration.
+  // Compact saved card needs user GPS + a shared minute ticker so all
+  // visible cards re-evaluate countdowns on the same cadence (one
+  // setInterval at the screen level, not 50 inside list items).
+  const { coords: userCoords } = useGps();
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
   // FIX #2 (Favorites tab skeleton never resolves): Previously the screen
   // had no explicit loading state — a silent API failure would leave the user
   // staring at shimmer cards forever. We now track loading + error + loaded
@@ -107,34 +247,17 @@ export default function Saved() {
     isChanged: (prev, next) => prev !== null && prev !== next,
   });
 
-  // --- Favorites: sort + filter ----------------------------------------
+  // Favorites — June 2025 simplified: always sort by most-recently saved.
+  // The old multi-mode sort (Recently saved / Score / Distance / City /
+  // Shoot type) and the shoot-type filter row were removed per redesign
+  // CR. Re-introducing them later should reuse this sortedFavs source.
   const sortedFavs = useMemo(() => {
-    let arr = [...savedSpots];
-    if (filterShoot) arr = arr.filter((s) => (s.shoot_types || []).includes(filterShoot));
-    switch (sort) {
-      case 'score':
-        arr.sort((a, b) => (b.shoot_score || 0) - (a.shoot_score || 0));
-        break;
-      case 'distance':
-        arr.sort((a, b) => (a.distance_km ?? 9e9) - (b.distance_km ?? 9e9));
-        break;
-      case 'city':
-        arr.sort((a, b) => (a.city || '').localeCompare(b.city || ''));
-        break;
-      case 'shoot_type':
-        arr.sort((a, b) => (a.shoot_types?.[0] || 'z').localeCompare(b.shoot_types?.[0] || 'z'));
-        break;
-      case 'recent':
-      default:
-        arr.sort((a, b) => new Date(b.saved_at || b.created_at || 0).getTime() - new Date(a.saved_at || a.created_at || 0).getTime());
-    }
+    const arr = [...savedSpots];
+    arr.sort((a, b) =>
+      new Date(b.saved_at || b.created_at || 0).getTime() -
+      new Date(a.saved_at || a.created_at || 0).getTime()
+    );
     return arr;
-  }, [savedSpots, sort, filterShoot]);
-
-  const uniqueShoots = useMemo(() => {
-    const set = new Set<string>();
-    savedSpots.forEach((s) => (s.shoot_types || []).forEach((x: string) => set.add(x)));
-    return Array.from(set).slice(0, 8);
   }, [savedSpots]);
 
   if (!user) {
@@ -164,7 +287,10 @@ export default function Saved() {
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
       <View style={styles.head}>
-        <Text style={styles.title}>Saved</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>Saved</Text>
+          <Text style={styles.subtitle}>Your favorite places to shoot.</Text>
+        </View>
         {user.plan && user.plan !== 'free' ? null : (
           <View style={styles.planPill}><Text style={styles.planPillTxt}>FREE</Text></View>
         )}
@@ -243,40 +369,11 @@ export default function Saved() {
                   />
                 </View>
               )}
-              {savedSpots.length > 0 && (
-                <View style={styles.sortRail}>
-                  <ScrollView
-                    keyboardShouldPersistTaps="handled"
-                    keyboardDismissMode="on-drag"
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={{ paddingHorizontal: space.xl, gap: 6 }}
-                  >
-                    {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
-                      <TouchableOpacity
-                        key={k}
-                        onPress={() => setSort(k)}
-                        style={[styles.sortChip, sort === k && styles.sortChipActive]}
-                        testID={`sort-${k}`}
-                      >
-                        <Text style={[styles.sortChipTxt, sort === k && { color: colors.textInverse }]}>{SORT_LABELS[k]}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-              )}
-              {uniqueShoots.length > 1 && (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: space.xl, gap: 6, paddingBottom: 8 }}>
-                  <TouchableOpacity onPress={() => setFilterShoot(null)} style={[styles.filterChip, !filterShoot && styles.filterChipActive]} testID="filter-all">
-                    <Text style={[styles.filterChipTxt, !filterShoot && { color: colors.textInverse }]}>All</Text>
-                  </TouchableOpacity>
-                  {uniqueShoots.map((st) => (
-                    <TouchableOpacity key={st} onPress={() => setFilterShoot(filterShoot === st ? null : st)} style={[styles.filterChip, filterShoot === st && styles.filterChipActive]} testID={`filter-shoot-${st}`}>
-                      <Text style={[styles.filterChipTxt, filterShoot === st && { color: colors.textInverse }]}>{st}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              )}
+              {savedSpots.length > 0 ? (
+                <Text style={styles.countLine} testID="saved-count">
+                  {savedSpots.length} saved location{savedSpots.length === 1 ? '' : 's'}
+                </Text>
+              ) : null}
               {sortedFavs.length === 0 ? (
                 <ScrollView contentContainerStyle={{ padding: space.xl, paddingBottom: 100 }}>
                   {/* FIX #2: Richer empty state with illustration + 2 CTAs.
@@ -320,11 +417,18 @@ export default function Saved() {
                 <FlatList
                   data={sortedFavs}
                   keyExtractor={(i) => i.spot_id}
-                  contentContainerStyle={{ padding: space.xl, gap: space.md, paddingBottom: 100 }}
-                  renderItem={({ item }) => <SpotCard spot={item} width={undefined as any} onToggleSave={load} />}
-                  // CR Item 11 (May 2026) — branded pull-to-refresh.
-                  // The toast view (Toast component) is rendered at the
-                  // top-level wrapper so it floats above the FlatList.
+                  contentContainerStyle={{ paddingHorizontal: space.xl, paddingBottom: 100, gap: 10 }}
+                  initialNumToRender={6}
+                  windowSize={5}
+                  removeClippedSubviews
+                  renderItem={({ item }) => (
+                    <CompactSavedCard
+                      spot={item}
+                      userCoords={userCoords}
+                      tick={tick}
+                    />
+                  )}
+                  // Branded pull-to-refresh.
                   refreshControl={
                     <BrandedRefreshControl
                       refreshing={pullRefresh.refreshing}
@@ -468,6 +572,24 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   head: { paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.sm, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
   title: { color: colors.text, fontFamily: font.display, fontSize: 34, letterSpacing: -0.5 },
+  // June 2025 — small subtitle under the page title, mirrors the
+  // simplified Home tab's hierarchy.
+  subtitle: {
+    color: colors.textSecondary,
+    fontFamily: font.body,
+    fontSize: 13,
+    marginTop: 2,
+    letterSpacing: 0.1,
+  },
+  // "24 saved locations" / "1 saved location" — appears above the list.
+  countLine: {
+    color: colors.textSecondary,
+    fontFamily: font.bodyMedium,
+    fontSize: 12.5,
+    paddingHorizontal: space.xl,
+    paddingTop: 8,
+    paddingBottom: 6,
+  },
   planPill: {
     backgroundColor: colors.surface2, paddingHorizontal: 10, paddingVertical: 3,
     borderRadius: radii.pill, borderColor: colors.border, borderWidth: 1, marginBottom: 6,
@@ -641,3 +763,73 @@ function FeatureLine({ icon, text }: { icon: any; text: string }) {
     </View>
   );
 }
+
+
+// CompactSavedCard styles — June 2025 Saved redesign.
+const savedStyles = StyleSheet.create({
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: colors.surface1,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  thumbWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: colors.surface2,
+  },
+  thumb: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardTitle: {
+    color: colors.text,
+    fontFamily: font.bodyBold,
+    fontSize: 14.5,
+    letterSpacing: -0.1,
+  },
+  cardCity: {
+    color: colors.textSecondary,
+    fontFamily: font.body,
+    fontSize: 12,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 3,
+    flexWrap: 'wrap',
+  },
+  metaChunk: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  metaGold: {
+    color: colors.primary,
+    fontFamily: font.bodyMedium,
+    fontSize: 11,
+  },
+  metaDrive: {
+    color: colors.textSecondary,
+    fontFamily: font.bodyMedium,
+    fontSize: 11,
+  },
+  directionsBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});
