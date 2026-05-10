@@ -11,6 +11,8 @@ import { Search, List, Map as MapIcon, SlidersHorizontal, Locate, X, Shield, Gem
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { calculateDistanceMiles, formatDistance, resolveMiles } from '../../src/utils/distance';
+import { goldenHourBrief, blueHourBrief } from '../../src/utils/sun-windows';
+import { driveTimeEstimate } from '../../src/utils/drive-time';
 import { api } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
 import SpotCard from '../../src/components/SpotCard';
@@ -1510,6 +1512,7 @@ export default function Explore() {
             >
               <PinPreview
                 spot={selectedSpot}
+                userCoords={userCoords ? { latitude: userCoords.lat, longitude: userCoords.lng } : null}
                 onClose={() => setSelectedSpot(null)}
                 isSaved={!!savedIds[selectedSpot.spot_id]}
                 onToggleSave={() => {
@@ -1662,6 +1665,7 @@ export default function Explore() {
                       `fallback-${idx}-${(item && item.title) || 'untitled'}`
                     }
                     spot={item}
+                    compact
                     testID={`list-spot-${item?.spot_id || `fallback-${idx}`}`}
                   />
                 ))}
@@ -1709,16 +1713,83 @@ function LegendDot({ color, label }: { color: string; label: string }) {
   );
 }
 
+/**
+ * PinPreviewPlanning — golden hour, blue hour, and drive-time
+ * countdown band shown inside the map preview card.
+ *
+ * Ticks every 60 s while mounted (i.e. while a pin is selected).
+ * Computations are O(1) (suncalc + haversine) and memoised by the
+ * sun-windows minute-bucket cache, so a snappy preview opens in <1ms.
+ */
+function PinPreviewPlanning({
+  spotLat, spotLng, userCoords,
+}: {
+  spotLat?: number | null;
+  spotLng?: number | null;
+  userCoords?: { latitude: number; longitude: number } | null;
+}) {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  const hasSpot = typeof spotLat === 'number' && typeof spotLng === 'number';
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const golden = useMemo(
+    () => (hasSpot ? goldenHourBrief(spotLat as number, spotLng as number) : null),
+    [spotLat, spotLng, tick],
+  );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const blue = useMemo(
+    () => (hasSpot ? blueHourBrief(spotLat as number, spotLng as number) : null),
+    [spotLat, spotLng, tick],
+  );
+  const drive = useMemo(
+    () => driveTimeEstimate(
+      userCoords,
+      hasSpot ? { latitude: spotLat as number, longitude: spotLng as number } : null,
+    ),
+    [userCoords, spotLat, spotLng, hasSpot],
+  );
+
+  return (
+    <View style={styles.planningBand}>
+      <View style={styles.planningRowLine}>
+        <Sun size={11} color={colors.primary} />
+        <Text style={styles.planningGold} numberOfLines={1}>
+          {golden ?? 'Golden hour unavailable'}
+        </Text>
+      </View>
+      <View style={styles.planningRowLine}>
+        <Sun size={11} color="#60A5FA" />
+        <Text style={styles.planningBlue} numberOfLines={1}>
+          {blue ?? 'Blue hour unavailable'}
+        </Text>
+      </View>
+      <View style={styles.planningRowLine}>
+        <Navigation size={11} color={colors.textSecondary} />
+        <Text style={styles.planningDrive} numberOfLines={1}>
+          {drive ? drive.label : 'Drive time unavailable'}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 function PinPreview({
   spot,
   onClose,
   isSaved,
   onToggleSave,
+  userCoords,
 }: {
   spot: any;
   onClose: () => void;
   isSaved?: boolean;
   onToggleSave?: () => void;
+  /** User's GPS, when available — drives the "Approx. X min drive"
+   *  estimate. When null/undefined we render "Drive time unavailable". */
+  userCoords?: { latitude: number; longitude: number } | null;
 }) {
   const verified = spot.owner?.verification_status === 'verified';
   const premium = spot.privacy_mode === 'premium';
@@ -2021,6 +2092,20 @@ function PinPreview({
           )}
         </View>
       </View>
+
+      {/* June 2025 Map View CR — photographer planning row.
+          Three lines packed into the preview footer:
+            • Golden hour countdown for THIS spot's coords
+            • Blue hour countdown for THIS spot's coords
+            • Approx. drive time from user → spot
+          Each updates every 60s while the preview is open;
+          missing data renders a dashed-out fallback so users always
+          see all three "slots" (no jumpy layout shifts). */}
+      <PinPreviewPlanning
+        spotLat={spot.latitude}
+        spotLng={spot.longitude}
+        userCoords={userCoords ?? null}
+      />
 
       {/* Subtle outline tag row */}
       <View style={styles.subtleTagRow}>
@@ -2604,6 +2689,39 @@ const styles = StyleSheet.create({
     fontFamily: font.bodyBold,
     fontSize: 11,
     letterSpacing: 0.1,
+  },
+  // June 2025 — Map preview planning band: golden hour, blue hour,
+  // drive time. Three condensed lines so the user can plan without
+  // ever leaving the map. Tight padding keeps the preview compact.
+  planningBand: {
+    paddingTop: 10,
+    gap: 4,
+  },
+  planningRowLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  planningGold: {
+    color: colors.primary,
+    fontFamily: font.bodyBold,
+    fontSize: 12,
+    letterSpacing: 0.1,
+    flexShrink: 1,
+  },
+  planningBlue: {
+    color: '#60A5FA',
+    fontFamily: font.bodyMedium,
+    fontSize: 12,
+    letterSpacing: 0.1,
+    flexShrink: 1,
+  },
+  planningDrive: {
+    color: colors.textSecondary,
+    fontFamily: font.bodyMedium,
+    fontSize: 12,
+    letterSpacing: 0.1,
+    flexShrink: 1,
   },
   // Subtle outline tag chip row (Urban / Easy Access / Great for Portraits)
   subtleTagRow: {

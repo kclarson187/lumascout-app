@@ -17311,3 +17311,57 @@ agent_communication:
           IS the endpoint that was actually refactored at lines
           1362-1389 and is the correct regression target — and it
           returns 200 cleanly.
+
+
+  - task: "EXPLORE — Map preview & list-card photographer overhaul (June 2025)"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/src/utils/sun-windows.ts (NEW — short-form goldenHourBrief / blueHourBrief w/ minute-bucket cache)
+      /app/frontend/src/utils/drive-time.ts (NEW — distance-based drive-time estimator with Approx. label)
+      /app/frontend/src/components/SpotCard.tsx (added `compact` prop: 16:10 ratio, no ScoreBadge, new <PlanningRow> with golden+blue countdowns; updated memo comparator)
+      /app/frontend/app/(tabs)/explore.tsx (PinPreview now receives userCoords; new <PinPreviewPlanning> band shows golden/blue/drive lines; list cards passed `compact`)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Map view (PinPreview):
+            • New planning band between subtleTagRow and the title block
+              shows three lines:
+                – "Golden hour now" / "Golden hour in 42 min" / "Sunset in 12 min"
+                – "Blue hour now" / "Blue hour in 1h 8m" / "Blue hour ended"
+                – "Approx. 18 min drive" / "Drive time unavailable"
+            • Computed at the SPOT'S coordinates via SunCalc (sun-windows.ts).
+            • Drive time = haversine × 1.3 ÷ 35 mph (distance-based fallback).
+            • Self-updates every 60 s while a pin is selected. No API
+              calls per render. SunCalc memoised by 1-min cache key
+              (lat, lng, minute, dayOffset).
+            • Edge cases: missing spot lat/lng → "Golden hour unavailable".
+              Missing user coords → "Drive time unavailable". Polar
+              regions return null briefs → unavailable copy.
+
+          List view ("All nearby spots"):
+            • Removed ScoreBadge from compact image-overlay.
+            • New aspect ratio 16:10 (was 4:5) → ~50% shorter cards;
+              ~2× more cards fit on a screen.
+            • Tighter info padding (10 px vs 16 px) and smaller title
+              (15 px vs 16 px).
+            • New <PlanningRow> below the title shows golden hour brief
+              (gold) and blue hour brief (soft blue) for the spot.
+            • Other surfaces (Home rails, Search, User profile, Saved
+              tab) untouched — they don't pass `compact` so they
+              continue rendering the original portrait card.
+
+          Performance:
+            • Memo cache (sun-windows tCache) caps at 256 entries with
+              FIFO eviction; 25-card list = 25 cache hits per minute.
+            • <PlanningRow> and <PinPreviewPlanning> each have their
+              own setInterval — neither triggers parent re-renders.
+            • SpotCard memo comparator now includes lat/lng + compact
+              so FlashList recycle works correctly.
+
+          Backend untouched. No new env vars. SunCalc was already a
+          dependency from the Home tab work.

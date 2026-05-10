@@ -4,6 +4,7 @@ import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { Bookmark, Star, Shield, Lock, EyeOff, MapPin, MoreVertical, TrendingUp, Sparkles, ShieldCheck } from 'lucide-react-native';
 import { formatDistance } from '../utils/distance';
+import { goldenHourBrief, blueHourBrief } from '../utils/sun-windows';
 import { colors, radii, space, font } from '../theme';
 import { api } from '../api';
 import { useAuth } from '../auth';
@@ -32,6 +33,7 @@ function SpotCardImpl({
   onAfterAdminAction,
   width,
   testID,
+  compact = false,
 }: {
   spot: Spot;
   onPress?: () => void;
@@ -39,6 +41,16 @@ function SpotCardImpl({
   onAfterAdminAction?: () => void;
   width?: number | string;
   testID?: string;
+  /**
+   * Compact list-card mode (June 2025 — Explore "All nearby spots").
+   * • Shorter image (16:10 instead of 4:5).
+   * • No overall-score badge in the image overlay (clutter removal).
+   * • Adds a planning row beneath the title showing live golden +
+   *   blue-hour countdowns for the spot's coordinates.
+   * Non-Explore surfaces (Home rails, search) leave it `false` so
+   * they keep their portrait-style premium look.
+   */
+  compact?: boolean;
 }) {
   const { user } = useAuth();
   const isAdmin = !!user && (user.role === 'admin' || user.role === 'super_admin');
@@ -80,15 +92,19 @@ function SpotCardImpl({
   // makes aspectRatio unambiguous on first paint — no flash there.
   // We only override the height when no explicit width is supplied.
   const winWidth = Dimensions.get('window').width;
+  // Compact list cards (Explore "All nearby spots", June 2025) use a
+  // shorter 16:10 image so 2× more cards fit on one screen and
+  // scrolling feels snappier. Default cards stay portrait (4:5).
+  const aspect = compact ? 16 / 10 : 4 / 5;
   const fallbackImgHeight = useMemo(() => {
     // Mirror the page gutter from explore.tsx:1469 (paddingHorizontal: 12).
     const gutter = 24;
     const cardWidth = Math.max(280, winWidth - gutter);
-    return Math.round(cardWidth * (5 / 4)); // aspectRatio 4:5 → height = 5/4 × width
-  }, [winWidth]);
+    return Math.round(cardWidth / aspect); // height = width / aspect
+  }, [winWidth, aspect]);
   const wrapStyle = typeof width === 'number'
-    ? styles.imageWrap                                  // explicit pixel width — aspectRatio handles height fine
-    : [styles.imageWrap, { aspectRatio: undefined as unknown as number, height: fallbackImgHeight }]; // % width — pin pixels
+    ? [styles.imageWrap, { aspectRatio: aspect }]
+    : [styles.imageWrap, { aspectRatio: undefined as unknown as number, height: fallbackImgHeight }];
 
   // Cover priority (v2.1.0, May 2026): single source of truth via
   // `resolveSpotCoverForListCard(spot)` — same cascade and resize
@@ -287,7 +303,10 @@ function SpotCardImpl({
                 saves count → new — picking the first real signal we
                 have. If there's genuinely nothing to say, we say
                 nothing (we never fake a value). */}
-            {typeof spot.shoot_score === 'number' && spot.shoot_score > 0 && spot.shoot_score < 100 && (
+            {/* Score badge — hidden in compact (Explore list) mode per
+                June 2025 CR. Photographers cared more about light +
+                drive-time than an aggregate score on this surface. */}
+            {!compact && typeof spot.shoot_score === 'number' && spot.shoot_score > 0 && spot.shoot_score < 100 && (
               <ScoreBadge score={spot.shoot_score} />
             )}
             <FreshnessBadge freshness={spot.freshness} label={spot.freshness_label} variant="compact" />
@@ -338,9 +357,9 @@ function SpotCardImpl({
         )}
       </View>
 
-      <View style={styles.info}>
+      <View style={[styles.info, compact && styles.infoCompact]}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-          <Text style={[styles.title, { flex: 1 }]} numberOfLines={1}>{spot.title}</Text>
+          <Text style={[styles.title, compact && styles.titleCompact, { flex: 1 }]} numberOfLines={1}>{spot.title}</Text>
           <VerifiedBadge status={spot.owner?.verification_status} variant="inline" size={14} />
         </View>
         <View style={styles.metaRow}>
@@ -349,19 +368,28 @@ function SpotCardImpl({
             {(() => { const d = formatDistance(spot); return d ? ` · ${d}` : ''; })()}
           </Text>
         </View>
-        <View style={styles.tagRow}>
-          {(spot.shoot_types || []).slice(0, 2).map((t: string) => (
-            <View key={t} style={styles.tag}>
-              <Text style={styles.tagText}>{t}</Text>
-            </View>
-          ))}
-          {spot.average_rating != null && (
-            <View style={[styles.tag, { flexDirection: 'row', alignItems: 'center', gap: 4 }]}>
-              <Star size={10} color={colors.primary} fill={colors.primary} />
-              <Text style={styles.tagText}>{spot.average_rating}</Text>
-            </View>
-          )}
-        </View>
+        {/* Compact-mode planning row (June 2025 Explore CR) — replaces
+            the bigger ScoreBadge with photographer-useful sun timing
+            specific to THIS spot's coords. Both lines are computed
+            with a 1-minute memo cache (sun-windows.ts) and gracefully
+            hide when SunCalc cannot resolve events for this lat/lng
+            (e.g. polar regions). */}
+        {compact ? <PlanningRow spot={spot} /> : null}
+        {!compact && (
+          <View style={styles.tagRow}>
+            {(spot.shoot_types || []).slice(0, 2).map((t: string) => (
+              <View key={t} style={styles.tag}>
+                <Text style={styles.tagText}>{t}</Text>
+              </View>
+            ))}
+            {spot.average_rating != null && (
+              <View style={[styles.tag, { flexDirection: 'row', alignItems: 'center', gap: 4 }]}>
+                <Star size={10} color={colors.primary} fill={colors.primary} />
+                <Text style={styles.tagText}>{spot.average_rating}</Text>
+              </View>
+            )}
+          </View>
+        )}
       </View>
     </Pressable>
     {isAdmin && (
@@ -374,6 +402,55 @@ function SpotCardImpl({
       />
     )}
     </>
+  );
+}
+
+/**
+ * PlanningRow — golden + blue hour briefs for compact list cards.
+ * Rendered only when the spot has valid lat/lng; gracefully hides
+ * when SunCalc cannot resolve events. Re-evaluates every 60 s
+ * scoped to the row so unchanged cards don't re-render.
+ */
+function PlanningRow({ spot }: { spot: any }) {
+  const lat = spot?.latitude;
+  const lng = spot?.longitude;
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (lat == null || lng == null) return;
+    const id = setInterval(() => setTick((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, [lat, lng]);
+  // Tick is a dependency to force re-evaluation each minute.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const golden = useMemo(
+    () => (lat != null && lng != null ? goldenHourBrief(lat, lng) : null),
+    [lat, lng, tick],
+  );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const blue = useMemo(
+    () => (lat != null && lng != null ? blueHourBrief(lat, lng) : null),
+    [lat, lng, tick],
+  );
+  if (lat == null || lng == null) {
+    return (
+      <View style={styles.planningRow}>
+        <Text style={[styles.planningGolden, { color: colors.textTertiary }]} numberOfLines={1}>
+          Golden hour unavailable
+        </Text>
+      </View>
+    );
+  }
+  return (
+    <View style={styles.planningRow}>
+      <Text style={styles.planningGolden} numberOfLines={1}>
+        {golden ?? 'Golden hour unavailable'}
+      </Text>
+      {blue ? (
+        <Text style={styles.planningBlue} numberOfLines={1}>
+          {' · '}{blue}
+        </Text>
+      ) : null}
+    </View>
   );
 }
 
@@ -513,11 +590,39 @@ const styles = StyleSheet.create({
     padding: space.md,
     gap: 6,
   },
+  // Compact-mode info block — tighter padding for the shorter
+  // Explore "All nearby" cards. Keeps text legible while shaving
+  // ~14 px off card height.
+  infoCompact: {
+    padding: 10,
+    gap: 4,
+  },
   title: {
     color: colors.text,
     fontSize: 16,
     fontFamily: font.bodySemibold,
     letterSpacing: -0.2,
+  },
+  titleCompact: {
+    fontSize: 15,
+  },
+  planningRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    marginTop: 2,
+  },
+  planningGolden: {
+    color: colors.primary,           // gold accent — matches LumaScout brand
+    fontFamily: font.bodyBold,
+    fontSize: 11,
+    letterSpacing: 0.15,
+  },
+  planningBlue: {
+    color: '#60A5FA',                // soft blue for blue hour
+    fontFamily: font.bodyMedium,
+    fontSize: 11,
+    letterSpacing: 0.15,
   },
   metaRow: { flexDirection: 'row' },
   city: {
@@ -552,8 +657,10 @@ export default memo(SpotCardImpl, (prev, next) => {
     a?.save_count === b?.save_count &&
     a?.view_count === b?.view_count &&
     a?.verification_status === b?.verification_status &&
+    a?.latitude === b?.latitude &&
+    a?.longitude === b?.longitude &&
     prev.width === next.width &&
-    prev.compact === next.compact &&
+    !!prev.compact === !!next.compact &&
     prev.onToggleSave === next.onToggleSave
   );
 });
