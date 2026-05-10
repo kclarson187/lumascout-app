@@ -54,19 +54,11 @@ import { useAuth } from '../auth';
 import { colors, font, space, radii } from '../theme';
 import UserBadge from './UserBadge';
 
-// June 2025 redesign — ONE simple pill row replaces the old layered system.
-// Some pills set the backend `filter` param, others set `specialty`.
-// We keep a single client-side `activePill` key so the row stays mutually
-// exclusive without needing a multi-select grid.
-type PillKey = 'all' | 'nearby' | 'verified' | 'pet' | 'portrait' | 'wedding' | 'new';
-const PILLS: Array<{ key: PillKey; label: string; serverFilter?: string; serverSpecialty?: string }> = [
-  { key: 'nearby',   label: 'Nearby',   serverFilter: 'nearby' },
-  { key: 'verified', label: 'Verified', serverFilter: 'verified' },
-  { key: 'pet',      label: 'Pet',      serverSpecialty: 'Pet' },
-  { key: 'portrait', label: 'Portrait', serverSpecialty: 'Portrait' },
-  { key: 'wedding',  label: 'Wedding',  serverSpecialty: 'Wedding' },
-  { key: 'new',      label: 'New',      serverFilter: 'new' },
-];
+// June 2025 — Directory filter pills were fully removed (Nearby /
+// Verified / Pet / Portrait / Wedding / New). Search + Sort + count
+// line are the only inputs. The /directory backend still accepts
+// `filter` and `specialty` params for future use; we just don't
+// surface them in this tab anymore.
 
 const SORTS: Array<{ key: string; label: string }> = [
   { key: 'popular', label: 'Popular' },
@@ -579,42 +571,7 @@ const s = StyleSheet.create({
     backgroundColor: colors.surface2,
   },
   // ─── June 2025 simplified Directory styles ──────────────────────
-  pillRow: {
-    paddingHorizontal: space.xl,
-    gap: 8,
-  },
-  pill: {
-    // June 2025 contrast fix — inactive pills used to blend into the
-    // background. Bumped to surface2 with a stronger 0.18 outline so
-    // they read at low brightness / outdoors on OLED. Padding kept
-    // identical so layout never shifts when the active pill moves.
-    paddingHorizontal: 14, paddingVertical: 8,
-    borderRadius: 18,
-    backgroundColor: colors.surface2,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)',
-  },
-  pillActive: {
-    // Crisper active state — slightly stronger gold wash + a fully
-    // saturated primary border. The gold tint stays subtle enough to
-    // not muddy the gold text but obvious enough to read instantly.
-    backgroundColor: 'rgba(245,166,35,0.22)',
-    borderColor: colors.primary,
-  },
-  pillTxt: {
-    // Brighter inactive text — was textSecondary (dim). Now a clear
-    // off-white at 92% opacity, bumped to bodySemibold for readability
-    // on smaller iPhones / dynamic type.
-    color: 'rgba(255,255,255,0.92)',
-    fontFamily: font.bodySemibold,
-    fontSize: 13,
-    letterSpacing: 0.1,
-  },
-  pillTxtActive: {
-    color: colors.primary,
-    fontFamily: font.bodyBold,
-    fontSize: 13,
-    letterSpacing: 0.1,
-  },
+  // Pill row was removed — only count line + sort row styles remain.
   sortRow: {
     flexDirection: 'row',
     alignItems: 'center',
