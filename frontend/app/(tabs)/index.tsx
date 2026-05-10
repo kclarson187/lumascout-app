@@ -55,6 +55,7 @@ import { readCache, writeCache } from '../../src/utils/swrCache';
 import { resolveSpotCoverForListCard } from '../../src/utils/spot-cover';
 import { calculateDistanceMiles } from '../../src/utils/distance';
 import { goldenHourLabel } from '../../src/utils/sun';
+import { getCachedCoords, setCachedCoords } from '../../src/utils/cached-coords';
 
 type Feed = Record<string, any[]>;
 
@@ -70,16 +71,23 @@ function timeOfDayGreeting(now: Date = new Date()): string {
 }
 
 /** Returns { text, gold } where `gold` is the countdown chunk to highlight,
- *  e.g. text="Golden hour starts in" gold="42 min". Supports:
- *    • "Golden hour starts in 42 min"  (pre-evening-golden)
- *    • "Golden hour ends in 18 min"    (during evening golden hour)
- *    • "Blue hour happening now"       (sunset → civil dusk)
- *    • "Sunrise in 1h 12m"             (overnight, before morning golden)
- *    • "Plan today's shoot"            (fallback when nothing else fits)
+ *  e.g. text="Golden hour starts in" gold="42 min". Phase-aware for the
+ *  user's current location, expressed in TODAY'S local sun events.
+ *
+ *    • Pre-dawn / overnight              → "Sunrise in 5h 12m"
+ *    • Morning blue hour (dawn→sunrise)  → "Sunrise in 18 min"
+ *    • Morning golden hour               → "Golden hour ending in 24 min"
+ *    • Daytime, before evening golden    → "Golden hour starts in 3h"
+ *    • Evening golden hour (>15m sunset) → "Golden hour ending in 32 min"
+ *    • Last 15 min before sunset         → "Sunset in 12 min"
+ *    • Blue hour (sunset → civil dusk)   → "Blue hour ending in 18 min"
+ *    • After dusk (full night)           → "Sunrise in 7h 4m"
  *
  *  All windows are computed in the SPOT'S local time via SunCalc;
  *  `goldenHour` = 6° above horizon, `goldenHourEnd` = morning end.
  *  `dusk` = civil dusk (when blue hour ends).
+ *  Returns null when SunCalc cannot resolve the events for this lat/date
+ *  (polar regions near solstice).
  */
 function goldenCountdownParts(
   coords?: { latitude: number; longitude: number } | null,
@@ -89,11 +97,16 @@ function goldenCountdownParts(
   try {
     const SunCalc = require('suncalc');
     const t = SunCalc.getTimes(now, coords.latitude, coords.longitude);
-    const eveningStart: Date | undefined = t.goldenHour;     // sun at +6° (evening)
-    const eveningEnd: Date | undefined = t.sunsetStart || t.sunset;
-    const blueEnd: Date | undefined = t.dusk;                // civil dusk
-    const morningStart: Date | undefined = t.sunriseEnd || t.sunrise;
-    const morningEnd: Date | undefined = t.goldenHourEnd;
+    const dawn: Date | undefined = t.dawn;
+    const sunrise: Date | undefined = t.sunriseEnd || t.sunrise;
+    const morningGoldenEnd: Date | undefined = t.goldenHourEnd;
+    const eveningGoldenStart: Date | undefined = t.goldenHour;     // sun at +6°
+    const sunset: Date | undefined = t.sunsetStart || t.sunset;
+    const dusk: Date | undefined = t.dusk;
+
+    // Helper — return true if every Date in the list is a real Date (not NaN).
+    const valid = (...ds: (Date | undefined)[]) =>
+      ds.every((d) => d && !Number.isNaN(d.getTime()));
 
     const fmtMins = (ms: number): string => {
       const mins = Math.max(1, Math.round(ms / 60000));
@@ -103,27 +116,56 @@ function goldenCountdownParts(
       return m === 0 ? `${h}h` : `${h}h ${m}m`;
     };
 
-    // Morning golden hour (rare for "starts in" branch — usually after sunrise).
-    if (morningStart && morningEnd && now >= morningStart && now < morningEnd) {
-      return { text: 'Golden hour ends in', gold: fmtMins(morningEnd.getTime() - now.getTime()) };
+    // ── PHASE A — overnight, pre-dawn. ────────────────────────────────
+    // Show countdown to today's sunrise so a 4am photographer can plan.
+    if (valid(sunrise) && now < (sunrise as Date)) {
+      // Inside morning blue hour (dawn → sunrise)? Same copy is fine —
+      // "Sunrise in 18 min" already conveys urgency.
+      return { text: 'Sunrise in', gold: fmtMins((sunrise as Date).getTime() - now.getTime()) };
     }
-    // Evening golden hour active right now.
-    if (eveningStart && eveningEnd && now >= eveningStart && now < eveningEnd) {
-      return { text: 'Golden hour ends in', gold: fmtMins(eveningEnd.getTime() - now.getTime()) };
+
+    // ── PHASE B — morning golden hour (sunrise → goldenHourEnd). ──────
+    if (valid(sunrise, morningGoldenEnd) && now >= (sunrise as Date) && now < (morningGoldenEnd as Date)) {
+      return {
+        text: 'Golden hour ending in',
+        gold: fmtMins((morningGoldenEnd as Date).getTime() - now.getTime()),
+      };
     }
-    // Blue hour active (sunset → civil dusk).
-    if (eveningEnd && blueEnd && now >= eveningEnd && now < blueEnd) {
-      return { text: 'Blue hour', gold: 'happening now' };
+
+    // ── PHASE C — daytime, before evening golden hour starts. ─────────
+    if (valid(eveningGoldenStart) && now < (eveningGoldenStart as Date)) {
+      return {
+        text: 'Golden hour starts in',
+        gold: fmtMins((eveningGoldenStart as Date).getTime() - now.getTime()),
+      };
     }
-    // Pre-evening-golden — most common label during the day.
-    if (eveningStart && now < eveningStart) {
-      return { text: 'Golden hour starts in', gold: fmtMins(eveningStart.getTime() - now.getTime()) };
+
+    // ── PHASE D — evening golden hour active (until sunset start). ────
+    if (valid(eveningGoldenStart, sunset) && now >= (eveningGoldenStart as Date) && now < (sunset as Date)) {
+      const msToSunset = (sunset as Date).getTime() - now.getTime();
+      // Last 15 minutes — switch to a dramatic "Sunset in X" cue.
+      if (msToSunset <= 15 * 60_000) {
+        return { text: 'Sunset in', gold: fmtMins(msToSunset) };
+      }
+      return { text: 'Golden hour ending in', gold: fmtMins(msToSunset) };
     }
-    // Overnight — show countdown to sunrise so users planning early shoots
-    // can see how long they have.
-    if (morningStart && now < morningStart) {
-      return { text: 'Sunrise in', gold: fmtMins(morningStart.getTime() - now.getTime()) };
+
+    // ── PHASE E — blue hour (sunset → civil dusk). ────────────────────
+    if (valid(sunset, dusk) && now >= (sunset as Date) && now < (dusk as Date)) {
+      return {
+        text: 'Blue hour ending in',
+        gold: fmtMins((dusk as Date).getTime() - now.getTime()),
+      };
     }
+
+    // ── PHASE F — after dusk, full night. Show NEXT day's sunrise. ────
+    const tomorrow = new Date(now.getTime() + 24 * 3600 * 1000);
+    const tn = SunCalc.getTimes(tomorrow, coords.latitude, coords.longitude);
+    const nextSunrise: Date | undefined = tn.sunriseEnd || tn.sunrise;
+    if (valid(nextSunrise) && now < (nextSunrise as Date)) {
+      return { text: 'Sunrise in', gold: fmtMins((nextSunrise as Date).getTime() - now.getTime()) };
+    }
+
     return null;
   } catch {
     return null;
@@ -187,8 +229,37 @@ export default function HomeMinimal() {
   const [refreshing, setRefreshing] = useState(false);
   const [unreadNotif, setUnreadNotif] = useState(0);
   const [weather, setWeather] = useState<{ temp_f: number; label: string } | null>(null);
+  // June 2025 — last-known coords, hydrated from AsyncStorage on mount.
+  // Used as a fallback for the golden-hour line when live GPS hasn't
+  // resolved yet (cold start, airplane mode, permission still pending).
+  // Live `coords` from useGps takes precedence as soon as it arrives.
+  const [cachedCoords, setCachedCoordsState] = useState<{ latitude: number; longitude: number } | null>(null);
   const loadingRef = useRef(false);
   const hydratedOnceRef = useRef(false);
+
+  // Effective coords used for sun-events: live GPS preferred, cached as fallback.
+  const effectiveCoords = useMemo<{ latitude: number; longitude: number } | null>(() => {
+    if (coords) return coords;
+    return cachedCoords;
+  }, [coords, cachedCoords]);
+
+  // Hydrate cached coords once on mount.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const c = await getCachedCoords();
+      if (alive && c) setCachedCoordsState({ latitude: c.latitude, longitude: c.longitude });
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // Persist GPS coords to AsyncStorage whenever they change — keeps the
+  // last-known cache fresh for cold starts and offline use.
+  useEffect(() => {
+    if (coords) {
+      setCachedCoords(coords);
+    }
+  }, [coords]);
 
   const greeting = useMemo(() => timeOfDayGreeting(), []);
   const firstName = useMemo(() => {
@@ -277,9 +348,9 @@ export default function HomeMinimal() {
   const heroLat = hero?.latitude ?? hero?.coords?.latitude;
   const heroLng = hero?.longitude ?? hero?.coords?.longitude;
   const heroDistanceMi = useMemo(() => {
-    if (!hero || !coords || heroLat == null || heroLng == null) return null;
-    return calculateDistanceMiles(coords.latitude, coords.longitude, heroLat, heroLng);
-  }, [hero, coords, heroLat, heroLng]);
+    if (!hero || !effectiveCoords || heroLat == null || heroLng == null) return null;
+    return calculateDistanceMiles(effectiveCoords.latitude, effectiveCoords.longitude, heroLat, heroLng);
+  }, [hero, effectiveCoords, heroLat, heroLng]);
   const heroGolden = useMemo(() => {
     if (heroLat == null || heroLng == null) return '—';
     return heroGoldenMinutes({ latitude: heroLat, longitude: heroLng } as any);
@@ -323,7 +394,7 @@ export default function HomeMinimal() {
               {firstName ? `${greeting}, ${firstName}` : greeting}
             </Text>
             <Text style={s.headline}>Scout. Plan. Shoot.</Text>
-            <GoldenHourLine coords={coords as any} />
+            <GoldenHourLine coords={effectiveCoords as any} />
           </View>
           <View style={s.headerRight}>
             <TouchableOpacity
@@ -524,7 +595,13 @@ export default function HomeMinimal() {
 /** Self-updating golden-hour line. Re-evaluates `goldenCountdownParts`
  *  every 60 seconds so the countdown ticks down without forcing a
  *  re-render of the whole Home tab. The interval is also refreshed
- *  if `coords` change (user GPS resolves later). */
+ *  if `coords` change (user GPS resolves later).
+ *
+ *  Fallback copy:
+ *   • coords missing entirely     → "Waiting for location…"  (one-time hint)
+ *   • coords present, parts null  → "Golden hour information unavailable"
+ *                                   (e.g. polar regions near solstice)
+ */
 function GoldenHourLine({ coords }: { coords?: { latitude: number; longitude: number } | null }) {
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -544,8 +621,10 @@ function GoldenHourLine({ coords }: { coords?: { latitude: number; longitude: nu
         <Text style={s.subText}>
           {parts.text} <Text style={s.subTextGold}>{parts.gold}</Text>
         </Text>
+      ) : coords ? (
+        <Text style={s.subText}>Golden hour information unavailable</Text>
       ) : (
-        <Text style={s.subText}>Plan today\u2019s shoot</Text>
+        <Text style={s.subText}>Locating you for sun times…</Text>
       )}
     </View>
   );

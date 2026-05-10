@@ -17155,6 +17155,54 @@ agent_communication:
           on save. Existing users with a non-US state are auto-detected
           on mount and start in intl mode.
 
+  - task: "HOME — Dynamic, location-aware Golden Hour line (June 2025)"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/src/utils/cached-coords.ts (NEW — AsyncStorage last-known coords helper, 14-day TTL)
+      /app/frontend/app/(tabs)/index.tsx (richer phase FSM in goldenCountdownParts; effectiveCoords = live ?? cached; persists fresh GPS to cache; smarter fallback copy)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Upgraded the Home tab "Golden hour starts in…" line to be a
+          phase-aware countdown driven by the user's live GPS + a
+          14-day cached fallback for cold-starts/offline.
+
+          New phases in goldenCountdownParts (suncalc-driven):
+            • Pre-dawn / overnight        → "Sunrise in 5h 12m"
+            • Morning blue/golden window  → "Sunrise in 18 min" / "Golden hour ending in 24 min"
+            • Daytime, pre-evening        → "Golden hour starts in 3h"
+            • Evening golden (>15m left)  → "Golden hour ending in 32 min"
+            • Last 15 min before sunset   → "Sunset in 12 min"
+            • Blue hour                   → "Blue hour ending in 18 min"
+            • After dusk                  → "Sunrise in 7h 4m" (next day)
+            • Polar/no events resolvable  → "Golden hour information unavailable"
+            • No coords yet               → "Locating you for sun times…"
+
+          Performance:
+            • Self-updating every 60s via setInterval scoped to the
+              GoldenHourLine subcomponent — no Home-tab re-renders.
+            • useMemo'd parts; ticker only runs when coords are present.
+          Offline:
+            • cached-coords.ts persists every fresh GPS fix to
+              AsyncStorage with a timestamp; reads on mount and used as
+              fallback when live GPS hasn't resolved or is denied.
+            • 14-day TTL — beyond that the seasonal sun arc would make
+              the cached fix misleading.
+          Edge cases handled:
+            • Polar regions — SunCalc returns NaN dates; explicit
+              valid() guard returns null → fallback copy.
+            • Permission denied — coords stay null, line shows
+              "Locating you for sun times…" rather than crashing.
+            • Travel — live GPS overrides cache the moment it arrives.
+
+          Backend untouched. No new env vars required.
+
+
           Backend logs healthy after all changes; frontend bundles
           cleanly. No regressions to existing flows expected.
         -working: true
