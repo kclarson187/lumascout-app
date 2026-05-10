@@ -53,7 +53,7 @@ import { useUnreadMessages } from '../../src/hooks/useUnreadMessages';
 import { colors, font, space, radii } from '../../src/theme';
 import { readCache, writeCache } from '../../src/utils/swrCache';
 import { resolveSpotCoverForListCard } from '../../src/utils/spot-cover';
-import { calculateDistanceMiles } from '../../src/utils/geo';
+import { calculateDistanceMiles } from '../../src/utils/distance';
 import { goldenHourLabel } from '../../src/utils/sun';
 
 type Feed = Record<string, any[]>;
