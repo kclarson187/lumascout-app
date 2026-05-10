@@ -240,23 +240,15 @@ function CreatorCard({
 export default function DirectoryView() {
   const { user } = useAuth();
   const [q, setQ] = useState('');
-  // June 2025 simplified Directory — single client-side `activePill`
-  // replaces the previous filter+axis+specialty triumvirate. Maps to
-  // the existing backend params via the PILLS table above.
-  const [activePill, setActivePill] = useState<PillKey>('all');
+  // June 2025 — filter pills were removed per design CR. Search + sort
+  // are the only inputs now; the directory backend still accepts
+  // filter/specialty params for future use, hardcoded to defaults.
+  const filter = 'all';
+  const specialty: string | null = null;
   const [sort, setSort] = useState('popular');
   // Live count from /directory — drives the "238 photographers" line.
   const [total, setTotal] = useState<number | null>(null);
   const [totalCapped, setTotalCapped] = useState(false);
-  // Derived server-side params from the active pill.
-  const filter = useMemo(() => {
-    const p = PILLS.find((x) => x.key === activePill);
-    return p?.serverFilter || 'all';
-  }, [activePill]);
-  const specialty = useMemo<string | null>(() => {
-    const p = PILLS.find((x) => x.key === activePill);
-    return p?.serverSpecialty || null;
-  }, [activePill]);
   const [items, setItems] = useState<DirItem[]>([]);
   const [cursor, setCursor] = useState<number | null>(0);
   const [loading, setLoading] = useState(false);
@@ -352,7 +344,7 @@ export default function DirectoryView() {
   }, []);
 
   const resetFilters = useCallback(() => {
-    setQ(''); setActivePill('all'); setSort('popular');
+    setQ(''); setSort('popular');
   }, []);
 
   // Pull-to-refresh — re-fetches the current filter set fresh from server.
@@ -380,27 +372,18 @@ export default function DirectoryView() {
     }
   }, [q, sort, filter, specialty]);
 
-  const hasActiveFilters = !!(q || activePill !== 'all');
+  const hasActiveFilters = !!q;
   const sortLabel = SORTS.find((srt) => srt.key === sort)?.label || 'Popular';
 
-  // Build the dynamic count line (June 2025 spec) — adapts copy to
-  // active filters: "238 photographers", "42 verified photographers",
-  // "16 pet photographers nearby" etc. The specifically-requested
-  // shapes from the PRD are honoured by combining the active pill
-  // + nearby modifier.
+  // Build the dynamic count line — pills are gone so the only modifier
+  // is whether a search query is active. Falls back to the simple
+  // total when there's no q.
   const countLabel = useMemo(() => {
     if (total == null) return null;
     const fmt = `${totalCapped ? '5,000+' : total.toLocaleString()}`;
     const noun = total === 1 ? 'photographer' : 'photographers';
-    if (activePill === 'all') return `${fmt} ${noun}`;
-    if (activePill === 'verified') return `${fmt} verified ${noun}`;
-    if (activePill === 'new') return `${fmt} new ${noun}`;
-    if (activePill === 'nearby') return `${fmt} ${noun} nearby`;
-    if (activePill === 'pet') return `${fmt} pet ${noun}`;
-    if (activePill === 'portrait') return `${fmt} portrait ${noun}`;
-    if (activePill === 'wedding') return `${fmt} wedding ${noun}`;
     return `${fmt} ${noun}`;
-  }, [total, totalCapped, activePill]);
+  }, [total, totalCapped]);
 
   return (
     <View style={s.root}>
@@ -425,36 +408,13 @@ export default function DirectoryView() {
         ) : null}
       </View>
 
-      {/* June 2025 simplified Directory — single horizontal pill row.
-          Replaces the old layered system (axis toggle + facet pills +
-          3 filter cards + Sort/Specialties controls). The chosen pill
-          either applies a filter (nearby/verified/new) or a specialty
-          (pet/portrait/wedding) on the existing /directory endpoint —
-          no backend changes for the pill mapping itself. */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={s.pillRow}
-        style={{ flexGrow: 0, marginTop: 10 }}
-      >
-        {PILLS.map((p) => {
-          const active = activePill === p.key;
-          return (
-            <Pressable
-              key={p.key}
-              onPress={() => setActivePill(active ? 'all' : p.key)}
-              style={[s.pill, active && s.pillActive]}
-              testID={`directory-pill-${p.key}`}
-            >
-              <Text style={[s.pillTxt, active && s.pillTxtActive]}>{p.label}</Text>
-            </Pressable>
-          );
-        })}
-      </ScrollView>
+      {/* June 2025 — filter pills removed per design CR. The
+          Directory now relies on the search bar + sort sheet only.
+          (PILLS array kept for future re-enable; backend still
+          supports filter+specialty params.) */}
 
-      {/* Sort row — kept compact per spec. Right-aligned reset only
-          appears when the user actually has filters active so it
-          doesn't add visual noise on the default view. */}
+      {/* Sort row — kept compact. Reset only renders when a query is
+          active so the row stays clean on the default view. */}
       <View style={s.sortRow}>
         <Pressable
           onPress={() => setSortSheetOpen(true)}
@@ -472,11 +432,7 @@ export default function DirectoryView() {
         ) : null}
       </View>
 
-      {/* Live photographer count — June 2025 spec, dynamic and
-          adapts to active filter (e.g. "16 pet photographers nearby"
-          shape was requested by combining nearby + specialty filters
-          but our pills are mutually exclusive; we still surface the
-          most-relevant single qualifier). */}
+      {/* Live photographer count — adapts to search query when active. */}
       {countLabel ? (
         <Text style={s.countLine} testID="directory-count">{countLabel}</Text>
       ) : null}
@@ -502,10 +458,7 @@ export default function DirectoryView() {
           <View style={s.emptyActions}>
             <Pressable onPress={resetFilters} style={s.emptyResetBtn} testID="directory-reset-empty">
               <RefreshCw size={13} color={colors.textInverse} />
-              <Text style={s.emptyResetTxt}>Reset filters</Text>
-            </Pressable>
-            <Pressable onPress={() => { setActivePill('nearby'); setQ(''); }} style={s.emptyAltBtn}>
-              <Text style={s.emptyAltTxt}>Browse Nearby</Text>
+              <Text style={s.emptyResetTxt}>Reset</Text>
             </Pressable>
           </View>
         </View>
