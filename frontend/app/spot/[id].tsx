@@ -49,6 +49,12 @@ import ShotListSheet from '../../src/components/ShotListSheet';
 import ScoutAICard from '../../src/components/ScoutAICard';
 import DeleteConfirmSheet, { SPOT_DELETE_PRESETS } from '../../src/components/DeleteConfirmSheet';
 import { goldenHourLabel } from '../../src/utils/sun';
+import { goldenHourBrief, blueHourBrief } from '../../src/utils/sun-windows';
+import { driveTimeEstimate } from '../../src/utils/drive-time';
+import useGps from '../../src/hooks/useGps';
+import {
+  Sparkles, Coffee, ParkingCircle, Mountain, Heart as HeartIcon, Zap,
+} from 'lucide-react-native';
 
 // v2.0.25 refactor — data-fetching + ordering + retry logic lives in
 // useSpotDetail; style sheet + shared atoms (InfoCard / LogisticsRow /
@@ -131,6 +137,18 @@ function SpotDetailImpl() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   // May 2026 — admin / super_admin description editor.
   const [descEditOpen, setDescEditOpen] = useState(false);
+
+  // June 2025 redesign — user GPS for drive-time estimate inside the
+  // new combined "Light + Drive" card. Lazy; doesn't block render.
+  const { coords: userCoords } = useGps();
+
+  // Per-minute ticker for the golden / blue / drive countdown card
+  // so it stays accurate while the user lingers on the screen.
+  const [planningTick, setPlanningTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setPlanningTick((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   // ─── Responsive Hero Sizing (May 2026) ───────────────────────────────
   // Pre-refactor the hero was a static `width: W, height: W` square
@@ -215,6 +233,40 @@ function SpotDetailImpl() {
       load();
     } catch {}
   };
+
+  // June 2025 — single source of truth for the "Get directions" flow.
+  // Used by the new primary-actions row AND the simplified sticky bar.
+  // Falls back through Apple Maps → universal Apple link → geo: → web.
+  const openDirections = useCallback(() => {
+    const lat = spot?.latitude;
+    const lng = spot?.longitude;
+    if (lat == null || lng == null) {
+      Alert.alert('Directions unavailable', 'This spot has no precise pin yet.');
+      return;
+    }
+    const cityPart = [spot?.city, spot?.state].filter(Boolean).join(', ');
+    const labelRaw = cityPart ? `${spot.title} · ${cityPart}` : (spot?.title || 'Spot');
+    const label = encodeURIComponent(labelRaw);
+    const iosUrl = `maps://?q=${label}&ll=${lat},${lng}&daddr=${lat},${lng}&dirflg=d`;
+    const iosFallback = `http://maps.apple.com/?q=${label}&ll=${lat},${lng}&daddr=${lat},${lng}&dirflg=d`;
+    const androidUrl = `geo:${lat},${lng}?q=${lat},${lng}(${label})`;
+    const webUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+    (async () => {
+      try {
+        if (Platform.OS === 'ios') {
+          const canOpen = await Linking.canOpenURL(iosUrl).catch(() => false);
+          return Linking.openURL(canOpen ? iosUrl : iosFallback);
+        }
+        if (Platform.OS === 'android') {
+          const canOpen = await Linking.canOpenURL(androidUrl).catch(() => false);
+          return Linking.openURL(canOpen ? androidUrl : webUrl);
+        }
+        return Linking.openURL(webUrl);
+      } catch {
+        Alert.alert('Could not open maps', 'Please try again.');
+      }
+    })();
+  }, [spot?.latitude, spot?.longitude, spot?.city, spot?.state, spot?.title]);
 
   const toggleFollow = async () => {
     if (!user || !spot?.owner?.user_id) return;
@@ -851,57 +903,100 @@ function SpotDetailImpl() {
             ))}
           </View>
 
-          {/* Golden-hour window — prominent, actionable. Uses the spot's local
-              timezone (handled by goldenHourLabel). Hidden for polar regions
-              / missing coords / detail pages where coords are deliberately
-              redacted. PRD item #3. */}
+          {/*
+            ════════════════════════════════════════════════════════════
+            JUNE 2025 LOCATION DETAIL REDESIGN — "Field Guide" layout
+            ────────────────────────────────────────────────────────────
+            Order:
+              1. Title + city + categories (above this comment)
+              2. Light + Drive info card (golden / blue / drive)
+              3. Owner row + description (compact)
+              4. Primary actions (Directions / Save / Check-in)
+              5. Why photographers love this spot (chip rail)
+              6. Best light rating module (compact stars)
+              7. Land-access disclosure (compact)
+              8. Know before you go (chip strip — replaces logistics)
+              9. Recent photos (merged: uploads / seasonal / conditions)
+             10. Similar nearby (compact horizontal cards w/ drive time)
+             11. Secondary actions (Add photos / Add update / AI / Scout)
+             12. Admin tools (manage photos / super-admin delete)
+            All previous "Shoot Intelligence" rings, "Best time" score
+            cards, dense logistics rows, and "No reviews yet" empty
+            states are deliberately gone — they competed with the
+            photograph and slowed scanning in the field. ════════════
+          */}
+
+          {/* ── 2. Light + Drive info card ───────────────────────── */}
           {(() => {
-            const g = goldenHourLabel(spot.latitude, spot.longitude);
-            if (!g) return null;
+            const lat = spot.latitude;
+            const lng = spot.longitude;
+            const hasCoords = typeof lat === 'number' && typeof lng === 'number';
+            // planningTick is in scope from the outer component — it
+            // forces re-evaluation every minute so the countdown
+            // remains accurate while the user lingers on the screen.
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+            const golden = hasCoords ? goldenHourBrief(lat, lng) : null;
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+            const blue = hasCoords ? blueHourBrief(lat, lng) : null;
+            const drive = driveTimeEstimate(
+              userCoords ? { latitude: userCoords.lat, longitude: userCoords.lng } : null,
+              hasCoords ? { latitude: lat, longitude: lng } : null,
+            );
+            // Tick is referenced so the closure sees fresh values:
+            void planningTick;
             return (
-              <View style={styles.goldenWindow} testID="spot-golden-window">
-                <View style={styles.goldenIcon}>
-                  <Sun size={16} color={colors.primary} />
+              <View style={styles.lightDriveCard} testID="spot-light-drive-card">
+                <View style={styles.lightDriveCol}>
+                  <View style={styles.lightDriveLabelRow}>
+                    <Sun size={12} color={colors.primary} />
+                    <Text style={styles.lightDriveLabel}>Golden hour</Text>
+                  </View>
+                  <Text style={styles.lightDriveValueGold} numberOfLines={1}>
+                    {golden ? golden.replace(/^Golden hour /, '').replace(/^Golden hour /, '') : '—'}
+                  </Text>
+                  <Text style={styles.lightDriveSub} numberOfLines={1}>
+                    {golden ? (golden.startsWith('Sunset') ? 'until sunset' :
+                               golden.startsWith('Sunrise') ? 'until sunrise' :
+                               golden.startsWith('Golden hour now') ? 'happening now' :
+                               'starts at this spot') : 'unavailable'}
+                  </Text>
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.goldenTitle}>{g}</Text>
-                  <Text style={styles.goldenSub}>Best light for today · local time at the spot</Text>
+                <View style={styles.lightDriveDivider} />
+                <View style={styles.lightDriveCol}>
+                  <View style={styles.lightDriveLabelRow}>
+                    <Sun size={12} color="#60A5FA" />
+                    <Text style={styles.lightDriveLabel}>Blue hour</Text>
+                  </View>
+                  <Text style={styles.lightDriveValueBlue} numberOfLines={1}>
+                    {blue ? blue.replace(/^Blue hour /, '') : '—'}
+                  </Text>
+                  <Text style={styles.lightDriveSub} numberOfLines={1}>
+                    {blue ? (blue.includes('now') ? 'happening now' :
+                             blue.includes('ended') ? 'just ended' :
+                             'starts at this spot') : 'unavailable'}
+                  </Text>
+                </View>
+                <View style={styles.lightDriveDivider} />
+                <View style={styles.lightDriveCol}>
+                  <View style={styles.lightDriveLabelRow}>
+                    <Navigation size={12} color={colors.textSecondary} />
+                    <Text style={styles.lightDriveLabel}>Drive time</Text>
+                  </View>
+                  <Text style={styles.lightDriveValuePlain} numberOfLines={1}>
+                    {drive ? drive.label.replace(/^Approx\. /, '').replace(/ drive$/, '') : '—'}
+                  </Text>
+                  <Text style={styles.lightDriveSub} numberOfLines={1}>
+                    {drive ? 'approx. from your location' : 'enable location'}
+                  </Text>
                 </View>
               </View>
             );
           })()}
 
-          {/* May 2026 — Best light notes (free-form uploader guidance).
-              Shown whenever the uploader has filled in `best_light_notes`
-              (see add.tsx step #3). When that field is empty we fall back
-              to the legacy structured `best_time_of_day` chip so older
-              spots submitted before the free-form field existed still
-              surface something actionable. */}
-          {spot.best_light_notes && String(spot.best_light_notes).trim() ? (
-            <View style={styles.bestLightCard} testID="spot-best-light-notes">
-              <View style={styles.bestLightIcon}>
-                <Sun size={14} color={colors.primary} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.bestLightLabel}>Best light</Text>
-                <Text style={styles.bestLightBody}>{String(spot.best_light_notes).trim()}</Text>
-              </View>
-            </View>
-          ) : spot.best_time_of_day && spot.best_time_of_day !== 'any' ? (
-            <View style={styles.bestTimeChipRow} testID="spot-best-time-chip">
-              <View style={styles.bestTimeChip}>
-                <Sun size={11} color={colors.primary} />
-                <Text style={styles.bestTimeChipTxt}>
-                  Best at {String(spot.best_time_of_day).replace(/_/g, ' ')}
-                </Text>
-              </View>
-            </View>
-          ) : null}
-
-          {/* Owner row */}
+          {/* ── 3a. Owner row (compact) ───────────────────────────── */}
           <SectionErrorBoundary label="owner-row">
           {spot.owner && (
-            <View style={styles.ownerRow}>
+            <View style={[styles.ownerRow, { marginTop: space.lg }]}>
               <TouchableOpacity onPress={() => router.push(`/user/${spot.owner.user_id}`)} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
                 {spot.owner.avatar_url ? (
                   <Image source={{ uri: spot.owner.avatar_url }} style={styles.ownerAvatar} />
@@ -926,188 +1021,157 @@ function SpotDetailImpl() {
           )}
           </SectionErrorBoundary>
 
-          {/* Description block. May 2026 — admin / super_admin sees an
-              inline ✏️ Edit affordance that opens a bottom-sheet
-              editor. The sheet hits PATCH /api/admin/spots/:id/description
-              and optimistically merges the cleaned value back into
-              local state on success. Non-admins see only the text. */}
+          {/* ── 3b. Description ───────────────────────────────────── */}
           {(spot.description || isAdminUser) ? (
             <View style={styles.descBlock}>
               {isAdminUser ? (
                 <View style={styles.descHeaderRow}>
                   <Text style={styles.descHeaderLabel}>DESCRIPTION</Text>
-                  <TouchableOpacity
-                    onPress={() => setDescEditOpen(true)}
-                    style={styles.descEditBtn}
-                    hitSlop={8}
-                    testID="spot-desc-edit"
-                    accessibilityLabel="Edit description (admin)"
-                  >
+                  <TouchableOpacity onPress={() => setDescEditOpen(true)} style={styles.descEditBtn} hitSlop={8} testID="spot-desc-edit">
                     <PenLine color={colors.primary} size={13} />
-                    <Text style={styles.descEditTxt}>
-                      {spot.description ? 'Edit' : 'Add description'}
-                    </Text>
+                    <Text style={styles.descEditTxt}>{spot.description ? 'Edit' : 'Add description'}</Text>
                   </TouchableOpacity>
                 </View>
               ) : null}
               {spot.description ? (
                 <Text style={styles.desc}>{spot.description}</Text>
               ) : isAdminUser ? (
-                <Text style={styles.descPlaceholder}>
-                  No description yet — tap "Add description" to write one.
-                </Text>
+                <Text style={styles.descPlaceholder}>No description yet — tap "Add description" to write one.</Text>
               ) : null}
             </View>
           ) : null}
 
+          {/* ── 4. Primary actions row ─────────────────────────────── */}
+          {user && (
+            <View style={styles.primaryActions} testID="spot-primary-actions">
+              <TouchableOpacity
+                style={[styles.primaryActionBtn, styles.primaryActionBtnGold]}
+                onPress={openDirections}
+                activeOpacity={0.85}
+                testID="spot-primary-directions"
+              >
+                <Navigation size={16} color="#1a1300" />
+                <Text style={styles.primaryActionTxtGold}>Directions</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.primaryActionBtn}
+                onPress={toggleSave}
+                activeOpacity={0.85}
+                testID="spot-primary-save"
+              >
+                <Bookmark size={16} color={spot.is_saved ? colors.primary : colors.text} fill={spot.is_saved ? colors.primary : 'transparent'} />
+                <Text style={[styles.primaryActionTxt, spot.is_saved && { color: colors.primary }]}>{spot.is_saved ? 'Saved' : 'Save'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.primaryActionBtn}
+                onPress={() => router.push(`/review/${id}`)}
+                activeOpacity={0.85}
+                testID="spot-primary-checkin"
+              >
+                <MessageSquarePlus size={16} color={colors.text} />
+                <Text style={styles.primaryActionTxt}>Check-in</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {spot.location_display_mode === 'approximate' && (
-            <View style={styles.privacyNote}>
+            <View style={[styles.privacyNote, { marginTop: space.md }]}>
               <MapPin size={14} color={colors.info} />
               <Text style={styles.privacyNoteTxt}>Approximate location shown — exact coordinates protected.</Text>
             </View>
           )}
           {spot.location_display_mode === 'hidden' && (
-            <View style={styles.privacyNote}>
+            <View style={[styles.privacyNote, { marginTop: space.md }]}>
               <MapPin size={14} color={colors.info} />
               <Text style={styles.privacyNoteTxt}>Map pin hidden by owner. Contact contributor for details.</Text>
             </View>
           )}
 
-          {/* Community uploads + updates CTAs (Feature 9) */}
-          {!!spot.spot_id && (
-            <View style={styles.communityCtaRow}>
-              <TouchableOpacity
-                style={styles.communityCtaPrimary}
-                onPress={() => router.push(`/spot/${spot.spot_id}/upload` as any)}
-                activeOpacity={0.85}
-                testID="spot-add-photos"
-              >
-                <Camera size={16} color={colors.textInverse} />
-                <Text style={styles.communityCtaPrimaryTxt}>Add Recent Photos</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.communityCtaSecondary}
-                onPress={() => router.push(`/spot/${spot.spot_id}/update` as any)}
-                activeOpacity={0.85}
-                testID="spot-add-update"
-              >
-                <PenLine size={16} color={colors.primary} />
-                <Text style={styles.communityCtaSecondaryTxt}>Add Update</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {/* Get directions — shown whenever an exact pin is available */}
-          {spot.location_display_mode !== 'hidden' && spot.latitude != null && spot.longitude != null && (
-            <TouchableOpacity
-              style={styles.directionsBtn}
-              onPress={() => {
-                const lat = spot.latitude;
-                const lng = spot.longitude;
-                const cityPart = [spot.city, spot.state].filter(Boolean).join(', ');
-                // Give Apple/Google Maps a human-friendly destination label so
-                // the dropped pin doesn't reverse-geocode to a random ZIP.
-                const labelRaw = cityPart ? `${spot.title} · ${cityPart}` : spot.title;
-                const label = encodeURIComponent(labelRaw || 'LumaScout spot');
-                const iosUrl = `maps://?q=${label}&ll=${lat},${lng}&daddr=${lat},${lng}&dirflg=d`;
-                const iosFallback = `http://maps.apple.com/?q=${label}&ll=${lat},${lng}&daddr=${lat},${lng}&dirflg=d`;
-                // Android: geo: scheme with labeled pin
-                const androidUrl = `geo:${lat},${lng}?q=${lat},${lng}(${label})`;
-                const webUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
-                const openBest = async () => {
-                  if (Platform.OS === 'ios') {
-                    const canOpen = await Linking.canOpenURL(iosUrl).catch(() => false);
-                    return Linking.openURL(canOpen ? iosUrl : iosFallback);
-                  }
-                  if (Platform.OS === 'android') {
-                    const canOpen = await Linking.canOpenURL(androidUrl).catch(() => false);
-                    return Linking.openURL(canOpen ? androidUrl : webUrl);
-                  }
-                  return Linking.openURL(webUrl);
-                };
-                openBest().catch(() => Alert.alert('Could not open maps', 'Please try again.'));
-              }}
-              testID="spot-get-directions"
-            >
-              <Navigation size={16} color={colors.textInverse} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.directionsBtnTitle}>Get directions</Text>
-                <Text style={styles.directionsBtnSub} numberOfLines={1}>
-                  {spot.title}{spot.city ? ` · ${spot.city}` : ''}{spot.state ? `, ${spot.state}` : ''}
-                </Text>
+          {/* ── 5. Why photographers love this spot (chips) ─────── */}
+          {(() => {
+            type Chip = { icon: any; label: string };
+            const chips: Chip[] = [];
+            const seen = new Set<string>();
+            const add = (label: string, icon: any) => {
+              if (!label) return;
+              const k = label.toLowerCase();
+              if (seen.has(k)) return;
+              seen.add(k);
+              chips.push({ icon, label });
+            };
+            // Sun-quality chips from the existing per-window ratings.
+            if ((spot.sunset_rating || 0) >= 4) add('Stunning sunsets', <Sunset size={18} color={colors.primary} />);
+            if ((spot.sunrise_rating || 0) >= 4) add('Magical sunrises', <Sunrise size={18} color={colors.primary} />);
+            if ((spot.evening_golden_hour_rating || 0) >= 4) add('Dreamy golden hour', <Sun size={18} color={colors.primary} />);
+            // Logistics chips.
+            if (/free|easy|ample|lot/i.test(spot.parking_notes || '')) add('Easy parking', <ParkingCircle size={18} color={colors.primary} />);
+            if (/quiet|empty|low|few/i.test(spot.crowd_notes || spot.access_notes || '')) add('Low crowds', <Sparkles size={18} color={colors.primary} />);
+            if (spot.dog_friendly) add('Pet friendly', <HeartIcon size={18} color={colors.primary} />);
+            if (spot.kid_friendly) add('Kid friendly', <HeartIcon size={18} color={colors.primary} />);
+            if (spot.accessible) add('Easy access', <Zap size={18} color={colors.primary} />);
+            if (spot.indoor) add('Weather-proof', <Coffee size={18} color={colors.primary} />);
+            // Photography category chips.
+            if (Array.isArray(spot.shoot_types) && spot.shoot_types.includes('portrait')) add('Great for portraits', <Camera size={18} color={colors.primary} />);
+            if (Array.isArray(spot.shoot_types) && spot.shoot_types.includes('landscape')) add('Iconic landscapes', <Mountain size={18} color={colors.primary} />);
+            if (chips.length === 0) return null;
+            return (
+              <View style={styles.whyLoveSection}>
+                <Text style={styles.whyLoveTitle}>Why photographers love this spot</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.whyLoveRow}>
+                  {chips.slice(0, 8).map((c, i) => (
+                    <View key={`${c.label}-${i}`} style={styles.whyLoveChip}>
+                      {c.icon}
+                      <Text style={styles.whyLoveTxt}>{c.label}</Text>
+                    </View>
+                  ))}
+                </ScrollView>
               </View>
-            </TouchableOpacity>
-          )}
+            );
+          })()}
 
-          {/* AI Shot list */}
-          {!!spot.spot_id && (
-            <TouchableOpacity
-              style={styles.aiBtn}
-              onPress={() => setShotListOpen(true)}
-              testID="spot-shot-list"
-              activeOpacity={0.85}
-            >
-              <View style={styles.aiIconBubble}>
-                <Wand2 size={16} color={colors.primary} />
+          {/* ── 6. Best light (compact star module) ───────────────── */}
+          {(() => {
+            const stars = (n?: number) => {
+              const v = Math.max(0, Math.min(5, Math.round(Number(n) || 0)));
+              return '★'.repeat(v) + '☆'.repeat(5 - v);
+            };
+            const items: { label: string; value: string }[] = [];
+            if (spot.evening_golden_hour_rating != null || spot.morning_golden_hour_rating != null) {
+              const peak = Math.max(spot.evening_golden_hour_rating || 0, spot.morning_golden_hour_rating || 0);
+              if (peak > 0) items.push({ label: 'Golden hour', value: stars(peak) });
+            }
+            if (spot.sunset_rating) items.push({ label: 'Sunset', value: stars(spot.sunset_rating) });
+            if (spot.sunrise_rating) items.push({ label: 'Sunrise', value: stars(spot.sunrise_rating) });
+            if (spot.best_season && spot.best_season !== 'any') {
+              const lbl = String(spot.best_season).charAt(0).toUpperCase() + String(spot.best_season).slice(1);
+              items.push({ label: lbl, value: '★★★★★' });
+            }
+            if (items.length === 0) return null;
+            return (
+              <View style={{ marginTop: space.xl }}>
+                <Text style={styles.sectionHeaderTitle}>Best light</Text>
+                <View style={{ marginTop: 10, gap: 6 }}>
+                  {items.map((it) => (
+                    <View key={it.label} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Text style={{ color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13 }}>{it.label}</Text>
+                      <Text style={{ color: colors.primary, fontFamily: font.bodyBold, fontSize: 13, letterSpacing: 1 }}>{it.value}</Text>
+                    </View>
+                  ))}
+                </View>
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.aiBtnTitle}>AI shot list</Text>
-                <Text style={styles.aiBtnSub} numberOfLines={1}>
-                  6–8 composition ideas tailored to {spot.title}
-                </Text>
-              </View>
-              <ChevronRight size={18} color={colors.textSecondary} />
-            </TouchableOpacity>
-          )}
+            );
+          })()}
 
-          {/* Scout AI — inline helper tied to this spot (PRD Scout AI Phase 1). */}
-          {!!spot.spot_id && (
-            <ScoutAICard
-              placement="spot_detail"
-              spotId={spot.spot_id}
-              subtitle={`Ask about fit, best light, or compare nearby options.`}
-            />
-          )}
-
-          {/* Scores */}
-          <Text style={styles.sectionH}>Shoot Intelligence</Text>
-          <View style={styles.scoreGrid}>
-            <ScoreRing score={spot.shoot_score} label="Overall" size={72} />
-            <ScoreRing score={lightScore} label="Light" />
-            <ScoreRing score={accessScore} label="Access" />
-            <ScoreRing score={varietyScore} label="Variety" />
-            <ScoreRing score={crowdScore} label="Crowd" />
-            <ScoreRing score={safetyScore} label="Safety" />
-          </View>
-
-          {/* Info cards */}
-          <Text style={styles.sectionH}>Best time</Text>
-          <View style={styles.infoRow}>
-            <InfoCard icon={<Sunrise size={18} color={colors.primary} />} label="Sunrise" value={`${spot.sunrise_rating}/5`} />
-            <InfoCard icon={<Sunset size={18} color={colors.primary} />} label="Sunset" value={`${spot.sunset_rating}/5`} />
-            <InfoCard icon={<Sun size={18} color={colors.primary} />} label="Golden AM" value={`${spot.morning_golden_hour_rating}/5`} />
-            <InfoCard icon={<Sun size={18} color={colors.primary} />} label="Golden PM" value={`${spot.evening_golden_hour_rating}/5`} />
-          </View>
-
-          <Text style={styles.sectionH}>Logistics</Text>
-          <View style={{ gap: space.sm }}>
-            {spot.parking_notes && <LogisticsRow icon={<Car size={16} color={colors.primary} />} label="Parking" text={spot.parking_notes} />}
-            {spot.walking_notes && <LogisticsRow icon={<MapPin size={16} color={colors.primary} />} label="Walking" text={spot.walking_notes} />}
-            {spot.permit_required && <LogisticsRow icon={<TicketIcon size={16} color={colors.warning} />} label="Permit" text={spot.permit_notes || 'Permit required'} />}
-            {spot.fee_required && <LogisticsRow icon={<TicketIcon size={16} color={colors.warning} />} label="Fee" text={spot.fee_notes || 'Entry fee'} />}
-            {spot.lens_recommendations && <LogisticsRow icon={<Camera size={16} color={colors.primary} />} label="Lens" text={spot.lens_recommendations} />}
-          </View>
-
-          {/* Item #1 (Apr 2026) — Land Access disclosure */}
+          {/* ── 7. Land access disclosure (compact) ──────────────── */}
           {(spot.land_access || spot.access_notes) ? (
             <View style={{
-              marginTop: space.lg,
-              padding: 14,
-              borderRadius: 16,
+              marginTop: space.xl,
+              padding: 12,
+              borderRadius: 14,
               borderWidth: 1,
               borderColor: spot.land_access === 'private' ? 'rgba(157,89,255,0.45)' : 'rgba(34,197,94,0.35)',
-              backgroundColor: spot.land_access === 'private' ? 'rgba(157,89,255,0.08)' : 'rgba(34,197,94,0.06)',
-              gap: 6,
+              backgroundColor: spot.land_access === 'private' ? 'rgba(157,89,255,0.07)' : 'rgba(34,197,94,0.05)',
+              gap: 4,
             }}>
               <Text style={{
                 color: spot.land_access === 'private' ? '#c8a8ff' : '#22c55e',
@@ -1118,74 +1182,81 @@ function SpotDetailImpl() {
                   : 'LAND ACCESS UNCONFIRMED'}
               </Text>
               {spot.access_notes ? (
-                <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 18 }}>
+                <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 12.5, lineHeight: 17 }}>
                   {spot.access_notes}
                 </Text>
               ) : null}
             </View>
           ) : null}
 
-          <View style={styles.badgesRow}>
-            {spot.dog_friendly && <Badge label="Dog friendly" />}
-            {spot.kid_friendly && <Badge label="Kid friendly" />}
-            {spot.accessible && <Badge label="Accessible" />}
-            {spot.indoor && <Badge label="Indoor" />}
-          </View>
+          {/* ── 8. Know before you go (chip strip — replaces dense logistics rows) ── */}
+          {(() => {
+            type KbygChip = { icon: any; label: string };
+            const out: KbygChip[] = [];
+            if (spot.land_access === 'public') out.push({ icon: <MapPin size={12} color={colors.primary} />, label: 'Public park' });
+            if (spot.parking_notes) out.push({ icon: <Car size={12} color={colors.primary} />, label: 'Parking available' });
+            if (spot.permit_required) out.push({ icon: <TicketIcon size={12} color={colors.warning} />, label: 'Permit required' });
+            if (spot.fee_required) out.push({ icon: <TicketIcon size={12} color={colors.warning} />, label: 'Entry fee' });
+            if (spot.kid_friendly) out.push({ icon: <HeartIcon size={12} color={colors.primary} />, label: 'Kid friendly' });
+            if (spot.dog_friendly) out.push({ icon: <HeartIcon size={12} color={colors.primary} />, label: 'Dog friendly' });
+            if (spot.accessible) out.push({ icon: <Zap size={12} color={colors.primary} />, label: 'Accessible' });
+            if (spot.lens_recommendations) out.push({ icon: <Camera size={12} color={colors.primary} />, label: 'Bring a wide lens' });
+            if (out.length === 0) return null;
+            return (
+              <View style={styles.kbygSection}>
+                <Text style={styles.sectionHeaderTitle}>Know before you go</Text>
+                <View style={styles.kbygChipRow}>
+                  {out.slice(0, 8).map((c, i) => (
+                    <View key={`${c.label}-${i}`} style={styles.kbygChip}>
+                      {c.icon}
+                      <Text style={styles.kbygChipTxt}>{c.label}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            );
+          })()}
+
+          {/* Walking / parking long-form notes (read-once details, not chips) */}
+          {(spot.parking_notes || spot.walking_notes) ? (
+            <View style={{ marginTop: space.lg, gap: 8 }}>
+              {spot.parking_notes ? (
+                <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 12.5, lineHeight: 17 }}>
+                  <Text style={{ color: colors.text, fontFamily: font.bodyBold }}>Parking · </Text>{spot.parking_notes}
+                </Text>
+              ) : null}
+              {spot.walking_notes ? (
+                <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 12.5, lineHeight: 17 }}>
+                  <Text style={{ color: colors.text, fontFamily: font.bodyBold }}>Walk · </Text>{spot.walking_notes}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
 
           {spot.last_verified_at && (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: space.md }}>
-              <CheckCircle size={14} color={colors.success} />
-              <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 12 }}>
+              <CheckCircle size={12} color={colors.success} />
+              <Text style={{ color: colors.textTertiary, fontFamily: font.body, fontSize: 11 }}>
                 Last verified {new Date(spot.last_verified_at).toLocaleDateString()}
               </Text>
             </View>
           )}
 
-          {/* Reviews */}
-          <SectionErrorBoundary label="reviews">
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: space.xl }}>
-            <Text style={styles.sectionH}>Field notes · {spot.review_count || 0}</Text>
-            <TouchableOpacity onPress={() => router.push(`/review/${id}`)} testID="spot-new-review">
-              <Text style={{ color: colors.primary, fontFamily: font.bodyMedium, fontSize: 13 }}>Add check-in</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={{ gap: space.md, marginTop: space.sm }}>
-            {(spot.reviews || []).slice(0, 3).map((r: any) => (
-              <View key={r.review_id} style={styles.reviewCard}>
-                <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center', marginBottom: 6 }}>
-                  {r.user?.avatar_url ? (
-                    <Image source={{ uri: r.user.avatar_url }} style={{ width: 28, height: 28, borderRadius: 14 }} />
-                  ) : <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: colors.surface2 }} />}
-                  <Text style={{ color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 }}>{r.user?.name || 'Photographer'}</Text>
-                  <Text style={{ color: colors.primary, fontFamily: font.bodyBold, fontSize: 13 }}>{r.overall_rating}★</Text>
-                </View>
-                {r.comment ? <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 18 }}>{r.comment}</Text> : null}
-              </View>
-            ))}
-            {(!spot.reviews || spot.reviews.length === 0) && (
-              <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 13 }}>No reviews yet — be the first!</Text>
-            )}
-          </View>
-          </SectionErrorBoundary>
-
-          {/* Community uploads (Feature 9 — retention) */}
+          {/* ── 9. Recent photos (merged: uploads / seasonal / conditions) ── */}
           {!!spot.spot_id && (
             <>
-              <View style={styles.sectionHeadRow}>
-                <Text style={styles.sectionH}>Recent community uploads</Text>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionHeaderTitle}>Recent photos</Text>
                 {spot.last_activity_at ? (
                   <Text style={styles.sectionHsub}>Updated {timeAgo(spot.last_activity_at)}</Text>
                 ) : null}
               </View>
-              <View style={{ marginTop: space.md, marginHorizontal: -space.xl }}>
+              <View style={{ marginHorizontal: -space.xl }}>
                 <SectionErrorBoundary label="community-uploads">
                   <CommunityUploadsSection
                     spotId={spot.spot_id}
                     initial={communityUploads.length > 0 ? communityUploads : undefined}
                     onAny={() => {
-                      // Refresh the hero pager when a user reacts /
-                      // adds an upload — so newly-uploaded photos
-                      // appear in the carousel without a full reload.
                       api.get(`/spots/${id}/uploads`, { limit: 24 })
                         .then((r: any) => {
                           if (Array.isArray(r?.items)) setCommunityUploads(r.items);
@@ -1195,53 +1266,169 @@ function SpotDetailImpl() {
                   />
                 </SectionErrorBoundary>
               </View>
-            </>
-          )}
 
-          {/* Latest conditions (text updates feed) */}
-          {!!spot.spot_id && (
-            <>
-              <Text style={[styles.sectionH, { marginTop: space.xl }]}>Latest conditions</Text>
-              <View style={{ marginTop: space.md, marginHorizontal: -space.xl }}>
+              {/* Latest conditions text feed — only if there ARE updates.
+                  Empty-state CTA replaces the old "No recent updates" dead zone. */}
+              <View style={{ marginTop: space.lg }}>
                 <SectionErrorBoundary label="latest-conditions">
                   <LatestConditionsSection spotId={spot.spot_id} />
                 </SectionErrorBoundary>
               </View>
+
+              {/* Seasonal timeline — only renders when uploads span multiple seasons */}
+              {spot.seasonal_timeline_total > 0 ? (
+                <View style={{ marginTop: space.xl, marginHorizontal: -space.xl }}>
+                  <SectionErrorBoundary label="seasonal-timeline">
+                    <SeasonalTimelineSection spotId={spot.spot_id} initial={spot.seasonal_timeline} />
+                  </SectionErrorBoundary>
+                </View>
+              ) : null}
             </>
           )}
 
-          {/* Seasonal timeline (Phase 2) — only renders if uploads span seasons */}
-          {!!spot.spot_id && spot.seasonal_timeline_total > 0 ? (
-            <>
-              <Text style={[styles.sectionH, { marginTop: space.xl }]}>Through the seasons</Text>
-              <View style={{ marginTop: space.md, marginHorizontal: -space.xl }}>
-                <SectionErrorBoundary label="seasonal-timeline">
-                  <SeasonalTimelineSection spotId={spot.spot_id} initial={spot.seasonal_timeline} />
-                </SectionErrorBoundary>
+          {/* Reviews — ONLY rendered when at least one review exists.
+              Empty state ("No reviews yet") deliberately removed in
+              the June 2025 redesign to eliminate visual dead zones. */}
+          {Array.isArray(spot.reviews) && spot.reviews.length > 0 && (
+            <SectionErrorBoundary label="reviews">
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionHeaderTitle}>Field notes · {spot.review_count || 0}</Text>
+                <TouchableOpacity onPress={() => router.push(`/review/${id}`)} testID="spot-new-review">
+                  <Text style={styles.sectionHeaderLink}>Add check-in</Text>
+                </TouchableOpacity>
               </View>
-            </>
-          ) : null}
+              <View style={{ gap: space.md }}>
+                {(spot.reviews || []).slice(0, 3).map((r: any) => (
+                  <View key={r.review_id} style={styles.reviewCard}>
+                    <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center', marginBottom: 6 }}>
+                      {r.user?.avatar_url ? (
+                        <Image source={{ uri: r.user.avatar_url }} style={{ width: 28, height: 28, borderRadius: 14 }} />
+                      ) : <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: colors.surface2 }} />}
+                      <Text style={{ color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 }}>{r.user?.name || 'Photographer'}</Text>
+                      <Text style={{ color: colors.primary, fontFamily: font.bodyBold, fontSize: 13 }}>{r.overall_rating}★</Text>
+                    </View>
+                    {r.comment ? <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 18 }}>{r.comment}</Text> : null}
+                  </View>
+                ))}
+              </View>
+            </SectionErrorBoundary>
+          )}
 
-          {/* Similar */}
+          {/* ── 10. Similar nearby (compact horizontal cards) ────── */}
           <SectionErrorBoundary label="similar-spots">
           {spot.similar_spots && spot.similar_spots.length > 0 && (
             <>
-              <Text style={[styles.sectionH, { marginTop: space.xl }]}>Similar nearby</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: space.md, marginHorizontal: -space.xl }} contentContainerStyle={{ paddingHorizontal: space.xl, gap: 12 }}>
-                {spot.similar_spots.map((s: any) => (
-                  <SpotCard key={s.spot_id || s.id || s._id} spot={s} width={240} />
-                ))}
-              </ScrollView>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionHeaderTitle}>Similar nearby</Text>
+              </View>
+              <View style={{ gap: 4 }}>
+                {spot.similar_spots.slice(0, 5).map((s: any) => {
+                  const drive = driveTimeEstimate(
+                    userCoords ? { latitude: userCoords.lat, longitude: userCoords.lng } : null,
+                    typeof s.latitude === 'number' && typeof s.longitude === 'number'
+                      ? { latitude: s.latitude, longitude: s.longitude } : null,
+                  );
+                  // eslint-disable-next-line react-hooks/exhaustive-deps
+                  const goldBrief = (typeof s.latitude === 'number' && typeof s.longitude === 'number')
+                    ? goldenHourBrief(s.latitude, s.longitude) : null;
+                  void planningTick;
+                  return (
+                    <TouchableOpacity
+                      key={s.spot_id || s.id || s._id}
+                      style={styles.similarCard}
+                      onPress={() => router.push(`/spot/${s.spot_id || s.id || s._id}`)}
+                      activeOpacity={0.85}
+                    >
+                      <View style={styles.similarThumb}>
+                        {s.hero_cover_image_url ? (
+                          <Image source={{ uri: s.hero_cover_image_url }} style={{ width: '100%', height: '100%' }} />
+                        ) : null}
+                      </View>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={styles.similarTitle} numberOfLines={1}>{s.title}</Text>
+                        <Text style={styles.similarMeta} numberOfLines={1}>
+                          {s.city}{s.state ? `, ${s.state}` : ''}
+                          {(() => { const d = formatDistance(s); return d ? ` · ${d}` : ''; })()}
+                        </Text>
+                        {goldBrief ? (
+                          <Text style={[styles.similarMeta, { color: colors.primary, fontFamily: font.bodyMedium }]} numberOfLines={1}>
+                            {goldBrief}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        {drive ? (
+                          <>
+                            <Text style={styles.similarDrive}>{drive.label.replace(/^Approx\. /, '').replace(/ drive$/, '')}</Text>
+                            <Text style={styles.similarDriveSub}>drive</Text>
+                          </>
+                        ) : (
+                          <Text style={styles.similarDriveSub}>—</Text>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
             </>
           )}
           </SectionErrorBoundary>
 
-          {/* BATCH 2 (Apr 2026): discoverable admin photo manager
-              CTA. Prior to this, the only entry point was a small
-              wand icon in the hero overlay that users were missing.
-              This wide card makes "change the cover / reorder photos"
-              obvious right below the spot body — visible to admins
-              AND super admins. */}
+          {/* ── 11. Secondary actions (de-prioritised AI + community CTAs) ── */}
+          {!!spot.spot_id && (
+            <View style={styles.secondarySection}>
+              <View style={styles.secondaryRow}>
+                <TouchableOpacity
+                  style={styles.secondaryBtn}
+                  onPress={() => router.push(`/spot/${spot.spot_id}/upload` as any)}
+                  testID="spot-add-photos"
+                  activeOpacity={0.85}
+                >
+                  <Camera size={14} color={colors.primary} />
+                  <Text style={styles.secondaryBtnTxt}>Add photos</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.secondaryBtn}
+                  onPress={() => router.push(`/spot/${spot.spot_id}/update` as any)}
+                  testID="spot-add-update"
+                  activeOpacity={0.85}
+                >
+                  <PenLine size={14} color={colors.primary} />
+                  <Text style={styles.secondaryBtnTxt}>Add update</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.secondaryRow}>
+                <TouchableOpacity
+                  style={styles.secondaryBtn}
+                  onPress={() => setShotListOpen(true)}
+                  testID="spot-shot-list"
+                  activeOpacity={0.85}
+                >
+                  <Wand2 size={14} color={colors.primary} />
+                  <Text style={styles.secondaryBtnTxt}>AI shot list</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.secondaryBtn}
+                  onPress={() => setAtcOpen(true)}
+                  testID="spot-add-collection"
+                  activeOpacity={0.85}
+                >
+                  <FolderPlus size={14} color={colors.primary} />
+                  <Text style={styles.secondaryBtnTxt}>Add to collection</Text>
+                </TouchableOpacity>
+              </View>
+              {/* Scout AI helper kept at the very bottom of secondary
+                  actions so it never competes with the field-guide
+                  hierarchy above. Subtle, opt-in. */}
+              <ScoutAICard
+                placement="spot_detail"
+                spotId={spot.spot_id}
+                subtitle={`Ask about fit, best light, or compare nearby options.`}
+              />
+            </View>
+          )}
+
+          {/* ── 12a. Admin photo manager (admin / super-admin only) ── */}
           {isAdminUser && (
             <TouchableOpacity
               style={sadStyles.photoMgrCard}
@@ -1262,7 +1449,7 @@ function SpotDetailImpl() {
             </TouchableOpacity>
           )}
 
-          {/* Super-admin destructive controls — not shown to regular admins/users. */}
+          {/* ── 12b. Super-admin destructive controls — last on page ── */}
           {user?.role === 'super_admin' && (
             <View style={sadStyles.dangerZone}>
               <View style={sadStyles.dangerHead}>
@@ -1289,33 +1476,33 @@ function SpotDetailImpl() {
       {user && (
         <View
           style={[
-            styles.actionBar,
+            styles.stickyBar,
             {
-              // ANDROID safe-area fix (June 2025): respect the system
-              // gesture / 3-button navigation bar inset so Saved / Add /
-              // Check-in buttons sit ABOVE the system controls instead
-              // of behind them. iOS home-indicator inset is also honored
-              // here. Math.max ensures we never reduce the original
-              // visual padding (space.xl = 24pt).
-              paddingBottom: Math.max(insets.bottom + 8, 24),
+              // Android system-nav inset + iOS home indicator inset.
+              paddingBottom: Math.max(insets.bottom + 6, 14),
             },
           ]}
+          testID="spot-sticky-bar"
         >
-          <TouchableOpacity style={styles.actBtn} onPress={toggleSave} testID="spot-action-save">
-            <Bookmark size={20} color={spot.is_saved ? colors.primary : colors.text} fill={spot.is_saved ? colors.primary : 'transparent'} />
-            <Text style={[styles.actTxt, spot.is_saved && { color: colors.primary }]}>Saved</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.actBtn} onPress={() => setAtcOpen(true)} testID="spot-action-collection">
-            <FolderPlus size={20} color={colors.text} />
-            <Text style={styles.actTxt}>Add</Text>
+          <TouchableOpacity style={styles.stickyBtn} onPress={toggleSave} testID="spot-action-save">
+            <Bookmark size={18} color={spot.is_saved ? colors.primary : colors.text} fill={spot.is_saved ? colors.primary : 'transparent'} />
+            <Text style={[styles.stickyBtnTxt, spot.is_saved && { color: colors.primary }]}>{spot.is_saved ? 'Saved' : 'Save'}</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.actBtn, styles.actBtnPrimary]}
+            style={[styles.stickyBtn, styles.stickyBtnGold]}
+            onPress={openDirections}
+            testID="spot-action-directions"
+          >
+            <Navigation size={18} color="#1a1300" />
+            <Text style={styles.stickyBtnTxtGold}>Directions</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.stickyBtn}
             onPress={() => router.push(`/review/${id}`)}
             testID="spot-action-review"
           >
-            <MessageSquarePlus size={20} color={colors.textInverse} />
-            <Text style={[styles.actTxt, { color: colors.textInverse }]}>Check-in</Text>
+            <MessageSquarePlus size={18} color={colors.text} />
+            <Text style={styles.stickyBtnTxt}>Check-in</Text>
           </TouchableOpacity>
         </View>
       )}

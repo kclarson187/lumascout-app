@@ -405,6 +405,332 @@ export const styles = StyleSheet.create({
   pendingBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17, marginTop: 2 },
   requestEditBtn: { alignSelf: 'flex-start', marginTop: 10, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radii.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface1 },
   requestEditTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 13 },
+
+  // ────────────────────────────────────────────────────────────────
+  // June 2025 Location Detail Redesign — "field guide" hierarchy.
+  // Replaces the dense analytics-heavy layout with a calm, cinematic
+  // photographer-focused page. New atoms below; old `scoreGrid`,
+  // `infoRow`, `logRow`, `reviewCard` etc. remain for the (rare)
+  // sections we still surface (admin / super-admin tooling).
+  // ────────────────────────────────────────────────────────────────
+  lightDriveCard: {
+    flexDirection: 'row',
+    backgroundColor: colors.surface1,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    marginTop: space.lg,
+    gap: 0,
+  },
+  lightDriveCol: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 8,
+    gap: 4,
+  },
+  lightDriveLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  lightDriveLabel: {
+    color: colors.textSecondary,
+    fontFamily: font.bodyMedium,
+    fontSize: 11.5,
+    letterSpacing: 0.2,
+  },
+  lightDriveValueGold: {
+    color: colors.primary,
+    fontFamily: font.displaySemibold || font.bodyBold,
+    fontSize: 22,
+    letterSpacing: -0.4,
+    marginTop: 2,
+  },
+  lightDriveValueBlue: {
+    color: '#60A5FA',
+    fontFamily: font.displaySemibold || font.bodyBold,
+    fontSize: 22,
+    letterSpacing: -0.4,
+    marginTop: 2,
+  },
+  lightDriveValuePlain: {
+    color: colors.text,
+    fontFamily: font.displaySemibold || font.bodyBold,
+    fontSize: 22,
+    letterSpacing: -0.4,
+    marginTop: 2,
+  },
+  lightDriveSub: {
+    color: colors.textTertiary,
+    fontFamily: font.body,
+    fontSize: 11,
+    marginTop: 1,
+  },
+  lightDriveDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    alignSelf: 'stretch',
+  },
+
+  // Primary 3-up action row (Directions / Save / Check-in)
+  primaryActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: space.lg,
+  },
+  primaryActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 14,
+    borderRadius: radii.md,
+    backgroundColor: colors.surface2,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  primaryActionBtnGold: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  primaryActionTxt: {
+    color: colors.text,
+    fontFamily: font.bodyBold,
+    fontSize: 13,
+  },
+  primaryActionTxtGold: {
+    color: '#1a1300',
+    fontFamily: font.bodyBold,
+    fontSize: 13,
+  },
+
+  // Why photographers love this spot — chip rail
+  whyLoveSection: {
+    marginTop: space.xl + 4,
+  },
+  whyLoveTitle: {
+    color: colors.text,
+    fontFamily: font.bodyBold,
+    fontSize: 16,
+    letterSpacing: -0.1,
+    marginBottom: 10,
+  },
+  whyLoveRow: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingRight: 16,
+  },
+  whyLoveChip: {
+    width: 96,
+    minHeight: 92,
+    backgroundColor: colors.surface1,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    paddingHorizontal: 8,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  whyLoveTxt: {
+    color: colors.text,
+    fontFamily: font.bodyMedium,
+    fontSize: 11,
+    textAlign: 'center',
+    lineHeight: 14,
+  },
+
+  // Recent photos section header w/ See all link
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    marginTop: space.xl + 4,
+    marginBottom: 12,
+  },
+  sectionHeaderTitle: {
+    color: colors.text,
+    fontFamily: font.bodyBold,
+    fontSize: 16,
+    letterSpacing: -0.1,
+  },
+  sectionHeaderLink: {
+    color: colors.primary,
+    fontFamily: font.bodyMedium,
+    fontSize: 12.5,
+  },
+  sectionFilterRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 10,
+  },
+  sectionFilterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+    backgroundColor: colors.surface1,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  sectionFilterChipActive: {
+    backgroundColor: 'rgba(245,166,35,0.14)',
+    borderColor: 'rgba(245,166,35,0.45)',
+  },
+  sectionFilterTxt: {
+    color: colors.textSecondary,
+    fontFamily: font.bodyMedium,
+    fontSize: 11.5,
+  },
+  sectionFilterTxtActive: {
+    color: colors.primary,
+  },
+
+  // Similar nearby compact horizontal card
+  similarCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 10,
+    paddingRight: 8,
+  },
+  similarThumb: {
+    width: 88,
+    height: 60,
+    borderRadius: 8,
+    backgroundColor: colors.surface2,
+    overflow: 'hidden',
+  },
+  similarTitle: {
+    color: colors.text,
+    fontFamily: font.bodyBold,
+    fontSize: 14,
+  },
+  similarMeta: {
+    color: colors.textSecondary,
+    fontFamily: font.body,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  similarTagRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 4,
+  },
+  similarTag: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: radii.pill,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  similarTagTxt: {
+    color: colors.textSecondary,
+    fontFamily: font.bodyMedium,
+    fontSize: 10.5,
+  },
+  similarDrive: {
+    color: '#22c55e',
+    fontFamily: font.bodyBold,
+    fontSize: 13,
+  },
+  similarDriveSub: {
+    color: colors.textTertiary,
+    fontFamily: font.body,
+    fontSize: 10.5,
+    marginTop: 1,
+  },
+  similarSaveBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Know before you go — chip strip (replaces logistics cards)
+  kbygSection: { marginTop: space.xl + 4 },
+  kbygChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  kbygChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: radii.pill,
+    backgroundColor: colors.surface1,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  kbygChipTxt: {
+    color: colors.text,
+    fontFamily: font.bodyMedium,
+    fontSize: 12,
+  },
+
+  // Secondary action row — AI shot list / Scout AI / Add update etc.
+  secondarySection: {
+    marginTop: space.xl + 4,
+    gap: 8,
+  },
+  secondaryRow: { flexDirection: 'row', gap: 8 },
+  secondaryBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 11,
+    borderRadius: radii.md,
+    backgroundColor: colors.surface1,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  secondaryBtnTxt: {
+    color: colors.text,
+    fontFamily: font.bodyMedium,
+    fontSize: 12.5,
+  },
+
+  // Slimmer sticky action bar — Save / Directions (gold) / Check-in
+  stickyBar: {
+    position: 'absolute',
+    left: 0, right: 0, bottom: 0,
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: space.xl,
+    paddingTop: 10,
+    backgroundColor: 'rgba(10,10,10,0.96)',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
+  },
+  stickyBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    borderRadius: radii.md,
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
+  },
+  stickyBtnGold: {
+    flex: 1.3,
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  stickyBtnTxt: {
+    color: colors.text,
+    fontFamily: font.bodySemibold,
+    fontSize: 13,
+  },
+  stickyBtnTxtGold: {
+    color: '#1a1300',
+    fontFamily: font.bodyBold,
+    fontSize: 13,
+  },
 });
 
 // Destructive-action palette — red/danger treatments for super-admin

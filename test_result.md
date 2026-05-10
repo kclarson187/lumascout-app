@@ -17365,3 +17365,94 @@ agent_communication:
 
           Backend untouched. No new env vars. SunCalc was already a
           dependency from the Home tab work.
+
+  - task: "SPOT DETAIL — Field-guide redesign (June 2025)"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app/spot/[id].tsx (body section fully rewritten — 11 dense legacy sections collapsed to 7 calm sections; new openDirections helper; sticky bar simplified)
+      /app/frontend/src/components/spot-detail/styles.ts (added 11 new style atoms for the redesign: lightDriveCard, primaryActions, whyLove*, sectionHeader*, similarCard*, kbygChip*, secondaryBtn*, stickyBar*)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Replaced the analytics-heavy Location Detail page with a calm,
+          cinematic photographer-focused field-guide layout.
+
+          Hero block UNCHANGED — left/right arrows, swipe gestures, and
+          gallery counter all preserved per spec.
+
+          New page order (post-hero):
+            1. Title + city + categories (kept from previous)
+            2. Light + Drive card — three columns: Golden hour brief,
+               Blue hour brief, Approx. drive time. Self-updates every
+               60 s via planningTick. Computed at the SPOT'S coords
+               (suncalc) + user's GPS (haversine fallback).
+            3. Owner row + description (compact)
+            4. Primary actions: Directions (gold), Save, Check-in
+            5. Why photographers love this spot — chip rail (Stunning
+               sunsets / Easy parking / Low crowds / Pet friendly /
+               Great for portraits / etc.) derived from existing data
+               (sun ratings, parking_notes, dog_friendly, shoot_types).
+            6. Best light — compact star module (Golden / Sunset /
+               Sunrise / Best season). Replaces 4-column score cards.
+            7. Land access disclosure (compact card)
+            8. Know before you go — chip strip (Public park / Parking
+               available / Permit required / Kid friendly / etc.).
+               Replaces dense LogisticsRow blocks.
+            9. Recent photos — merged uploads + latest conditions +
+               seasonal timeline. Empty-state dead zones removed.
+           10. Reviews — only renders if reviews.length > 0 (no more
+               "No reviews yet" copy occupying space).
+           11. Similar nearby — compact horizontal cards with drive
+               time + golden-hour brief inline.
+           12. Secondary actions — Add photos / Add update / AI shot
+               list / Add to collection. Plus ScoutAICard tucked at
+               bottom so it never competes with field-guide content.
+           13. Admin tools (Manage photos for admin/super_admin,
+               Super admin destructive zone).
+
+          DELETED:
+            • <ScoreRing> grid (Shoot Intelligence — overall/light/
+              access/variety/crowd/safety circles).
+            • <InfoCard> 4-up Best time row (Sunrise/Sunset/GoldenAM/
+              GoldenPM ratings).
+            • <LogisticsRow> stack (replaced by KBYG chips).
+            • "No reviews yet" / "No recent updates yet" empty states.
+            • Old large Add Recent Photos / Add Update primary CTA row.
+            • Old large "Get directions" hero card (replaced by
+              primary actions + sticky bar).
+            • Old AI shot list + Scout AI primary cards (moved to
+              secondary actions).
+
+          Sticky bar simplified:
+            • Save / Directions (gold primary) / Check-in.
+            • Lower height (paddingTop 10, paddingVertical 12).
+            • Cleaner spacing, less visual weight.
+
+          Performance:
+            • All countdowns run inside one shared planningTick set
+              once per minute at the page level — no per-element
+              setInterval. SunCalc memoised by (lat,lng,minute) cache
+              from sun-windows.ts.
+            • Zero new network calls. Same backend payload.
+            • Carousel & lightbox untouched.
+
+          Edge cases:
+            • Missing coords → "—" and "unavailable" sub-labels in
+              the Light + Drive card; chip rails simply hide.
+            • No GPS → drive time falls back to "enable location".
+            • Polar regions → goldenHourBrief returns null → "—".
+            • All sections null-safe; SectionErrorBoundary still wraps
+              owner row, reviews, community uploads, similar spots.
+
+          Backend untouched. No new env vars. Only frontend code.
+
+          Validation:
+            • TypeScript transpile OK on both files.
+            • Metro bundles cleanly (no resolve errors in expo logs).
+            • Backend 200s on /api/spots/spot_d116a63356d2 still happy.
+
