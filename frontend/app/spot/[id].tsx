@@ -972,45 +972,22 @@ function SpotDetailImpl() {
             photograph and slowed scanning in the field. ════════════
           */}
 
-          {/* ── 2. Light + Drive info card ───────────────────────── */}
+          {/* ── 2. Light info card — Golden + Blue hour only ───────
+                June 2025 update: drive time was REMOVED from this
+                card per design CR. Drive time still surfaces on the
+                Explore map preview where it's most useful (decision
+                time before driving). On the detail page, the user is
+                already committed — golden / blue hour timing is the
+                only signal that matters here. */}
           {(() => {
             const lat = spot.latitude;
             const lng = spot.longitude;
             const hasCoords = typeof lat === 'number' && typeof lng === 'number';
-            // planningTick is in scope from the outer component — it
-            // forces re-evaluation every minute so the countdown
-            // remains accurate while the user lingers on the screen.
             void planningTick;
-            // June 2025 fix — switched from string-based goldenHourBrief
-            // to structured goldenHourPlanning/blueHourPlanning so the
-            // card NEVER renders "Sunrise…" / "Sunset…" copy and never
-            // truncates on small phones. Each helper returns the next
-            // upcoming (or currently-active) golden / blue window with
-            // a clean "in Xh Ym" countdown + "7:44 PM – 8:17 PM" label.
             // eslint-disable-next-line react-hooks/exhaustive-deps
             const goldenP = hasCoords ? goldenHourPlanning(lat, lng) : null;
             // eslint-disable-next-line react-hooks/exhaustive-deps
             const blueP = hasCoords ? blueHourPlanning(lat, lng) : null;
-            const drive = driveTimeEstimate(
-              effectiveDriveCoords ? { latitude: effectiveDriveCoords.lat, longitude: effectiveDriveCoords.lng } : null,
-              hasCoords ? { latitude: lat, longitude: lng } : null,
-            );
-            // Drive time formatter — strips the "Approx." prefix and
-            // " drive" suffix used elsewhere; the field-guide card
-            // only shows the duration so it stays compact at small
-            // screen widths.
-            const driveValue = drive
-              ? drive.label.replace(/^Approx\. /, '').replace(/ drive$/, '').replace(/^< 1 min away$/, '< 1 min')
-              : '—';
-            // June 2025 — copy the user requested explicitly:
-            //   "Location unavailable" when GPS is denied/missing
-            // (NOT "enable location", which felt unfinished/broken).
-            // When location is denied AND the user can no longer be
-            // reprompted, hint at Settings instead of a no-op pill.
-            const driveSub = drive
-              ? 'from your location'
-              : (effectiveDriveCoords ? 'unavailable for this spot' : 'Location unavailable');
-            const showEnable = !drive && !effectiveDriveCoords;
             return (
               <View style={styles.lightDriveCard} testID="spot-light-drive-card">
                 <View style={styles.lightDriveCol}>
@@ -1049,38 +1026,6 @@ function SpotDetailImpl() {
                   <Text style={styles.lightDriveSub} numberOfLines={1}>
                     {blueP ? blueP.windowLabel : 'unavailable'}
                   </Text>
-                </View>
-                <View style={styles.lightDriveDivider} />
-                <View style={styles.lightDriveCol}>
-                  <View style={styles.lightDriveLabelRow}>
-                    <Navigation size={12} color={colors.textSecondary} />
-                    <Text style={styles.lightDriveLabel}>Drive time</Text>
-                  </View>
-                  <Text
-                    style={styles.lightDriveValuePlain}
-                    numberOfLines={1}
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.7}
-                    allowFontScaling
-                  >
-                    {driveValue}
-                  </Text>
-                  <Text style={styles.lightDriveSub} numberOfLines={1}>
-                    {driveSub}
-                  </Text>
-                  {showEnable ? (
-                    <TouchableOpacity
-                      onPress={requestLocation}
-                      disabled={locRequesting}
-                      style={styles.lightDriveEnableBtn}
-                      hitSlop={6}
-                      testID="spot-enable-location"
-                    >
-                      <Text style={styles.lightDriveEnableTxt}>
-                        {locRequesting ? 'Requesting…' : (locDeniedHard ? 'Settings' : 'Enable')}
-                      </Text>
-                    </TouchableOpacity>
-                  ) : null}
                 </View>
               </View>
             );
@@ -1134,38 +1079,11 @@ function SpotDetailImpl() {
             </View>
           ) : null}
 
-          {/* ── 4. Primary actions row ─────────────────────────────── */}
-          {user && (
-            <View style={styles.primaryActions} testID="spot-primary-actions">
-              <TouchableOpacity
-                style={[styles.primaryActionBtn, styles.primaryActionBtnGold]}
-                onPress={openDirections}
-                activeOpacity={0.85}
-                testID="spot-primary-directions"
-              >
-                <Navigation size={16} color="#1a1300" />
-                <Text style={styles.primaryActionTxtGold}>Directions</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.primaryActionBtn}
-                onPress={toggleSave}
-                activeOpacity={0.85}
-                testID="spot-primary-save"
-              >
-                <Bookmark size={16} color={spot.is_saved ? colors.primary : colors.text} fill={spot.is_saved ? colors.primary : 'transparent'} />
-                <Text style={[styles.primaryActionTxt, spot.is_saved && { color: colors.primary }]}>{spot.is_saved ? 'Saved' : 'Save'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.primaryActionBtn}
-                onPress={() => router.push(`/review/${id}`)}
-                activeOpacity={0.85}
-                testID="spot-primary-checkin"
-              >
-                <MessageSquarePlus size={16} color={colors.text} />
-                <Text style={styles.primaryActionTxt}>Check-in</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+          {/* ── 4. Primary actions row removed (June 2025 CR) ────
+                Save / Directions / Check-in already live in the sticky
+                bottom bar — duplicating them mid-page added clutter
+                without adding utility. Sticky bar is the only entry
+                point now. */}
 
           {spot.location_display_mode === 'approximate' && (
             <View style={[styles.privacyNote, { marginTop: space.md }]}>
