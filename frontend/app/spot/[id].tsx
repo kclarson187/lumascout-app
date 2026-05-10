@@ -49,7 +49,7 @@ import ShotListSheet from '../../src/components/ShotListSheet';
 import ScoutAICard from '../../src/components/ScoutAICard';
 import DeleteConfirmSheet, { SPOT_DELETE_PRESETS } from '../../src/components/DeleteConfirmSheet';
 import { goldenHourLabel } from '../../src/utils/sun';
-import { goldenHourBrief, blueHourBrief } from '../../src/utils/sun-windows';
+import { goldenHourBrief, blueHourBrief, goldenHourPlanning, blueHourPlanning } from '../../src/utils/sun-windows';
 import { driveTimeEstimate } from '../../src/utils/drive-time';
 import useGps from '../../src/hooks/useGps';
 import {
@@ -934,16 +934,34 @@ function SpotDetailImpl() {
             // planningTick is in scope from the outer component — it
             // forces re-evaluation every minute so the countdown
             // remains accurate while the user lingers on the screen.
+            void planningTick;
+            // June 2025 fix — switched from string-based goldenHourBrief
+            // to structured goldenHourPlanning/blueHourPlanning so the
+            // card NEVER renders "Sunrise…" / "Sunset…" copy and never
+            // truncates on small phones. Each helper returns the next
+            // upcoming (or currently-active) golden / blue window with
+            // a clean "in Xh Ym" countdown + "7:44 PM – 8:17 PM" label.
             // eslint-disable-next-line react-hooks/exhaustive-deps
-            const golden = hasCoords ? goldenHourBrief(lat, lng) : null;
+            const goldenP = hasCoords ? goldenHourPlanning(lat, lng) : null;
             // eslint-disable-next-line react-hooks/exhaustive-deps
-            const blue = hasCoords ? blueHourBrief(lat, lng) : null;
+            const blueP = hasCoords ? blueHourPlanning(lat, lng) : null;
             const drive = driveTimeEstimate(
               userCoords ? { latitude: userCoords.lat, longitude: userCoords.lng } : null,
               hasCoords ? { latitude: lat, longitude: lng } : null,
             );
-            // Tick is referenced so the closure sees fresh values:
-            void planningTick;
+            // Drive time formatter — strips the "Approx." prefix and
+            // " drive" suffix used elsewhere; the field-guide card
+            // only shows the duration so it stays compact at small
+            // screen widths.
+            const driveValue = drive
+              ? drive.label.replace(/^Approx\. /, '').replace(/ drive$/, '').replace(/^< 1 min away$/, '< 1 min')
+              : '—';
+            // June 2025 — copy the user requested explicitly:
+            //   "Location unavailable" when GPS is denied/missing
+            // (NOT "enable location", which felt unfinished/broken).
+            const driveSub = drive
+              ? 'from your location'
+              : (userCoords ? 'unavailable for this spot' : 'Location unavailable');
             return (
               <View style={styles.lightDriveCard} testID="spot-light-drive-card">
                 <View style={styles.lightDriveCol}>
@@ -951,14 +969,17 @@ function SpotDetailImpl() {
                     <Sun size={12} color={colors.primary} />
                     <Text style={styles.lightDriveLabel}>Golden hour</Text>
                   </View>
-                  <Text style={styles.lightDriveValueGold} numberOfLines={1}>
-                    {golden ? golden.replace(/^Golden hour /, '').replace(/^Golden hour /, '') : '—'}
+                  <Text
+                    style={styles.lightDriveValueGold}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.7}
+                    allowFontScaling
+                  >
+                    {goldenP ? goldenP.countdown : '—'}
                   </Text>
                   <Text style={styles.lightDriveSub} numberOfLines={1}>
-                    {golden ? (golden.startsWith('Sunset') ? 'until sunset' :
-                               golden.startsWith('Sunrise') ? 'until sunrise' :
-                               golden.startsWith('Golden hour now') ? 'happening now' :
-                               'starts at this spot') : 'unavailable'}
+                    {goldenP ? goldenP.windowLabel : 'unavailable'}
                   </Text>
                 </View>
                 <View style={styles.lightDriveDivider} />
@@ -967,13 +988,17 @@ function SpotDetailImpl() {
                     <Sun size={12} color="#60A5FA" />
                     <Text style={styles.lightDriveLabel}>Blue hour</Text>
                   </View>
-                  <Text style={styles.lightDriveValueBlue} numberOfLines={1}>
-                    {blue ? blue.replace(/^Blue hour /, '') : '—'}
+                  <Text
+                    style={styles.lightDriveValueBlue}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.7}
+                    allowFontScaling
+                  >
+                    {blueP ? blueP.countdown : '—'}
                   </Text>
                   <Text style={styles.lightDriveSub} numberOfLines={1}>
-                    {blue ? (blue.includes('now') ? 'happening now' :
-                             blue.includes('ended') ? 'just ended' :
-                             'starts at this spot') : 'unavailable'}
+                    {blueP ? blueP.windowLabel : 'unavailable'}
                   </Text>
                 </View>
                 <View style={styles.lightDriveDivider} />
@@ -982,11 +1007,17 @@ function SpotDetailImpl() {
                     <Navigation size={12} color={colors.textSecondary} />
                     <Text style={styles.lightDriveLabel}>Drive time</Text>
                   </View>
-                  <Text style={styles.lightDriveValuePlain} numberOfLines={1}>
-                    {drive ? drive.label.replace(/^Approx\. /, '').replace(/ drive$/, '') : '—'}
+                  <Text
+                    style={styles.lightDriveValuePlain}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.7}
+                    allowFontScaling
+                  >
+                    {driveValue}
                   </Text>
                   <Text style={styles.lightDriveSub} numberOfLines={1}>
-                    {drive ? 'approx. from your location' : 'enable location'}
+                    {driveSub}
                   </Text>
                 </View>
               </View>
