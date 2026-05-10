@@ -36,14 +36,15 @@ import { colors, font, space, radii } from '../theme';
 import UserBadge from './UserBadge';
 
 // ============================================================================
-// Filter pill row
+// Filter pill row — June 2025 redesign: photographer-focused filters.
+// "Near Me" was the only one that actually filtered; the rest were vanity.
+// New row drives both rail selection AND the hero recommendation.
 // ============================================================================
 const FILTERS = [
-  { key: 'all', label: 'All' },
-  { key: 'nearby', label: 'Nearby' },
+  { key: 'all', label: 'Near Me' },     // default = location-aware
+  { key: 'portrait', label: 'Portrait' },
+  { key: 'pet', label: 'Pet' },
   { key: 'verified', label: 'Verified' },
-  { key: 'elite', label: 'Elite' },
-  { key: 'new', label: 'New' },
 ] as const;
 type FilterKey = typeof FILTERS[number]['key'];
 
@@ -245,6 +246,252 @@ function UserCardPremium({
 // ============================================================================
 // Section header
 // ============================================================================
+// ============================================================================
+// HERO RECOMMENDED CARD — single large featured creator (June 2025 redesign).
+// Replaces the 7-rail wall with one prominent recommendation that
+// instantly answers "Who should I connect with today?"
+// ============================================================================
+function HeroRecommendedCard({
+  u,
+  isFollowing,
+  onToggleFollow,
+}: {
+  u: any;
+  isFollowing?: boolean;
+  onToggleFollow?: () => void;
+}) {
+  const verified = u.verification_status === 'verified';
+  const isPro = u.plan === 'pro' || u.plan === 'elite';
+  const specs = Array.isArray(u.specialties)
+    ? u.specialties.slice(0, 3)
+    : (typeof u.specialties === 'string' ? [u.specialties] : []);
+  const cityState = [u.city, u.state].filter(Boolean).join(', ');
+
+  // Build a one-line "reason this is recommended" — favours the
+  // strongest signal we have on the user's profile, falling back
+  // gracefully so we never render an empty reason line.
+  const reason = (() => {
+    const s = specs.map((x: any) => String(x).toLowerCase());
+    if (s.length >= 2) return `Shoots ${specs[0]} & ${specs[1]}`.toLowerCase();
+    if (s.length === 1) return `Specializes in ${specs[0]}`.toLowerCase();
+    if (verified) return 'Verified pro near you';
+    return 'New voice on LumaScout';
+  })();
+
+  const onMessage = () => {
+    Haptics.selectionAsync().catch(() => {});
+    router.push(`/inbox/new?to=${u.user_id}` as any);
+  };
+
+  const onOpenProfile = () => {
+    Haptics.selectionAsync().catch(() => {});
+    router.push(`/user/${u.user_id}` as any);
+  };
+
+  return (
+    <Pressable
+      style={hero.card}
+      onPress={onOpenProfile}
+      testID={`hero-recommended-${u.user_id}`}
+    >
+      <LinearGradient
+        colors={['rgba(245,166,35,0.10)', 'rgba(245,166,35,0.02)']}
+        start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+        style={hero.grad}
+      />
+      <View style={hero.headerRow}>
+        <View style={hero.avatarWrap}>
+          {u.avatar_url ? (
+            <Image source={{ uri: u.avatar_url }} style={hero.avatar} />
+          ) : (
+            <View style={[hero.avatar, { backgroundColor: colors.surface2 }]} />
+          )}
+          {/* Online dot — placeholder; presence not yet on backend. Hidden
+              when there's no signal so we don't lie to users. */}
+          {u.online ? <View style={hero.onlineDot} /> : null}
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <View style={hero.nameRow}>
+            <Text style={hero.name} numberOfLines={1}>{u.name || 'Photographer'}</Text>
+            {verified ? <ShieldCheck size={15} color="#3b82f6" /> : null}
+            {isPro ? (
+              <View style={hero.proPill}>
+                <Gem size={9} color={colors.primary} />
+                <Text style={hero.proPillTxt}>VERIFIED PRO</Text>
+              </View>
+            ) : null}
+          </View>
+          {cityState ? (
+            <View style={hero.locationRow}>
+              <MapPin size={11} color={colors.textSecondary} />
+              <Text style={hero.location}>{cityState}</Text>
+            </View>
+          ) : null}
+          {specs.length > 0 ? (
+            <View style={hero.specRow}>
+              {specs.map((s: any, i: number) => (
+                <View key={`${s}-${i}`} style={hero.specPill}>
+                  <Text style={hero.specPillTxt}>{String(s)}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+        </View>
+      </View>
+
+      <View style={hero.reasonRow}>
+        <Sparkles size={11} color={colors.primary} />
+        <Text style={hero.reasonTxt} numberOfLines={2}>
+          {reason}
+          {u.available_for_referrals ? ' · Available for collabs' : ''}
+        </Text>
+      </View>
+
+      <View style={hero.actionsRow}>
+        <Pressable
+          style={[hero.actionBtn, hero.actionBtnGold, isFollowing && hero.actionBtnFollowing]}
+          onPress={(e) => { e.stopPropagation?.(); onToggleFollow?.(); }}
+          testID={`hero-follow-${u.user_id}`}
+        >
+          <UserPlus size={14} color={isFollowing ? colors.primary : '#1a1300'} />
+          <Text style={[hero.actionBtnTxtGold, isFollowing && { color: colors.primary }]}>
+            {isFollowing ? 'Following' : 'Follow'}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={hero.actionBtn}
+          onPress={(e) => { e.stopPropagation?.(); onMessage(); }}
+          testID={`hero-message-${u.user_id}`}
+        >
+          <Send size={14} color={colors.text} />
+          <Text style={hero.actionBtnTxt}>Message</Text>
+        </Pressable>
+      </View>
+    </Pressable>
+  );
+}
+
+// ============================================================================
+// COMPACT CREATOR CARD — used in "Photographers Near You" 2-3 up row.
+// Avatar / name / location / 1-2 specialties / Follow / Message icon.
+// ============================================================================
+function CompactCreatorCard({
+  u,
+  isFollowing,
+  onToggleFollow,
+  width,
+}: {
+  u: any;
+  isFollowing?: boolean;
+  onToggleFollow?: () => void;
+  width?: number;
+}) {
+  const verified = u.verification_status === 'verified';
+  const specs = Array.isArray(u.specialties)
+    ? u.specialties.slice(0, 2)
+    : (typeof u.specialties === 'string' ? [u.specialties] : []);
+  const cityState = [u.city, u.state].filter(Boolean).join(', ');
+
+  const onMessage = () => {
+    Haptics.selectionAsync().catch(() => {});
+    router.push(`/inbox/new?to=${u.user_id}` as any);
+  };
+  const onOpen = () => {
+    Haptics.selectionAsync().catch(() => {});
+    router.push(`/user/${u.user_id}` as any);
+  };
+
+  return (
+    <Pressable
+      style={[compact.card, width ? { width } : null]}
+      onPress={onOpen}
+      testID={`compact-card-${u.user_id}`}
+    >
+      <View style={{ alignItems: 'center', gap: 6 }}>
+        <View style={compact.avatarWrap}>
+          {u.avatar_url ? (
+            <Image source={{ uri: u.avatar_url }} style={compact.avatar} />
+          ) : (
+            <View style={[compact.avatar, { backgroundColor: colors.surface2 }]} />
+          )}
+          {u.online ? <View style={compact.onlineDot} /> : null}
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <Text style={compact.name} numberOfLines={1}>{u.name || 'Photographer'}</Text>
+          {verified ? <ShieldCheck size={12} color="#3b82f6" /> : null}
+        </View>
+        {cityState ? (
+          <View style={compact.locRow}>
+            <MapPin size={10} color={colors.textSecondary} />
+            <Text style={compact.loc} numberOfLines={1}>{cityState}</Text>
+          </View>
+        ) : null}
+        {specs.length > 0 ? (
+          <View style={compact.specRow}>
+            {specs.map((s: any, i: number) => (
+              <View key={`${s}-${i}`} style={compact.specPill}>
+                <Text style={compact.specPillTxt} numberOfLines={1}>{String(s)}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+      </View>
+      <View style={compact.actionsRow}>
+        <Pressable
+          style={[compact.followBtn, isFollowing && compact.followBtnActive]}
+          onPress={(e) => { e.stopPropagation?.(); onToggleFollow?.(); }}
+          testID={`compact-follow-${u.user_id}`}
+        >
+          <UserPlus size={12} color={isFollowing ? colors.primary : '#1a1300'} />
+          <Text style={[compact.followBtnTxt, isFollowing && { color: colors.primary }]}>
+            {isFollowing ? 'Following' : 'Follow'}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={compact.iconBtn}
+          onPress={(e) => { e.stopPropagation?.(); onMessage(); }}
+          testID={`compact-message-${u.user_id}`}
+        >
+          <Send size={13} color={colors.text} />
+        </Pressable>
+      </View>
+    </Pressable>
+  );
+}
+
+// ============================================================================
+// FILTER PILLS ROW — June 2025: Near Me / Portrait / Pet / Verified
+// Simple, photographer-relevant filters that drive both the hero pick
+// and the compact-row results.
+// ============================================================================
+function FilterPills({ value, onChange }: { value: FilterKey; onChange: (k: FilterKey) => void }) {
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={{ paddingHorizontal: space.xl, gap: 8 }}
+      style={{ marginTop: 10 }}
+    >
+      {FILTERS.map((f) => {
+        const active = value === f.key;
+        return (
+          <Pressable
+            key={f.key}
+            onPress={() => { Haptics.selectionAsync().catch(() => {}); onChange(f.key); }}
+            style={[fp.pill, active && fp.pillActive]}
+            testID={`discover-filter-${f.key}`}
+          >
+            {f.key === 'all' ? (
+              <Send size={11} color={active ? colors.primary : colors.textSecondary} style={{ transform: [{ rotate: '-30deg' }] }} />
+            ) : null}
+            <Text style={[fp.pillTxt, active && fp.pillTxtActive]}>{f.label}</Text>
+          </Pressable>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
 function SectionHeader({
   title, subtitle, icon, accent, onSeeAll,
 }: {
@@ -339,17 +586,22 @@ export default function DiscoverPremiumView() {
       switch (filter) {
         case 'verified':
           return arr.filter((u) => u.verification_status === 'verified');
-        case 'elite':
-          return arr.filter((u) => u.plan === 'elite');
-        case 'new':
+        case 'portrait':
           return arr.filter((u) => {
-            const d = u.created_at ? new Date(u.created_at).getTime() : 0;
-            return d > Date.now() - 30 * 24 * 3600 * 1000;
+            const sp = Array.isArray(u.specialties) ? u.specialties : [];
+            return sp.some((s: string) => /portrait/i.test(String(s)));
           });
-        case 'nearby':
-          // Already handled by near_you rail; here fold across all rails
+        case 'pet':
+          return arr.filter((u) => {
+            const sp = Array.isArray(u.specialties) ? u.specialties : [];
+            return sp.some((s: string) => /pet|dog/i.test(String(s)));
+          });
+        case 'all':
+        default:
+          // "Near Me" — keep the natural near_you ordering as the
+          // best proxy when we don't yet pass real coords through
+          // the network endpoint.
           return arr;
-        default: return arr;
       }
     };
     return {
@@ -491,119 +743,109 @@ export default function DiscoverPremiumView() {
         </View>
       ) : (
         <>
-          {/* Daily freshness banner — informational only (no longer
-              points to the share-app intent). Tap is a no-op so it
-              doesn't surprise users with a share sheet. */}
-          <View style={s.freshness} testID="discover-freshness">
-            <View style={s.freshnessIcon}>
-              <Flame size={13} color={colors.primary} />
-            </View>
-            <Text style={s.freshnessTxt}>{dailyFreshness(rails)}</Text>
-          </View>
+          {/* June 2025 Discover redesign — single primary recommendation
+              + a small compact row + invite. The freshness banner and
+              the 7-rail wall (Best Matches / Active Near / Trending /
+              Referrals / Verified / Recently Joined / Who Viewed You)
+              are deliberately gone. The Discover tab now answers ONE
+              question — "Who should I connect with today?" — and lets
+              users dig deeper via the Directory tab. */}
+          <FilterPills value={filter} onChange={setFilter} />
 
-          {/* 2 — Best Matches For You */}
-          {filteredRails.best_matches.length > 0 ? (
-            <View style={{ marginTop: 6 }}>
-              <SectionHeader
-                title="Best Matches For You"
-                subtitle="Curated for your interests"
-                icon={<Sparkles size={13} color={colors.primary} />}
-                accent={colors.primary}
-              />
-              <Rail data={filteredRails.best_matches} ctx="match" />
-            </View>
-          ) : null}
+          {/* ── Recommended for you (one big featured creator) ── */}
+          {(() => {
+            // Pick the strongest candidate from the filtered rails.
+            // Order of preference is intentional: best-match (server's
+            // own near_you/top recommendations) > active near > trending
+            // > verified > new. The first user in any non-empty rail
+            // becomes the hero. Excluded from the "Near You" row below.
+            const pool = (
+              filteredRails.best_matches.length ? filteredRails.best_matches :
+              filteredRails.active.length        ? filteredRails.active :
+              filteredRails.trending.length      ? filteredRails.trending :
+              filteredRails.verified.length      ? filteredRails.verified :
+              filteredRails.new_creators
+            );
+            const hero = pool[0];
+            if (!hero) {
+              return (
+                <View style={{ paddingHorizontal: space.xl, marginTop: 18 }}>
+                  <Text style={s.empty}>
+                    No creators match this filter yet. Try Near Me or check the Directory tab.
+                  </Text>
+                </View>
+              );
+            }
+            return (
+              <View style={{ marginTop: 18, paddingHorizontal: space.xl }}>
+                <View style={s.heroSectionHeader}>
+                  <View style={s.heroSectionIcon}>
+                    <Sparkles size={11} color={colors.primary} />
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={s.heroSectionTitle}>Recommended for you</Text>
+                    <Text style={s.heroSectionSub}>Based on your location & interests</Text>
+                  </View>
+                </View>
+                <HeroRecommendedCard
+                  u={hero}
+                  isFollowing={!!followingMap[hero.user_id] || !!hero.is_following}
+                  onToggleFollow={() => toggleFollow(hero.user_id)}
+                />
+              </View>
+            );
+          })()}
 
-          {/* 3 — Creators Near You */}
-          {filteredRails.active.length > 0 ? (
-            <View style={{ marginTop: 18 }}>
-              <SectionHeader
-                title="Creators Near You"
-                subtitle="Online or posting today"
-                icon={<Zap size={13} color="#22c55e" />}
-                accent="#22c55e"
-              />
-              <Rail data={filteredRails.active} ctx="active" />
-            </View>
-          ) : null}
+          {/* ── Photographers Near You (2-3 compact cards) ── */}
+          {(() => {
+            const heroId =
+              (filteredRails.best_matches[0]?.user_id) ??
+              (filteredRails.active[0]?.user_id) ??
+              (filteredRails.trending[0]?.user_id) ??
+              (filteredRails.verified[0]?.user_id) ??
+              (filteredRails.new_creators[0]?.user_id);
+            // Fold across rails, dedupe, exclude the hero, take 3.
+            const pool: any[] = [
+              ...(filteredRails.active || []),
+              ...(filteredRails.best_matches || []),
+              ...(filteredRails.trending || []),
+            ];
+            const seen = new Set<string>();
+            if (heroId) seen.add(heroId);
+            const near: any[] = [];
+            for (const u of pool) {
+              if (!u?.user_id || seen.has(u.user_id)) continue;
+              seen.add(u.user_id);
+              near.push(u);
+              if (near.length >= 3) break;
+            }
+            if (near.length === 0) return null;
+            return (
+              <View style={{ marginTop: 22, paddingHorizontal: space.xl }}>
+                <View style={s.heroSectionHeader}>
+                  <View style={[s.heroSectionIcon, { backgroundColor: 'rgba(34,197,94,0.14)' }]}>
+                    <MapPin size={11} color="#22c55e" />
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={s.heroSectionTitle}>Photographers near you</Text>
+                    <Text style={s.heroSectionSub}>Active in your area</Text>
+                  </View>
+                </View>
+                <View style={s.compactRow}>
+                  {near.map((u) => (
+                    <CompactCreatorCard
+                      key={u.user_id}
+                      u={u}
+                      isFollowing={!!followingMap[u.user_id] || !!u.is_following}
+                      onToggleFollow={() => toggleFollow(u.user_id)}
+                    />
+                  ))}
+                </View>
+              </View>
+            );
+          })()}
 
-          {/* 4 — Trending This Week */}
-          {filteredRails.trending.length > 0 ? (
-            <View style={{ marginTop: 18 }}>
-              <SectionHeader
-                title="Trending This Week"
-                subtitle="Most viewed creators in your region"
-                icon={<TrendingUp size={13} color="#F97316" />}
-                accent="#F97316"
-              />
-              <Rail data={filteredRails.trending} ctx="trending" />
-            </View>
-          ) : null}
-
-          {/* 5 — Available For Referrals */}
-          {filteredRails.referrals.length > 0 ? (
-            <View style={{ marginTop: 18 }}>
-              <SectionHeader
-                title="Available For Referrals"
-                subtitle="Photographers booking referrals now"
-                icon={<Briefcase size={13} color="#22c55e" />}
-                accent="#22c55e"
-              />
-              <Rail data={filteredRails.referrals} ctx="referral" />
-            </View>
-          ) : null}
-
-          {/* 6 — Verified Pros */}
-          {filteredRails.verified.length > 0 ? (
-            <View style={{ marginTop: 18 }}>
-              <SectionHeader
-                title="Verified Pros"
-                subtitle="Trusted, authenticated creators"
-                icon={<ShieldCheck size={13} color="#3b82f6" />}
-                accent="#3b82f6"
-              />
-              <Rail data={filteredRails.verified} ctx="verified" />
-            </View>
-          ) : null}
-
-          {/* 7 — Recently Joined */}
-          {filteredRails.new_creators.length > 0 ? (
-            <View style={{ marginTop: 18 }}>
-              <SectionHeader
-                title="Recently Joined"
-                subtitle="Joined LumaScout in the last 30 days"
-                icon={<Sparkles size={13} color={colors.primary} />}
-                accent={colors.primary}
-              />
-              <Rail data={filteredRails.new_creators} ctx="new" />
-            </View>
-          ) : null}
-
-          {/* 8 — Who Viewed You (blurred for free) */}
-          <View style={{ marginTop: 18 }}>
-            <SectionHeader
-              title="Who Viewed You"
-              subtitle={
-                viewers?.locked
-                  ? 'Upgrade to see who viewed your profile'
-                  : `${viewers?.total_views || 0} viewers in the last 30 days`
-              }
-              icon={<Eye size={13} color="#9D59FF" />}
-              accent="#9D59FF"
-              onSeeAll={
-                viewers?.locked
-                  ? undefined
-                  : () => router.push('/profile-viewers' as any)
-              }
-            />
-            {viewers?.locked || (viewers?.viewers || []).length === 0 ? (
-              <ViewersUpsell locked={!!viewers?.locked} count={viewers?.total_views || 0} />
-            ) : (
-              <Rail data={viewers!.viewers} />
-            )}
-          </View>
-
-          {/* 9 — Invite Friends CTA */}
+          {/* ── Invite friends CTA ── */}
           <Pressable style={s.inviteCard} onPress={onInvite} testID="discover-invite">
             <LinearGradient
               colors={['rgba(245,166,35,0.18)', 'rgba(245,166,35,0.04)']}
@@ -615,8 +857,8 @@ export default function DiscoverPremiumView() {
               <UserPlus size={20} color={colors.primary} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={s.inviteTitle}>Know great photographers?</Text>
-              <Text style={s.inviteSub}>Invite them to LumaScout — earn referral perks.</Text>
+              <Text style={s.inviteTitle}>Know a great photographer?</Text>
+              <Text style={s.inviteSub}>Invite them to LumaScout and you'll both earn perks.</Text>
             </View>
             <View style={s.inviteCta}>
               <Text style={s.inviteCtaTxt}>Invite</Text>
@@ -951,4 +1193,193 @@ const s = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   inviteCtaTxt: { color: '#1a1300', fontFamily: font.bodyBold, fontSize: 12 },
+
+  // June 2025 Discover redesign — section header for hero + compact row
+  heroSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+  },
+  heroSectionIcon: {
+    width: 30, height: 30, borderRadius: 15,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(245,166,35,0.14)',
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.3)',
+  },
+  heroSectionTitle: {
+    color: colors.text,
+    fontFamily: font.bodyBold,
+    fontSize: 17,
+    letterSpacing: -0.2,
+  },
+  heroSectionSub: {
+    color: colors.textSecondary,
+    fontFamily: font.body,
+    fontSize: 12,
+    marginTop: 1,
+  },
+  compactRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+});
+
+// ============================================================================
+// HERO RECOMMENDED CARD STYLES
+// ============================================================================
+const hero = StyleSheet.create({
+  card: {
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(245,166,35,0.45)',
+    backgroundColor: colors.surface1,
+    padding: 14,
+    gap: 12,
+  },
+  grad: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: 0.7 },
+  headerRow: { flexDirection: 'row', gap: 12, alignItems: 'center' },
+  avatarWrap: {
+    position: 'relative',
+    width: 70, height: 70, borderRadius: 35,
+    borderWidth: 2, borderColor: colors.primary,
+    padding: 2,
+  },
+  avatar: { width: '100%', height: '100%', borderRadius: 31 },
+  onlineDot: {
+    position: 'absolute', right: 2, bottom: 2,
+    width: 12, height: 12, borderRadius: 6,
+    backgroundColor: '#22c55e',
+    borderWidth: 2, borderColor: colors.surface1,
+  },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  name: { color: colors.text, fontFamily: font.bodyBold, fontSize: 17, letterSpacing: -0.2 },
+  proPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    paddingHorizontal: 7, paddingVertical: 3, borderRadius: 8,
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.5)',
+    backgroundColor: 'rgba(245,166,35,0.10)',
+  },
+  proPillTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.5 },
+  locationRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
+  location: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12 },
+  specRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 6 },
+  specPill: {
+    paddingHorizontal: 9, paddingVertical: 3, borderRadius: 12,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+  },
+  specPillTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
+  reasonRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 4,
+  },
+  reasonTxt: {
+    color: colors.primary,
+    fontFamily: font.bodyMedium,
+    fontSize: 12.5,
+    flex: 1,
+  },
+  actionsRow: { flexDirection: 'row', gap: 8 },
+  actionBtn: {
+    flex: 1,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 6, paddingVertical: 11,
+    borderRadius: 12,
+    backgroundColor: colors.surface2,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)',
+  },
+  actionBtnGold: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  actionBtnFollowing: {
+    backgroundColor: 'rgba(245,166,35,0.10)',
+    borderColor: colors.primary,
+  },
+  actionBtnTxt: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13 },
+  actionBtnTxtGold: { color: '#1a1300', fontFamily: font.bodyBold, fontSize: 13 },
+});
+
+// ============================================================================
+// COMPACT CREATOR CARD STYLES
+// ============================================================================
+const compact = StyleSheet.create({
+  card: {
+    flex: 1,
+    backgroundColor: colors.surface1,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
+    padding: 10,
+    paddingTop: 12,
+    gap: 8,
+    minWidth: 0,
+  },
+  avatarWrap: {
+    position: 'relative',
+    width: 54, height: 54, borderRadius: 27,
+  },
+  avatar: { width: 54, height: 54, borderRadius: 27 },
+  onlineDot: {
+    position: 'absolute', right: 0, bottom: 0,
+    width: 10, height: 10, borderRadius: 5,
+    backgroundColor: '#22c55e',
+    borderWidth: 2, borderColor: colors.surface1,
+  },
+  name: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13.5, letterSpacing: -0.1 },
+  locRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  loc: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11 },
+  specRow: { flexDirection: 'row', gap: 4, marginTop: 2, flexWrap: 'wrap', justifyContent: 'center' },
+  specPill: {
+    paddingHorizontal: 7, paddingVertical: 2, borderRadius: 10,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.02)',
+    maxWidth: 80,
+  },
+  specPillTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10 },
+  actionsRow: { flexDirection: 'row', gap: 6, marginTop: 4 },
+  followBtn: {
+    flex: 1,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 4, paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: colors.primary,
+  },
+  followBtnActive: {
+    backgroundColor: 'rgba(245,166,35,0.10)',
+    borderWidth: 1, borderColor: colors.primary,
+  },
+  followBtnTxt: { color: '#1a1300', fontFamily: font.bodyBold, fontSize: 11.5 },
+  iconBtn: {
+    width: 32, height: 32, borderRadius: 16,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'transparent',
+  },
+});
+
+// ============================================================================
+// FILTER PILL ROW STYLES
+// ============================================================================
+const fp = StyleSheet.create({
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: colors.surface1,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  pillActive: {
+    backgroundColor: 'rgba(245,166,35,0.14)',
+    borderColor: colors.primary,
+  },
+  pillTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
+  pillTxtActive: { color: colors.primary, fontFamily: font.bodyBold },
 });

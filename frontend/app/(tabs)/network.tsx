@@ -36,9 +36,9 @@ const TABS: { key: ViewKey; label: string }[] = [
 ];
 
 const COPY: Record<ViewKey, { title: string; subtitle: string }> = {
-  discover:  { title: 'Discover photographers', subtitle: 'Find creators, collaborators, and opportunities near you.' },
-  directory: { title: 'Browse photographers',   subtitle: 'Browse creators near you and across specialties.' },
-  community: { title: 'Community',              subtitle: 'Connect with photographers — share, ask, refer.' },
+  discover:  { title: 'Find photographers',  subtitle: 'Connect with creators near you.' },
+  directory: { title: 'Browse photographers', subtitle: 'Browse creators near you and across specialties.' },
+  community: { title: 'Community',            subtitle: 'Connect with photographers — share, ask, refer.' },
 };
 
 export default function NetworkTab() {

@@ -17456,3 +17456,84 @@ agent_communication:
             • Metro bundles cleanly (no resolve errors in expo logs).
             • Backend 200s on /api/spots/spot_d116a63356d2 still happy.
 
+
+  - task: "NETWORK ▸ DISCOVER — single-recommendation redesign (June 2025)"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app/(tabs)/network.tsx (header copy → "Find photographers" / "Connect with creators near you.")
+      /app/frontend/src/components/DiscoverPremiumView.tsx (added HeroRecommendedCard / CompactCreatorCard / FilterPills components; replaced 7-rail wall with single hero + 2-3 compact + invite; new filter set: Near Me / Portrait / Pet / Verified)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Replaced the 7-rail wall (Best Matches / Creators Near You /
+          Trending This Week / Available For Referrals / Verified Pros /
+          Recently Joined / Who Viewed You) plus the daily freshness
+          banner with a single, focused experience that answers
+          "Who should I connect with today?":
+
+          New layout (top → bottom):
+            1. Header: "Find photographers" + "Connect with creators near you."
+            2. Segmented tabs: Discover / Directory / Community (KEPT)
+            3. Search bar (KEPT)
+            4. Filter pills: Near Me · Portrait · Pet · Verified
+            5. RECOMMENDED FOR YOU — one large featured creator card
+               (avatar w/ gold ring, name + verified, VERIFIED PRO
+               pill, location, 3 specialty pills, one-line reason
+               "shoots portraits & pets", Follow + Message buttons)
+            6. PHOTOGRAPHERS NEAR YOU — 2-3 compact cards in a row
+               (avatar, name + verified, location, up to 2 specialty
+               pills, Follow + Message icon)
+            7. Invite Photographer card
+
+          Hero pick logic: takes the first user from the strongest
+          available rail (best_matches → active → trending → verified
+          → new). Compact row dedupes against the hero and pulls 3
+          more across rails so we never show the same person twice.
+
+          Filter pills now drive both the hero AND compact row:
+            • Near Me (default) — natural near_you ordering
+            • Portrait — filters specialties.includes(/portrait/i)
+            • Pet — filters specialties.includes(/pet|dog/i)
+            • Verified — filters verification_status==='verified'
+
+          Removed:
+            • Daily "12 fresh creators" freshness banner
+            • All 7 horizontal rails
+            • Old filter chips (All / Nearby / Verified / Elite / New)
+            • Heavy gold borders on every card
+            • Section icons galore
+
+          Search behaviour unchanged — typing in the search bar still
+          takes over the feed with full results. Refresh-to-pull
+          and optimistic Follow with rollback also preserved.
+
+          Card simplification per spec:
+            • Avatar / name / location / 1-2 specialties / Follow / Message
+            • No follower-count pills, posted-today badges, or growth
+              numbers in the new compact card
+            • Hero shows a clean reason line (no badges spam)
+
+          Performance:
+            • Single API call (/network/discover) — same as before
+            • No new network calls
+            • All cards memoised by user_id
+            • All four pills, hero, and compact row share one filtered
+              source-of-truth (filteredRails)
+
+          Edge cases:
+            • Filter yields zero matches → "No creators match this
+              filter yet. Try Near Me or check the Directory tab."
+            • Hero card's Message button → /inbox/new?to=:user_id
+            • Compact card's Message icon → same deep link
+            • Following state syncs via existing optimistic
+              followingMap with rollback on API failure
+
+          Backend untouched. Same /network/discover payload.
+          Validation: TypeScript transpiles cleanly; metro bundles
+          without resolve errors; no runtime console errors.
+
