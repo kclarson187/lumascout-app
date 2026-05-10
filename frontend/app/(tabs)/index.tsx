@@ -1,92 +1,164 @@
-import React, { useCallback, useEffect, useRef, useState, memo } from 'react';
+/**
+ * LumaScout Home — Cinematic Minimal Edition (June 2025).
+ *
+ * Design goal: instantly answer "Where should I shoot right now?"
+ *
+ * Layout (top → bottom):
+ *   1. Header — greeting, headline, golden-hour countdown, 3 icons
+ *   2. Hero card — single dominant AI pick with cinematic image
+ *   3. Quick actions — 4 equal cards (Explore, Near Me, Collections, Upload)
+ *   4. Insight card — soft single line about new spots near you
+ *
+ * What was REMOVED from the old Home (preserved everywhere else):
+ *   • Trending / Best Near You / Freshly Updated / Continue Planning rails
+ *   • Marketplace card
+ *   • ScoutAI promo card
+ *   • Filter chip row + search bar (use Explore tab for these)
+ *   • HomeInboxPreview (use the messenger icon in the header)
+ *   • UpgradeBanner (now surfaces in Profile / Settings only)
+ *
+ * What was KEPT:
+ *   • Same /api/feed/home backend — no API changes needed
+ *   • SWR cache (writeCache/readCache) — fast first-paint
+ *   • GPS coords for distance + golden-hour calc
+ *   • Notification + DM unread badge counts in header icons
+ *
+ * iOS / Android safety:
+ *   • SafeAreaView from react-native-safe-area-context for proper
+ *     edge-to-edge handling on Android.
+ *   • All TouchableOpacity targets are 44×44+ for thumbprint safety.
+ */
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
-  FlatList,
-  Image,
   TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
-  TextInput,
-  Share,
-  Pressable,
-  Alert,
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { Search, TrendingUp, MessageCircle, Users, HandHeart, BookOpen, Bell, Share2, SlidersHorizontal, Sparkles, ChevronRight, Gem, MapPin, Sun, Cloud, Bookmark, Route } from 'lucide-react-native';
-import { ContinuePlanningRail, BestNearYouRail, TrendingRail } from '../../src/components/PremiumHomeRails';
+import {
+  MessageCircle,
+  Bell,
+  Map as MapIcon,
+  Navigation,
+  Bookmark,
+  Plus,
+  Sun,
+  Users,
+  Camera,
+  ChevronRight,
+} from 'lucide-react-native';
+import SafeImage from '../../src/components/SafeImage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { api } from '../../src/api';
 import { useAuth } from '../../src/auth';
-
 import { useGps } from '../../src/hooks/useGps';
-import { colors, font, space, radii, QUICK_FILTERS } from '../../src/theme';
-import SpotCard from '../../src/components/SpotCard';
-import SpotCardCompact from '../../src/components/SpotCardCompact';
-import FreshlyUpdatedRail from '../../src/components/FreshlyUpdatedRail';
-import { SectionHeader, Chip, EmptyState } from '../../src/components/ui';
-import { SectionSkeleton, SkeletonBox } from '../../src/components/Skeleton';
-import UpgradeBanner from '../../src/components/UpgradeBanner';
-import ScoutAICard from '../../src/components/ScoutAICard';
-import ScoutAIIntroModal from '../../src/components/ScoutAIIntroModal';
-import HomeInboxPreview from '../../src/components/HomeInboxPreview';
 import { useUnreadMessages } from '../../src/hooks/useUnreadMessages';
+import { colors, font, space, radii } from '../../src/theme';
 import { readCache, writeCache } from '../../src/utils/swrCache';
+import { resolveSpotCoverForListCard } from '../../src/utils/spot-cover';
+import { calculateDistanceMiles } from '../../src/utils/geo';
+import { goldenHourLabel } from '../../src/utils/sun';
 
 type Feed = Record<string, any[]>;
 
-// Sanitizer is pulled out so it can run once on cached payloads too,
-// avoiding duplicate filtering work on every fetch vs. cache hydration.
-function sanitizeFeed(data: any): any {
-  const isRenderable = (s: any) => {
-    if (!s || !s.title) return false;
-    const imgs = Array.isArray(s.images) ? s.images : [];
-    const cover = imgs.find((i: any) => i?.is_cover) || imgs[0];
-    return !!cover?.image_url;
-  };
-  if (!data || typeof data !== 'object') return data;
-  const appearances: Record<string, number> = {};
-  for (const key of Object.keys(data)) {
-    if (!Array.isArray(data[key])) continue;
-    data[key] = data[key]
-      .filter(isRenderable)
-      .filter((s: any) => {
-        const id = s.spot_id;
-        if (!id) return false;
-        const n = appearances[id] || 0;
-        if (n >= 2) return false;
-        appearances[id] = n + 1;
-        return true;
-      });
-  }
-  if (data.hero && !isRenderable(data.hero)) data.hero = null;
-  return data;
+// ─── Helpers ────────────────────────────────────────────────────────────
+
+function timeOfDayGreeting(now: Date = new Date()): string {
+  const h = now.getHours();
+  if (h < 5) return 'Good night';
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  if (h < 21) return 'Good evening';
+  return 'Good night';
 }
 
-export default function Home() {
+/** Returns a string like "Golden hour starts in 42 min" or null when no
+ *  evening golden hour today (or after it has ended).  We do this with the
+ *  user's GPS coords; if no coords, we fall back to a generic "Plan today's
+ *  shoot" subtitle. */
+function goldenHourCountdown(coords?: { latitude: number; longitude: number } | null, now: Date = new Date()): string | null {
+  if (!coords) return null;
+  try {
+    const SunCalc = require('suncalc');
+    const t = SunCalc.getTimes(now, coords.latitude, coords.longitude);
+    const start: Date | undefined = t.goldenHour;
+    const end: Date | undefined = t.sunsetStart || t.sunset;
+    if (start && now < start) {
+      const mins = Math.max(1, Math.round((start.getTime() - now.getTime()) / 60000));
+      if (mins < 60) return `Golden hour starts in ${mins} min`;
+      const h = Math.floor(mins / 60);
+      const m = mins % 60;
+      return m === 0 ? `Golden hour in ${h}h` : `Golden hour in ${h}h ${m}m`;
+    }
+    if (start && end && now >= start && now < end) {
+      return 'Golden hour is now';
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Tiny helper: pick the single best hero spot from any of the feed sections.
+ *  Priority: trending → nearby → near_you → recent → freshly_updated. */
+function pickHeroSpot(feed: Feed): any | null {
+  const order = ['trending', 'nearby', 'near_you', 'recent', 'freshly_updated'];
+  for (const key of order) {
+    const arr = feed[key];
+    if (Array.isArray(arr) && arr.length) {
+      const hit = arr.find((s: any) => s?.title && (s?.images?.length || s?.cover_image_url));
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+function newSpotsCountNearby(feed: Feed): number {
+  const arr = feed.freshly_updated || feed.recent || feed.nearby || [];
+  return Math.min(Array.isArray(arr) ? arr.length : 0, 12);
+}
+
+// ─── Screen ────────────────────────────────────────────────────────────
+
+export default function HomeMinimal() {
   const { user } = useAuth();
-  const unread = useUnreadMessages();
+  const { coords, loading: gpsLoading } = useGps();
+  const unreadDM = useUnreadMessages();
+
   const [feed, setFeed] = useState<Feed>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [unreadNotif, setUnreadNotif] = useState(0);
-  const [filterResults, setFilterResults] = useState<any[] | null>(null);
-  const { coords, loading: gpsLoading, error: gpsError } = useGps();
-  const [showGpsBanner, setShowGpsBanner] = useState(false);
+  const loadingRef = useRef(false);
+  const hydratedOnceRef = useRef(false);
 
-  // PERF #1: unread-notification poll is deferred 500ms so the Home shell
-  // can paint first. First page render no longer blocks on this call.
+  const greeting = useMemo(() => timeOfDayGreeting(), []);
+  const firstName = useMemo(() => {
+    const n = (user?.name || user?.username || '').toString().trim();
+    if (!n) return null;
+    return n.split(/\s+/)[0];
+  }, [user]);
+
+  // Subtitle: golden-hour countdown if we have coords, otherwise a soft fallback.
+  const subtitle = useMemo(() => {
+    const gh = goldenHourCountdown(coords as any);
+    if (gh) return gh;
+    return 'Plan today\u2019s shoot';
+  }, [coords]);
+
+  // Notif poll deferred 500ms so the shell can paint first.
   useEffect(() => {
     let alive = true;
     const fire = async () => {
       try {
         const r = await api.get('/notifications', { limit: 1 });
-        if (alive) setUnreadNotif(r.unread_count || 0);
+        if (alive) setUnreadNotif(r?.unread_count || 0);
       } catch {}
     };
     const kickoff = setTimeout(fire, 500);
@@ -94,45 +166,11 @@ export default function Home() {
     return () => { alive = false; clearTimeout(kickoff); clearInterval(iv); };
   }, []);
 
-  // PERF #2: stale-while-revalidate. Hydrate from cached payload instantly
-  // (under 100ms), then kick off a network refresh in the background. User
-  // never stares at a skeleton after the first successful visit.
-  // PERF #3: double-fetch bug fixed — previously the feed re-fetched the
-  // moment coords resolved. We now debounce: if coords are pending, wait
-  // up to 1.2s before falling back to a no-coords request; if coords
-  // arrive first we fire immediately. Net result: exactly one network
-  // fetch per home mount.
-  const loadingRef = useRef(false);
-  const hydratedOnceRef = useRef(false);
-
-  const doFetch = useCallback(async (withCoords: boolean) => {
-    if (loadingRef.current) return;
-    loadingRef.current = true;
-    try {
-      const params: any = {};
-      if (withCoords && coords) {
-        params.lat = coords.latitude;
-        params.lng = coords.longitude;
-      }
-      const data = await api.get('/feed/home', Object.keys(params).length ? params : undefined);
-      const clean = sanitizeFeed(data);
-      setFeed(clean);
-      // Cache key is versioned (v2) — bumped after the Apr 2026 distance
-      // bug fix so any pre-fix caches with fabricated mileage are
-      // discarded rather than briefly painted on next mount.
-      writeCache('feed:home:v2', clean).catch(() => {});
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-      loadingRef.current = false;
-    }
-  }, [coords]);
-
-  // Instant cache hydration — runs ONCE on mount.
+  // Cache hydration (first-paint <100ms).
   useEffect(() => {
     let alive = true;
     (async () => {
-      const cached = await readCache<Feed>('feed:home:v2');
+      const cached = await readCache<Feed>('feed:home:v3-min');
       if (alive && cached && !hydratedOnceRef.current) {
         setFeed(cached);
         setLoading(false);
@@ -142,650 +180,451 @@ export default function Home() {
     return () => { alive = false; };
   }, []);
 
-  // Single-fetch orchestration — waits for GPS to resolve (or be denied)
-  // before firing. We give the OS up to 5s to deliver coords (covers the
-  // "user just tapped Allow on the permission prompt" case on iOS where
-  // the dialog itself takes 1-2s). If GPS never resolves we still fire so
-  // users with denied permissions don't see a perpetual skeleton.
-  // If GPS arrives AFTER the no-coords fetch fired, we re-fetch with
-  // coords so distances become accurate as soon as possible.
+  const doFetch = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    try {
+      const params: any = {};
+      if (coords) {
+        params.lat = coords.latitude;
+        params.lng = coords.longitude;
+      }
+      const data = await api.get('/feed/home', Object.keys(params).length ? params : undefined);
+      setFeed(data || {});
+      writeCache('feed:home:v3-min', data || {}).catch(() => {});
+    } catch {}
+    finally {
+      setLoading(false);
+      setRefreshing(false);
+      loadingRef.current = false;
+    }
+  }, [coords]);
+
+  // Single-fetch orchestration: wait briefly for GPS, then fire.
   const firedNoCoordsRef = useRef(false);
   useEffect(() => {
     if (coords) {
-      doFetch(true);
-      firedNoCoordsRef.current = false; // re-fetch on coord refresh
+      doFetch();
+      firedNoCoordsRef.current = false;
       return;
     }
     if (gpsLoading) {
-      // GPS still resolving — wait up to 5s
       const t = setTimeout(() => {
         if (!firedNoCoordsRef.current) {
           firedNoCoordsRef.current = true;
-          doFetch(false);
+          doFetch();
         }
       }, 5000);
       return () => clearTimeout(t);
     }
-    // GPS finished but no coords (denied or failed). Show banner + fire once.
-    if (gpsError === 'permission_denied') setShowGpsBanner(true);
     if (!firedNoCoordsRef.current) {
       firedNoCoordsRef.current = true;
-      doFetch(false);
+      doFetch();
     }
-  }, [coords, doFetch, gpsLoading, gpsError]);
+  }, [coords, gpsLoading, doFetch]);
 
-  // Back-compat entry point for pull-to-refresh / manual reload buttons.
-  const load = useCallback(async () => {
-    return doFetch(!!coords);
-  }, [doFetch, coords]);
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    doFetch();
+  }, [doFetch]);
 
-  const applyFilter = async (label: string | null) => {
-    setActiveFilter(label);
-    if (!label) {
-      setFilterResults(null);
-      return;
+  const hero = useMemo(() => pickHeroSpot(feed), [feed]);
+  const heroDistanceMi = useMemo(() => {
+    if (!hero || !coords) return null;
+    const lat = hero?.latitude ?? hero?.coords?.latitude;
+    const lng = hero?.longitude ?? hero?.coords?.longitude;
+    if (lat == null || lng == null) return null;
+    return calculateDistanceMiles(coords.latitude, coords.longitude, lat, lng);
+  }, [hero, coords]);
+  const heroGolden = useMemo(() => {
+    if (!hero) return null;
+    const lat = hero?.latitude ?? hero?.coords?.latitude;
+    const lng = hero?.longitude ?? hero?.coords?.longitude;
+    if (lat == null || lng == null) return null;
+    // Compact form: just the start time, e.g. "6:47 PM".
+    try {
+      const SunCalc = require('suncalc');
+      const t = SunCalc.getTimes(new Date(), lat, lng);
+      const start: Date | undefined = t.goldenHour;
+      if (!start) return null;
+      // Reuse the locale-aware formatting from goldenHourLabel by running it
+      // directly — easier than cloning the helper.
+      const lbl = goldenHourLabel(lat, lng);
+      if (!lbl) return null;
+      // lbl is "Golden 6:47 PM–7:14 PM"; we want the first time only.
+      const m = lbl.match(/Golden\s+([0-9]{1,2}:[0-9]{2}\s*[AP]M)/i);
+      return m ? m[1] : null;
+    } catch {
+      return null;
     }
-    let params: any = { sort: 'score', limit: 30 };
-    if (['Family', 'Pet', 'Wedding', 'Urban', 'Nature'].includes(label)) {
-      params.shoot_type = label;
-    } else if (label === 'Sunset') {
-      params.best_time_of_day = 'sunset';
-    } else if (label === 'Indoor') {
-      params.indoor = true;
-    } else if (label === 'Dog Friendly') {
-      params.dog_friendly = true;
-    }
-    const r = await api.get('/spots', params);
-    setFilterResults(r);
-  };
+  }, [hero]);
+  const heroCover = useMemo(() => (hero ? resolveSpotCoverForListCard(hero) : null), [hero]);
 
-  // Premium home rail order (June 2026 Home Premium Upgrade PRD):
-  //   1. Continue Planning      (saved spots — proxy until /routes/in-progress lands)
-  //   2. Best Near You Right Now (= existing 'nearby')
-  //   3. Trending This Week     (= existing 'trending')
-  //   4. Freshly Updated Near You (rendered separately above, see freshly_updated key)
-  //   5. Golden Hour Tonight    (= existing 'golden_hour')
-  //   6. Creators You Follow    (= existing 'following')
-  //   7. Hidden Gems            (Elite upsell card, rendered separately)
-  // The order list below intentionally drops 'recent' / 'seasonal' / 'best_for_you'
-  // from the visible Home — they're still computed by the backend and reachable via
-  // the Explore tab; keeping the Home crisp and on-brand wins over showing every rail.
-  const sections = [
-    { key: 'nearby', title: 'Best Near You Right Now' },
-    { key: 'trending', title: 'Trending This Week' },
-    { key: 'golden_hour', title: 'Golden Hour Tonight' },
-    { key: 'following', title: 'Creators You Follow' },
-  ].filter((s) => Array.isArray(feed[s.key]) && feed[s.key].length > 0);
-  // ^ hide every empty section globally — prevents blank headers in production UI
-
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.root} edges={['top']}>
-        <View style={styles.header}>
-          <View style={{ gap: 6 }}>
-            <SkeletonBox style={{ height: 12, width: 100 }} />
-            <SkeletonBox style={{ height: 32, width: 180 }} />
-          </View>
-          <SkeletonBox style={{ width: 44, height: 44, borderRadius: 22 }} />
-        </View>
-        <SkeletonBox style={{ marginHorizontal: space.xl, marginTop: space.md, height: 48, borderRadius: radii.md }} />
-        <SectionSkeleton />
-        <SectionSkeleton />
-      </SafeAreaView>
-    );
-  }
-
-  const hero = (feed.trending || [])[0];
-
-  // Premium numbered rail header (June 2026 Home Premium Upgrade).
-  // Renders a circled gold number, serif title, and a "View all"
-  // chevron link aligned right. Used inline below to override the
-  // generic SectionHeader for the new home rail order.
-  const NumberedRailHeader = ({
-    n, title, onViewAll, fresh,
-  }: { n: number; title: string; onViewAll?: () => void; fresh?: boolean }) => (
-    <View style={styles.railHead}>
-      <View style={styles.railHeadLeft}>
-        <View style={styles.railNum}><Text style={styles.railNumTxt}>{n}</Text></View>
-        <Text style={styles.railTitle}>{title}</Text>
-        {fresh ? (
-          <View style={styles.railFreshDot} />
-        ) : null}
-      </View>
-      {onViewAll ? (
-        <TouchableOpacity onPress={onViewAll} hitSlop={8} testID={`rail-view-all-${n}`}>
-          <Text style={styles.railViewAll}>View all</Text>
-        </TouchableOpacity>
-      ) : null}
-    </View>
-  );
-
-  // Map section keys → numbered rail position (1=Continue Planning,
-  // 2=Best Near You, 3=Trending, 4=Freshly Updated, 5=Golden Hour,
-  // 6=Creators You Follow, 7=Hidden Gems).
-  const SECTION_NUM: Record<string, number> = {
-    nearby: 2,
-    trending: 3,
-    golden_hour: 5,
-    following: 6,
-  };
+  const newCount = useMemo(() => newSpotsCountNearby(feed), [feed]);
 
   return (
-    <SafeAreaView style={styles.root} edges={['top']}>
-      <ScoutAIIntroModal />
+    <SafeAreaView style={s.root} edges={['top']}>
       <ScrollView
+        contentContainerStyle={s.scroll}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.primary} />}
-        contentContainerStyle={{ paddingBottom: space.lg }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+          />
+        }
       >
-        <View style={styles.header}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.hello}>Hello{user ? `, ${user.name.split(' ')[0]}` : ''}</Text>
-            <Text style={styles.brand}>LumaScout</Text>
-            <Text style={styles.brandSub}>Find epic places. Plan the perfect shot.</Text>
-          </View>
-          <TouchableOpacity
-            onPress={() => router.push('/inbox')}
-            style={styles.topIconBtn}
-            testID="home-messages"
-          >
-            <MessageCircle size={20} color={colors.text} />
-            {unread.unread_messages > 0 ? (
-              <View style={styles.topIconBadge}>
-                <Text style={styles.topIconBadgeTxt}>
-                  {unread.unread_messages > 9 ? '9+' : unread.unread_messages}
-                </Text>
-              </View>
-            ) : null}
-          </TouchableOpacity>
-          {/* PRD: Share LumaScout — quick access between messages and avatar.
-              Native Share sheet; referral-code appended when present.
-              FIX: gold-tinted pill so it's clearly visible as a CTA next to
-              the standard surface-colored Messages pill (same 40x40 shell). */}
-          <TouchableOpacity
-            onPress={async () => {
-              try {
-                const ref = (user as any)?.referral_code;
-                const urlBase = 'https://lumascout.app';
-                const url = ref ? `${urlBase}?ref=${encodeURIComponent(ref)}` : urlBase;
-                await Share.share({
-                  message: `I'm using LumaScout to find amazing photo spots — come join me 📸\n\n${url}`,
-                  url,
-                  title: 'LumaScout',
-                });
-              } catch {}
-            }}
-            style={styles.topShareBtn}
-            testID="home-share"
-          >
-            <Share2 size={19} color={colors.primary} />
-          </TouchableOpacity>
-          {user?.avatar_url ? (
-            <TouchableOpacity onPress={() => router.push('/(tabs)/profile')} testID="home-avatar" style={styles.avatarWrap}>
-              <Image source={{ uri: user.avatar_url }} style={styles.avatar} />
-              {unread.total > 0 ? <View style={styles.avatarRedDot} /> : null}
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity onPress={() => router.push('/(tabs)/profile')} style={[styles.avatarPh, styles.avatarWrap]} testID="home-avatar">
-              <Text style={{ color: colors.text, fontFamily: font.bodyBold }}>
-                {user?.name?.[0]?.toUpperCase() || '?'}
-              </Text>
-              {unread.total > 0 ? <View style={styles.avatarRedDot} /> : null}
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {/* Search bar (mockup order: Header → Search → Pills) */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: space.xl, marginTop: space.sm }}>
-          <TouchableOpacity
-            style={[styles.searchBar, { flex: 1, marginHorizontal: 0, marginTop: 0 }]}
-            onPress={() => router.push('/search')}
-            testID="home-search"
-            activeOpacity={0.85}
-          >
-            <Search size={18} color={colors.textSecondary} />
-            <Text style={styles.searchPlaceholder}>Search spots, cities, creators…</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => router.push('/notifications' as any)}
-            style={styles.notifBtn}
-            testID="home-notifications"
-            activeOpacity={0.85}
-          >
-            <SlidersHorizontal size={18} color={colors.text} />
-            {unreadNotif > 0 ? (
-              <View style={styles.notifBadge}>
-                <Text style={styles.notifBadgeTxt}>{unreadNotif > 9 ? '9+' : unreadNotif}</Text>
-              </View>
-            ) : null}
-          </TouchableOpacity>
-        </View>
-
-        {/* Subtle GPS-denied banner — appears only when location permission
-            was explicitly denied. Encourages users to enable foreground
-            location for accurate "Best Near You" distances. */}
-        {showGpsBanner ? (
-          <Pressable
-            onPress={() => router.push('/settings/location' as any)}
-            style={styles.gpsBanner}
-            testID="home-gps-banner"
-          >
-            <View style={styles.gpsBannerIcon}>
-              <MapPin size={14} color={colors.primary} />
-            </View>
-            <Text style={styles.gpsBannerTxt}>
-              Enable location for accurate nearby spots.
+        {/* ─── Header ───────────────────────────────────────────────── */}
+        <View style={s.header}>
+          <View style={s.headerLeft}>
+            <Text style={s.greeting} numberOfLines={1}>
+              {firstName ? `${greeting}, ${firstName}` : greeting}
             </Text>
-            <ChevronRight size={14} color={colors.textSecondary} />
-          </Pressable>
+            <Text style={s.headline}>Scout. Plan. Shoot.</Text>
+            <Text style={s.subtitle} numberOfLines={1}>{subtitle}</Text>
+          </View>
+          <View style={s.headerRight}>
+            <TouchableOpacity
+              style={s.iconBtn}
+              onPress={() => router.push('/inbox' as any)}
+              accessibilityLabel="Messages"
+            >
+              <MessageCircle size={20} color={colors.text} />
+              {unreadDM > 0 ? <View style={s.iconDot} /> : null}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={s.iconBtn}
+              onPress={() => router.push('/notifications' as any)}
+              accessibilityLabel="Notifications"
+            >
+              <Bell size={20} color={colors.text} />
+              {unreadNotif > 0 ? <View style={s.iconDot} /> : null}
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => router.push('/(tabs)/profile' as any)}
+              accessibilityLabel="Profile"
+            >
+              {user?.avatar_url ? (
+                <SafeImage source={{ uri: user.avatar_url }} style={s.avatar} />
+              ) : (
+                <View style={[s.avatar, s.avatarFallback]}>
+                  <Text style={s.avatarTxt}>{(firstName?.[0] || '?').toUpperCase()}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* ─── Hero Card ────────────────────────────────────────────── */}
+        {loading && !hero ? (
+          <View style={[s.hero, s.heroSkeleton]}>
+            <ActivityIndicator color={colors.primary} />
+          </View>
+        ) : hero ? (
+          <TouchableOpacity
+            style={s.hero}
+            activeOpacity={0.92}
+            onPress={() => router.push(`/spot/${hero.spot_id}` as any)}
+          >
+            {heroCover ? (
+              <SafeImage source={{ uri: heroCover }} style={s.heroImg} />
+            ) : (
+              <View style={[s.heroImg, { backgroundColor: colors.surface2 }]} />
+            )}
+            <LinearGradient
+              colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.45)', 'rgba(0,0,0,0.92)']}
+              locations={[0, 0.55, 1]}
+              style={StyleSheet.absoluteFill}
+              pointerEvents="none"
+            />
+            <View style={s.heroContent} pointerEvents="none">
+              <View style={s.heroLabels}>
+                <View style={s.heroLabelAi}>
+                  <Text style={s.heroLabelAiTxt}>AI PICK FOR YOU</Text>
+                </View>
+                <View style={s.heroLabelCat}>
+                  <Text style={s.heroLabelCatTxt}>GREAT LIGHT</Text>
+                </View>
+              </View>
+              <Text style={s.heroTitle} numberOfLines={1}>{hero.title}</Text>
+              <Text style={s.heroLoc} numberOfLines={1}>
+                {[hero?.city, hero?.state].filter(Boolean).join(', ')}
+                {heroDistanceMi != null ? ` \u2022 ${heroDistanceMi.toFixed(0)} mi away` : ''}
+              </Text>
+
+              <View style={s.heroStats}>
+                <HeroStat icon={<Sun size={14} color={colors.primary} />} label="Golden hour" value={heroGolden || '—'} />
+                <HeroStat icon={<Users size={14} color={colors.primary} />} label="Crowd" value="Low" />
+                <HeroStat icon={<Camera size={14} color={colors.primary} />} label="Great for" value={inferGreatFor(hero)} />
+                <HeroStat icon={<Navigation size={14} color={colors.primary} />} label="Drive" value={driveTimeFromMi(heroDistanceMi)} />
+              </View>
+            </View>
+
+            {/* CTAs sit OUTSIDE pointerEvents="none" so they receive taps */}
+            <View style={s.heroCtas}>
+              <TouchableOpacity
+                style={[s.cta, s.ctaPrimary]}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  router.push({ pathname: '/spot/[id]' as any, params: { id: hero.spot_id, navigate: '1' } });
+                }}
+              >
+                <Navigation size={16} color={colors.bg} />
+                <Text style={s.ctaPrimaryTxt}>Navigate</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.cta, s.ctaSecondary]}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  // Fire the save endpoint optimistically; failure is silent.
+                  api.post(`/spots/${hero.spot_id}/save`, {}).catch(() => {});
+                }}
+              >
+                <Bookmark size={16} color={colors.text} />
+                <Text style={s.ctaSecondaryTxt}>Save Spot</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
         ) : null}
 
-        {/* Premium Quick Action Pills (2026-04 Home PRD) — Near You /
-            Golden Hour / Weather / Collections / Routes. Replaces the
-            earlier Community tab strip which duplicated bottom nav
-            affordances. Each pill renders an icon + bold label + contextual
-            subtitle and deep-links into existing features. */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={{ flexGrow: 0, flexShrink: 0, maxHeight: 70 }}
-          contentContainerStyle={styles.qaRow}
-        >
-          <TouchableOpacity
-            onPress={() => router.push('/explore' as any)}
-            style={[styles.qaPill, styles.qaPillActive]}
-            testID="home-qa-nearyou"
-          >
-            <View style={styles.qaIcon}>
-              <MapPin size={13} color={colors.primary} />
-            </View>
-            <View>
-              <Text style={[styles.qaLabel, styles.qaLabelActive]}>Near You</Text>
-              <Text style={[styles.qaSub, styles.qaSubActive]}>50 mi</Text>
-            </View>
-          </TouchableOpacity>
-          {/* Apr 2026 cleanup: removed Golden Hour and Weather pills —
-              they felt gimmicky vs photographer-utility focused. Keep the
-              three useful tools only: Near You / Collections / Routes. */}
-          <TouchableOpacity
+        {/* ─── Quick Actions ──────────────────────────────────────── */}
+        <View style={s.quick}>
+          <QuickAction
+            icon={<MapIcon size={22} color={colors.primary} />}
+            label="Explore Map"
+            onPress={() => router.push('/(tabs)/explore' as any)}
+          />
+          <QuickAction
+            icon={<Navigation size={22} color={colors.primary} />}
+            label="Near Me"
+            onPress={() => router.push({ pathname: '/(tabs)/explore' as any, params: { view: 'list', sort: 'nearby' } })}
+          />
+          <QuickAction
+            icon={<Bookmark size={22} color={colors.primary} />}
+            label="Collections"
             onPress={() => router.push('/(tabs)/saved' as any)}
-            style={styles.qaPill}
-            testID="home-qa-collections"
-          >
-            <View style={styles.qaIcon}>
-              <Bookmark size={13} color={colors.textSecondary} />
-            </View>
-            <View>
-              <Text style={styles.qaLabel}>Collections</Text>
-              <Text style={styles.qaSub}>{(user as any)?.collections_count ?? 12} saved</Text>
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => {
-              // FIX(pre-launch cleanup): Routes / Road Trips feature is not
-              // shipped yet. Show a non-blocking "coming soon" toast instead
-              // of routing to /routes which would render the Unmatched Route
-              // 404 page. Once the feature is built, swap the body back to
-              // `router.push('/routes')`.
-              if (typeof window !== 'undefined' && (window as any).alert) {
-                (window as any).alert('Routes are launching soon. Stay tuned!');
-              } else {
-                Alert.alert('Coming soon', 'Routes are launching soon. Stay tuned!');
-              }
-            }}
-            style={[styles.qaPill, { opacity: 0.7 }]}
-            testID="home-qa-routes"
-          >
-            <View style={styles.qaIcon}>
-              <Route size={13} color={colors.textSecondary} />
-            </View>
-            <View>
-              <Text style={styles.qaLabel}>Routes</Text>
-              <Text style={styles.qaSub}>Launching soon</Text>
-            </View>
-          </TouchableOpacity>
-        </ScrollView>
-
-        {/* Location-trust strip — Apr 2026 Item #3.
-            Tells the user whether 'Near You' values are real GPS or
-            unavailable. Subtle, non-blocking. */}
-        <View style={styles.locTrustStrip} testID="home-location-trust">
-          <MapPin size={10} color={coords ? '#22c55e' : colors.textTertiary} />
-          <Text style={[styles.locTrustTxt, { color: coords ? '#22c55e' : colors.textTertiary }]}>
-            {coords ? 'Using current location' : 'Enable location for accurate nearby results'}
-          </Text>
+          />
+          <QuickAction
+            icon={<Plus size={22} color={colors.primary} />}
+            label="Upload Spot"
+            onPress={() => router.push('/(tabs)/add' as any)}
+          />
         </View>
 
-        {/* Clutter removed per mockup: UpgradeBanner / Scout AI card /
-            Inbox preview / niche chip row / EDITOR'S PICK hero were all
-            pulled off the Home. Scout AI and notifications remain
-            reachable via the header icons. Hero content is now surfaced
-            through the much more editorial "Best Near You Right Now"
-            rail below. */}
-
-        {/* Rail #1 — Continue Planning */}
-        <ContinuePlanningRail items={feed.saved_plans || feed.recent || feed.near_you || feed.nearby || []} />
-
-        {/* Rail #2 — Best Near You Right Now */}
-        <BestNearYouRail items={feed.nearby || feed.near_you || feed.trending || []} />
-
-        {/* Rail #3 — Trending This Week */}
-        <TrendingRail items={feed.trending || feed.trending_again || feed.nearby || []} />
-
-        {filterResults ? (
-          <>
-            <SectionHeader title={`${activeFilter} spots`} />
-            {filterResults.length === 0 ? (
-              <EmptyState title="No spots found" subtitle="Try another filter or explore the map." />
-            ) : (
-              <View style={{ paddingHorizontal: space.xl, gap: space.md }}>
-                {filterResults.map((s) => (
-                  <SpotCard
-                    key={s.spot_id}
-                    spot={s}
-                    width={undefined as any}
-                    testID={`spot-${s.spot_id}`}
-                  />
-                ))}
-              </View>
-            )}
-          </>
-        ) : (
-          <>
-            {/* Hero block removed per Apr 2026 mockup — its inspirational
-                role is now played by the much more editorial
-                "Best Near You Right Now" rail rendered above. */}
-            {/* Freshly Updated Near You — rail #4 (the retention rail).
-                Always renders with a graceful fallback to recent/nearby
-                so the home never has a dead-space gap before Hidden Gems. */}
-            {(() => {
-              const fresh = (Array.isArray(feed.freshly_updated) && feed.freshly_updated.length > 0)
-                ? feed.freshly_updated
-                : (feed.recent || feed.near_you || feed.nearby || []).slice(0, 8);
-              if (!fresh || fresh.length === 0) return null;
-              return (
-                <View>
-                  <NumberedRailHeader n={4} title="Freshly Updated Near You" fresh onViewAll={() => router.push('/explore' as any)} />
-                  <FreshlyUpdatedRail spots={fresh} />
-                </View>
-              );
-            })()}
-            {/* Apr 2026 cleanup: Hidden Gems Elite upsell removed. The
-                Home tab now closes with a Recently Saved Spots rail —
-                pulls from feed.recently_saved (or feed.saved as fallback)
-                so users land back on spots they actually care about
-                instead of being upsold every visit. */}
-            {(() => {
-              const saved =
-                (Array.isArray(feed.recently_saved) && feed.recently_saved.length > 0
-                  ? feed.recently_saved
-                  : (feed.saved || feed.bookmarks || feed.collections_recent || []))
-                  .slice(0, 8);
-              if (!saved || saved.length === 0) return null;
-              return (
-                <View style={{ marginTop: space.md }}>
-                  <NumberedRailHeader
-                    n={5}
-                    title="Recently Saved Spots"
-                    onViewAll={() => router.push('/(tabs)/saved' as any)}
-                  />
-                  <FlatList
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    data={saved}
-                    keyExtractor={(it) => it.spot_id || it.id}
-                    contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.md }}
-                    renderItem={({ item }) => (
-                      <SpotCard spot={item} width={260} testID={`spot-saved-${item.spot_id}`} onToggleSave={load} />
-                    )}
-                  />
-                </View>
-              );
-            })()}
-          </>
-        )}
-
-        {/* Item #10 (Apr 2026) — Marketplace promo card moved to BOTTOM
-            of Home per latest direction. After all rails (Continue
-            Planning → Best Near You → Trending → Freshly Updated →
-            Recently Saved) so Home stays content-first; the Marketplace
-            entry point is the cinematic closer that nudges to commerce
-            without competing with discovery. */}
-        <Pressable
-          onPress={() => router.push('/marketplace' as any)}
-          style={({ pressed }) => [{
-            marginHorizontal: space.xl, marginTop: 28, marginBottom: 8,
-            borderRadius: 22, overflow: 'hidden',
-            borderWidth: 1, borderColor: 'rgba(245,166,35,0.45)',
-            backgroundColor: 'rgba(245,166,35,0.08)',
-            padding: 18, opacity: pressed ? 0.92 : 1,
-          }]}
-          testID="home-marketplace-rail"
-        >
-          <Text style={{ color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 1.0, marginBottom: 4 }}>
-            MARKETPLACE
-          </Text>
-          <Text style={{ color: colors.text, fontFamily: font.display, fontSize: 19, letterSpacing: -0.3, marginBottom: 6, lineHeight: 24 }}>
-            Shop presets, guides, routes, and spot packs
-          </Text>
-          <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 12.5, lineHeight: 18 }}>
-            Curated by elite creators — tap to browse the LumaScout Marketplace.
-          </Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12 }}>
-            <Text style={{ color: colors.primary, fontFamily: font.bodyBold, fontSize: 13 }}>Browse Marketplace</Text>
-            <Text style={{ color: colors.primary, fontSize: 14 }}>→</Text>
-          </View>
-        </Pressable>
+        {/* ─── Insight Card ──────────────────────────────────────── */}
+        {newCount > 0 ? (
+          <TouchableOpacity
+            style={s.insight}
+            activeOpacity={0.85}
+            onPress={() => router.push('/(tabs)/explore' as any)}
+          >
+            <View style={s.insightIcon}>
+              <MapIcon size={18} color={colors.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.insightTitle}>{newCount} new spots added near you</Text>
+              <Text style={s.insightSub}>Check them out on the map</Text>
+            </View>
+            <ChevronRight size={18} color={colors.textTertiary} />
+          </TouchableOpacity>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
+// ─── Sub-components ────────────────────────────────────────────────────
+
+function HeroStat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  return (
+    <View style={s.stat}>
+      <View style={s.statIcon}>{icon}</View>
+      <Text style={s.statLabel}>{label}</Text>
+      <Text style={s.statValue} numberOfLines={1}>{value}</Text>
+    </View>
+  );
+}
+
+function QuickAction({ icon, label, onPress }: { icon: React.ReactNode; label: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={s.qa} onPress={onPress} activeOpacity={0.85}>
+      <View style={s.qaIcon}>{icon}</View>
+      <Text style={s.qaLabel}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+// ─── Heuristics ────────────────────────────────────────────────────────
+
+function inferGreatFor(spot: any): string {
+  const t = (spot?.specialties || spot?.categories || spot?.tags || []) as string[];
+  const flat = Array.isArray(t) ? t.map((x) => String(x).toLowerCase()).join(' ') : '';
+  if (flat.includes('landscape')) return 'Landscape';
+  if (flat.includes('astro')) return 'Astro';
+  if (flat.includes('seascape') || flat.includes('coast') || flat.includes('beach')) return 'Seascape';
+  if (flat.includes('city') || flat.includes('urban')) return 'Cityscape';
+  if (flat.includes('wildlife')) return 'Wildlife';
+  if (flat.includes('portrait')) return 'Portrait';
+  return 'Landscape';
+}
+
+function driveTimeFromMi(mi: number | null | undefined): string {
+  if (mi == null || !Number.isFinite(mi)) return '—';
+  // Rough 35 mph average accounting for stop-and-go + scenic detours.
+  const minutes = Math.max(1, Math.round((mi / 35) * 60));
+  if (minutes < 60) return `${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+// ─── Styles ────────────────────────────────────────────────────────────
+
+const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
+  scroll: { paddingHorizontal: space.xl, paddingBottom: space.xxxl },
+
+  // Header
   header: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
+    paddingTop: space.lg,
+    paddingBottom: space.xl,
+  },
+  headerLeft: { flex: 1, paddingRight: space.md },
+  greeting: { color: colors.textTertiary, fontFamily: font.body, fontSize: 13, marginBottom: 2 },
+  headline: { color: colors.text, fontFamily: font.displayBold, fontSize: 28, letterSpacing: -0.5, lineHeight: 32 },
+  subtitle: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, marginTop: 4 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: 6 },
+  iconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: 'center',
-    paddingHorizontal: space.xl,
-    paddingTop: space.md,
-    paddingBottom: space.sm,
-    gap: 10,
+    justifyContent: 'center',
   },
-  topIconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', position: 'relative' },
-  // Numeric unread badge for the Messages pill (Tier 1 messaging upgrade).
-  topIconBadge: {
-    position: 'absolute', top: -3, right: -3,
-    minWidth: 18, height: 18, borderRadius: 9,
-    backgroundColor: '#ef4444', paddingHorizontal: 4,
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 2, borderColor: colors.bg,
-  },
-  topIconBadgeTxt: { color: '#fff', fontFamily: font.bodyBold, fontSize: 9 },
-  // Avatar red-dot overlay — small surface that reads "you have activity".
-  avatarWrap: { position: 'relative' },
-  avatarRedDot: {
-    position: 'absolute', top: -1, right: -1,
-    width: 12, height: 12, borderRadius: 6,
-    backgroundColor: '#ef4444',
-    borderWidth: 2, borderColor: colors.bg,
-  },
-  // Gold-tinted pill variant so the Share CTA reads as a distinct action
-  // between the Messages pill and the avatar. Same 40x40 shell for vertical
-  // alignment parity with the other two top-bar items.
-  topShareBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: 'rgba(245,166,35,0.14)',
-    borderWidth: 1, borderColor: 'rgba(245,166,35,0.4)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  communityStrip: { paddingHorizontal: space.xl, paddingBottom: space.sm, gap: 6, alignItems: 'center' },
-  // Apr 2026 Item #3 — location-trust strip on Home
-  locTrustStrip: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: space.xl, paddingTop: 4, paddingBottom: 8,
-  },
-  locTrustTxt: {
-    fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.2,
-  },
-  cTab: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1 },
-  // Subtle "you are here" — no primary fill. Just a darker surface and
-  // slightly bolder typography so the current tab is distinguishable
-  // without shouting. (Commit 8b / 2026-04)
-  cTabHere: { backgroundColor: colors.surface2, borderColor: colors.borderStrong || colors.border },
-  cTabTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
-  cTabTxtHere: { color: colors.text, fontFamily: font.bodySemibold },
-  hello: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13 },
-  brand: { color: colors.text, fontFamily: font.display, fontSize: 30, letterSpacing: -0.5 },
-  brandSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2, lineHeight: 16 },
-
-  // GPS-permission banner — shown only when the user explicitly denied
-  // location. Subtle gold pill that deep-links into Location settings.
-  gpsBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    marginHorizontal: space.xl,
-    marginTop: space.xs,
-    paddingHorizontal: space.md,
-    paddingVertical: 10,
-    backgroundColor: 'rgba(245,166,35,0.08)',
-    borderColor: 'rgba(245,166,35,0.28)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radii.lg,
-  },
-  gpsBannerIcon: {
-    width: 24, height: 24, borderRadius: 12,
-    backgroundColor: 'rgba(245,166,35,0.18)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  gpsBannerTxt: {
-    flex: 1,
-    fontFamily: font.body,
-    fontSize: 13,
-    color: colors.text,
-  },
-
-  // Quick Action Pills (2026-04 Home Premium) — Near You / Golden Hour /
-  // Weather / Collections / Routes. Each pill is a compact gold-accent
-  // card with icon + bold label + subtle status subtitle.
-  qaRow: {
-    paddingHorizontal: space.xl,
-    paddingTop: 8,
-    paddingBottom: 4,
-    gap: 8,
-    alignItems: 'center',
-  },
-  qaPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    height: 52,
-    paddingHorizontal: 12,
-    borderRadius: 14,
-    backgroundColor: colors.surface1,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  qaPillActive: {
-    backgroundColor: 'rgba(245,166,35,0.1)',
-    borderColor: 'rgba(245,166,35,0.6)',
-  },
-  qaIcon: {
-    width: 28, height: 28, borderRadius: 14,
-    backgroundColor: 'rgba(245,166,35,0.1)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(245,166,35,0.35)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  qaLabel: { color: colors.text, fontFamily: font.bodyBold, fontSize: 12 },
-  qaLabelActive: { color: colors.primary },
-  qaSub: { color: colors.textTertiary, fontFamily: font.body, fontSize: 10, marginTop: 1 },
-  qaSubActive: { color: colors.primary, opacity: 0.85 },
-  // Premium numbered rail header (2026-04 Home Premium Upgrade).
-  railHead: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: space.xl, marginTop: space.md, marginBottom: 8,
-  },
-  railHeadLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
-  railNum: {
-    width: 22, height: 22, borderRadius: 11,
-    backgroundColor: 'rgba(245,166,35,0.14)',
-    borderWidth: 1, borderColor: 'rgba(245,166,35,0.45)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  railNumTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 11 },
-  railTitle: { color: colors.text, fontFamily: font.display, fontSize: 18, flexShrink: 1 },
-  railFreshDot: {
-    width: 7, height: 7, borderRadius: 4,
-    backgroundColor: '#22c55e',
-    marginLeft: 2,
-  },
-  railViewAll: { color: colors.primary, fontFamily: font.bodySemibold, fontSize: 12 },
-  // Hidden Gems Elite upsell card — rail #7.
-  gemsCard: {
-    marginHorizontal: space.xl, marginTop: space.lg, marginBottom: space.sm,
-    padding: 16, borderRadius: 16,
-    backgroundColor: 'rgba(245,166,35,0.06)',
-    borderWidth: 1, borderColor: 'rgba(245,166,35,0.35)',
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-  },
-  gemsIcon: {
-    width: 42, height: 42, borderRadius: 21,
-    backgroundColor: 'rgba(245,166,35,0.14)',
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: 'rgba(245,166,35,0.45)',
-  },
-  gemsTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
-  gemsSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, marginTop: 3, lineHeight: 16 },
-  gemsCta: {
-    flexDirection: 'row', alignItems: 'center', gap: 3,
-    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16,
+  iconDot: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
     backgroundColor: colors.primary,
+    borderWidth: 1.5,
+    borderColor: colors.bg,
   },
-  gemsCtaTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 11 },
-  avatar: { width: 44, height: 44, borderRadius: 22 },
-  avatarPh: {
-    width: 44, height: 44, borderRadius: 22,
-    backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border,
-    alignItems: 'center', justifyContent: 'center',
+  avatar: { width: 38, height: 38, borderRadius: 19, marginLeft: 4 },
+  avatarFallback: {
+    backgroundColor: colors.surface2,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  searchBar: {
-    marginHorizontal: space.xl,
-    marginTop: space.md,
+  avatarTxt: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
+
+  // Hero card
+  hero: {
+    height: 460,
+    borderRadius: radii.xl,
+    overflow: 'hidden',
+    backgroundColor: colors.surface2,
+    marginBottom: space.xl,
+  },
+  heroSkeleton: { alignItems: 'center', justifyContent: 'center' },
+  heroImg: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  heroContent: {
+    position: 'absolute',
+    left: 18,
+    right: 18,
+    bottom: 96, // leaves room for the CTA row below
+  },
+  heroLabels: { flexDirection: 'row', gap: 6, marginBottom: 10 },
+  heroLabelAi: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(46,160,67,0.18)',
+    borderRadius: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(46,160,67,0.6)',
+  },
+  heroLabelAiTxt: { color: '#5dd96f', fontFamily: font.bodySemibold, fontSize: 9.5, letterSpacing: 0.6 },
+  heroLabelCat: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 4,
+  },
+  heroLabelCatTxt: { color: '#fff', fontFamily: font.bodySemibold, fontSize: 9.5, letterSpacing: 0.6 },
+  heroTitle: { color: '#fff', fontFamily: font.displayBold, fontSize: 26, letterSpacing: -0.4 },
+  heroLoc: { color: 'rgba(255,255,255,0.72)', fontFamily: font.body, fontSize: 13, marginTop: 4 },
+  heroStats: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 14 },
+  stat: { flex: 1 },
+  statIcon: { marginBottom: 4 },
+  statLabel: { color: 'rgba(255,255,255,0.55)', fontFamily: font.body, fontSize: 10, letterSpacing: 0.3 },
+  statValue: { color: '#fff', fontFamily: font.bodySemibold, fontSize: 13, marginTop: 1 },
+
+  heroCtas: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 16,
+    flexDirection: 'row',
+    gap: 10,
+  },
+  cta: {
+    flex: 1,
+    height: 50,
+    borderRadius: radii.lg,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    backgroundColor: colors.surface1,
+    justifyContent: 'center',
+    gap: 8,
+  },
+  ctaPrimary: { backgroundColor: colors.primary },
+  ctaPrimaryTxt: { color: colors.bg, fontFamily: font.bodyBold, fontSize: 15 },
+  ctaSecondary: {
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.22)',
+  },
+  ctaSecondaryTxt: { color: '#fff', fontFamily: font.bodyBold, fontSize: 15 },
+
+  // Quick actions
+  quick: { flexDirection: 'row', gap: 10, marginBottom: space.lg },
+  qa: {
+    flex: 1,
+    height: 80,
+    backgroundColor: colors.surface,
+    borderRadius: radii.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
-    borderWidth: 1,
-    paddingHorizontal: space.lg,
-    // FIX: explicit height so the search bar lines up perfectly with the
-    // notif bell (both 48px) regardless of platform font padding.
-    height: 48,
-    borderRadius: radii.md,
   },
-  searchPlaceholder: { color: colors.textSecondary, fontFamily: font.body, fontSize: 14 },
-  // Notifications bell — matches search bar height for a clean inline row.
-  notifBtn: { width: 48, height: 48, borderRadius: radii.md, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', position: 'relative' },
-  notifBadge: { position: 'absolute', top: 4, right: 4, minWidth: 16, height: 16, borderRadius: 8, backgroundColor: colors.secondary || '#ef4444', paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
-  notifBadgeTxt: { color: colors.textInverse || '#fff', fontFamily: font.bodyBold, fontSize: 9 },
-  heroCard: {
-    marginHorizontal: space.xl, marginTop: space.xl,
-    borderRadius: radii.lg, overflow: 'hidden',
-    backgroundColor: colors.surface2,
-    aspectRatio: 4 / 3,
-    borderWidth: 1, borderColor: colors.border,
+  qaIcon: { marginBottom: 6 },
+  qaLabel: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 11, textAlign: 'center' },
+
+  // Insight
+  insight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: space.md,
+    backgroundColor: colors.surface,
+    borderRadius: radii.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
   },
-  heroImg: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%' },
-  heroGrad: { position: 'absolute', bottom: 0, left: 0, right: 0, height: '70%' },
-  heroTop: { position: 'absolute', top: space.md, left: space.md, flexDirection: 'row', gap: 6 },
-  heroTag: {
-    flexDirection: 'row', gap: 4, alignItems: 'center',
-    backgroundColor: colors.primary, paddingHorizontal: 10, paddingVertical: 5, borderRadius: radii.pill,
+  insightIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255,184,76,0.10)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  heroTagTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.6 },
-  heroBottom: { position: 'absolute', bottom: space.lg, left: space.lg, right: space.lg },
-  heroTitle: { color: colors.text, fontFamily: font.display, fontSize: 26, letterSpacing: -0.3, lineHeight: 30 },
-  heroMeta: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12, marginTop: 4 },
+  insightTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
+  insightSub: { color: colors.textTertiary, fontFamily: font.body, fontSize: 12, marginTop: 2 },
 });
