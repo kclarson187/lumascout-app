@@ -631,17 +631,37 @@ const s = StyleSheet.create({
     gap: 8,
   },
   pill: {
+    // June 2025 contrast fix — inactive pills used to blend into the
+    // background. Bumped to surface2 with a stronger 0.18 outline so
+    // they read at low brightness / outdoors on OLED. Padding kept
+    // identical so layout never shifts when the active pill moves.
     paddingHorizontal: 14, paddingVertical: 8,
     borderRadius: 18,
-    backgroundColor: colors.surface1,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: colors.surface2,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)',
   },
   pillActive: {
-    backgroundColor: 'rgba(245,166,35,0.14)',
+    // Crisper active state — slightly stronger gold wash + a fully
+    // saturated primary border. The gold tint stays subtle enough to
+    // not muddy the gold text but obvious enough to read instantly.
+    backgroundColor: 'rgba(245,166,35,0.22)',
     borderColor: colors.primary,
   },
-  pillTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12.5 },
-  pillTxtActive: { color: colors.primary, fontFamily: font.bodyBold },
+  pillTxt: {
+    // Brighter inactive text — was textSecondary (dim). Now a clear
+    // off-white at 92% opacity, bumped to bodySemibold for readability
+    // on smaller iPhones / dynamic type.
+    color: 'rgba(255,255,255,0.92)',
+    fontFamily: font.bodySemibold,
+    fontSize: 13,
+    letterSpacing: 0.1,
+  },
+  pillTxtActive: {
+    color: colors.primary,
+    fontFamily: font.bodyBold,
+    fontSize: 13,
+    letterSpacing: 0.1,
+  },
   sortRow: {
     flexDirection: 'row',
     alignItems: 'center',
