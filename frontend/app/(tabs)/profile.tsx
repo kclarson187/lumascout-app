@@ -43,6 +43,10 @@ import {
   MessageCircle,
   HelpCircle,
   Eye,
+  Inbox as InboxIcon,
+  Globe as GlobeIcon2,
+  MapPin as MapPinIcon,
+  MessageSquare as MessageSquareIcon,
 } from 'lucide-react-native';
 import GlobeIcon from '../../src/components/icons/GlobeIcon';
 import { useAuth } from '../../src/auth';
@@ -62,7 +66,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'posts', label: 'Posts' },
   { key: 'spots', label: 'Spots' },
   { key: 'photos', label: 'Photos' },
-  { key: 'reviews', label: 'Reviews' },
+  // June 2025 — Reviews removed from top-level tabs per redesign CR.
   { key: 'collections', label: 'Collections' },
   { key: 'about', label: 'About' },
 ];
@@ -501,39 +505,19 @@ function ProfileImpl() {
               </View>
             )}
 
-            {/* Row A — Edit profile (self only). Sits on its own line so the
-                Portfolio + Share pair below feels like the headline actions. */}
+            {/* June 2025 redesign — single CTA row: Edit Profile + Share Profile.
+                Portfolio button moved into the Quick Actions section below to
+                keep this primary row to just two headline actions. */}
             <View style={[styles.ctaRow, { marginTop: space.md }]}>
               <Button
-                title={editMode ? 'Cancel' : 'Edit profile'}
+                title={editMode ? 'Cancel' : 'Edit Profile'}
                 variant="secondary"
                 onPress={() => setEditMode(!editMode)}
                 style={{ flex: 1 }}
                 testID="profile-edit-toggle"
               />
-            </View>
-
-            {/* Row B — [ Portfolio ]  [ Share profile ]
-                Two equal-width ghost buttons, perfectly matched. Portfolio
-                always renders; tapping it when empty opens an elegant
-                "Add Portfolio Link" sheet so the CTA never dead-ends. */}
-            <View style={styles.ctaRow}>
               <Button
-                title="Portfolio"
-                variant="ghost"
-                onPress={() => {
-                  if (user.website) {
-                    openUrl(user.website);
-                  } else {
-                    setPortfolioEmptyOpen(true);
-                  }
-                }}
-                icon={<GlobeIcon size={15} active weight="regular" />}
-                style={{ flex: 1 }}
-                testID="profile-portfolio-link"
-              />
-              <Button
-                title="Share profile"
+                title="Share Profile"
                 variant="ghost"
                 onPress={shareProfile}
                 style={{ flex: 1 }}
@@ -541,20 +525,67 @@ function ProfileImpl() {
             </View>
           </View>
 
-          {/* Apr 2026 — Premium creator-dashboard sections (replaces the
-              4-stat row with a 7-tile scrollable strip + Quick Actions
-              + Portfolio highlights + Growth insights + Subscription
-              card). All data flows from already-loaded state, so no
-              extra API surface for the parent. */}
-          <View style={{ paddingHorizontal: 0, paddingTop: 4, paddingBottom: 8 }}>
-            <PremiumProfileExtras
-              user={user}
-              mySpots={mySpots}
-              myPosts={myPosts}
-              photos={photos}
-              onEdit={() => setEditMode(true)}
+          {/* June 2025 — replaced PremiumProfileExtras (dense dashboard) with
+              one compact stats card + a 4-up quick-actions row. Stats numbers
+              come from the same `stats`/viewers state already in scope so
+              there's no new network surface. */}
+          <View style={styles.statsCard}>
+            <StatCell
+              label="Followers"
+              value={(stats.followers ?? 0).toLocaleString()}
+              onPress={() => router.push(`/user/${user.user_id}/followers` as any)}
+            />
+            <View style={styles.statsDivider} />
+            <StatCell
+              label="Following"
+              value={(stats.following ?? 0).toLocaleString()}
+              onPress={() => router.push(`/user/${user.user_id}/following` as any)}
+            />
+            <View style={styles.statsDivider} />
+            <StatCell
+              label="Views"
+              value={(stats.profile_views ?? 0).toLocaleString()}
+            />
+            <View style={styles.statsDivider} />
+            <StatCell
+              label="Saves"
+              value={(stats.total_spot_saves ?? mySpots.reduce((acc: number, s: any) => acc + (s.save_count || 0), 0)).toLocaleString()}
             />
           </View>
+
+          <View style={styles.quickRow}>
+            <QuickCell
+              icon={<MapPinIcon size={18} color={colors.primary} />}
+              label="Upload Spot"
+              onPress={() => router.push('/(tabs)/add' as any)}
+              testID="profile-quick-upload-spot"
+            />
+            <QuickCell
+              icon={<MessageSquareIcon size={18} color={colors.primary} />}
+              label="Create Post"
+              onPress={() => router.push('/community/compose' as any)}
+              testID="profile-quick-create-post"
+            />
+            <QuickCell
+              icon={<GlobeIcon2 size={18} color={colors.primary} />}
+              label="Portfolio"
+              onPress={() => {
+                if (user.website) openUrl(user.website);
+                else setPortfolioEmptyOpen(true);
+              }}
+              testID="profile-quick-portfolio"
+            />
+            <QuickCell
+              icon={<InboxIcon size={18} color={colors.primary} />}
+              label="Messages"
+              onPress={() => router.push('/inbox' as any)}
+              testID="profile-quick-messages"
+            />
+          </View>
+
+          {/* June 2025 — PremiumProfileExtras (dense dashboard) removed.
+              Stats + Quick Actions are now compact inline blocks above,
+              keeping the screen calm and creator-focused. */}
 
           {/* PRD #4: Badges strip — visual shorthand for who this photographer
               is at a glance. Only shows badges the user has actually earned
@@ -653,44 +684,9 @@ function ProfileImpl() {
             </TouchableOpacity>
           )}
 
-          {/* PRD #11: Share-the-app primary CTA moved HIGH on the profile so
-              it's visible above the fold. Sits right under the Upgrade CTA
-              (or directly below Badges when the user is already Pro/Elite).
-              Uses the native Share sheet with referral code auto-appended
-              when present so we can track K-factor later. */}
-          <TouchableOpacity
-            style={styles.shareAppRow}
-            onPress={async () => {
-              try {
-                const ref = (user as any)?.referral_code;
-                const urlBase = 'https://lumascout.app';
-                const url = ref ? `${urlBase}?ref=${encodeURIComponent(ref)}` : urlBase;
-                await Share.share({
-                  message: `I'm using LumaScout to find amazing photo spots — come join me 📸\n\n${url}`,
-                  url,
-                  title: 'LumaScout — photo-spot scouting for photographers',
-                });
-              } catch {}
-            }}
-            testID="profile-share-app"
-            activeOpacity={0.88}
-          >
-            <LinearGradient
-              colors={['rgba(245,166,35,0.18)', 'rgba(245,166,35,0.04)']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={StyleSheet.absoluteFill}
-            />
-            <View style={styles.shareAppIcon}>
-              <Share2 size={18} color={colors.primary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.shareAppTitle}>Share LumaScout with a friend</Text>
-              <Text style={styles.shareAppBody}>
-                Photographers love finding new spots. Spread the word — unlock Pro perks when referrals subscribe.
-              </Text>
-            </View>
-          </TouchableOpacity>
+          {/* June 2025 — Share-the-app big card removed per redesign CR
+              ("only ONE subtle upgrade card"). Sharing is still
+              available via the "Share Profile" button at the top. */}
 
           {/* === ROLE-BASED TOOLS ======================================== */}
           {showRoleSection && (
@@ -1033,6 +1029,40 @@ function AboutRow({ label, value }: { label: string; value: string }) {
 }
 
 /**
+ * StatCell — June 2025 redesign helper.
+ * Compact stats row cell. 1 of 4 inside a single rounded card.
+ */
+function StatCell({ label, value, onPress }: { label: string; value: string; onPress?: () => void }) {
+  const C: any = onPress ? TouchableOpacity : View;
+  return (
+    <C onPress={onPress} style={{ flex: 1, alignItems: 'center', paddingVertical: 4 }} activeOpacity={0.85}>
+      <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+        {value}
+      </Text>
+      <Text style={styles.statLabel} numberOfLines={1}>{label}</Text>
+    </C>
+  );
+}
+
+/**
+ * QuickCell — June 2025 redesign helper.
+ * Compact square cards row (Upload Spot / Create Post / Portfolio /
+ * Messages). One short row, evenly flexed, no excessive height.
+ */
+function QuickCell({
+  icon, label, onPress, testID,
+}: { icon: React.ReactNode; label: string; onPress: () => void; testID?: string }) {
+  return (
+    <TouchableOpacity onPress={onPress} style={styles.quickCell} activeOpacity={0.85} testID={testID}>
+      <View style={styles.quickIcon}>{icon}</View>
+      <Text style={styles.quickLabel} numberOfLines={1}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+
+
+/**
  * ProfileViewersTeaser — Phase B.1 "Who Viewed Your Profile"
  * Premium card above the Account section. Polls /me/viewers/summary
  * and surfaces the 7-day new-viewer count with a one-tap CTA to the
@@ -1293,6 +1323,69 @@ const styles = StyleSheet.create({
   },
 
   ctaRow: { flexDirection: 'row', gap: 8, marginTop: space.lg, width: '100%' },
+
+  // ─── June 2025 redesign — compact stats + quick-actions atoms ──
+  // One rounded card, 4 evenly-flexed cells, subtle dividers.
+  statsCard: {
+    flexDirection: 'row',
+    marginHorizontal: space.xl,
+    marginTop: space.lg,
+    paddingVertical: 14,
+    paddingHorizontal: 6,
+    backgroundColor: colors.surface1,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    alignItems: 'center',
+  },
+  statsDivider: {
+    width: StyleSheet.hairlineWidth,
+    height: 28,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    alignSelf: 'center',
+  },
+  statValue: {
+    color: colors.text,
+    fontFamily: font.displaySemibold || font.bodyBold,
+    fontSize: 18,
+    letterSpacing: -0.3,
+    marginBottom: 2,
+  },
+  statLabel: {
+    color: colors.textSecondary,
+    fontFamily: font.bodyMedium,
+    fontSize: 10.5,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  quickRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: space.xl,
+    marginTop: 12,
+  },
+  quickCell: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: colors.surface1,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  quickIcon: {
+    width: 32, height: 32, borderRadius: 16,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(245,166,35,0.12)',
+  },
+  quickLabel: {
+    color: colors.text,
+    fontFamily: font.bodyMedium,
+    fontSize: 11.5,
+  },
 
   statsRow: {
     flexDirection: 'row', marginTop: space.lg, paddingHorizontal: space.xl,
