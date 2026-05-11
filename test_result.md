@@ -12,6 +12,64 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "ADMIN UI Cinematic Overhaul — Simplified Command Center (Jun 2025)"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app/admin/_layout.tsx (REWRITTEN — 5-up primary nav: Overview · Queue · Users · Spots · More)
+      /app/frontend/app/admin/index.tsx (REWRITTEN — Needs your attention 2x2, System Overview horizontal stats, Quick Actions tiles, compact Revenue Snapshot, Growth Highlights, Recent Activity)
+      /app/frontend/app/admin/queue.tsx (NEW — unified moderation feed merging Reports / Flagged Posts / Edit Requests / Pending Spots with live chip counts and per-type action buttons)
+      /app/frontend/app/admin/more.tsx (NEW — grouped overflow page: System / Content / Business / Platform with all legacy admin tools)
+      /app/frontend/app/admin/spots.tsx (Pending list converted from heavy SpotCard to compact pendCard row with Cover/Reject/Approve action buttons)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Full admin UI overhaul per Jun 2025 user spec:
+          • Primary nav simplified from 9 horizontally-scrolling tabs to a
+            fixed 5-up grid (Overview, Queue, Users, Spots, More).
+          • Compact header (back, "Admin", role badge) — removed the
+            oversized "LumaScout · Admin" kicker + 24pt title block.
+          • Overview rebuilt as a "command center":
+              – "Needs your attention" 2x2 grid (Reports, Pending Spots,
+                Edit Requests, Flagged Posts) with live counts; each
+                deep-links to /admin/queue?filter=<type>.
+              – System Overview horizontal stats row (Total Users,
+                Active 7D, Suspended, New Today) — replaces oversized KPIs.
+              – Quick Actions 4-up tiles (System Health, Diagnostics,
+                Activity Log, Settings).
+              – Revenue Snapshot compact card with plan dot ticks.
+              – Growth Highlights (Top contributors 30d + Trending cities
+                30d) using compact rows.
+              – Recent Activity list (top 4 from /admin/audit-logs).
+          • Queue tab is a new unified review feed that client-side merges
+            four existing endpoints (no new backend API):
+              – Reports: Dismiss / Warn / Remove
+              – Flagged Posts: View / Remove
+              – Edit Requests: Review (opens diff page)
+              – Pending Spots: Cover / Reject / Approve
+            Live counts on chips; refresh on focus and pull-to-refresh.
+          • More page collects every previously-shown admin tool so NOTHING
+            is removed from access: System Health (Analytics), Diagnostics,
+            Activity Log, Reports, Edit Requests, Community Posts,
+            Marketplace, Marketplace Purchases, Scout AI Controls, Community
+            Tools, Admin Settings. Role-gated rows still respect minRole.
+          • Spots Pending rows converted to compact pendCard with thumbnail
+            + city + Submitted timestamp; action row is Cover / Reject /
+            Approve (44pt touch targets, no oversized buttons).
+          • Color discipline: black bg, hairline borders (#2A2A2E), accent
+            tints only when an item has a count > 0 (red=reports,
+            warning=pending, info=edits, primary=flagged).
+
+          Verified: bundler clean, no metro errors, all 5 tabs render with
+          live data after admin@lumascout.app login (screenshot confirmed
+          Overview, Queue, Users, Spots empty-state, More all render).
+
+
+
   - task: "ANDROID STABILIZATION ROUND 5 — Markers visible + Auth keyboard parity"
     implemented: true
     working: "NA"

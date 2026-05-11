@@ -1,25 +1,23 @@
 import React, { useMemo } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Slot, router, usePathname } from 'expo-router';
 import {
-  LayoutDashboard, Users, Map, Flag, Activity, FileText, Settings, ChevronLeft, ShieldCheck, MessageSquare, ShoppingBag,
+  LayoutDashboard, Inbox, Users, Map, MoreHorizontal, ChevronLeft, ShieldCheck,
 } from 'lucide-react-native';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 
 const ADMIN_ROLES = ['moderator', 'support', 'admin', 'super_admin'];
 
+// New simplified primary nav per Jun-2025 admin overhaul.
+// Less-used tools live under /admin/more.
 const TABS = [
-  { key: 'index',     label: 'Overview',   icon: LayoutDashboard, path: '/admin' },
-  { key: 'users',     label: 'Users',      icon: Users,           path: '/admin/users' },
-  { key: 'spots',     label: 'Spots',      icon: Map,             path: '/admin/spots' },
-  { key: 'posts',     label: 'Posts',      icon: MessageSquare,   path: '/admin/posts' },
-  { key: 'reports',   label: 'Reports',    icon: Flag,            path: '/admin/reports' },
-  { key: 'marketplace', label: 'Marketplace', icon: ShoppingBag,  path: '/admin/marketplace' },
-  { key: 'analytics', label: 'Analytics',  icon: Activity,        path: '/admin/analytics' },
-  { key: 'audit',     label: 'Audit',      icon: FileText,        path: '/admin/audit', minRole: 'admin' },
-  { key: 'settings',  label: 'Settings',   icon: Settings,        path: '/admin/settings', minRole: 'super_admin' },
+  { key: 'index', label: 'Overview', icon: LayoutDashboard, path: '/admin' },
+  { key: 'queue', label: 'Queue',    icon: Inbox,           path: '/admin/queue' },
+  { key: 'users', label: 'Users',    icon: Users,           path: '/admin/users' },
+  { key: 'spots', label: 'Spots',    icon: Map,             path: '/admin/spots' },
+  { key: 'more',  label: 'More',     icon: MoreHorizontal,  path: '/admin/more' },
 ];
 
 const ROLE_RANK: Record<string, number> = {
@@ -30,22 +28,10 @@ export default function AdminLayout() {
   const { user } = useAuth();
   const pathname = usePathname();
 
-  // --- FIX(Commit 5 / 2026-04): All hooks MUST run on every render in the
-  // same order (React Rules of Hooks). Previously `visibleTabs = useMemo(...)`
-  // was called AFTER the auth-gate early returns below, which crashed the
-  // dashboard on any cold-cache render where `user` hydrated between renders
-  // (render 1 = no hooks past `usePathname`, render 2 = extra `useMemo` →
-  // "Rendered more hooks than during the previous render"). Computing rank
-  // and visibleTabs unconditionally up front, with a null-safe fallback,
-  // makes the hook count stable across all render paths.
+  // FIX(Commit 5 / 2026-04): hooks-stability — compute unconditionally.
   const myRank = ROLE_RANK[(user && user.role) || 'user'] || 0;
-  const visibleTabs = useMemo(
-    () => TABS.filter((t) => !t.minRole || myRank >= (ROLE_RANK[t.minRole] || 99)),
-    [myRank]
-  );
+  const visibleTabs = useMemo(() => TABS, [myRank]);
 
-  // Role guard — never render admin UI for regular users.
-  const allowed = !!user && ADMIN_ROLES.includes(user.role || '');
   if (!user) {
     return (
       <SafeAreaView style={styles.gateWrap}>
@@ -60,6 +46,8 @@ export default function AdminLayout() {
       </SafeAreaView>
     );
   }
+
+  const allowed = !!user && ADMIN_ROLES.includes(user.role || '');
   if (!allowed) {
     return (
       <SafeAreaView style={styles.gateWrap}>
@@ -75,48 +63,68 @@ export default function AdminLayout() {
     );
   }
 
-  const active = (t: typeof TABS[number]) => {
+  const isActive = (t: typeof TABS[number]) => {
     if (t.path === '/admin') return pathname === '/admin' || pathname === '/admin/';
+    if (t.path === '/admin/more') {
+      // "More" stays highlighted when on any sub-tool route.
+      return pathname.startsWith('/admin/more')
+        || pathname.startsWith('/admin/analytics')
+        || pathname.startsWith('/admin/diagnostics')
+        || pathname.startsWith('/admin/audit')
+        || pathname.startsWith('/admin/settings')
+        || pathname.startsWith('/admin/marketplace')
+        || pathname.startsWith('/admin/community')
+        || pathname.startsWith('/admin/ai-controls')
+        || pathname.startsWith('/admin/posts')
+        || pathname.startsWith('/admin/reports')
+        || pathname.startsWith('/admin/edit-requests');
+    }
+    if (t.path === '/admin/queue') return pathname.startsWith('/admin/queue');
+    if (t.path === '/admin/users') return pathname.startsWith('/admin/user');
+    if (t.path === '/admin/spots') return pathname.startsWith('/admin/spots');
     return pathname.startsWith(t.path);
   };
 
+  const roleLabel = user.role === 'super_admin'
+    ? 'Super Admin'
+    : (user.role || 'Staff').replace('_', ' ');
+
   return (
     <SafeAreaView style={styles.wrap} edges={['top']}>
+      {/* Compact header */}
       <View style={styles.head}>
         <TouchableOpacity onPress={() => router.replace('/(tabs)/profile')} style={styles.backBtn} testID="admin-exit">
-          <ChevronLeft size={22} color={colors.text} />
+          <ChevronLeft size={20} color={colors.text} />
         </TouchableOpacity>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.kicker}>LumaScout · Admin</Text>
-          <Text style={styles.title}>{user.role === 'super_admin' ? 'Super Admin' : (user.role || 'Staff').replace('_', ' ')}</Text>
-        </View>
-        <View style={styles.roleBadge}>
-          <Text style={styles.roleBadgeTxt}>{(user.role || 'staff').toUpperCase()}</Text>
+        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Text style={styles.title}>Admin</Text>
+          <View style={styles.roleBadge}>
+            <ShieldCheck size={10} color={colors.primary} />
+            <Text style={styles.roleBadgeTxt} numberOfLines={1}>{roleLabel}</Text>
+          </View>
         </View>
       </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.tabsStripScroll}
-        contentContainerStyle={styles.tabsStrip}
-      >
+      {/* 5-up primary nav — fixed grid, no horizontal scroll */}
+      <View style={styles.tabsRow}>
         {visibleTabs.map((t) => {
           const Icon = t.icon;
-          const on = active(t);
+          const on = isActive(t);
           return (
             <TouchableOpacity
               key={t.key}
               onPress={() => router.push(t.path as any)}
-              style={[styles.tab, on && styles.tabActive]}
+              style={styles.tab}
               testID={`admin-tab-${t.key}`}
+              hitSlop={6}
             >
-              <Icon size={15} color={on ? colors.textInverse : colors.textSecondary} />
-              <Text style={[styles.tabTxt, on && styles.tabTxtActive]}>{t.label}</Text>
+              <Icon size={18} color={on ? colors.primary : colors.textSecondary} />
+              <Text style={[styles.tabTxt, on && styles.tabTxtActive]} numberOfLines={1}>{t.label}</Text>
+              {on ? <View style={styles.tabUnderline} /> : <View style={styles.tabUnderlineHidden} />}
             </TouchableOpacity>
           );
         })}
-      </ScrollView>
+      </View>
 
       <View style={styles.divider} />
 
@@ -129,29 +137,44 @@ const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: colors.bg },
   head: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: space.xl, paddingVertical: space.md, gap: 8,
+    paddingHorizontal: space.lg, paddingVertical: 8, gap: 4,
   },
-  backBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  kicker: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase' },
-  title: { color: colors.text, fontFamily: font.display, fontSize: 24, letterSpacing: -0.3, textTransform: 'capitalize' },
+  backBtn: {
+    width: 32, height: 32, alignItems: 'center', justifyContent: 'center',
+  },
+  title: {
+    color: colors.text, fontFamily: font.display, fontSize: 22, letterSpacing: -0.3,
+  },
   roleBadge: {
-    paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.pill,
-    borderColor: colors.primary, borderWidth: 1, backgroundColor: 'rgba(245,166,35,0.12)',
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: radii.pill,
+    borderColor: 'rgba(245,166,35,0.35)', borderWidth: 1,
+    backgroundColor: 'rgba(245,166,35,0.08)',
   },
-  roleBadgeTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.5 },
-  tabsStripScroll: { flexGrow: 0, flexShrink: 0, maxHeight: 44 },
-  tabsStrip: {
-    paddingHorizontal: space.xl, paddingBottom: space.sm, gap: 8, alignItems: 'center',
+  roleBadgeTxt: {
+    color: colors.primary, fontFamily: font.bodyBold, fontSize: 10,
+    letterSpacing: 0.4, textTransform: 'uppercase',
+  },
+
+  tabsRow: {
+    flexDirection: 'row',
+    paddingHorizontal: space.xs,
+    alignItems: 'stretch',
   },
   tab: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    height: 30, paddingHorizontal: 12, borderRadius: radii.pill,
-    backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
+    flex: 1,
+    alignItems: 'center', justifyContent: 'flex-start',
+    paddingVertical: 8, gap: 3,
   },
-  tabActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  tabTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
-  tabTxtActive: { color: colors.textInverse, fontFamily: font.bodySemibold },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginTop: 4 },
+  tabTxt: {
+    color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11,
+  },
+  tabTxtActive: { color: colors.primary, fontFamily: font.bodyBold },
+  tabUnderline: {
+    marginTop: 4, height: 2, width: 24, borderRadius: 1, backgroundColor: colors.primary,
+  },
+  tabUnderlineHidden: { marginTop: 4, height: 2, width: 24 },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
 
   gateWrap: { flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center', padding: space.xl },
   gate: { alignItems: 'center', gap: 10, maxWidth: 320 },

@@ -16,7 +16,6 @@ import { router } from 'expo-router';
 import { Check, X, ShieldCheck, Crop, Search, Star, EyeOff, ImagePlus } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
-import SpotCard from '../../src/components/SpotCard';
 
 function timeAgo(iso?: string): string {
   if (!iso) return '';
@@ -144,33 +143,59 @@ export default function AdminSpots() {
             )}
           </View>
         ) : (
-          <View style={{ paddingHorizontal: space.xl, gap: space.md }}>
-            {pending.map((s: any) => (
-              <View key={s.spot_id} style={styles.card}>
-                <SpotCard spot={s} onPress={() => {}} />
-                <View style={styles.metaRow}>
-                  <Text style={styles.meta}>Submitted {timeAgo(s.created_at)}</Text>
+          <View style={{ paddingHorizontal: space.lg, gap: 8 }}>
+            <Text style={styles.hint}>Approve, reject, or open the cover editor.</Text>
+            {pending.map((s: any) => {
+              const cover = s.hero_cover_image_url
+                || (s.images && (s.images.find((i: any) => i.is_cover) || s.images[0]))?.image_url;
+              return (
+                <View key={s.spot_id} style={styles.pendCard}>
+                  <View style={styles.pendTopRow}>
+                    {cover
+                      ? <Image source={{ uri: cover }} style={styles.pendImg} />
+                      : <View style={[styles.pendImg, { backgroundColor: colors.surface2, alignItems: 'center', justifyContent: 'center' }]}>
+                          <ImagePlus size={14} color={colors.textTertiary} />
+                        </View>}
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.pendTitle} numberOfLines={1}>{s.title}</Text>
+                      <Text style={styles.pendCity} numberOfLines={1}>
+                        {s.city || ''}{s.state ? `, ${s.state}` : ''}
+                        {s.country_code ? ` · ${s.country_code}` : ''}
+                      </Text>
+                      <Text style={styles.pendMeta}>
+                        {(s.images || []).length} photo{(s.images || []).length === 1 ? '' : 's'} · Submitted {timeAgo(s.created_at)}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.btnRow}>
+                    <TouchableOpacity
+                      style={[styles.actBtn, styles.actGhost]}
+                      onPress={() => router.push(`/admin/spots/${s.spot_id}/cover` as any)}
+                      testID={`admin-cover-${s.spot_id}`}
+                    >
+                      <Crop size={12} color={colors.primary} />
+                      <Text style={[styles.actTxt, { color: colors.primary }]}>Cover</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.actBtn, { backgroundColor: colors.secondary }]}
+                      onPress={() => decide(s.spot_id, false)}
+                      testID={`admin-reject-${s.spot_id}`}
+                    >
+                      <X size={12} color="#fff" />
+                      <Text style={[styles.actTxt, { color: '#fff' }]}>Reject</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.actBtn, { backgroundColor: colors.success }]}
+                      onPress={() => decide(s.spot_id, true)}
+                      testID={`admin-approve-${s.spot_id}`}
+                    >
+                      <Check size={12} color={colors.textInverse} />
+                      <Text style={[styles.actTxt, { color: colors.textInverse }]}>Approve</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
-                <View style={styles.btnRow}>
-                  <TouchableOpacity style={[styles.actBtn, { backgroundColor: colors.success }]} onPress={() => decide(s.spot_id, true)} testID={`admin-approve-${s.spot_id}`}>
-                    <Check size={16} color={colors.textInverse} />
-                    <Text style={styles.actTxt}>Approve</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.actBtn, { backgroundColor: colors.secondary }]} onPress={() => decide(s.spot_id, false)} testID={`admin-reject-${s.spot_id}`}>
-                    <X size={16} color="#fff" />
-                    <Text style={[styles.actTxt, { color: '#fff' }]}>Reject</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.actBtn, { backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.primary }]}
-                    onPress={() => router.push(`/admin/spots/${s.spot_id}/cover` as any)}
-                    testID={`admin-cover-${s.spot_id}`}
-                  >
-                    <Crop size={16} color={colors.primary} />
-                    <Text style={[styles.actTxt, { color: colors.primary }]}>Edit cover</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
+              );
+            })}
           </View>
         )
       ) : (
@@ -256,9 +281,29 @@ const styles = StyleSheet.create({
   card: { backgroundColor: colors.surface1, borderRadius: radii.lg, borderWidth: 1, borderColor: colors.border, padding: 10, gap: 10 },
   metaRow: { flexDirection: 'row' },
   meta: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
-  btnRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  actBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 9, paddingHorizontal: 12, borderRadius: radii.md },
-  actTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 12 },
+  btnRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
+  actBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 4, paddingVertical: 8, paddingHorizontal: 8, borderRadius: radii.sm,
+  },
+  actGhost: {
+    backgroundColor: colors.surface2,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.primary,
+  },
+  actTxt: { fontFamily: font.bodyBold, fontSize: 12 },
+
+  // Compact pending card (Jun 2025)
+  pendCard: {
+    backgroundColor: colors.surface1,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
+    borderRadius: radii.md,
+    padding: space.md, gap: 8,
+  },
+  pendTopRow: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+  pendImg: { width: 52, height: 52, borderRadius: radii.sm },
+  pendTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
+  pendCity: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, marginTop: 1 },
+  pendMeta: { color: colors.textTertiary, fontFamily: font.body, fontSize: 10, marginTop: 2 },
 
   row: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
