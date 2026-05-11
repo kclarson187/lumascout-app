@@ -530,24 +530,24 @@ function ProfileImpl() {
               come from the same `stats`/viewers state already in scope so
               there's no new network surface. */}
           <View style={styles.statsCard}>
-            <StatCell
+            <CompactProfileStatCell
               label="Followers"
               value={(stats.followers ?? 0).toLocaleString()}
               onPress={() => router.push(`/user/${user.user_id}/followers` as any)}
             />
             <View style={styles.statsDivider} />
-            <StatCell
+            <CompactProfileStatCell
               label="Following"
               value={(stats.following ?? 0).toLocaleString()}
               onPress={() => router.push(`/user/${user.user_id}/following` as any)}
             />
             <View style={styles.statsDivider} />
-            <StatCell
+            <CompactProfileStatCell
               label="Views"
               value={(stats.profile_views ?? 0).toLocaleString()}
             />
             <View style={styles.statsDivider} />
-            <StatCell
+            <CompactProfileStatCell
               label="Saves"
               value={(stats.total_spot_saves ?? mySpots.reduce((acc: number, s: any) => acc + (s.save_count || 0), 0)).toLocaleString()}
             />
@@ -1029,10 +1029,12 @@ function AboutRow({ label, value }: { label: string; value: string }) {
 }
 
 /**
- * StatCell — June 2025 redesign helper.
+ * CompactProfileStatCell — June 2025 redesign helper.
  * Compact stats row cell. 1 of 4 inside a single rounded card.
+ * Renamed from `StatCell` to avoid collision with the legacy
+ * `StatCell` at the bottom of this file used by PremiumProfileExtras.
  */
-function StatCell({ label, value, onPress }: { label: string; value: string; onPress?: () => void }) {
+function CompactProfileStatCell({ label, value, onPress }: { label: string; value: string; onPress?: () => void }) {
   const C: any = onPress ? TouchableOpacity : View;
   return (
     <C onPress={onPress} style={{ flex: 1, alignItems: 'center', paddingVertical: 4 }} activeOpacity={0.85}>
