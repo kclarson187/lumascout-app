@@ -12,6 +12,71 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Network → Discover message button 404 fix (Jun 2025)"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app/inbox/[id].tsx — added "get-or-create" shim:
+        • Pulls `to` (recipient user_id) from useLocalSearchParams alongside `id`.
+        • When `id === 'new'`, hits POST /dm/threads/start instead of
+          GET /dm/threads/new (which was 404'ing) and router.replace's
+          to /inbox/<real_thread_id> so the URL is canonical and back()
+          doesn't loop back to the "new" stub.
+        • Catch block now maps status 403/404 to friendly app-level
+          copy instead of raw axios "Request failed with status code 404".
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          ROOT CAUSE
+            Three call sites in the app pushed to `/inbox/new?to=USER_ID`:
+              • src/components/DiscoverPremiumView.tsx (lines 283, 397) —
+                Discover hero card + compact card
+              • app/marketplace/[id].tsx — "Contact seller" button
+            But `/inbox/[id].tsx` had no special handling for `id === 'new'`,
+            so it tried `GET /dm/threads/new` which returned 404, then
+            surfaced the raw axios error as
+            "Thread unavailable / Request failed with status code 404".
+
+          FIX — single-point, no new endpoint
+            Backend already has POST /dm/threads/start (the proper
+            get-or-create endpoint, verified idempotent: calling twice
+            returns the same thread_id). The fix is purely in
+            /app/frontend/app/inbox/[id].tsx:
+              1. Detect `id === 'new'` in the load() callback.
+              2. Read `to` from useLocalSearchParams.
+              3. POST /dm/threads/start { user_id: to }.
+              4. router.replace(`/inbox/${response.thread_id}`) → re-mount
+                 with the real id and load() runs normally on the second
+                 mount. No request to the bogus "new" id is ever made.
+              5. If `to` is missing or the call fails, show a friendly
+                 alert and router.back(). Never surface a raw axios
+                 status code.
+
+          NO BACKEND CHANGES
+            • POST /dm/threads/start was already deployed (network.py:458)
+            • Smoke test confirms idempotent + returns thread_id
+            • 403 (blocked) and 404 (deleted user) now map to polished copy.
+
+          REGRESSION SURFACE
+            • Existing /inbox/<real_id> path is unchanged — only adds
+              an early-return when the id matches the literal string "new".
+            • Marketplace "Contact seller" button is automatically fixed
+              by the same change because it also routes through /inbox/new.
+            • The legacy /messages/new?user=... callers (mentors.tsx,
+              community.tsx, community/post/[id].tsx) ALREADY worked via
+              the /messages/[id].tsx redirect screen and are unaffected.
+
+          VERIFIED
+            • Backend: POST /dm/threads/start → 200, returns thread_id.
+            • Idempotent: same target_user → same thread_id on repeat.
+            • GET /dm/threads/<thread_id> → 200 with full thread.
+            • Frontend bundles clean (no syntax/type errors).
+
+
   - task: "DM Composer Keyboard Fix — iOS regression (Jun 2025 v7) + Phase 1 onboarding QA"
     implemented: true
     working: "NA"

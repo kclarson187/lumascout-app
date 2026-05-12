@@ -33,7 +33,7 @@ export default function ThreadScreen() {
 
 function ThreadScreenImpl() {
   const { user } = useAuth();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, to } = useLocalSearchParams<{ id: string; to?: string }>();
   const threadId = String(id || '');
   const [thread, setThread] = useState<any>(null);
   const [other, setOther] = useState<any>(null);
@@ -79,16 +79,51 @@ function ThreadScreenImpl() {
 
   const load = useCallback(async () => {
     try {
+      // ───────────────────────────────────────────────────────────────
+      // GET-OR-CREATE shim (Jun 2025): callers that don't yet know the
+      // thread id route here as `/inbox/new?to=USER_ID` (used by the
+      // Network → Discover cards and the Marketplace listing screen).
+      // Previously the screen tried `GET /dm/threads/new`, which 404'd
+      // and surfaced as a raw "Request failed with status code 404"
+      // alert. We now detect the "new" sentinel, hit the existing
+      // get-or-create endpoint (`POST /dm/threads/start`), and replace
+      // the route with the canonical /inbox/<thread_id> so the URL is
+      // stable and `back()` doesn't bounce through the "new" stub.
+      // ───────────────────────────────────────────────────────────────
+      if (threadId === 'new') {
+        const targetUserId = (to || '').trim();
+        if (!targetUserId) {
+          Alert.alert('No recipient', 'We couldn\'t find who to message. Please try again.');
+          router.back();
+          return;
+        }
+        const t = await api.post('/dm/threads/start', { user_id: targetUserId });
+        if (t?.thread_id) {
+          router.replace(`/inbox/${t.thread_id}` as any);
+          return;  // re-mount with the real id will trigger another load()
+        }
+        Alert.alert('Couldn\'t start conversation', 'Please try again shortly.');
+        router.back();
+        return;
+      }
+
       const r = await api.get(`/dm/threads/${threadId}`);
       setThread(r.thread);
       setOther(r.other);
       setMessages(r.messages || []);
       await api.post(`/dm/threads/${threadId}/mark-read`, {});
     } catch (e: any) {
-      Alert.alert('Thread unavailable', e?.message || 'Please try again');
+      // Friendly app-level message — never surface a raw axios/HTTP code.
+      const status = e?.response?.status;
+      const detail = e?.response?.data?.detail;
+      const friendly =
+        status === 403 ? 'You can\'t message this person right now.'
+        : status === 404 ? 'This conversation isn\'t available anymore.'
+        : (typeof detail === 'string' && detail) || 'Please try again shortly.';
+      Alert.alert('Conversation unavailable', friendly);
       router.back();
     } finally { setLoading(false); }
-  }, [threadId]);
+  }, [threadId, to]);
 
   useEffect(() => { load(); }, [load]);
 
