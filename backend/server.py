@@ -604,6 +604,15 @@ class RegisterIn(BaseModel):
     password: str
     name: str
     specialties: Optional[List[str]] = []
+    # ─── Phase 1 onboarding v2 (Jun 2025) ───────────────────────────────
+    # All optional + additive. Older clients sending only {email, password,
+    # name} keep working. Newer clients can pass these to skip the
+    # post-register profile-setup step.
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    display_name: Optional[str] = None
+    home_area: Optional[str] = None
+    username: Optional[str] = None
 
 
 class LoginIn(BaseModel):
@@ -651,6 +660,22 @@ class UserUpdateIn(BaseModel):
     location_prefs: Optional[Dict[str, Any]] = None
     gear_prefs: Optional[Dict[str, Any]] = None
     travel_prefs: Optional[Dict[str, Any]] = None
+    # --- Onboarding v2 (Phase 1, Jun 2025) ----------------------------------
+    # Additive optional fields. Older clients keep working — they simply
+    # never populate these. `home_area` is a free-text city/region string
+    # (e.g. "Austin, TX" or "Berlin, DE") used as the public location
+    # layer; `city`/`state` remain the canonical structured fields.
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    display_name: Optional[str] = None
+    home_area: Optional[str] = None
+    portfolio_url: Optional[str] = None
+    profile_photo_url: Optional[str] = None
+    goals: Optional[List[str]] = None
+    experience_level: Optional[str] = None  # hobbyist | semi_pro | pro | studio
+    directory_visible: Optional[bool] = None
+    sample_image_urls: Optional[List[str]] = None
+    basics_complete: Optional[bool] = None
 
 
 
@@ -734,6 +759,26 @@ async def register(body: RegisterIn):
         "primary_region": None,
         "timezone": None,
         "language_hint": "en",
+        # --- Onboarding v2 (Phase 1, Jun 2025) ------------------------------
+        # New users start with basics_complete=false so the client routes
+        # them through /onboarding/basics. Existing users without this
+        # field default to True in `_compute_basics_complete()` so they
+        # are grandfathered (never bounced back to onboarding).
+        "first_name": (body.first_name or "").strip() or None,
+        "last_name": (body.last_name or "").strip() or None,
+        "display_name": (body.display_name or "").strip() or body.name or None,
+        "home_area": (body.home_area or "").strip() or None,
+        "portfolio_url": None,
+        "profile_photo_url": None,
+        "goals": [],
+        "experience_level": None,
+        "directory_visible": False,
+        "sample_image_urls": [],
+        "basics_complete": bool(
+            (body.first_name or "").strip()
+            and (body.display_name or body.name or "").strip()
+            and (body.home_area or "").strip()
+        ),
         "created_at": utcnow(),
         "updated_at": utcnow(),
     }
@@ -970,6 +1015,105 @@ def _compute_profile_complete(user: dict) -> bool:
     return True
 
 
+# ─── Onboarding v2 (Phase 1, Jun 2025) ─────────────────────────────────────
+def _compute_basics_complete(user: dict) -> bool:
+    """True when Phase-1 'public profile basics' are filled in.
+
+    Backwards-compat: if the user document was created BEFORE the v2
+    onboarding shipped (no `basics_complete` key AND no `first_name`
+    key), grandfather them in by returning True. This prevents existing
+    users from being bounced back to onboarding on next launch.
+    """
+    if not user:
+        return False
+    # Explicit grandfather: pre-v2 user docs never had any of these keys.
+    if "basics_complete" not in user and "first_name" not in user:
+        return True
+    if user.get("basics_complete") is True:
+        return True
+    has_first = bool((user.get("first_name") or "").strip())
+    has_display = bool(
+        (user.get("display_name") or user.get("name") or "").strip()
+    )
+    has_handle = bool((user.get("username") or "").strip())
+    has_home = bool(
+        (user.get("home_area") or "").strip()
+        or ((user.get("city") or "").strip() and (user.get("state") or "").strip())
+    )
+    return has_first and has_display and has_handle and has_home
+
+
+_DIRECTORY_MISSING_LABELS = {
+    "profile_photo": "profile_photo",
+    "specialty": "specialty",
+    "portfolio_or_samples": "portfolio_or_samples",
+    "bio": "bio",
+}
+
+
+def _compute_directory_eligibility(user: dict) -> dict:
+    """Compute Phase-1 directory eligibility. Returns dict with:
+      • eligible: bool
+      • missing:  list[str]  — keys from _DIRECTORY_MISSING_LABELS
+    """
+    if not user:
+        return {"eligible": False, "missing": list(_DIRECTORY_MISSING_LABELS.keys())}
+    missing: list = []
+    has_photo = bool(
+        (user.get("profile_photo_url") or "").strip()
+        or (user.get("avatar_url") or "").strip()
+        or (user.get("avatar_image_url") or "").strip()
+    )
+    if not has_photo:
+        missing.append("profile_photo")
+    if len(user.get("specialties") or []) < 1:
+        missing.append("specialty")
+    portfolio = (user.get("portfolio_url") or user.get("website") or "").strip()
+    samples = user.get("sample_image_urls") or []
+    if not portfolio and len(samples) < 3:
+        missing.append("portfolio_or_samples")
+    if len((user.get("bio") or "").strip()) < 60:
+        missing.append("bio")
+    return {"eligible": len(missing) == 0, "missing": missing}
+
+
+def _compute_profile_completion_percent(user: dict) -> int:
+    """Compute a 0-100 progress integer based on the public profile +
+    directory readiness checklist. Used to power the "X% complete"
+    progress indicator in the profile tab.
+
+    Weights (must sum to 100):
+        Basics — first_name (10), display_name (10), username (10),
+                 home_area (10), profile_photo (10) = 50
+        Pro    — bio>=60 (15), specialty>=1 (10), portfolio_or_samples (15),
+                 experience_level (5), goals>=1 (5) = 50
+    """
+    if not user:
+        return 0
+    pts = 0
+    if (user.get("first_name") or "").strip(): pts += 10
+    if (user.get("display_name") or user.get("name") or "").strip(): pts += 10
+    if (user.get("username") or "").strip(): pts += 10
+    if (user.get("home_area") or "").strip() or (
+        (user.get("city") or "").strip() and (user.get("state") or "").strip()
+    ):
+        pts += 10
+    has_photo = bool(
+        (user.get("profile_photo_url") or "").strip()
+        or (user.get("avatar_url") or "").strip()
+        or (user.get("avatar_image_url") or "").strip()
+    )
+    if has_photo: pts += 10
+    if len((user.get("bio") or "").strip()) >= 60: pts += 15
+    if len(user.get("specialties") or []) >= 1: pts += 10
+    portfolio = (user.get("portfolio_url") or user.get("website") or "").strip()
+    samples = user.get("sample_image_urls") or []
+    if portfolio or len(samples) >= 3: pts += 15
+    if (user.get("experience_level") or "").strip(): pts += 5
+    if len(user.get("goals") or []) >= 1: pts += 5
+    return max(0, min(100, pts))
+
+
 @api.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
     user["plan"] = plan_of(user)
@@ -982,6 +1126,15 @@ async def me(user: dict = Depends(get_current_user)):
     # so analytics / segments can query without re-running the logic.
     user["profile_complete"] = _compute_profile_complete(user)
     user["profile_completed_at"] = user.get("profile_completed_at")
+    # ─── Onboarding v2 (Phase 1, Jun 2025) ────────────────────────────
+    # `basics_complete` gates the post-register profile-basics step.
+    # `directory_eligible` powers the photographer-directory toggle.
+    # `profile_completion_percent` powers the in-app progress card.
+    user["basics_complete"] = _compute_basics_complete(user)
+    dir_status = _compute_directory_eligibility(user)
+    user["directory_eligible"] = dir_status["eligible"]
+    user["missing_for_directory"] = dir_status["missing"]
+    user["profile_completion_percent"] = _compute_profile_completion_percent(user)
     uid = user["user_id"]
     # FIX(membership conversion update): expose `uploads` and
     # `outbound_threads_30d` so the frontend can show tasteful upgrade
@@ -1113,6 +1266,12 @@ async def update_me(body: UserUpdateIn, user: dict = Depends(get_current_user)):
     # off the response without a follow-up GET.
     if updated is not None:
         updated["profile_complete"] = _compute_profile_complete(updated)
+        # Onboarding v2 mirrors (Jun 2025)
+        updated["basics_complete"] = _compute_basics_complete(updated)
+        _dir = _compute_directory_eligibility(updated)
+        updated["directory_eligible"] = _dir["eligible"]
+        updated["missing_for_directory"] = _dir["missing"]
+        updated["profile_completion_percent"] = _compute_profile_completion_percent(updated)
     return updated
 
 

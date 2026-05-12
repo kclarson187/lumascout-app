@@ -12,6 +12,115 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Onboarding v2 Phase 1 — Premium Signup + Profile Basics Foundation (Jun 2025)"
+    implemented: true
+    working: "NA"
+    file: |
+      Backend (additive, no migrations):
+        /app/backend/server.py
+          • Extended RegisterIn with optional first_name, last_name, display_name, home_area, username
+          • Extended UserUpdateIn with first_name, last_name, display_name, home_area, portfolio_url, profile_photo_url, goals[], experience_level, directory_visible, sample_image_urls, basics_complete
+          • Added register() doc fields for the same (defaults preserved)
+          • Added _compute_basics_complete (grandfathers pre-v2 users)
+          • Added _compute_directory_eligibility (eligible + missing[])
+          • Added _compute_profile_completion_percent (0-100, weighted)
+          • Surfaces basics_complete, directory_eligible, missing_for_directory, profile_completion_percent on /auth/me and PATCH /auth/me
+        /app/backend/routes/users.py
+          • NEW GET /api/users/username-available?u=<handle>
+            returns {available:bool, reason: "empty"|"too_short"|"too_long"|"invalid_chars"|"reserved"|"taken"|null}
+
+      Frontend (additive + feature-flagged):
+        /app/frontend/src/constants/flags.ts       (NEW — ONBOARDING_V2_ENABLED rollback flag)
+        /app/frontend/src/utils/profileCompletion.ts (NEW — client mirror of backend computation)
+        /app/frontend/src/components/FormField.tsx   (NEW — premium dark input with default/focused/typing/success/error/disabled states)
+        /app/frontend/src/components/UsernameField.tsx (NEW — debounced live availability with ✓/✗/spinner)
+        /app/frontend/src/components/AppleSoonButton.tsx (NEW — "Continue with Apple — SOON" stub, no SIWA wiring this round)
+        /app/frontend/src/auth.tsx (extended User type with new optional + computed fields)
+        /app/frontend/app/_layout.tsx (gate: basics_complete===false routes to /onboarding/basics; profile_complete gate suppressed when v2 is on)
+        /app/frontend/app/onboarding/index.tsx (welcome slide 1 copy refreshed to "Find better photo spots." + new body)
+        /app/frontend/app/(auth)/register.tsx (REWRITE — adaptive social order iOS/Android, Apple "Coming soon" stub, email path with inline errors + helper text)
+        /app/frontend/app/(auth)/login.tsx (minor edit — Apple "Coming soon" stub for visual parity)
+        /app/frontend/app/onboarding/basics.tsx (NEW — "Set up your public profile" blocking step: first_name + display_name + username + home_area + optional photo, with live username availability and Skip-photo path)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Phase 1 of the LumaScout signup/onboarding v2 overhaul. Scope per
+          user direction (Jun 2025):
+            • Polish welcome + create-account + profile basics
+            • Add foundation for directory eligibility & profile-completion %
+            • Build /api/users/username-available
+            • Apple Sign-In is a "Coming soon" stub (no SIWA wiring)
+            • DO NOT build personalize/location/photographer/activation screens yet
+            • DO NOT force-migrate existing users (grandfather)
+
+          BACKEND
+            • All new fields are optional. Existing user docs without
+              basics_complete are grandfathered via the
+              `"basics_complete" not in user and "first_name" not in user`
+              fallback in _compute_basics_complete → True.
+            • Tested end-to-end:
+              - new register (legacy payload {email,password,name}) → 200,
+                /auth/me returns basics_complete=False, completion=20%,
+                missing=[profile_photo, specialty, portfolio_or_samples, bio]
+              - PATCH /auth/me with first_name + display_name + home_area
+                + basics_complete:true → 200, completion=40%, basics_complete=True
+              - GET /users/username-available works for empty / too short /
+                too long / invalid chars / reserved / available
+              - Existing admin@lumascout.app logs in → basics_complete=True
+                (grandfather), completion=65%, directory_eligible reflects
+                their existing website/bio/specialty
+
+          FRONTEND
+            • ONBOARDING_V2_ENABLED feature flag in src/constants/flags.ts
+              is the single rollback lever (flip to false to revert all
+              flow changes; backend additions are inert without it).
+            • Register: choose mode (Apple stub + Google + Email) → email
+              mode shows FormField with required tag, helper "Use 8+ chars",
+              inline error mapping for "already in use", "invalid email".
+              Post-register routes to /onboarding/basics when v2 is on.
+            • Basics: 3-dot wizard progress + live %. Inputs:
+              First name (required), Display name (required, auto-fills
+              from first), Username (live debounced check, 400ms,
+              ✓/✗/spinner trailing, reason-aware helper), Home area
+              (required, helper "Shown as city/region, never your exact
+              address."). Profile photo is optional with explicit
+              "Skip photo" CTA. On save, PATCH /auth/me persists basics +
+              basics_complete:true and replaces to /(tabs).
+            • Apple "Coming soon" stub: tap → Toast (Android) /
+              Alert (iOS+web), zero crash risk. Added to BOTH login and
+              register for visual parity.
+            • Welcome screen 1 copy refreshed to spec: "Find better photo
+              spots." / "LumaScout helps you scout locations, save ideas,
+              and connect with local photographers."
+
+          VERIFIED VISUALLY (web, 390x844):
+            • Welcome / Register choose mode / Register email form
+            • Login with Apple stub
+            • Basics screen with all four required fields + Skip photo
+
+          ROLLBACK PATH
+            1. Set ONBOARDING_V2_ENABLED = false in flags.ts → instantly
+               reverts route gate + register routing back to /(tabs).
+               Backend additions are inert (just optional fields).
+            2. Or git revert the commit — no app.json changes, no EAS
+               rebuild needed, no package.json additions.
+
+          NOT BUILT IN THIS ROUND (Phase 2 backlog):
+            • /onboarding/personalize  (specialties/goals/experience chips)
+            • /onboarding/location     (location pre-permission)
+            • /onboarding/photographer (directory profile screen)
+            • /onboarding/activation   (suggestion cards to Network/Explore)
+            • Real Apple SIWA wiring (app.json + Apple Portal + backend verify)
+            • Portfolio URL HEAD verification
+            • Progressive nudges tracker (after-N-saves, after-3-views, etc.)
+            • Soft "Complete your profile" card on Profile tab
+
+
+
   - task: "ADMIN UI Cinematic Overhaul — Simplified Command Center (Jun 2025)"
     implemented: true
     working: "NA"

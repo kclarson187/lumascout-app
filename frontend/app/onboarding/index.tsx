@@ -24,8 +24,10 @@ const { width: W } = Dimensions.get('window');
 
 const slides = [
   {
-    title: 'Welcome to\nLumaScout',
-    body: 'Discover better light and better locations. LumaScout is your photography scouting companion — find, save, plan, and share places worth shooting.',
+    // Phase 1 onboarding v2 (Jun 2025) — opener refreshed to lead with
+    // the two-part promise (better spots + meeting photographers).
+    title: 'Find better\nphoto spots.',
+    body: 'LumaScout helps you scout locations, save ideas, and connect with local photographers.',
     image: 'https://images.unsplash.com/photo-1672285312540-f1786a51a097?w=1200&q=85',
     icon: <Camera size={28} color={colors.primary} />,
   },

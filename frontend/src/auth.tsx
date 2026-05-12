@@ -50,6 +50,25 @@ export type User = {
   // Profile-completion flag (computed server-side; read-only here).
   profile_complete?: boolean;
   profile_completed_at?: string | null;
+  // ─── Onboarding v2 (Phase 1, Jun 2025) ──────────────────────────
+  // All optional on the User type. Older clients that never read these
+  // keys keep working. New fields are populated by the new /onboarding/
+  // basics flow and the existing /auth/me endpoint.
+  first_name?: string | null;
+  last_name?: string | null;
+  display_name?: string | null;
+  home_area?: string | null;
+  portfolio_url?: string | null;
+  profile_photo_url?: string | null;
+  goals?: string[];
+  experience_level?: string | null;
+  directory_visible?: boolean;
+  sample_image_urls?: string[];
+  // Computed server-side, read-only:
+  basics_complete?: boolean;
+  directory_eligible?: boolean;
+  missing_for_directory?: string[];
+  profile_completion_percent?: number;
 };
 
 type AuthState = {

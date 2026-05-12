@@ -16,6 +16,7 @@ import {
 } from '@expo-google-fonts/manrope';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AuthProvider, useAuth } from '../src/auth';
+import { ONBOARDING_V2_ENABLED } from '../src/constants/flags';
 import { colors } from '../src/theme';
 import { onPaywallNeeded } from '../src/api';
 import UpgradeGateModal, { GateReason } from '../src/components/UpgradeGateModal';
@@ -114,6 +115,10 @@ function Gate() {
     const inAuthCb = seg0 === 'auth-callback';
     // May 2026 — profile-setup route lives at /onboarding/profile-setup
     const onProfileSetup = inOnboarding && seg1 === 'profile-setup';
+    // Jun 2025 — onboarding v2 basics route. Blocking step shown to new
+    // signups before /(tabs). Existing users are grandfathered server-
+    // side via `basics_complete: true` and therefore never see this.
+    const onBasics = inOnboarding && seg1 === 'basics';
 
     if (!user && !inAuth && !inOnboarding && !inAuthCb) {
       router.replace('/onboarding');
@@ -121,6 +126,21 @@ function Gate() {
     }
 
     if (user) {
+      // ─── Onboarding v2 basics gate (Phase 1, Jun 2025) ───────────
+      // Blocks new email-path signups on /onboarding/basics until they
+      // fill in first_name + display_name + username + home_area.
+      // Existing users are grandfathered (server returns true).
+      // Strict `=== false` check so undefined boots don't redirect.
+      if (
+        ONBOARDING_V2_ENABLED
+        && user.basics_complete === false
+        && !onBasics
+        && !inAuthCb
+      ) {
+        router.replace('/onboarding/basics' as any);
+        return;
+      }
+
       // ─── Profile-completion gate (PRD May 2026) ───────────────────
       // Redirect logged-in users whose required photographer fields
       // are missing to the profile-setup screen — UNLESS they're
@@ -130,7 +150,14 @@ function Gate() {
       // re-fetched yet it'll be undefined — we treat undefined as
       // "no opinion yet, don't redirect" so the user isn't yanked
       // around during boot.
-      const needsSetup = user.profile_complete === false;
+      //
+      // Jun 2025: when v2 onboarding is enabled, the photographer
+      // profile is OPTIONAL (per the new spec — required only for
+      // directory visibility). We suppress this hard gate entirely
+      // and rely on a soft nudge in the Profile tab (Phase 2). Flip
+      // ONBOARDING_V2_ENABLED back to false to restore the prior
+      // mandatory gate.
+      const needsSetup = !ONBOARDING_V2_ENABLED && user.profile_complete === false;
       if (needsSetup && !onProfileSetup && !inAuthCb) {
         router.replace('/onboarding/profile-setup' as any);
         return;
@@ -139,7 +166,11 @@ function Gate() {
       // bounce to the app. Profile-setup is intentionally excluded
       // from this rule so an admin / debugging visit to the screen
       // doesn't slingshot back instantly.
-      if ((inAuth || (inOnboarding && !onProfileSetup) || !seg0) && !needsSetup) {
+      if (
+        (inAuth || (inOnboarding && !onProfileSetup && !onBasics) || !seg0)
+        && !needsSetup
+        && user.basics_complete !== false
+      ) {
         router.replace('/(tabs)');
       }
     }

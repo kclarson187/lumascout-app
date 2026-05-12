@@ -37,9 +37,44 @@ from server import (
     public_spot_view,
     PLAN_LIMITS, PLAN_PRICING,
     DMReportIn,
+    RESERVED_USERNAMES,
 )
 
 router = APIRouter(prefix="/api", tags=["users"])
+
+
+# ─── Username availability (Phase 1 onboarding v2, Jun 2025) ──────────────
+import re as _re
+_USERNAME_RE = _re.compile(r"^[a-z0-9_]{3,24}$")
+
+
+@router.get("/users/username-available")
+async def username_available(u: str = Query(..., min_length=1, max_length=64)):
+    """Live-check for the signup/profile-basics username field.
+    Returns {available: bool, reason: str|null}.
+    Never raises 4xx for client validation — always returns a structured
+    payload so the field can show the right helper text.
+    """
+    raw = (u or "").strip().lstrip("@")
+    norm = raw.lower()
+    if not norm:
+        return {"available": False, "reason": "empty"}
+    if len(norm) < 3:
+        return {"available": False, "reason": "too_short"}
+    if len(norm) > 24:
+        return {"available": False, "reason": "too_long"}
+    if not _USERNAME_RE.match(norm):
+        return {"available": False, "reason": "invalid_chars"}
+    if norm in RESERVED_USERNAMES:
+        return {"available": False, "reason": "reserved"}
+    existing = await db.users.find_one(
+        {"username": {"$regex": f"^{norm}$", "$options": "i"}},
+        {"_id": 1},
+    )
+    if existing:
+        return {"available": False, "reason": "taken"}
+    return {"available": True, "reason": None}
+
 
 
 # --- UpgradeIn (server.py:754-756) ---
