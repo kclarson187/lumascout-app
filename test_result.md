@@ -12,6 +12,73 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "DM Composer Keyboard Fix — iOS regression (Jun 2025 v7) + Phase 1 onboarding QA"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app/inbox/[id].tsx — REWRAPPED screen tree with KeyboardAvoidingView
+        • Imported KeyboardAvoidingView from react-native
+        • Wrapped <SafeAreaView> inside <KeyboardAvoidingView style={{flex:1}}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            keyboardVerticalOffset={0}>
+        • Kept Android root-view `paddingBottom: kbHeight` (proven path
+          for our edge-to-edge + softwareKeyboardLayoutMode="resize" setup).
+        • Composer + FlatList layout otherwise unchanged.
+      /app/frontend/app/onboarding/basics.tsx — single copy polish:
+        helper "Used in private workflows (payouts, support). Never shown publicly."
+        → "Used for payouts and support. Not shown on your profile." (less technical)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          ROOT CAUSE OF DM KEYBOARD BUG:
+            Previous patch iterations (v3→v6) repeatedly STRIPPED
+            KeyboardAvoidingView from the thread screen while chasing
+            Android edge-to-edge edge-cases. v6 ended in a state with no
+            KAV at all and only an Android-side `paddingBottom: kbHeight`
+            on the root view. On iOS that left the composer plainly
+            beneath the keyboard whenever the user tapped the "Type a
+            message" input.
+
+          FIX:
+            Re-introduced KeyboardAvoidingView at the wrapper level with
+            a Platform-split behavior:
+              • iOS:   behavior="padding" (the documented React-Native
+                       pattern; keyboardVerticalOffset=0 because KAV
+                       starts at top-of-screen above the SafeAreaView).
+              • Android: behavior=undefined → KAV is inert. The existing
+                       manual `paddingBottom: kbHeight` on the root view
+                       continues to lift the composer above the keyboard.
+            Single layout tree, no JSX-level platform branching.
+
+          NOT CHANGED:
+            • DM API contracts
+            • DM permissions / paywall gating
+            • Read-receipt rendering or ReadReceipt component
+            • Inbox screen (index.tsx) — confirmed untouched
+            • messageTime utils, UserBadge, ScreenErrorBoundary
+
+          PHASE 1 ONBOARDING REGRESSION CHECK (still in scope):
+            Verify on web preview (390x844, dark theme):
+              1. /onboarding (welcome carousel) — "Find better photo
+                 spots." headline + body intact.
+              2. /(auth)/register — choose mode (Google + Apple-SOON
+                 stub + Email). Email mode → form fields + helper text.
+              3. /(auth)/login — same Apple-SOON stub for parity.
+              4. /onboarding/basics — 4 required fields + skip photo.
+                 Username live-check ✓/✗.
+              5. Backend smoke: /users/username-available returns
+                 correct payloads for admin/short/long/space/new.
+              6. Existing admin login → straight to /(tabs) (no
+                 onboarding redirect).
+              7. /inbox — list of threads loads. Tapping a thread
+                 opens /inbox/[id], composer visible after keyboard
+                 opens on iOS Safari sim viewport.
+
+
   - task: "Onboarding v2 Phase 1 — Premium Signup + Profile Basics Foundation (Jun 2025)"
     implemented: true
     working: "NA"

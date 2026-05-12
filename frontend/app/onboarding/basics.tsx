@@ -187,7 +187,7 @@ export default function OnboardingBasics() {
               placeholder="Sophie"
               autoCapitalize="words"
               required
-              helper="Used in private workflows (payouts, support). Never shown publicly."
+              helper="Used for payouts and support. Not shown on your profile."
               error={firstErr}
               testID="basics-first-name"
             />

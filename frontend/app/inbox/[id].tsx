@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, TextInput, ActivityIndicator, Alert, Platform, Keyboard } from 'react-native';
+import { View, Text, StyleSheet, FlatList, Pressable, TextInput, ActivityIndicator, Alert, Platform, Keyboard, KeyboardAvoidingView } from 'react-native';
 import SafeImage from '../../src/components/SafeImage';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -123,25 +123,48 @@ function ThreadScreenImpl() {
   };
 
   return (
-    // ANDROID DM FIX (June 2025 v6 — KeyboardAvoidingView completely
-    // removed):
-    //   KeyboardAvoidingView is unreliable on Android in this project
-    //   (edgeToEdgeEnabled=true + adjustResize together don't shrink
-    //   the activity properly under Fabric or Paper). We replaced it
-    //   with a plain <View> and apply manual `paddingBottom: kbHeight`
-    //   computed from Keyboard.addListener. The FlatList (flex:1)
-    //   shrinks by exactly the keyboard height and the composer
-    //   docks flush above the keyboard.
+    // ───────────────────────────────────────────────────────────────────
+    //  IOS DM KEYBOARD FIX (Jun 2025 v7 — composer was hidden by keyboard)
     //
-    //   iOS: paddingBottom stays 0 because we don't apply it on iOS;
-    //   the SafeAreaView edges handle iOS home-indicator on its own
-    //   and softwareKeyboard there is platform-handled correctly.
+    //  Root cause: previous patches kept stripping KeyboardAvoidingView
+    //  while chasing Android edge-to-edge edge-cases, which left iOS
+    //  with NO keyboard avoidance at all. On iOS the composer sat at
+    //  the bottom of the SafeAreaView and the keyboard simply rose over
+    //  it, completely covering the "Type a message" input and the Send
+    //  button (the bug reported by users).
+    //
+    //  Fix strategy — Platform-split, the simplest pattern that works
+    //  for each OS:
+    //
+    //    iOS:   wrap the screen in <KeyboardAvoidingView behavior="padding">.
+    //           KAV adds bottom padding equal to the keyboard height so
+    //           the composer (last item in the flex column) ends up
+    //           flush above the keyboard. `keyboardVerticalOffset={0}`
+    //           because the KAV starts at the very top of the screen
+    //           (above SafeAreaView's top inset, which is what RN
+    //           expects — KAV measures itself, not its children).
+    //
+    //    Android: KAV with `behavior={undefined}` is a no-op, so we
+    //           rely on the manual `paddingBottom: kbHeight` on the
+    //           root that was already proven to work with our
+    //           edge-to-edge + softwareKeyboardLayoutMode="resize"
+    //           setup (see history block below the import).
+    //
+    //  Both platforms therefore share one layout tree — no branching
+    //  in the JSX — and the composer always remains visible above
+    //  the keyboard.
+    // ───────────────────────────────────────────────────────────────────
     <View
       style={[
         s.root,
         { paddingBottom: Platform.OS === 'android' ? kbHeight : 0 },
       ]}
     >
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+      >
       <SafeAreaView style={{ flex: 1 }} edges={['top', 'left', 'right']}>
       <View style={s.header}>
         <Pressable onPress={() => router.back()} style={s.backBtn} testID="thread-back">
@@ -319,6 +342,7 @@ function ThreadScreenImpl() {
         )}
       </View>
       </SafeAreaView>
+      </KeyboardAvoidingView>
     </View>
   );
 }
