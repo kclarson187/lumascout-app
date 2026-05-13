@@ -122,7 +122,10 @@ export default function OnboardingBasics() {
       }
       await api.patch('/auth/me', payload);
       await refresh();
-      router.replace('/(tabs)');
+      // Phase 2.1 — chain into the personalize step instead of dropping
+      // straight into /(tabs). Existing users (already complete) never
+      // see this screen so they're not impacted.
+      router.replace('/onboarding/personalize' as any);
     } catch (e: any) {
       const raw = String(formatApiError(e) || '');
       if (/username/i.test(raw)) {

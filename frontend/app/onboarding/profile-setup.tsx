@@ -1,6 +1,22 @@
 /**
  * onboarding/profile-setup.tsx
  * ─────────────────────────────────────────────────────────────────
+ * ⚠️  PHASE 2.1 (Jun 2025) — LEGACY / ROLLBACK ONLY
+ *
+ * This file is the pre-v2 photographer-profile setup. It is no longer
+ * reached by the active route gate when ONBOARDING_V2_ENABLED=true
+ * (see src/constants/flags.ts). The new onboarding wizard uses:
+ *
+ *   /onboarding/basics        (Phase 1)
+ *   /onboarding/personalize   (Phase 2.1)
+ *   /onboarding/location      (Phase 2.1)
+ *   /onboarding/photographer  (Phase 2.1)    ← supersedes this file
+ *   /onboarding/activation    (Phase 2.1)
+ *
+ * Kept on disk so flipping ONBOARDING_V2_ENABLED back to false
+ * instantly restores the legacy flow with zero code changes.
+ * Do not edit unless you are reverting the v2 onboarding rollout.
+ * ─────────────────────────────────────────────────────────────────
  * May 2026 — Member profile completion flow.
  *
  * Required (gates `profile_complete`):

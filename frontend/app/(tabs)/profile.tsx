@@ -58,6 +58,7 @@ import SpotCard from '../../src/components/SpotCard';
 import VerifiedBadge from '../../src/components/VerifiedBadge';
 import UserBadge from '../../src/components/UserBadge';
 import PremiumProfileExtras from '../../src/components/PremiumProfileExtras';
+import { ProfileCompletionCard } from '../../src/components/ProfileCompletionCard';
 import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
 
 
@@ -384,6 +385,14 @@ function ProfileImpl() {
               <Settings size={16} color={colors.text} />
             </TouchableOpacity>
           </View>
+
+          {/* Phase 2.1 (Jun 2025) — soft "Complete your profile" card.
+              Self-hides when profile_completion_percent === 100 OR the
+              missing-for-directory list is empty. */}
+          <ProfileCompletionCard
+            percent={user?.profile_completion_percent}
+            missing={user?.missing_for_directory as any}
+          />
 
           {/* Banner */}
           <TouchableOpacity

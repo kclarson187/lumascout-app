@@ -20,7 +20,6 @@ import { Button } from '../../src/components/Button';
 import { Input } from '../../src/components/ui';
 import { formatApiError } from '../../src/api';
 import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
-import { AppleSoonButton } from '../../src/components/AppleSoonButton';
 
 export default function Login() {
   const { login, googleExchange } = useAuth();
@@ -119,9 +118,8 @@ export default function Login() {
               <View style={styles.divLine} />
             </View>
             <Button title="Continue with Google" variant="secondary" onPress={onGoogle} testID="login-google" />
-            {/* Phase 1 onboarding v2 — Apple stub for visual parity. SIWA is
-                wired in a follow-up; tapping shows a friendly toast/alert. */}
-            <AppleSoonButton testID="login-apple-soon" />
+            {/* Phase 2.1 (Jun 2025): Apple Sign-In stub removed — real
+                SIWA ships in Phase 2.3 with a fresh EAS build. */}
           </View>
 
           <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: space.xxxl }}>

@@ -29,9 +29,8 @@ import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 import { Button } from '../../src/components/Button';
 import { FormField } from '../../src/components/FormField';
-import { AppleSoonButton } from '../../src/components/AppleSoonButton';
-import { formatApiError } from '../../src/api';
 import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
+import { formatApiError } from '../../src/api';
 import { ONBOARDING_V2_ENABLED } from '../../src/constants/flags';
 
 // Minimal email shape check \u2014 server is the source of truth, this is
@@ -54,10 +53,11 @@ export default function Register() {
   const [loading, setLoading] = useState(false);
   const kbHeight = useKeyboardHeight();
 
-  // Order of social-auth buttons \u2014 per-platform per spec.
-  const socialOrder = useMemo(() => {
-    return Platform.OS === 'ios' ? ['apple', 'google'] as const : ['google', 'apple'] as const;
-  }, []);
+  // Phase 2.1 (Jun 2025): Apple Sign-In is hidden everywhere until
+  // real SIWA ships in Phase 2.3. Leaving a non-functional Apple
+  // button on iOS is an App Store review risk. The AppleSoonButton
+  // component is kept on disk for resurrection later.
+  const socialOrder = useMemo(() => ['google'] as const, []);
 
   const validateEmail = (v: string): string | null => {
     if (!v.trim()) return 'Enter a valid email address.';

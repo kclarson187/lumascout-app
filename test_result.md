@@ -12,6 +12,88 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Onboarding v2 Phase 2.1 — Personalize · Location · Photographer · Activation + Profile soft card (Jun 2025)"
+    implemented: true
+    working: "NA"
+    file: |
+      NEW SCREENS:
+        /app/frontend/app/onboarding/personalize.tsx      — chips (specialties + goals) + experience radio
+        /app/frontend/app/onboarding/location.tsx          — expo-location foreground primer
+        /app/frontend/app/onboarding/photographer.tsx      — directory profile (photo + bio + specialties + portfolio/samples + toggles + radius + social)
+        /app/frontend/app/onboarding/activation.tsx        — 3 deep-link suggestion cards + Start exploring
+      NEW COMPONENTS / CONSTANTS:
+        /app/frontend/src/components/ProfileCompletionCard.tsx — soft re-engagement card on Profile tab
+        /app/frontend/src/constants/onboardingOptions.ts        — SPECIALTIES (12) · GOALS (6) · EXPERIENCE_LEVELS (4)
+      EDITS:
+        /app/frontend/app/onboarding/basics.tsx       — chains to /onboarding/personalize instead of /(tabs)
+        /app/frontend/app/(tabs)/profile.tsx          — renders <ProfileCompletionCard /> below kicker header
+        /app/frontend/app/(auth)/register.tsx         — socialOrder=['google'] only (Apple removed everywhere)
+        /app/frontend/app/(auth)/login.tsx            — AppleSoonButton removed
+        /app/frontend/app/onboarding/profile-setup.tsx — added LEGACY/ROLLBACK header banner (no behavior change)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          PHASE 2.1 SCOPE (per user direction)
+            • Build screens 4 + 5 + 6 + 7 (personalize, location, photographer, activation)
+            • Add Profile-tab "Complete your profile" soft card
+            • Hide Apple button on both platforms until real SIWA ships in 2.3
+            • Keep legacy /onboarding/profile-setup.tsx on disk for v2 rollback
+            • DO NOT add: portfolio URL verify, nudges tracker, real progress tracking, Apple SIWA, forced migration
+
+          FLOW (v2 ON)
+            register → basics → personalize → location → photographer → activation → /(tabs)
+            Any "Skip" on personalize/photographer routes directly to /(tabs).
+            "Not now" on location proceeds to photographer (informational only).
+            "Start exploring" on activation → /(tabs).
+
+          GATING
+            No new blocking gate added. The only blocking step remains
+            basics_complete === false (Phase 1). All four new screens are
+            voluntarily entered by walking forward, exited by Skip. The
+            ProfileCompletionCard on Profile tab is the long-tail
+            re-engagement surface; tap → /onboarding/photographer.
+
+          BACKEND
+            ZERO new endpoints. All save paths use existing PATCH /auth/me.
+            All persisted fields were already added in Phase 1 schema
+            (goals[], experience_level, portfolio_url, sample_image_urls,
+            booking_available, available_for_second_shooter,
+            mentorship_available, service_radius_miles, instagram,
+            tiktok_url, facebook_url, directory_visible).
+
+          APPLE BUTTON
+            Removed from BOTH login and register on both platforms.
+            AppleSoonButton component kept at
+            src/components/AppleSoonButton.tsx for resurrection in 2.3.
+            ONBOARDING_V2_ENABLED flag in src/constants/flags.ts unchanged.
+
+          VERIFIED VISUALLY (web preview 390×844)
+            • personalize.tsx renders all 3 sections + progress 2/4
+            • location.tsx renders icon ring + bullets + 2 CTAs + progress 3/4
+            • photographer.tsx renders photo + bio + spec chips + portfolio
+              + 3 sample slots + 3 toggles + radius + social + progress 4/4
+            • activation.tsx renders 3 colored cards + Start exploring + progress 4/4 done
+
+          ROLLBACK
+            1. Flip ONBOARDING_V2_ENABLED = false in flags.ts → app reverts
+               to legacy /onboarding/profile-setup flow instantly.
+            2. New screens are additive — deleting them is safe; layout
+               gate only looks for basics_complete + profile_complete.
+            3. No app.json change, no package adds, no EAS rebuild.
+
+          QA CHECKLIST FOR USER
+            • Register a new user → basics → personalize → location → photographer → activation → tabs
+            • Try Skip on each screen → confirm /(tabs)
+            • Open Profile tab as a user with completion < 100 → soft card appears
+            • Open Profile tab as the admin (65% complete in our smoke test) → card appears with the missing checklist
+            • Tap card → /onboarding/photographer opens with existing values pre-filled
+            • Login as existing user → no forced onboarding redirect (grandfather preserved)
+
+
   - task: "Network → Discover message button 404 fix (Jun 2025)"
     implemented: true
     working: "NA"
