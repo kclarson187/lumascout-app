@@ -12,6 +12,69 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "P0 — Android chat keyboard fix (v8 KeyboardSafeDocked) + Production backend URL"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/frontend/app/inbox/[id].tsx
+        • Removed raw <KeyboardAvoidingView> with behavior={ios?'padding':undefined}
+          (the `undefined` made Android a no-op).
+        • Removed the manual `paddingBottom: Platform.OS === 'android' ? kbHeight : 0`
+          workaround on the root <View>.
+        • Replaced both with the existing <KeyboardSafeDocked> helper
+          from src/components/KeyboardSafe.tsx, which already uses the
+          correct cross-platform pattern (iOS=padding, Android=height).
+        • Kept `kbShown` Keyboard listener — the composer itself uses it
+          to flip its own paddingBottom between insets.bottom and 10pt.
+      /app/frontend/eas.json
+        • production.env.EXPO_PUBLIC_BACKEND_URL:
+            "https://photo-finder-60.preview.emergentagent.com"  (was)
+            "https://photo-finder-60.emergent.host"               (now)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          P0-1 Android chat keyboard
+            v7 (previous round) re-added KAV with `behavior={ios?'padding':undefined}`
+            to fix iOS, but on Android `undefined` is a no-op, so the composer
+            was either covered by the keyboard or left extra space depending on
+            how the manual `paddingBottom: kbHeight` on the root view interacted
+            with `softwareKeyboardLayoutMode: resize` + `edgeToEdgeEnabled: true`.
+            Preferred fix per spec was applied: use the existing
+            <KeyboardSafeDocked> component which encapsulates the correct
+            iOS=padding / Android=height pattern. Removed the conflicting manual
+            paddingBottom. iOS behavior preserved (still padding-based).
+            Safe-area handling unchanged (SafeAreaView edges still ['top','left','right']).
+            No backend / API / message-send / read-receipt / attachment logic touched.
+
+          P0-2 Production backend URL
+            eas.json's production build was pointing at the preview-emergentagent.com
+            subdomain, which would cause production binaries to talk to the wrong
+            backend. Pointed at the live host:
+              https://photo-finder-60.emergent.host
+            EXPO_PUBLIC_WEB_BASE_URL was already https://lumascout.app — unchanged.
+            cli, build.development, build.preview, submit.production all unchanged.
+
+          NOT CHANGED
+            • DM API contracts, send/receive/threading/attachments/read receipts
+            • iOS keyboard behavior (still padding-based via the same helper)
+            • SafeAreaView edges and inset handling
+            • Backend code, schemas, env files
+
+          QA SCOPE (user to validate on a real Android device)
+            • Open thread → tap composer → keyboard opens, composer visible
+            • Type multi-line → composer expands, last message stays in view
+            • Send message → still works
+            • Dismiss keyboard → no excessive bottom gap
+            • Long thread → last message not hidden behind composer
+            • Switch between threads → no layout regression
+            • Gesture nav + 3-button nav → both behave normally
+            • Production EAS build → API calls hit photo-finder-60.emergent.host
+
+
   - task: "Onboarding v2 Phase 2.1 — Personalize · Location · Photographer · Activation + Profile soft card (Jun 2025)"
     implemented: true
     working: "NA"

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, TextInput, ActivityIndicator, Alert, Platform, Keyboard, KeyboardAvoidingView } from 'react-native';
+import { View, Text, StyleSheet, FlatList, Pressable, TextInput, ActivityIndicator, Alert, Platform, Keyboard } from 'react-native';
 import SafeImage from '../../src/components/SafeImage';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -10,6 +10,7 @@ import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 import ReadReceipt from '../../src/components/ReadReceipt';
 import UserBadge from '../../src/components/UserBadge';
+import { KeyboardSafeDocked } from '../../src/components/KeyboardSafe';
 import { formatMessageTime, isPaidPlan, isElitePlan } from '../../src/utils/messageTime';
 
 const QUICK_STARTERS = [
@@ -159,47 +160,27 @@ function ThreadScreenImpl() {
 
   return (
     // ───────────────────────────────────────────────────────────────────
-    //  IOS DM KEYBOARD FIX (Jun 2025 v7 — composer was hidden by keyboard)
+    //  DM KEYBOARD AVOIDANCE (Jun 2025 v8) — switched to the existing
+    //  <KeyboardSafeDocked> helper. v7 used a raw KeyboardAvoidingView
+    //  with `behavior={Platform.OS === 'ios' ? 'padding' : undefined}`
+    //  which is a NO-OP on Android, and relied on a manual
+    //  `paddingBottom: kbHeight` workaround that fought the OS resize
+    //  on edge-to-edge devices and either hid the composer or left a
+    //  large empty band after dismissal.
     //
-    //  Root cause: previous patches kept stripping KeyboardAvoidingView
-    //  while chasing Android edge-to-edge edge-cases, which left iOS
-    //  with NO keyboard avoidance at all. On iOS the composer sat at
-    //  the bottom of the SafeAreaView and the keyboard simply rose over
-    //  it, completely covering the "Type a message" input and the Send
-    //  button (the bug reported by users).
+    //  KeyboardSafeDocked encapsulates the correct cross-platform
+    //  pattern (iOS=padding, Android=height) and is used elsewhere in
+    //  the project for chat-style bottom-docked inputs. Switching to
+    //  it removes the manual paddingBottom and the behavior=undefined
+    //  conflict in one move.
     //
-    //  Fix strategy — Platform-split, the simplest pattern that works
-    //  for each OS:
-    //
-    //    iOS:   wrap the screen in <KeyboardAvoidingView behavior="padding">.
-    //           KAV adds bottom padding equal to the keyboard height so
-    //           the composer (last item in the flex column) ends up
-    //           flush above the keyboard. `keyboardVerticalOffset={0}`
-    //           because the KAV starts at the very top of the screen
-    //           (above SafeAreaView's top inset, which is what RN
-    //           expects — KAV measures itself, not its children).
-    //
-    //    Android: KAV with `behavior={undefined}` is a no-op, so we
-    //           rely on the manual `paddingBottom: kbHeight` on the
-    //           root that was already proven to work with our
-    //           edge-to-edge + softwareKeyboardLayoutMode="resize"
-    //           setup (see history block below the import).
-    //
-    //  Both platforms therefore share one layout tree — no branching
-    //  in the JSX — and the composer always remains visible above
-    //  the keyboard.
+    //  The `kbShown` listener is kept because the composer itself uses
+    //  it to flip its own paddingBottom between insets.bottom (keyboard
+    //  down) and a tighter 10pt (keyboard up). `kbHeight` state is now
+    //  unused for layout but kept for diagnostics.
     // ───────────────────────────────────────────────────────────────────
-    <View
-      style={[
-        s.root,
-        { paddingBottom: Platform.OS === 'android' ? kbHeight : 0 },
-      ]}
-    >
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={0}
-      >
+    <View style={s.root}>
+      <KeyboardSafeDocked>
       <SafeAreaView style={{ flex: 1 }} edges={['top', 'left', 'right']}>
       <View style={s.header}>
         <Pressable onPress={() => router.back()} style={s.backBtn} testID="thread-back">
@@ -377,7 +358,7 @@ function ThreadScreenImpl() {
         )}
       </View>
       </SafeAreaView>
-      </KeyboardAvoidingView>
+      </KeyboardSafeDocked>
     </View>
   );
 }

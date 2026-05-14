@@ -16,7 +16,7 @@
     },
     "production": {
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://photo-finder-60.preview.emergentagent.com",
+        "EXPO_PUBLIC_BACKEND_URL": "https://photo-finder-60.emergent.host",
         "EXPO_PUBLIC_WEB_BASE_URL": "https://lumascout.app"
       },
       "ios": {
