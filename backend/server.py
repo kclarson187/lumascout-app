@@ -5681,13 +5681,23 @@ async def _generate_shot_list(spot: dict) -> List[str]:
 # ============================================================================
 # STRIPE BILLING — Real subscription flow (Checkout + Customer Portal + Webhooks)
 # ----------------------------------------------------------------------------
-# Uses the official `stripe` Python SDK with STRIPE_API_KEY from .env. Products
+# Uses the official `stripe` Python SDK with STRIPE_SECRET_KEY from .env.
+# (Renamed from STRIPE_API_KEY → STRIPE_SECRET_KEY in Jun-2025 live-mode
+# cutover per ops policy. Restricted live keys (rk_live_…) are accepted.)
+# Products and Prices are upserted on startup keyed on lookup_key so
+# price IDs are stable across deploys without hardcoded IDs.
 # and Prices are upserted on startup keyed on lookup_key so price IDs are stable
 # across deploys without hardcoding values.
 # ============================================================================
 import stripe as _stripe  # type: ignore
 
-_STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "").strip()
+_STRIPE_API_KEY = os.environ.get("STRIPE_SECRET_KEY", "").strip()
+# Backwards-compat: accept the legacy STRIPE_API_KEY env name if it's
+# the only one set (e.g. during a deploy where STRIPE_SECRET_KEY hasn't
+# rolled to every pod yet). Once the rename is fully deployed this
+# fallback can be deleted.
+if not _STRIPE_API_KEY:
+    _STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "").strip()
 _STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
 _stripe.api_key = _STRIPE_API_KEY or None
 
@@ -5710,7 +5720,7 @@ async def bootstrap_stripe_products():
     Prices for LumaScout: Pro $9.99/mo · Elite $19.99/mo.
     """
     if not _stripe_ready():
-        print("[stripe] STRIPE_API_KEY not set — billing routes are disabled.")
+        print("[stripe] STRIPE_SECRET_KEY not set — billing routes are disabled.")
         return
     plan_catalog = [
         {"key": "pro",   "name": "LumaScout Pro",   "amount": 999,  "lookup": "pro_monthly"},
