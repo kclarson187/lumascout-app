@@ -867,6 +867,203 @@ async def admin_set_spot_description(
     return {"ok": True, "description": new_value, "changed": True}
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# admin_set_spot_info — unified narrative/metadata editor (Jun 2025).
+#
+# Why this exists (in addition to the dedicated /description and /cover
+# endpoints): the admin "Edit Location" screen lets a single tap save
+# title + description + every narrative metadata field in one shot. A
+# unified endpoint avoids a sequence of partial PATCHes that could half-
+# succeed (e.g. title saved but bio failed → orphaned title edit in the
+# audit log with no matching description change).
+#
+# Safety properties — these are deliberate, please keep them:
+#   1.  EVERY field is Optional. Only fields the client actually sends
+#       are touched. Leaving a field out is a "do not change" signal,
+#       not a "set to null" signal. Pydantic's exclude_unset handles
+#       this for us.
+#   2.  Images, gallery order, coords, owner, status, slug, save count,
+#       analytics — none of these can be edited through this endpoint.
+#       That's enforced by the AdminSpotInfoPatch shape itself; even if
+#       a malicious client posts extra fields, Pydantic drops them.
+#   3.  Each changed field gets its own audit_log entry so the activity
+#       log shows "spot.title.update" / "spot.parking_notes.update"
+#       etc. — same granular pattern as /description.
+#   4.  Unchanged fields are NOT written. Idempotent saves don't
+#       pollute the audit trail.
+#   5.  Five new narrative fields are added to the spot schema:
+#         short_description, access_notes, safety_notes,
+#         crowd_notes, creator_tips
+#       They are nullable strings with no migration needed — existing
+#       spot docs that lack these keys default to None on read.
+# ──────────────────────────────────────────────────────────────────────────
+
+_VALID_BEST_TIME = {
+    "sunrise", "morning", "midday", "afternoon", "sunset",
+    "golden_hour", "blue_hour", "evening", "night",
+}
+
+
+class AdminSpotInfoPatch(BaseModel):
+    """All fields optional — only what's present is written.
+
+    Length caps mirror create-spot so an edit can't bypass the original
+    submission rules.
+    """
+    title:             Optional[str]  = None    # 3-120 chars
+    description:       Optional[str]  = None    # 0-4000 chars (existing limit)
+    short_description: Optional[str]  = None    # 0-280  chars (one-liner)
+    best_time_of_day:  Optional[str]  = None    # enum, see _VALID_BEST_TIME
+    parking_notes:     Optional[str]  = None    # 0-800
+    access_notes:      Optional[str]  = None    # 0-800
+    safety_notes:      Optional[str]  = None    # 0-800
+    crowd_notes:       Optional[str]  = None    # 0-800
+    creator_tips:      Optional[str]  = None    # 0-1500
+    permit_required:   Optional[bool] = None
+    permit_notes:      Optional[str]  = None    # 0-800
+    crowd_level:       Optional[int]  = None    # 1-5
+    safety_rating:     Optional[int]  = None    # 1-5
+
+
+def _norm_text(raw: Optional[str], *, max_len: int) -> Optional[str]:
+    """Trim, normalize line endings, cap to `max_len`. Empty → None so
+    the read path's "no value yet" branch fires cleanly.
+    """
+    if raw is None:
+        return None
+    cleaned = str(raw).replace("\r\n", "\n").replace("\r", "\n").strip()
+    while "\n\n\n" in cleaned:
+        cleaned = cleaned.replace("\n\n\n", "\n\n")
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len].rstrip()
+    return cleaned or None
+
+
+@router.patch("/admin/spots/{spot_id}/info")
+async def admin_set_spot_info(
+    spot_id: str,
+    body: AdminSpotInfoPatch,
+    user: dict = Depends(require_role("admin")),
+):
+    """Admin / Super-Admin unified spot info edit.
+
+    Accepted fields: title, description, short_description,
+    best_time_of_day, parking_notes, access_notes, safety_notes,
+    crowd_notes, creator_tips, permit_required, permit_notes,
+    crowd_level, safety_rating.
+
+    NOT accepted (use the dedicated endpoints): cover image, gallery
+    reorder, owner reassignment, status changes, coordinates.
+
+    Response shape:
+      {
+        "ok": true,
+        "changed": ["title", "parking_notes"],
+        "spot": {<full spot view>}
+      }
+    """
+    spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0})
+    if not spot:
+        raise HTTPException(status_code=404, detail="Spot not found")
+
+    # Read-only "submitted vs. current" maps so we can compute diff.
+    submitted = body.model_dump(exclude_unset=True)
+    updates: dict = {}
+    audit_entries: list[tuple[str, object, object]] = []
+
+    # ── title ─────────────────────────────────────────────────────────
+    if "title" in submitted:
+        raw = (body.title or "").strip()
+        if len(raw) < 3:
+            raise HTTPException(status_code=400, detail="Name cannot be empty (min 3 characters).")
+        if len(raw) > 120:
+            raise HTTPException(status_code=400, detail="Name must be 120 characters or fewer.")
+        if raw != (spot.get("title") or ""):
+            updates["title"] = raw
+            audit_entries.append(("title", spot.get("title"), raw))
+
+    # ── narrative text fields (same normalization helper) ─────────────
+    text_specs = [
+        ("description",       4000),
+        ("short_description",  280),
+        ("parking_notes",      800),
+        ("access_notes",       800),
+        ("safety_notes",       800),
+        ("crowd_notes",        800),
+        ("creator_tips",      1500),
+        ("permit_notes",       800),
+    ]
+    for key, cap in text_specs:
+        if key not in submitted:
+            continue
+        new_val = _norm_text(getattr(body, key), max_len=cap)
+        if new_val != (spot.get(key) or None):
+            updates[key] = new_val
+            audit_entries.append((key, spot.get(key), new_val))
+
+    # ── best_time_of_day (enum) ───────────────────────────────────────
+    if "best_time_of_day" in submitted:
+        raw = (body.best_time_of_day or "").strip().lower() or None
+        if raw and raw not in _VALID_BEST_TIME:
+            raise HTTPException(
+                status_code=400,
+                detail=f"best_time_of_day must be one of: {', '.join(sorted(_VALID_BEST_TIME))}",
+            )
+        if raw != (spot.get("best_time_of_day") or None):
+            updates["best_time_of_day"] = raw
+            audit_entries.append(("best_time_of_day", spot.get("best_time_of_day"), raw))
+
+    # ── permit_required (bool) ────────────────────────────────────────
+    if "permit_required" in submitted:
+        new_val = bool(body.permit_required)
+        if new_val != bool(spot.get("permit_required")):
+            updates["permit_required"] = new_val
+            audit_entries.append(("permit_required", spot.get("permit_required"), new_val))
+
+    # ── crowd_level / safety_rating (ints 1-5) ────────────────────────
+    for key in ("crowd_level", "safety_rating"):
+        if key not in submitted:
+            continue
+        val = getattr(body, key)
+        if val is None:
+            continue
+        try:
+            new_val = int(val)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"{key} must be an integer 1-5.")
+        if not (1 <= new_val <= 5):
+            raise HTTPException(status_code=400, detail=f"{key} must be between 1 and 5.")
+        if new_val != spot.get(key):
+            updates[key] = new_val
+            audit_entries.append((key, spot.get(key), new_val))
+
+    if not updates:
+        # Nothing actually changed → return current spot without polluting audit.
+        return {"ok": True, "changed": [], "spot": public_spot_view(spot, user=user)}
+
+    updates["updated_at"] = utcnow()
+    await db.spots.update_one({"spot_id": spot_id}, {"$set": updates})
+
+    # Granular audit entries, one per changed field — matches existing
+    # pattern from admin_set_spot_description and makes the Activity Log
+    # filterable per-field.
+    for field, before, after in audit_entries:
+        await audit_log(
+            user, f"spot.{field}.update", "spot", spot_id,
+            before={field: before},
+            after={field: after},
+        )
+
+    fresh = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0})
+    return {
+        "ok": True,
+        "changed": [f for (f, _, _) in audit_entries],
+        "spot": public_spot_view(fresh, user=user),
+    }
+
+
+
+
 # --- admin_reorder_spot_gallery (server.py:5655-5687) ---
 @router.patch("/admin/spots/{spot_id}/gallery")
 async def admin_reorder_spot_gallery(
