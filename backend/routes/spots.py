@@ -217,6 +217,13 @@ class SpotCreateIn(BaseModel):
     county_region: Optional[str] = None
     timezone: Optional[str] = None         # IANA zone
     language_hint: Optional[str] = None    # "en", "es", "fr"
+    # --- Park grouping (Feature 3 · Phase 1) -------------------------
+    # When present, this spot is a child of a parent park record in
+    # `db.parks`. `park_name` is denormalized so cards / list endpoints
+    # don't need an extra fetch. Both are optional; standalone spots
+    # leave them null.
+    park_group_id: Optional[str] = None
+    park_name: Optional[str] = Field(default=None, max_length=160)
 
 # --- CollectionIn (server.py:628-631) ---
 class CollectionIn(BaseModel):
@@ -610,6 +617,21 @@ async def create_spot(body: SpotCreateIn, user: dict = Depends(get_current_user)
     if images and not any(i["is_cover"] for i in images):
         images[0]["is_cover"] = True
 
+    # --- Park grouping (Feature 3 · Phase 1) -------------------------
+    # If a park_group_id was passed, validate it exists and follow any
+    # merge redirects so we always link to the canonical park. Reject
+    # silently-bad ids (404) so the client surfaces a clear error.
+    park_doc = None
+    if body.park_group_id:
+        park_doc = await db.parks.find_one({"park_id": body.park_group_id}, {"_id": 0})
+        if not park_doc:
+            raise HTTPException(status_code=404, detail="Park not found for park_group_id.")
+        # Follow 1 merge hop
+        if park_doc.get("status") == "merged_into" and park_doc.get("merged_into_park_id"):
+            canon = await db.parks.find_one({"park_id": park_doc["merged_into_park_id"]}, {"_id": 0})
+            if canon:
+                park_doc = canon
+
     visibility_status = "pending_review" if body.privacy_mode in ("public", "premium") else "approved"
     if user.get("verification_status") == "verified" and body.privacy_mode in ("public", "premium"):
         visibility_status = "approved"
@@ -620,6 +642,10 @@ async def create_spot(body: SpotCreateIn, user: dict = Depends(get_current_user)
     doc = body.dict()
     doc.pop("images", None)
     doc.pop("save_as_draft", None)  # not persisted as a spot field
+    # Apply canonical park linkage (in case of merge redirect)
+    if park_doc:
+        doc["park_group_id"] = park_doc["park_id"]
+        doc["park_name"] = park_doc.get("name") or body.park_name
     doc.update({
         "spot_id": spot_id,
         "owner_user_id": user["user_id"],
@@ -637,6 +663,21 @@ async def create_spot(body: SpotCreateIn, user: dict = Depends(get_current_user)
             status_code=413,
             detail="Your photos are too large to store together. Please remove a photo or re-add them so they can be compressed.",
         )
+
+    # Bump parent park's child_spot_count. Best-effort; failures are
+    # non-fatal and the count can be recomputed by GET /parks/{id}.
+    if park_doc:
+        try:
+            await db.parks.update_one(
+                {"park_id": park_doc["park_id"]},
+                {
+                    "$inc": {"child_spot_count": 1},
+                    "$set": {"updated_at": utcnow()},
+                },
+            )
+        except Exception:
+            pass
+
     return public_spot_view(doc, user)
 
 # --- get_spot (server.py:1256-1402) ---

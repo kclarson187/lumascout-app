@@ -12,6 +12,45 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Feature 3 · Phase 1 — Park-based multi-spot workflow (backend foundation)"
+    implemented: true
+    working: true
+    file: |
+      /app/backend/routes/parks.py (NEW)
+        • Adds /api/parks/* + /api/me/park-session endpoints.
+        • Endpoints: search, create (with force_create), check-duplicates,
+          get detail (with first 50 children), list children (paginated),
+          patch (owner/admin only, propagates name to children).
+        • Session: get / set (24h TTL) / delete; auto-heals on park merges.
+        • Duplicate detection: bbox prefilter + haversine + normalized
+          name overlap (returns 409 with `matches[]` when not forced).
+      /app/backend/routes/spots.py
+        • SpotCreateIn gained optional park_group_id + park_name.
+        • create_spot: validates park exists, follows merge redirect,
+          denormalizes park_name onto the spot, bumps park.child_spot_count.
+      /app/backend/server.py
+        • Registers parks router.
+        • Adds indexes: parks.park_id (unique), parks.name,
+          parks.(latitude, longitude), parks.created_by, parks.status,
+          spots.park_group_id, park_sessions.user_id (unique),
+          park_sessions.expires_at (TTL).
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Smoke-tested end-to-end against localhost via /tmp/test_parks_phase1.py:
+          login → create park → duplicate blocked (409) → force-create succeeds
+          → search by name (3 hits) → search by bbox (closest 0.5km) → child
+          spot created (park linkage persisted) → park detail shows count=1 &
+          1 child → park session set/get/delete → PATCH rename propagates
+          park_name to children. All assertions pass.
+          ADDITIVE ONLY — existing spots without park_group_id behave identically.
+
+
+
   - task: "P0 — Android chat keyboard fix (v8 KeyboardSafeDocked) + Production backend URL"
     implemented: true
     working: "NA"

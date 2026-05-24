@@ -6461,6 +6461,24 @@ async def on_startup():
     await db.audit_logs.create_index("created_at")
     await db.audit_logs.create_index("admin_user_id")
     await db.audit_logs.create_index("target_id")
+    # ─── Park-based multi-spot workflow (Feature 3 · Phase 1) ────────
+    # All idempotent. Used by /api/parks/* and Add Spot Phase 2.
+    try:
+        await db.parks.create_index("park_id", unique=True)
+        await db.parks.create_index("name")
+        await db.parks.create_index([("latitude", 1), ("longitude", 1)])
+        await db.parks.create_index("created_by")
+        await db.parks.create_index("status")
+        await db.spots.create_index("park_group_id")
+        await db.park_sessions.create_index("user_id", unique=True)
+        # Auto-expire stale sessions after 25h (1h grace past the 24h app TTL)
+        await db.park_sessions.create_index(
+            "expires_at",
+            expireAfterSeconds=0,
+        )
+    except Exception as _e:
+        # Non-fatal at boot — the explicit endpoint queries will still work.
+        pass
     await db.admin_notes.create_index("subject_user_id")
     await db.community_posts.create_index("post_id", unique=True)
     await db.community_posts.create_index([("created_at", -1)])
@@ -7606,6 +7624,7 @@ from routes import edit_requests as _edit_requests_routes  # noqa: E402
 from routes import uploads as _uploads_routes  # noqa: E402
 from routes import share as _share_routes  # noqa: E402
 from routes import img_proxy as _img_proxy_routes  # noqa: E402
+from routes import parks as _parks_routes  # noqa: E402
 
 app.include_router(_scout_ai_routes.router)
 app.include_router(_support_routes.router)
@@ -7620,6 +7639,7 @@ app.include_router(_spots_routes.router)
 app.include_router(_users_routes.router)
 app.include_router(_edit_requests_routes.router)
 app.include_router(_uploads_routes.router)
+app.include_router(_parks_routes.router)
 # CR Items 7 & 8 (May 2026) — smart-link share endpoints (HTML responses,
 # returned outside of `api` APIRouter because they're consumed by external
 # clients pasting the URL into iMessage / Twitter / Slack and need full
