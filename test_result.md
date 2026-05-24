@@ -12,6 +12,64 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Explore map stability hardening Phase 2 (code changes complete, native verification pending)"
+    implemented: true
+    working: NA
+    file: |
+      /app/frontend/src/utils/map-safety.ts (NEW)
+        • isValidCoordinate(lat, lng) — strict typed boolean (no string
+          coercion; rejects NaN/Inf; lat ±90, lng ±180).
+        • FALLBACK_REGION (San Antonio TX, 0.35° deltas).
+        • MAX_MARKERS = 100 (combined budget: parks + spots, never both).
+        • pickNearest(items, center, cap) — distance-sort + slice; auto-
+          filters items failing isValidCoordinate.
+        • clampRegion / isValidRegion / logSkippedOnce (dev one-shot).
+      /app/frontend/src/components/SafeMapView.tsx (NEW)
+        • Replaces SafeClusteredMapView. Thin pass-through to plain
+          MapView; in __DEV__ warns ONCE per cluster-* prop a stale
+          caller still passes; in prod silently strips them; region
+          clamp + NaN-drop guards retained.
+      /app/frontend/src/components/SafeClusteredMapView.tsx (REPLACED)
+        • Now just `export { default } from './SafeMapView'` for backward
+          compat. Deprecated; slated for deletion after one release.
+      /app/frontend/src/components/MapErrorBoundary.tsx (NEW)
+        • Local React error boundary; fallback UI: title + subtitle +
+          [Try Again] (key bump) + [View List] (mode switch).
+        • Wraps ONLY the map subtree on Explore — list, header, filters
+          live outside.
+      /app/frontend/src/components/PremiumMapPin.tsx
+        • PULSE_ANIM_ENABLED hard-disabled (was iOS-only) per
+          "no animated marker components" requirement.
+      /app/frontend/app/(tabs)/explore.tsx
+        • Imports map-safety + SafeMapView + MapErrorBoundary.
+        • initialRegion always passes isValidCoordinate; falls back to
+          FALLBACK_REGION.
+        • mapMarkerData: strict isValidCoordinate + pickNearest cap at
+          MAX_MARKERS; dev one-shot warn on drop count.
+        • Park layer fetch filters via isValidCoordinate + .slice(MAX_MARKERS).
+        • Map view JSX wrapped with <MapErrorBoundary onViewList=...>.
+        • "Showing nearest 100 spots" banner appears when trimmed.
+        • SafeMapView is now the directly imported component (the JSX
+          uses SafeMapView instead of SafeClusteredMapView).
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -agent: "main"
+        -comment: |
+          NATIVE VERIFICATION PENDING — this container is web-only.
+          The crash class targeted by this audit happens on iOS / Android
+          native; web preview cannot exercise that code path.
+          Code changes covered every requirement in the spec.
+          Bundle compiles cleanly (8.5s web rebuild). All grep audits
+          confirm: zero clustering libs, zero active cluster-* props
+          outside the SafeMapView drop-list, both clustering packages
+          gone from node_modules, no .bak files left.
+          The user must run on physical iOS + Android to confirm the
+          crash class is resolved.
+
+
+
   - task: "URGENT STABILITY — Full removal of map clustering"
     implemented: true
     working: true

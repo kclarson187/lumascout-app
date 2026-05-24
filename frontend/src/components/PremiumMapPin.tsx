@@ -25,7 +25,12 @@ export type PinTier = 'default' | 'elite' | 'trending' | 'saved' | 'verified-pro
 // by GoogleMap, throwing a NullPointerException). Disabling pulse
 // animations on Android removes this attack surface entirely.
 // iOS is unaffected.
-const PULSE_ANIM_ENABLED = Platform.OS !== 'android';
+// STABILITY HARDENING (Nov 2026 Phase 2): the pulse animation is now
+// hard-disabled on both platforms. Requirement from the Explore tab
+// stability audit was "No animated marker components." Keeping the
+// Animated.Value scaffolding in place so the component still mounts
+// cleanly — the loop just never starts.
+const PULSE_ANIM_ENABLED = false;
 
 export function pinTierOf(spot: any): PinTier {
   const verified = spot?.owner?.verification_status === 'verified';

@@ -44,6 +44,12 @@ import MAP_STYLE_DARK from '../../src/components/mapStyleDark';
 
 // Native-only map wrapper with web stub (Metro / codegenNativeCommands safety).
 import { MapView, ClusteredMapView, Marker, PROVIDER_GOOGLE } from '../../src/components/maps-module';
+import SafeMapView from '../../src/components/SafeMapView';
+import MapErrorBoundary from '../../src/components/MapErrorBoundary';
+import {
+  isValidCoordinate, FALLBACK_REGION, MAX_MARKERS,
+  pickNearest, logSkippedOnce,
+} from '../../src/utils/map-safety';
 import SafeClusteredMapView from '../../src/components/SafeClusteredMapView';
 import { Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -255,14 +261,24 @@ export default function Explore() {
   //   3. San Antonio, TX (premium default market)
   // This computation runs every render but is cheap (constant-time table
   // lookup) and gives us the latest fallback as state populates.
+  // Stability hardening (Nov 2026): the resolved seed MUST always pass
+  // isValidCoordinate before we promote it to `initialRegion` — bad
+  // seed coords have historically crashed react-native-maps on mount.
+  // Worst case, falls back to FALLBACK_REGION (San Antonio).
   const initialRegion = useMemo(() => {
-    if (userCoords?.lat && userCoords?.lng) {
+    if (userCoords?.lat != null && userCoords?.lng != null
+        && isValidCoordinate(userCoords.lat, userCoords.lng)) {
       return { latitude: userCoords.lat, longitude: userCoords.lng, latitudeDelta: 0.45, longitudeDelta: 0.45 };
     }
     const cityKey = (user?.city || '').toLowerCase().trim();
     const cityCoords = cityKey ? CITY_GEO[cityKey] : null;
-    const seed = cityCoords || DEFAULT_FALLBACK;
-    return { latitude: seed.lat, longitude: seed.lng, latitudeDelta: 0.45, longitudeDelta: 0.45 };
+    if (cityCoords && isValidCoordinate(cityCoords.lat, cityCoords.lng)) {
+      return { latitude: cityCoords.lat, longitude: cityCoords.lng, latitudeDelta: 0.45, longitudeDelta: 0.45 };
+    }
+    if (DEFAULT_FALLBACK && isValidCoordinate(DEFAULT_FALLBACK.lat, DEFAULT_FALLBACK.lng)) {
+      return { latitude: DEFAULT_FALLBACK.lat, longitude: DEFAULT_FALLBACK.lng, latitudeDelta: 0.45, longitudeDelta: 0.45 };
+    }
+    return FALLBACK_REGION;
   }, [userCoords, user?.city]);
   // FIX(2026-04 Item #3 round 3): GPS state machine for the trust strip.
   // 'idle' | 'requesting' | 'granted' | 'denied' | 'error'
@@ -904,23 +920,52 @@ export default function Explore() {
   const mapMarkerData = useMemo(() => {
     const source = mapMarkers.length > 0 ? mapMarkers : spots;
     const result = normalizeSpotsForMap(source);
+
+    // Stability hardening (Nov 2026 Phase 2): strict re-validation +
+    // MAX_MARKERS cap on top of the existing normalizer. This is
+    // defense in depth — the strict validator rejects string coords
+    // and out-of-range values that older API rows occasionally smuggle
+    // through. The cap then keeps the native marker count predictable
+    // regardless of how generous the backend response is.
+    const totalBeforeCap = result.renderable.length;
+    const strictlyValid = result.renderable.filter(
+      (s) => isValidCoordinate(s.latitude, s.longitude),
+    );
+    const strictDropped = result.renderable.length - strictlyValid.length;
+
+    // Sort-by-nearest then slice. Center = current region if known,
+    // else initialRegion seed.
+    const center = currentRegion.current
+      ? { latitude: currentRegion.current.latitude, longitude: currentRegion.current.longitude }
+      : { latitude: initialRegion.latitude, longitude: initialRegion.longitude };
+    const capped = pickNearest(strictlyValid, center, MAX_MARKERS);
+
+    const trimmed = strictlyValid.length > capped.length;
     if (
       result.droppedInvalid > 0 ||
       result.droppedDuplicate > 0 ||
-      result.droppedOverCap > 0
+      result.droppedOverCap > 0 ||
+      strictDropped > 0
     ) {
       exploreLog('warn', 'spots_normalised', {
         total: Array.isArray(source) ? source.length : 0,
-        renderable: result.renderable.length,
-        droppedInvalid: result.droppedInvalid,
+        renderable: capped.length,
+        droppedInvalid: result.droppedInvalid + strictDropped,
         droppedDuplicate: result.droppedDuplicate,
-        droppedOverCap: result.droppedOverCap,
+        droppedOverCap: result.droppedOverCap + (totalBeforeCap - capped.length),
         reasons: result.reasons,
         mapMarkerSource: mapMarkers.length > 0 ? 'lightweight' : 'legacy',
       });
+      if (strictDropped > 0) {
+        logSkippedOnce(
+          `explore-strict:${mapMarkers.length || spots.length}`,
+          strictDropped,
+          totalBeforeCap,
+        );
+      }
     }
-    return result;
-  }, [mapMarkers, spots]);
+    return { ...result, renderable: capped, trimmedByCap: trimmed, totalCandidates: strictlyValid.length };
+  }, [mapMarkers, spots, initialRegion]);
 
   // v2.0.21 — Pinch-zoom crash hardening (issue #2 from user report).
   //
@@ -1069,10 +1114,12 @@ export default function Explore() {
       });
       if (ac.signal.aborted || !mapMountedRef.current) return;
       const items = (Array.isArray(r) ? r : []).filter((p: any) =>
-        Number.isFinite(p?.latitude) && Number.isFinite(p?.longitude) &&
-        Math.abs(p.latitude) <= 90 && Math.abs(p.longitude) <= 180 &&
-        !!p.park_id,
-      );
+        // Strict validator — rejects string coords / NaN / out-of-range
+        // and keeps the combined budget under MAX_MARKERS (parks and
+        // spots are mutually exclusive on screen, never both).
+        isValidCoordinate(p?.latitude, p?.longitude) &&
+        !!p?.park_id,
+      ).slice(0, MAX_MARKERS);
       setParkMarkers(items);
     } catch {}
   }, [view]);
@@ -1384,13 +1431,21 @@ export default function Explore() {
       ) : null}
 
       {view === 'map' && mapEverMounted && Platform.OS !== 'web' && (ClusteredMapView || MapView) ? (
-        <View style={{ flex: 1 }}>
-          {React.createElement(
-            SafeClusteredMapView,
-            {
-              ref: mapRef,
-              style: { flex: 1 },
-              initialRegion: initialRegion,
+        <MapErrorBoundary onViewList={() => setView('list')}>
+          <View style={{ flex: 1 }}>
+            {mapMarkerData.trimmedByCap && (
+              <View style={styles.trimBanner} testID="map-trim-banner">
+                <Text style={styles.trimBannerTxt}>
+                  Showing nearest {MAX_MARKERS} spots. Zoom or search to narrow results.
+                </Text>
+              </View>
+            )}
+            {React.createElement(
+              SafeMapView,
+              {
+                ref: mapRef,
+                style: { flex: 1 },
+                initialRegion: initialRegion,
               // ANDROID STABILIZATION (June 2025): explicitly use the
               // Google Maps provider on Android. The default provider
               // is a legacy native module that's incompatible with
@@ -1576,6 +1631,7 @@ export default function Explore() {
             </SectionErrorBoundary>
           )}
         </View>
+        </MapErrorBoundary>
       ) : (
         <View style={{ flex: 1 }}>
           {/* Explore Speed CR — Batch 2 (June 2025): skeleton card stack
@@ -2923,4 +2979,13 @@ const styles = StyleSheet.create({
   scaleBtn: { flex: 1, paddingVertical: 8, borderRadius: radii.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface2, alignItems: 'center' },
   scaleBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   scaleTxt: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13 },
+  // Phase 2 stability: shown when MAX_MARKERS cap is enforced
+  trimBanner: {
+    position: 'absolute', top: 8, left: 12, right: 12, zIndex: 6,
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: radii.pill,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+  },
+  trimBannerTxt: {
+    color: '#fff', fontFamily: font.bodyMedium, fontSize: 11, textAlign: 'center',
+  },
 });
