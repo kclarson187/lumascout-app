@@ -921,17 +921,31 @@ export default function Explore() {
     const source = mapMarkers.length > 0 ? mapMarkers : spots;
     const result = normalizeSpotsForMap(source);
 
+    // Coord dedupe (Phase 2 follow-up): if multiple spots round to the
+    // same 5-decimal lat/lng (~1.1 m precision) we keep the first and
+    // drop the rest. This stops the "three pins stacked on one pixel"
+    // problem at e.g. Shavano Park. The dropped duplicates are still
+    // discoverable via the list view + spot detail; they are NOT on
+    // the map, and they are NOT clustered.
+    const seen = new Set<string>();
+    const deduped: typeof result.renderable = [];
+    let stackedDropped = 0;
+    for (const s of result.renderable) {
+      if (!isValidCoordinate(s.latitude, s.longitude)) continue;
+      const key = `${(s.latitude as number).toFixed(5)}_${(s.longitude as number).toFixed(5)}`;
+      if (seen.has(key)) {
+        stackedDropped += 1;
+        continue;
+      }
+      seen.add(key);
+      deduped.push(s);
+    }
+
     // Stability hardening (Nov 2026 Phase 2): strict re-validation +
-    // MAX_MARKERS cap on top of the existing normalizer. This is
-    // defense in depth — the strict validator rejects string coords
-    // and out-of-range values that older API rows occasionally smuggle
-    // through. The cap then keeps the native marker count predictable
-    // regardless of how generous the backend response is.
-    const totalBeforeCap = result.renderable.length;
-    const strictlyValid = result.renderable.filter(
-      (s) => isValidCoordinate(s.latitude, s.longitude),
-    );
-    const strictDropped = result.renderable.length - strictlyValid.length;
+    // MAX_MARKERS cap on top of the existing normalizer + dedupe.
+    const totalBeforeCap = deduped.length;
+    const strictlyValid = deduped; // already strict-validated in the dedupe loop
+    const strictDropped = (result.renderable.length - deduped.length) - stackedDropped;
 
     // Sort-by-nearest then slice. Center = current region if known,
     // else initialRegion seed.
@@ -1033,41 +1047,45 @@ export default function Explore() {
         <Marker
           key={String(s.spot_id || `m-${idx}-${s.latitude}-${s.longitude}`)}
           coordinate={{ latitude: s.latitude, longitude: s.longitude }}
+          // STABILITY HARDENING (Nov 2026 Phase 2 follow-up):
+          //   • NO child JSX inside <Marker> — uses stock native pin.
+          //   • `pinColor` is the ONLY visual customization allowed.
+          //   • Custom views, nested touchables, animated children, and
+          //     gradient circles are forbidden until the iOS/Android
+          //     stability pass is proven across the full test matrix.
+          //   • tracksViewChanges intentionally NOT set — stock pins
+          //     don't need bitmap snapshotting.
+          pinColor={savedIds[s.spot_id] ? '#d04848' : '#f5a623'}
           onPress={() => {
-            if (!s || !s.spot_id ||
-                !Number.isFinite(s.latitude) ||
-                !Number.isFinite(s.longitude)) {
-              exploreLog('warn', 'marker_tap_rejected', {
-                spot_id: s?.spot_id, lat: s?.latitude, lng: s?.longitude,
-              });
-              return;
+            try {
+              if (!s || !s.spot_id ||
+                  !Number.isFinite(s.latitude) ||
+                  !Number.isFinite(s.longitude)) {
+                exploreLog('warn', 'marker_tap_rejected', {
+                  spot_id: s?.spot_id, lat: s?.latitude, lng: s?.longitude,
+                });
+                return;
+              }
+              Haptics.selectionAsync().catch(() => {});
+              const uc = userCoordsRef.current;
+              const enriched = (() => {
+                if (!uc?.lat || !uc?.lng) return s;
+                const mi = calculateDistanceMiles(uc.lat, uc.lng, s.latitude, s.longitude);
+                return mi == null ? s : { ...s, distance_mi: mi };
+              })();
+              setSelectedSpot(enriched);
+            } catch (e) {
+              if (__DEV__) {
+                // eslint-disable-next-line no-console
+                console.warn('[explore] marker onPress threw:', e);
+              }
             }
-            Haptics.selectionAsync().catch(() => {});
-            const uc = userCoordsRef.current;
-            const enriched = (() => {
-              if (!uc?.lat || !uc?.lng) return s;
-              const mi = calculateDistanceMiles(uc.lat, uc.lng, s.latitude, s.longitude);
-              return mi == null ? s : { ...s, distance_mi: mi };
-            })();
-            setSelectedSpot(enriched);
           }}
-          // Platform-aware tracksViewChanges:
-          //   • iOS: false (capture once, perf-stable, visible)
-          //   • Android: true while map is settling (~800ms) so the
-          //     custom <PremiumMapPin> children get measured + drawn
-          //     into the bitmap; then false to stop the per-frame
-          //     re-capture churn (which would tank Android map perf).
-          tracksViewChanges={
-            Platform.OS === 'android' ? androidMarkersTracking : false
-          }
-          anchor={{ x: 0.5, y: 1 }}
           testID={`marker-${s.spot_id || idx}`}
-        >
-          <PremiumMapPin tier={savedIds[s.spot_id] ? 'saved' : safeTier(s)} />
-        </Marker>
+        />
       )),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [markersIdentity, savedIds, androidMarkersTracking],
+    [markersIdentity, savedIds],
   );
 
   // ─── Park-Based Multi-Spot Workflow · Phase 4 ─────────────────────
@@ -1136,21 +1154,30 @@ export default function Explore() {
         <Marker
           key={`park-${p.park_id || idx}`}
           coordinate={{ latitude: p.latitude, longitude: p.longitude }}
+          // STABILITY HARDENING (Nov 2026 Phase 2 follow-up):
+          //   • Stock pin only. No <ParkMapPin> child — that was reading
+          //     as a cluster bubble in the field.
+          //   • This layer is currently DISABLED at the JSX render site
+          //     (see comment block where renderedMarkers is rendered).
+          //   • No special tap handler: routes straight to the park
+          //     detail page.
+          pinColor={'#f5a623'}
           onPress={() => {
-            Haptics.selectionAsync().catch(() => {});
-            router.push(`/park/${p.park_id}` as any);
+            try {
+              Haptics.selectionAsync().catch(() => {});
+              router.push(`/park/${p.park_id}` as any);
+            } catch (e) {
+              if (__DEV__) {
+                // eslint-disable-next-line no-console
+                console.warn('[explore] park marker onPress threw:', e);
+              }
+            }
           }}
-          tracksViewChanges={
-            Platform.OS === 'android' ? androidMarkersTracking : false
-          }
-          anchor={{ x: 0.5, y: 1 }}
           testID={`park-marker-${p.park_id}`}
-        >
-          <ParkMapPin childCount={p.child_spot_count} />
-        </Marker>
+        />
       )),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [parkMarkersIdentity, androidMarkersTracking],
+    [parkMarkersIdentity],
   );
 
   // v2.0.21 — Build environment diagnostic.
@@ -1538,14 +1565,17 @@ export default function Explore() {
             // interop shim called insertObject:atIndex: on a
             // not-yet-fully-mounted parent's child array.
             //
-            // Phase 4 (Park-Based Multi-Spot Workflow): swap to
-            // parent-park markers at low zoom. Crucially this is NOT
-            // clustering — these are first-class data rows. Child spots
-            // remain individually tappable as soon as the user zooms
-            // in past PARK_LAYER_THRESHOLD.
-            mapNativeReady
-              ? (parksLayerVisible ? renderedParkMarkers : renderedMarkers)
-              : null
+            // STABILITY HARDENING (Nov 2026 Phase 2 follow-up):
+            //   • Parent-park markers (Phase 4) are DISABLED while we
+            //     prove iOS + Android stability with stock pins only.
+            //   • Even though the data is correct (1 marker per park
+            //     row, not a cluster), the visual was reading as a
+            //     cluster bubble in the field and could be confused
+            //     with the old clustering behavior.
+            //   • To re-enable: replace `renderedMarkers` below with
+            //     `(parksLayerVisible ? renderedParkMarkers : renderedMarkers)`
+            //     and audit ParkMapPin to ensure it's still child-free.
+            mapNativeReady ? renderedMarkers : null
           )}
 
           {/* Apr 2026 cleanup — trending floating chip removed per

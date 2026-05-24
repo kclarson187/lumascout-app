@@ -12,6 +12,51 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Explore map stability Phase 2 follow-up — stock pins only, parks disabled, coord dedupe"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/app/(tabs)/explore.tsx
+        Fix 1 — Stock <Marker> with pinColor only:
+          • renderedMarkers: <Marker> is now self-closing. NO child JSX.
+            Was: <Marker><PremiumMapPin tier=... /></Marker>
+            Now: <Marker pinColor={savedIds[id] ? '#d04848' : '#f5a623'} />
+          • tracksViewChanges removed (stock pins don't need bitmap snapshot).
+          • onPress wrapped in try/catch; dev-warn on throw.
+          • renderedParkMarkers: same treatment — self-closing, pinColor=orange,
+            no <ParkMapPin> child, simple router.push to /park/{id}.
+        Fix 2 — Parent-park layer DISABLED:
+          • The conditional render in the map JSX now always returns
+            `renderedMarkers` — never `renderedParkMarkers`.
+          • Park data fetch still runs (cheap), but markers never appear
+            on screen. Documented how to re-enable.
+        Fix 3 — Coordinate dedupe:
+          • In mapMarkerData, after strict isValidCoordinate, every
+            spot is keyed by `${lat.toFixed(5)}_${lng.toFixed(5)}` and
+            duplicates after the first are dropped.
+          • The trim banner ("Showing nearest 100 spots") already shows
+            when the cap is hit; stacked-duplicate count is logged via
+            exploreLog.
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -agent: "main"
+        -comment: |
+          Grep audit confirms:
+            grep -nE "</Marker>"  → ZERO hits (every <Marker> is self-closing).
+            grep -nE "<PremiumMapPin|<ParkMapPin" → ZERO active hits in explore.tsx
+              (only a doc-comment naming the disabled future re-enable point).
+            grep -nE "children=" on <Marker> → ZERO.
+          Web bundle clean (6.5s rebuild after expo restart).
+          STILL PENDING: native iOS / Android verification. Stock <Marker>
+          rendering is the safest possible state in react-native-maps —
+          no custom view = no snapshot ≠ no JNI race. If the crash class
+          persists with stock pins, the cause is outside marker children
+          (likely region/coord shape).
+
+
+
   - task: "Explore map stability hardening Phase 2 (code changes complete, native verification pending)"
     implemented: true
     working: NA
