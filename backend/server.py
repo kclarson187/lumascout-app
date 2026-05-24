@@ -6476,6 +6476,9 @@ async def on_startup():
             "expires_at",
             expireAfterSeconds=0,
         )
+        await db.park_saves.create_index([("user_id", 1), ("park_id", 1)], unique=True)
+        await db.park_saves.create_index("park_id")
+        await db.park_saves.create_index("saved_at")
     except Exception as _e:
         # Non-fatal at boot — the explicit endpoint queries will still work.
         pass

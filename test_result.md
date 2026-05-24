@@ -12,6 +12,51 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Feature 3 · Phase 3 — Park polish + spot breadcrumb + Explore parks rail"
+    implemented: true
+    working: true
+    file: |
+      /app/backend/routes/parks.py
+        • New endpoints: POST /parks/{id}/save, DELETE /parks/{id}/save,
+          GET /me/saved-parks.
+        • GET /parks/{id} now returns is_saved + saved_count for authed
+          viewers (used by the Save toggle on the detail page).
+      /app/backend/server.py
+        • Added park_saves indexes (composite unique + park_id + saved_at).
+      /app/frontend/app/park/[id].tsx (rewritten with polish)
+        • Hero image (pulled from first child's cover with scrim + title overlay).
+        • Save park heart toggle in header + as an Action button (optimistic).
+        • Directions deep-link (Apple Maps on iOS, Google Maps elsewhere).
+        • Distance-from-user pill (computed locally via Haversine when
+          location permission is already granted — no prompt forced).
+        • Per-child distance-from-park-center badges.
+        • Cursor-paginated children "Load more" via /parks/{id}/children.
+      /app/frontend/app/spot/[id].tsx + src/components/spot-detail/styles.ts
+        • Added "INSIDE <park name>" breadcrumb pill above the spot
+          title — only rendered when spot.park_group_id is present.
+          Tap routes to /park/[id].
+      /app/frontend/src/components/ParksRail.tsx (NEW)
+        • Horizontal rail of parks with ≥ 2 child spots, surfaced on
+          Explore between Golden Hour Rail and the long-tail browse.
+        • Self-renders null when no parks meet the threshold.
+        • Biases by user location when GPS is granted.
+      /app/frontend/app/(tabs)/explore.tsx
+        • Imported & inserted <ParksRail /> as Section 4.
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Backend save endpoints smoke-passed:
+          POST /parks/{id}/save → saved_count=1, is_saved=true on next
+          GET, present in /me/saved-parks; DELETE reverses both cleanly.
+          Web bundle: clean 9.3s rebuild after expo restart, zero errors.
+          UI testing pending user verification on mobile.
+
+
+
   - task: "Feature 3 · Phase 2 — Park-based multi-spot workflow (Add Spot UX)"
     implemented: true
     working: true

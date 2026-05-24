@@ -26,6 +26,7 @@ import {
   TrendingNearbyList,
   GoldenHourRail,
 } from '../../src/components/PremiumExploreRails';
+import ParksRail from '../../src/components/ParksRail';
 import { PremiumMapPin, PremiumMapCluster } from '../../src/components/PremiumMapPin';
 import ExploreErrorBoundary from '../../src/components/ExploreErrorBoundary';
 import SectionErrorBoundary from '../../src/components/SectionErrorBoundary';
@@ -1625,6 +1626,14 @@ export default function Explore() {
                       (a.evening_golden_hour_rating || 0),
                   )
                   .slice(0, 8)}
+              />
+
+              {/* Section 4 — Photo Parks rail (parks with 2+ child spots).
+                  Park-Based Multi-Spot Workflow · Phase 3. Self-renders
+                  null if there are no parks worth surfacing. */}
+              <ParksRail
+                nearLat={userCoords?.lat ?? null}
+                nearLng={userCoords?.lng ?? null}
               />
 
               {/* Tail — full editorial cards for the long-tail browse */}

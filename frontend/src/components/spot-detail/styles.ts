@@ -183,6 +183,25 @@ export const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   content: { padding: space.xl, gap: 6 },
+  // Park-Based Multi-Spot Workflow (Phase 3): "Inside <park>" breadcrumb
+  // shown on spot detail when the spot has a park_group_id. Tapping
+  // routes to /park/[id].
+  parkBreadcrumb: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 10, paddingVertical: 5, marginBottom: 4,
+    borderRadius: radii.pill,
+    backgroundColor: 'rgba(245,166,35,0.10)',
+    borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(245,166,35,0.40)',
+    maxWidth: '100%',
+  },
+  parkBreadcrumbIcon: {
+    width: 18, height: 18, borderRadius: 9,
+    backgroundColor: 'rgba(245,166,35,0.20)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  parkBreadcrumbLabel: { color: colors.textTertiary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.6 },
+  parkBreadcrumbName: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 12, flexShrink: 1 },
   title: { color: colors.text, fontFamily: font.display, fontSize: 32, letterSpacing: -0.5, lineHeight: 38 },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
   meta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13 },

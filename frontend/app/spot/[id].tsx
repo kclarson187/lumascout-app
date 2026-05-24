@@ -22,7 +22,7 @@ import { Image as ExpoImage } from 'expo-image';
 import {
   ChevronLeft, Bookmark, Share2, Flag, MapPin, Sun, Sunrise, Sunset, Cloud,
   Camera, Car, Accessibility, Users, Shield, DogIcon, BabyIcon, TicketIcon, ClockIcon, CheckCircle,
-  FolderPlus, MessageSquarePlus, Navigation, Wand2, ChevronRight, Trash2, PenLine, X,
+  FolderPlus, MessageSquarePlus, Navigation, Wand2, ChevronRight, Trash2, PenLine, X, Layers,
 } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
@@ -913,6 +913,23 @@ function SpotDetailImpl() {
               <Text style={styles.requestEditTxt}>Request edits to this spot</Text>
             </Pressable>
           )}
+          {spot.park_group_id && spot.park_name ? (
+            <TouchableOpacity
+              style={styles.parkBreadcrumb}
+              onPress={() => router.push(`/park/${spot.park_group_id}` as any)}
+              testID="spot-park-breadcrumb"
+              activeOpacity={0.7}
+            >
+              <View style={styles.parkBreadcrumbIcon}>
+                <Layers size={11} color={colors.primary} />
+              </View>
+              <Text style={styles.parkBreadcrumbLabel}>INSIDE</Text>
+              <Text style={styles.parkBreadcrumbName} numberOfLines={1}>
+                {spot.park_name}
+              </Text>
+              <ChevronRight size={13} color={colors.primary} />
+            </TouchableOpacity>
+          ) : null}
           <Text style={styles.title}>{spot.title}</Text>
           <View style={styles.metaRow}>
             <MapPin size={14} color={colors.textSecondary} />

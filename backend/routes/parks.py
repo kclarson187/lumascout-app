@@ -415,6 +415,16 @@ async def get_park(
     park = _park_public_view(park)
     park["children"] = children
     park["children_returned"] = len(children)
+    # Save state — useful for the "Save park" toggle on the detail page.
+    park["saved_count"] = await db.park_saves.count_documents({"park_id": park["park_id"]})
+    if viewer_id:
+        existing = await db.park_saves.find_one(
+            {"user_id": viewer_id, "park_id": park["park_id"]},
+            {"_id": 0},
+        )
+        park["is_saved"] = bool(existing)
+    else:
+        park["is_saved"] = False
     return park
 
 
@@ -581,3 +591,54 @@ async def end_park_session(user: dict = Depends(get_current_user)) -> Dict[str, 
     """End the active park session immediately."""
     await db.park_sessions.delete_one({"user_id": user["user_id"]})
     return {"ok": True}
+
+
+# ─── Save Park (Phase 3) ──────────────────────────────────────────────
+
+
+@router.post("/parks/{park_id}/save")
+async def save_park(park_id: str, user: dict = Depends(get_current_user)) -> Dict[str, Any]:
+    """Save a park to the user's library.
+
+    Idempotent — re-saving an already-saved park is a no-op. Returns
+    the canonical park_id (in case of merge redirect) and the current
+    saved-count.
+    """
+    park = await db.parks.find_one({"park_id": park_id}, {"_id": 0})
+    if not park:
+        raise HTTPException(status_code=404, detail="Park not found")
+    canon_id = park["park_id"]
+    if park.get("status") == "merged_into" and park.get("merged_into_park_id"):
+        canon = await db.parks.find_one({"park_id": park["merged_into_park_id"]}, {"_id": 0})
+        if canon:
+            canon_id = canon["park_id"]
+
+    await db.park_saves.update_one(
+        {"user_id": user["user_id"], "park_id": canon_id},
+        {"$set": {"saved_at": utcnow()}},
+        upsert=True,
+    )
+    saved_count = await db.park_saves.count_documents({"park_id": canon_id})
+    return {"park_id": canon_id, "saved": True, "saved_count": saved_count}
+
+
+@router.delete("/parks/{park_id}/save")
+async def unsave_park(park_id: str, user: dict = Depends(get_current_user)) -> Dict[str, Any]:
+    """Remove a park from the user's library."""
+    await db.park_saves.delete_one({"user_id": user["user_id"], "park_id": park_id})
+    saved_count = await db.park_saves.count_documents({"park_id": park_id})
+    return {"park_id": park_id, "saved": False, "saved_count": saved_count}
+
+
+@router.get("/me/saved-parks")
+async def list_my_saved_parks(
+    limit: int = Query(50, ge=1, le=200),
+    user: dict = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """List parks the current user has saved (most recent first)."""
+    saves = await db.park_saves.find({"user_id": user["user_id"]}, {"_id": 0}).sort("saved_at", -1).limit(limit).to_list(limit)
+    park_ids = [s["park_id"] for s in saves]
+    parks = await db.parks.find({"park_id": {"$in": park_ids}}, {"_id": 0}).to_list(len(park_ids))
+    by_id = {p["park_id"]: _park_public_view(p) for p in parks}
+    items = [by_id[pid] for pid in park_ids if pid in by_id]
+    return {"items": items, "total": len(items)}
