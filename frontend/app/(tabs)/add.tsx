@@ -17,7 +17,7 @@ import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as Location from 'expo-location';
-import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown, AlertTriangle, Search, Map as MapIcon, Edit3, FileText, Sun, Eye, EyeOff, Sparkles, Circle, Camera } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown, AlertTriangle, Search, Map as MapIcon, Edit3, FileText, Sun, Eye, EyeOff, Sparkles, Circle, Camera, Layers } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { uploadImageAsset } from '../../src/utils/upload-image';
 import { resolveImageUrl } from '../../src/utils/image-url';
@@ -32,6 +32,8 @@ import MapPreviewCard from '../../src/components/MapPreviewCard';
 import { Input, Chip } from '../../src/components/ui';
 import ScoutAICard from '../../src/components/ScoutAICard';
 import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
+import ParkPickerSheet, { ParkSummary } from '../../src/components/ParkPickerSheet';
+import PostSaveSpotSheet from '../../src/components/PostSaveSpotSheet';
 
 const STEPS = ['Photos', 'Location', 'Details', 'Ratings', 'Privacy', 'Review'];
 
@@ -168,6 +170,38 @@ function AddSpotImpl() {
   // Raw editable string for style tags so the user can freely type commas and
   // spaces. We only split into an array when the input loses focus.
   const [tagsText, setTagsText] = useState<string>('');
+
+  // ─── Park-Based Multi-Spot Workflow (Phase 2) ────────────────────
+  // Tracks whether this spot belongs to a parent park and the active
+  // 24h session so users can keep adding child spots through app
+  // restarts.
+  const [locationType, setLocationType] = useState<'standalone' | 'park_child'>('standalone');
+  const [selectedPark, setSelectedPark] = useState<ParkSummary | null>(null);
+  const [parkPickerOpen, setParkPickerOpen] = useState(false);
+  const [activeSession, setActiveSession] = useState<{
+    active_park_id: string;
+    active_park_name: string;
+    last_added_spot_id?: string | null;
+  } | null>(null);
+  const [sessionPark, setSessionPark] = useState<ParkSummary | null>(null);
+  const [postSaveOpen, setPostSaveOpen] = useState(false);
+  const [lastSubmittedSpot, setLastSubmittedSpot] = useState<{ spot_id: string; park_id?: string | null; park_name?: string | null } | null>(null);
+
+  // Load active park session on mount so we can offer the
+  // "Continue adding spots to <park>?" pickup banner.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await api.get('/me/park-session');
+        if (!cancelled && r?.session) {
+          setActiveSession(r.session);
+          if (r.park) setSessionPark(r.park as ParkSummary);
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -707,6 +741,9 @@ function AddSpotImpl() {
       && typeof draft.gpsAccuracy === 'number'
       && draft.gpsAccuracy <= 100,
     save_as_draft: asDraft,
+    // Park-Based Multi-Spot Workflow (Phase 2)
+    park_group_id: locationType === 'park_child' && selectedPark ? selectedPark.park_id : undefined,
+    park_name:     locationType === 'park_child' && selectedPark ? selectedPark.name    : undefined,
   });
 
   const runAiUploadAssist = async () => {
@@ -757,7 +794,7 @@ function AddSpotImpl() {
     }
     setSubmitting(true);
     try {
-      await api.post('/spots', buildPayload(false));
+      const created = await api.post('/spots', buildPayload(false));
       // Explore Speed CR — Batch 4 (June 2025): clear the Explore list
       // SWR cache so the user sees their newly-submitted spot on the
       // next Explore visit instead of the previous cached set.
@@ -765,9 +802,28 @@ function AddSpotImpl() {
         const { invalidateCachePrefix } = await import('../../src/utils/swrCache');
         await invalidateCachePrefix('explore.list:v1');
       } catch {}
-      Alert.alert('Spot submitted', draft.privacy_mode === 'public' ? 'Your public spot is in review.' : 'Saved!', [
-        { text: 'OK', onPress: () => { setDraft(initialDraft); setStep(0); router.replace('/(tabs)'); } },
-      ]);
+
+      // Park-Based Multi-Spot Workflow (Phase 2)
+      // ─────────────────────────────────────────
+      // If this spot was added under a parent park, refresh the 24h
+      // session so reopening the app later surfaces the pickup banner.
+      // Failures are non-fatal — the spot was already saved.
+      const submittedSpotId = created?.spot_id || null;
+      const childPark = locationType === 'park_child' && selectedPark ? selectedPark : null;
+      if (childPark) {
+        try {
+          await api.post('/me/park-session', {
+            park_id: childPark.park_id,
+            last_added_spot_id: submittedSpotId,
+          });
+        } catch {}
+      }
+      setLastSubmittedSpot({
+        spot_id: submittedSpotId,
+        park_id: childPark?.park_id || null,
+        park_name: childPark?.name || null,
+      });
+      setPostSaveOpen(true);
     } catch (e) {
       Alert.alert('Could not submit', formatApiError(e));
     } finally {
@@ -819,6 +875,55 @@ function AddSpotImpl() {
         >
           {step === 0 && (
             <View style={{ gap: space.lg }}>
+              {/* Park session pickup banner — shown when an active 24h session
+                  exists from a prior add. Lets the user continue, switch, or
+                  go standalone without losing their state. */}
+              {activeSession && sessionPark && locationType === 'standalone' && !selectedPark && (
+                <View style={styles.sessionBanner} testID="park-session-banner">
+                  <View style={styles.sessionIcon}>
+                    <Layers size={16} color={colors.primary} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.sessionTitle}>
+                      Continue adding spots to {activeSession.active_park_name}?
+                    </Text>
+                    <Text style={styles.sessionSub}>
+                      You were adding spots here recently. Pick up where you left off.
+                    </Text>
+                    <View style={styles.sessionBtnRow}>
+                      <TouchableOpacity
+                        style={styles.sessionPrimary}
+                        onPress={() => {
+                          setSelectedPark(sessionPark);
+                          setLocationType('park_child');
+                        }}
+                        testID="park-session-continue"
+                      >
+                        <Text style={styles.sessionPrimaryTxt}>Continue</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.sessionGhost}
+                        onPress={() => setParkPickerOpen(true)}
+                        testID="park-session-different"
+                      >
+                        <Text style={styles.sessionGhostTxt}>Different park</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.sessionGhost}
+                        onPress={async () => {
+                          try { await api.delete('/me/park-session'); } catch {}
+                          setActiveSession(null);
+                          setSessionPark(null);
+                        }}
+                        testID="park-session-end"
+                      >
+                        <Text style={styles.sessionGhostTxt}>End</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              )}
+
               <Text style={styles.heading}>Add photos</Text>
               <Text style={styles.sub}>Start with your shots. You'll assign a location next. Public spots need at least one photo — tap an image to make it the cover.</Text>
               {/* Take Photo Now — captures GPS in parallel with the shutter */}
@@ -885,6 +990,73 @@ function AddSpotImpl() {
 
           {step === 1 && (
             <View style={{ gap: space.lg }}>
+              {/* Location Type chooser — Standalone vs. Spot inside a park.
+                  Lets a photographer group multiple shootable areas under
+                  one parent park (e.g., Eisenhower Park → Sunset Ridge,
+                  Shaded Oak, Rocky Stairs). Optional — defaults to
+                  standalone so existing flow is preserved. */}
+              <View style={styles.typeRow}>
+                <TouchableOpacity
+                  style={[styles.typeCard, locationType === 'standalone' && styles.typeCardOn]}
+                  onPress={() => { setLocationType('standalone'); setSelectedPark(null); }}
+                  testID="loc-type-standalone"
+                >
+                  <MapPin size={16} color={locationType === 'standalone' ? colors.primary : colors.textSecondary} />
+                  <Text style={[styles.typeTitle, locationType === 'standalone' && { color: colors.primary }]}>Standalone spot</Text>
+                  <Text style={styles.typeSub}>A single location.</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.typeCard, locationType === 'park_child' && styles.typeCardOn]}
+                  onPress={() => {
+                    setLocationType('park_child');
+                    if (!selectedPark) setParkPickerOpen(true);
+                  }}
+                  testID="loc-type-park-child"
+                >
+                  <Layers size={16} color={locationType === 'park_child' ? colors.primary : colors.textSecondary} />
+                  <Text style={[styles.typeTitle, locationType === 'park_child' && { color: colors.primary }]}>Inside a park / area</Text>
+                  <Text style={styles.typeSub}>Group under a parent.</Text>
+                </TouchableOpacity>
+              </View>
+
+              {locationType === 'park_child' && (
+                <View style={styles.parkPickedCard}>
+                  {selectedPark ? (
+                    <>
+                      <View style={styles.parkPickedIcon}>
+                        <Layers size={16} color={colors.primary} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.parkPickedLabel}>Parent park</Text>
+                        <Text style={styles.parkPickedName} numberOfLines={1}>{selectedPark.name}</Text>
+                        {selectedPark.city ? (
+                          <Text style={styles.parkPickedMeta} numberOfLines={1}>
+                            {selectedPark.city}{selectedPark.state ? `, ${selectedPark.state}` : ''}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <TouchableOpacity onPress={() => setParkPickerOpen(true)} testID="loc-park-change">
+                        <Text style={styles.parkPickedChange}>Change</Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : (
+                    <TouchableOpacity
+                      style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 }}
+                      onPress={() => setParkPickerOpen(true)}
+                      testID="loc-park-pick"
+                    >
+                      <View style={styles.parkPickedIcon}>
+                        <Search size={14} color={colors.primary} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.parkPickedName}>Pick or create a parent park</Text>
+                        <Text style={styles.parkPickedMeta}>Search existing or add a new one.</Text>
+                      </View>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
+
               <Text style={styles.heading}>Where was this shot?</Text>
               <Text style={styles.sub}>
                 You don't need to be there. Search a place, drop a pin, or type the details by hand — perfect for past sessions.
@@ -1458,6 +1630,65 @@ function AddSpotImpl() {
           longitude: draft.longitude,
         }}
       />
+      {/* Park-Based Multi-Spot Workflow (Phase 2) */}
+      <ParkPickerSheet
+        visible={parkPickerOpen}
+        onClose={() => setParkPickerOpen(false)}
+        onPick={(park) => {
+          setSelectedPark(park);
+          setLocationType('park_child');
+        }}
+        nearLat={draft.latitude ?? null}
+        nearLng={draft.longitude ?? null}
+        defaultCity={draft.city}
+        defaultState={draft.state}
+        defaultCountryCode={undefined}
+        initialQuery={draft.landmark || ''}
+      />
+      <PostSaveSpotSheet
+        visible={postSaveOpen}
+        parkName={lastSubmittedSpot?.park_name || null}
+        parkId={lastSubmittedSpot?.park_id || null}
+        newSpotId={lastSubmittedSpot?.spot_id || null}
+        onClose={() => setPostSaveOpen(false)}
+        onAddAnother={() => {
+          // Keep selectedPark; reset draft fields that are spot-specific.
+          setPostSaveOpen(false);
+          setDraft({ ...initialDraft });
+          setStep(0);
+        }}
+        onViewPark={() => {
+          setPostSaveOpen(false);
+          if (lastSubmittedSpot?.park_id) {
+            router.push(`/park/${lastSubmittedSpot.park_id}` as any);
+          }
+        }}
+        onViewSpot={() => {
+          setPostSaveOpen(false);
+          if (lastSubmittedSpot?.spot_id) {
+            router.push(`/spot/${lastSubmittedSpot.spot_id}` as any);
+          }
+        }}
+        onSaveAndClose={() => {
+          setPostSaveOpen(false);
+          setDraft(initialDraft);
+          setStep(0);
+          setSelectedPark(null);
+          setLocationType('standalone');
+          router.replace('/(tabs)');
+        }}
+        onEndSession={async () => {
+          try { await api.delete('/me/park-session'); } catch {}
+          setActiveSession(null);
+          setSessionPark(null);
+          setSelectedPark(null);
+          setLocationType('standalone');
+          setPostSaveOpen(false);
+          setDraft(initialDraft);
+          setStep(0);
+          router.replace('/(tabs)');
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -1825,4 +2056,58 @@ const styles = StyleSheet.create({
     padding: space.xl, borderTopWidth: 1, borderTopColor: colors.border,
     backgroundColor: colors.bg,
   },
+  // ─── Park-Based Multi-Spot Workflow (Phase 2) ──────────────────────
+  sessionBanner: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+    padding: 12, borderRadius: radii.md,
+    backgroundColor: 'rgba(245,166,35,0.08)',
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.45)',
+  },
+  sessionIcon: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: 'rgba(245,166,35,0.20)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  sessionTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
+  sessionSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2 },
+  sessionBtnRow: { flexDirection: 'row', gap: 6, marginTop: 10, flexWrap: 'wrap' },
+  sessionPrimary: {
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: radii.pill,
+    backgroundColor: colors.primary,
+  },
+  sessionPrimaryTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 12 },
+  sessionGhost: {
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: radii.pill,
+    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
+  },
+  sessionGhostTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },
+
+  typeRow: { flexDirection: 'row', gap: 8 },
+  typeCard: {
+    flex: 1, gap: 4, padding: 12, borderRadius: radii.md,
+    backgroundColor: colors.surface1,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  typeCardOn: {
+    borderColor: colors.primary,
+    backgroundColor: 'rgba(245,166,35,0.08)',
+  },
+  typeTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13, marginTop: 2 },
+  typeSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11 },
+
+  parkPickedCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    padding: 12, borderRadius: radii.md,
+    backgroundColor: colors.surface1,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
+  },
+  parkPickedIcon: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: 'rgba(245,166,35,0.16)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  parkPickedLabel: { color: colors.textTertiary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase' },
+  parkPickedName: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
+  parkPickedMeta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12 },
+  parkPickedChange: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 12 },
 });

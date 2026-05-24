@@ -12,6 +12,56 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Feature 3 · Phase 2 — Park-based multi-spot workflow (Add Spot UX)"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/src/components/ParkPickerSheet.tsx (NEW)
+        • Full-screen modal: debounced /api/parks/search + inline
+          "Create new park" form.
+        • Handles 409 duplicate response → "Is this the same park?"
+          inline prompt with one-tap re-use, or "Create new park anyway".
+        • Pre-fills create form with current pin lat/lng + city/state
+          drawn from the spot draft.
+      /app/frontend/src/components/PostSaveSpotSheet.tsx (NEW)
+        • Bottom-sheet shown after successful spot submission.
+        • Standalone path: View spot / Done.
+        • Park-child path: Add another in this park / View park /
+          Save & close / End park session.
+      /app/frontend/app/park/[id].tsx (NEW)
+        • Minimal park detail page (Phase 3 will polish):
+          header + "N photo spots inside this park" + child cards.
+        • "Add another spot in this park" button refreshes the 24h
+          session and routes back to /(tabs)/add.
+      /app/frontend/app/(tabs)/add.tsx
+        • Adds park session pickup banner on step 0 (24h session reload
+          via GET /api/me/park-session on mount).
+        • Adds Location Type chooser (Standalone vs Park Child) at top
+          of step 1 + parent-park summary card with Change action.
+        • buildPayload now sends park_group_id + park_name when the
+          spot is a park child.
+        • Submit success path replaced with PostSaveSpotSheet; persists
+          the 24h park session via POST /api/me/park-session after a
+          successful park-child submission.
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          End-to-end smoke verified via direct API calls:
+          login → POST /parks → POST /spots with park_group_id → GET
+          /parks/{id} returns child_spot_count=1 + children[0] correct →
+          POST /me/park-session active → cleanup. Web bundle compiles
+          with zero errors after restart (6.7s bundle).
+          Frontend UI testing pending user verification on mobile.
+          Note: ADDITIVE — Location Type defaults to "standalone" so
+          users who never engage with the park flow get the exact same
+          experience as before.
+
+
+
   - task: "Feature 3 · Phase 1 — Park-based multi-spot workflow (backend foundation)"
     implemented: true
     working: true
