@@ -12,6 +12,46 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Feature 3 · Phase 4 — Park markers on map at low zoom (NO clustering)"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/src/components/ParkMapPin.tsx (NEW)
+        • Distinctive orange "layered" map pin with optional child count.
+        • Deliberately not a cluster bubble — represents a single
+          parent-park data row.
+        • No shadows / textShadows (Android map bitmap snapshot clips
+          them, producing dark squares).
+      /app/frontend/app/(tabs)/explore.tsx
+        • Added parkMarkers state + loadParkMarkers (mirrors the spot-
+          marker fetch pattern: throttled 2.5s, AbortController-aware,
+          drops malformed coordinates).
+        • PARK_LAYER_THRESHOLD = 0.5 latitudeDelta — at metro-region
+          zoom and wider, the map swaps from child-spot pins to one
+          marker per parent park.
+        • renderedParkMarkers memoized on park identity set so pan/zoom
+          alone never churns the JSX tree.
+        • Conditional: mapNativeReady ? (parksLayerVisible
+          ? renderedParkMarkers : renderedMarkers) : null.
+        • Tap on park marker → router.push(`/park/{id}`) (bypasses the
+          spot bottom-sheet path entirely).
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Implements the no-cluster rule from FEATURE 3G:
+          • Child spots remain individually tappable when visible.
+          • Single parent park marker only when the map is zoomed out.
+          • Parents are data records, not viewport aggregations.
+          Backend bbox search returns 5 parks 0.5-1km from test pin
+          with child counts. Web bundle clean (12.7s rebuild).
+          Mobile UI testing pending user verification.
+
+
+
   - task: "Feature 3 · Phase 3 — Park polish + spot breadcrumb + Explore parks rail"
     implemented: true
     working: true

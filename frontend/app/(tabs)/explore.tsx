@@ -27,6 +27,7 @@ import {
   GoldenHourRail,
 } from '../../src/components/PremiumExploreRails';
 import ParksRail from '../../src/components/ParksRail';
+import ParkMapPin from '../../src/components/ParkMapPin';
 import { PremiumMapPin, PremiumMapCluster } from '../../src/components/PremiumMapPin';
 import ExploreErrorBoundary from '../../src/components/ExploreErrorBoundary';
 import SectionErrorBoundary from '../../src/components/SectionErrorBoundary';
@@ -1024,6 +1025,87 @@ export default function Explore() {
     [markersIdentity, savedIds, androidMarkersTracking],
   );
 
+  // ─── Park-Based Multi-Spot Workflow · Phase 4 ─────────────────────
+  // Parent-park markers at low zoom. When the viewport is regional
+  // scale (latitudeDelta > PARK_LAYER_THRESHOLD), we hide individual
+  // child-spot markers and show one marker per parent park instead.
+  // This is NOT clustering — these are first-class data records from
+  // /api/parks/search. Child spots remain individually tappable as
+  // soon as the user zooms in past the threshold.
+  const PARK_LAYER_THRESHOLD = 0.5;       // ≈ 55 km lat span; metro-region zoom
+  const PARK_LAYER_FETCH_MS = 2500;       // mirror the spot-markers throttle
+  const [parkMarkers, setParkMarkers] = useState<any[]>([]);
+  const [parksLayerVisible, setParksLayerVisible] = useState(false);
+  const lastParkFetchAt = useRef<number>(0);
+  const parkFetchInflight = useRef<AbortController | null>(null);
+
+  const loadParkMarkers = useCallback(async (region?: any) => {
+    if (view !== 'map') return;
+    const now = Date.now();
+    if (now - lastParkFetchAt.current < PARK_LAYER_FETCH_MS) return;
+    if (
+      !region ||
+      !Number.isFinite(region.latitude) ||
+      !Number.isFinite(region.longitude) ||
+      !Number.isFinite(region.latitudeDelta) ||
+      region.latitudeDelta <= 0
+    ) return;
+    if (parkFetchInflight.current) {
+      try { parkFetchInflight.current.abort(); } catch {}
+    }
+    const ac = new AbortController();
+    parkFetchInflight.current = ac;
+    lastParkFetchAt.current = now;
+    try {
+      // Use search's near_lat/near_lng + a radius proportional to the
+      // current viewport so we only fetch parks that could plausibly
+      // show on screen. Capped at 200 km to keep payloads small.
+      const radiusKm = Math.min(200, Math.max(20, region.latitudeDelta * 111 * 1.2));
+      const r = await api.get('/parks/search', {
+        near_lat: region.latitude,
+        near_lng: region.longitude,
+        radius_km: radiusKm,
+        limit: 50,
+      });
+      if (ac.signal.aborted || !mapMountedRef.current) return;
+      const items = (Array.isArray(r) ? r : []).filter((p: any) =>
+        Number.isFinite(p?.latitude) && Number.isFinite(p?.longitude) &&
+        Math.abs(p.latitude) <= 90 && Math.abs(p.longitude) <= 180 &&
+        !!p.park_id,
+      );
+      setParkMarkers(items);
+    } catch {}
+  }, [view]);
+
+  // Render park markers, memoized on the park identity set so pan/zoom
+  // alone doesn't churn the JSX tree.
+  const parkMarkersIdentity = useMemo(
+    () => parkMarkers.map((p) => p.park_id).join('|'),
+    [parkMarkers],
+  );
+  const renderedParkMarkers = useMemo(
+    () =>
+      parkMarkers.map((p, idx) => (
+        <Marker
+          key={`park-${p.park_id || idx}`}
+          coordinate={{ latitude: p.latitude, longitude: p.longitude }}
+          onPress={() => {
+            Haptics.selectionAsync().catch(() => {});
+            router.push(`/park/${p.park_id}` as any);
+          }}
+          tracksViewChanges={
+            Platform.OS === 'android' ? androidMarkersTracking : false
+          }
+          anchor={{ x: 0.5, y: 1 }}
+          testID={`park-marker-${p.park_id}`}
+        >
+          <ParkMapPin childCount={p.child_spot_count} />
+        </Marker>
+      )),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [parkMarkersIdentity, androidMarkersTracking],
+  );
+
   // v2.0.21 — Build environment diagnostic.
   // Logged once at mount so we can confirm in Xcode / Console.app
   // that the TestFlight build was bundled against the expected
@@ -1092,7 +1174,23 @@ export default function Explore() {
         if (mapMarkers.length === 0 && view === 'map') {
           loadMapMarkers(region);
         }
+        // Phase 4: also drive the park-layer visibility + fetch on the
+        // very first region emit so a fresh-mount low-zoom view shows
+        // parks immediately.
+        const initialParksVisible = region.latitudeDelta > PARK_LAYER_THRESHOLD;
+        setParksLayerVisible(initialParksVisible);
+        if (initialParksVisible && view === 'map') loadParkMarkers(region);
         return;
+      }
+      // Phase 4 — update park-layer visibility based on current zoom.
+      // We only refetch the parks dataset when the layer becomes visible
+      // OR the user pans meaningfully within the layer's zoom band; the
+      // spot-marker code path below handles the "search this area"
+      // motion separately.
+      const parksVisibleNow = region.latitudeDelta > PARK_LAYER_THRESHOLD;
+      setParksLayerVisible(parksVisibleNow);
+      if (parksVisibleNow && view === 'map') {
+        loadParkMarkers(region);
       }
       const dLat = Math.abs(region.latitude - lastLoadCenter.current.lat);
       const dLng = Math.abs(region.longitude - lastLoadCenter.current.lng);
@@ -1109,7 +1207,7 @@ export default function Explore() {
         }
       }
     }, 350);
-  }, [view, mapMarkers.length, loadMapMarkers]);
+  }, [view, mapMarkers.length, loadMapMarkers, loadParkMarkers]);
 
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
@@ -1444,7 +1542,15 @@ export default function Explore() {
             // This eliminates the Mac-Catalyst crash where Fabric's
             // interop shim called insertObject:atIndex: on a
             // not-yet-fully-mounted parent's child array.
-            mapNativeReady ? renderedMarkers : null
+            //
+            // Phase 4 (Park-Based Multi-Spot Workflow): swap to
+            // parent-park markers at low zoom. Crucially this is NOT
+            // clustering — these are first-class data rows. Child spots
+            // remain individually tappable as soon as the user zooms
+            // in past PARK_LAYER_THRESHOLD.
+            mapNativeReady
+              ? (parksLayerVisible ? renderedParkMarkers : renderedMarkers)
+              : null
           )}
 
           {/* Apr 2026 cleanup — trending floating chip removed per
