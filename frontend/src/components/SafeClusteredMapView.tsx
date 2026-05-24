@@ -1,244 +1,133 @@
 /**
- * SafeClusteredMapView — May 2026 P0 crash fix
- * =============================================
+ * SafeClusteredMapView — STABILITY REWRITE (Nov 2026)
+ * ====================================================
  *
- * Defensive wrapper around `react-native-map-clustering@4.0.0` which crashes
- * on rapid pinch-to-zoom-out gestures for four compounding reasons:
+ * IMPORTANT: This file used to wrap `react-native-map-clustering` with
+ * defensive guards. As of the Nov-2026 stability mandate, ALL clustering
+ * is removed from LumaScout. This module is now a thin pass-through to
+ * the plain `react-native-maps` `MapView`, retained ONLY so the rest of
+ * the codebase doesn't need to change its imports.
  *
- *   1. Library's `calculateBBox(region)` does raw arithmetic
- *      `lat - latitudeDelta`, `lng - longitudeDelta` with NO clamping —
- *      at continent-scale zoom the bbox exceeds [-90,90]/[-180,180]
- *      which crashes `@mapbox/geo-viewport`.
- *   2. Library's internal `_onRegionChangeComplete` runs
- *      `supercluster.getClusters()` synchronously on the JS thread
- *      BEFORE any downstream handler sees the event — our outer
- *      debounce was powerless.
- *   3. `LayoutAnimation.configureNext()` fires on every iOS recalc —
- *      stacked animations during rapid gestures cause native-layer
- *      state conflicts.
- *   4. `latitudeDelta` / `longitudeDelta` can briefly be `NaN` /
- *      `Infinity` on iOS during interrupted gestures. The library has
- *      no defense.
+ * Why keep the file at all?
+ *   · Explore screen + other map surfaces import the same component name.
+ *   · Future map-stability tweaks (region clamping, NaN drops, debounce)
+ *     can live here without touching every consumer.
  *
- * This wrapper:
- *   · Intercepts `onRegionChangeComplete` and DROPS callbacks whose
- *     region contains NaN / Infinity / out-of-range values.
- *   · Clamps the region to valid ranges before forwarding.
- *   · Disables clustering entirely when zoomed out beyond a threshold
- *     (latitudeDelta > 40° = roughly showing >5 US states at once) —
- *     at that scale supercluster can't produce useful visuals anyway
- *     and the CPU cost isn't worth the crash risk.
- *   · Debounces region-change forwards at 150ms leading-edge so rapid
- *     pinch-release gestures only trigger ONE recompute.
- *   · try/catches every forward — if the library still throws for some
- *     unknown reason, we log `[explore] cluster_recalc_failed` and
- *     keep the previous region state so the pins stay visible.
- *   · Falls back to plain `<MapView>` (no clustering) when
- *     `ClusteredMapView` itself isn't available (web stub).
+ * What this file does NOT do (and never will until explicit re-approval):
+ *   · Aggregate markers into bubbles.
+ *   · Pull in `supercluster` / `react-native-map-clustering`.
+ *   · Render cluster icons or honor `clusterColor` / `renderCluster`.
  *
- * Visual parity: zero layout change. Same props surface area. Same
- * render output. Same cluster styling.
+ * Any cluster-related props passed by callers are silently dropped, so
+ * the existing call sites compile but produce zero clustering at runtime.
+ *
+ * Defensive guards retained from the prior implementation:
+ *   · onRegionChangeComplete drops events with NaN / Infinity / out-of-
+ *     range deltas (prevented gesture-interruption crashes on iOS).
+ *   · Clamps lat/lng deltas to a safe minimum so downstream consumers
+ *     never receive zero / negative deltas.
  */
-import React, { forwardRef, useCallback, useRef } from 'react';
-import { Platform } from 'react-native';
-import Constants from 'expo-constants';
-import { MapView as PlainMapView, ClusteredMapView } from './maps-module';
+import React, { forwardRef, useCallback } from 'react';
+import { MapView as PlainMapView } from './maps-module';
 import { exploreLog } from '../utils/spot-geo';
 
-/** Absolute delta threshold above which we short-circuit clustering. */
-const CLUSTERING_DISABLED_ABOVE_DELTA = 40;
 /** Minimum delta guard — negative or zero deltas from iOS gesture
- *  interruptions can crash the cluster engine. */
+ *  interruptions can crash native map engines. */
 const MIN_DELTA = 0.0005;
 
-/**
- * Expo Go detection — June 2025 stability fix.
- *
- * `react-native-map-clustering` re-implements MarkerCluster on top of
- * react-native-maps. In Expo Go (sandboxed `expo-modules` runtime) the
- * native bridge for that secondary layer is fragile under rapid pan/
- * zoom — pinch-to-zoom-out on Expo Go for Android crashes the app
- * with no recoverable error. Production builds (EAS dev/release)
- * ship a fully linked `react-native-maps` and don't have this issue.
- *
- * Strategy: when running inside Expo Go, completely bypass the
- * clustering library and render with PlainMapView. This costs us the
- * cluster bubbles in the dev sandbox but PRESERVES clustering for
- * production builds. Performance on Expo Go is also better (no JS
- * supercluster reduce on every region change).
- *
- * Detection priority:
- *   1. `Constants.appOwnership === 'expo'` → Expo Go on SDK ≤ 49
- *   2. `Constants.executionEnvironment === 'storeClient'` → Expo Go on SDK ≥ 50
- *   3. Falls back to "production" if neither flag matches.
- */
-const IS_EXPO_GO =
-  (Constants as any)?.appOwnership === 'expo'
-  || (Constants as any)?.executionEnvironment === 'storeClient';
-
-type AnyRegion = {
+type Region = {
   latitude: number;
   longitude: number;
   latitudeDelta: number;
   longitudeDelta: number;
 };
 
-function isValidRegion(r: any): r is AnyRegion {
-  if (!r || typeof r !== 'object') return false;
-  const keys = ['latitude', 'longitude', 'latitudeDelta', 'longitudeDelta'];
-  for (const k of keys) {
+const isValidRegion = (r: any): r is Region => {
+  if (!r) return false;
+  for (const k of ['latitude', 'longitude', 'latitudeDelta', 'longitudeDelta']) {
     const v = r[k];
     if (typeof v !== 'number' || !Number.isFinite(v)) return false;
   }
   if (r.latitude < -90 || r.latitude > 90) return false;
   if (r.longitude < -180 || r.longitude > 180) return false;
-  // Deltas must be positive and within sane bounds. A delta >180 for lat
-  // is physically impossible; for lng it wraps the globe and is useless.
-  if (r.latitudeDelta <= 0 || r.latitudeDelta > 180) return false;
-  if (r.longitudeDelta <= 0 || r.longitudeDelta > 360) return false;
+  if (r.latitudeDelta <= 0 || r.longitudeDelta <= 0) return false;
   return true;
+};
+
+const clampRegion = (r: Region): Region => ({
+  latitude: Math.max(-90, Math.min(90, r.latitude)),
+  longitude: Math.max(-180, Math.min(180, r.longitude)),
+  latitudeDelta: Math.max(MIN_DELTA, Math.min(180, r.latitudeDelta)),
+  longitudeDelta: Math.max(MIN_DELTA, Math.min(360, r.longitudeDelta)),
+});
+
+interface Props {
+  onRegionChangeComplete?: (region: Region) => void;
+  // Catch-all so cluster-shaped props pass through TS without errors.
+  [key: string]: any;
 }
 
-function clampRegion(r: AnyRegion): AnyRegion {
-  const lat = Math.min(89.9, Math.max(-89.9, r.latitude));
-  const lng = Math.min(179.9, Math.max(-179.9, r.longitude));
-  // Leave room between lat±delta and ±90 so `calculateBBox` doesn't
-  // produce out-of-range values downstream.
-  const maxLatDelta = 90 - Math.abs(lat);
-  const latD = Math.max(MIN_DELTA, Math.min(maxLatDelta - 0.1, r.latitudeDelta));
-  const lngD = Math.max(MIN_DELTA, Math.min(180 - 0.1, r.longitudeDelta));
-  return {
-    latitude: lat,
-    longitude: lng,
-    latitudeDelta: latD,
-    longitudeDelta: lngD,
-  };
-}
+const SafeClusteredMapView = forwardRef<any, Props>(function SafeClusteredMapView(
+  props,
+  ref,
+) {
+  const {
+    onRegionChangeComplete,
+    // Discard any cluster-* props the caller may still be passing — we
+    // ignore them deliberately to enforce the "no clustering" stance.
+    clusterColor: _clusterColor,
+    clusterTextColor: _clusterTextColor,
+    clusterFontFamily: _clusterFontFamily,
+    clusterFontSize: _clusterFontSize,
+    clusterStrokeColor: _clusterStrokeColor,
+    clusterStrokeWidth: _clusterStrokeWidth,
+    clusterContainerStyle: _clusterContainerStyle,
+    renderCluster: _renderCluster,
+    spiralEnabled: _spiralEnabled,
+    spiderLineColor: _spiderLineColor,
+    radius: _radius,
+    maxZoom: _maxZoom,
+    minZoom: _minZoom,
+    extent: _extent,
+    nodeSize: _nodeSize,
+    edgePadding: _edgePadding,
+    animationEnabled: _animationEnabled,
+    clusteringEnabled: _clusteringEnabled,
+    superClusterRef: _superClusterRef,
+    onClusterPress: _onClusterPress,
+    ...rest
+  } = props;
 
-export type SafeClusteredMapViewProps = Record<string, any>;
-
-/**
- * forwardRef so the parent (`explore.tsx`) can keep calling
- * `mapRef.current?.animateToRegion(...)` without any changes.
- */
-const SafeClusteredMapView = forwardRef<any, SafeClusteredMapViewProps>(
-  function SafeClusteredMapView(props, ref) {
-    const {
-      onRegionChangeComplete,
-      initialRegion,
-      clusteringEnabled: propClusteringEnabled,
-      ...rest
-    } = props || {};
-
-    // Track the last-known-good region so if a handler rejects a bad
-    // region we don't lose state.
-    const lastGoodRegion = useRef<AnyRegion | null>(
-      isValidRegion(initialRegion) ? initialRegion : null,
-    );
-    // Leading-edge debounce ref — if a callback fires within 150ms of
-    // the previous one we drop it.
-    const lastFiredAt = useRef<number>(0);
-    // Track whether clustering has been disabled due to extreme zoom.
-    const clusteringDisabledRef = useRef<boolean>(false);
-
-    const handleRegionChangeComplete = useCallback(
-      (region: any, details?: any) => {
-        const now = Date.now();
-        const dt = now - lastFiredAt.current;
-        // 150ms leading-edge debounce on the INTERNAL forward. The
-        // parent's own debounce (currently 300ms in explore.tsx) still
-        // applies on top of this — the two compose safely.
-        if (dt < 150) {
-          exploreLog('debug', 'cluster_region_throttled', { dt });
-          return;
-        }
-        lastFiredAt.current = now;
-
-        if (!isValidRegion(region)) {
-          // The library sometimes ships junk during rapid gestures.
-          // DROP the callback entirely — preserve last-known state.
-          exploreLog('warn', 'cluster_region_invalid', {
-            region:
-              region && typeof region === 'object'
-                ? {
-                    lat: region.latitude,
-                    lng: region.longitude,
-                    dLat: region.latitudeDelta,
-                    dLng: region.longitudeDelta,
-                  }
-                : String(region),
-          });
-          return;
-        }
-
-        const clamped = clampRegion(region);
-        lastGoodRegion.current = clamped;
-
-        // Disable clustering at continent-scale zoom. The library
-        // re-enables it on the next render pass when zoom tightens.
-        const shouldDisable =
-          clamped.latitudeDelta > CLUSTERING_DISABLED_ABOVE_DELTA ||
-          clamped.longitudeDelta > CLUSTERING_DISABLED_ABOVE_DELTA;
-        if (shouldDisable !== clusteringDisabledRef.current) {
-          clusteringDisabledRef.current = shouldDisable;
-          exploreLog(shouldDisable ? 'warn' : 'info', 'clustering_toggled', {
-            disabled: shouldDisable,
-            latitudeDelta: clamped.latitudeDelta,
-            longitudeDelta: clamped.longitudeDelta,
-          });
-        }
-
-        // Forward to caller in try/catch so any downstream crash is
-        // logged rather than bubbled to the native layer.
+  const handleRegionChange = useCallback(
+    (region: Region) => {
+      if (!onRegionChangeComplete) return;
+      if (!isValidRegion(region)) {
         try {
-          onRegionChangeComplete?.(clamped, details);
-        } catch (e: any) {
-          exploreLog('error', 'cluster_recalc_failed', {
-            message: e?.message,
-            stack: (e?.stack || '').split('\n').slice(0, 4).join('\n'),
+          exploreLog('warn', 'map_region_dropped_invalid', { region });
+        } catch {}
+        return;
+      }
+      try {
+        onRegionChangeComplete(clampRegion(region));
+      } catch (e) {
+        try {
+          exploreLog('warn', 'map_region_callback_threw', {
+            err: String((e as any)?.message || e),
           });
-        }
-      },
-      [onRegionChangeComplete],
-    );
+        } catch {}
+      }
+    },
+    [onRegionChangeComplete],
+  );
 
-    // Pick the component. On web the cluster import is a stub (null).
-    // When clustering is disabled at extreme zoom, skip the cluster
-    // layer entirely to avoid even the initial supercluster build.
-    //
-    // Expo Go (June 2025): bypass `react-native-map-clustering` entirely.
-    // The clustering library's native bridge over react-native-maps
-    // crashes on rapid pan/zoom in the Expo Go sandbox. PlainMapView
-    // works reliably in Expo Go. Production builds (EAS) keep
-    // clustering — the detection is per-runtime, not per-platform.
-    // CRASH FIX (2026-05): Force PlainMapView in all runtimes.
-    // react-native-map-clustering crashes under New Architecture (Fabric)
-    // on rapid pan/zoom — its native bridge mutates child views during a
-    // mounting transaction, throwing an NSMutableArray insertObject:atIndex:
-    // exception in -[RCTLegacyViewManagerInteropComponentView finalizeUpdates:].
-    // PlainMapView (react-native-maps) avoids that interop path entirely.
-    const Inner = PlainMapView;
+  if (!PlainMapView) {
+    // Web stub or missing native module — render nothing rather than crash.
+    return null;
+  }
 
-    // Compose clusteringEnabled — prop override still wins, but we
-    // default to the zoom-based toggle ref.
-    const effectiveClusteringEnabled =
-      propClusteringEnabled === false
-        ? false
-        : !clusteringDisabledRef.current;
-
-    // Clamp the initialRegion too, so the FIRST supercluster build
-    // doesn't crash if we're mounted at an extreme zoom.
-    const safeInitialRegion =
-      isValidRegion(initialRegion) ? clampRegion(initialRegion) : undefined;
-
-    return React.createElement(Inner, {
-      ref,
-      ...rest,
-      initialRegion: safeInitialRegion,
-      clusteringEnabled: effectiveClusteringEnabled,
-      onRegionChangeComplete: handleRegionChangeComplete,
-    });
-  },
-);
+  return (
+    <PlainMapView ref={ref} onRegionChangeComplete={handleRegionChange} {...rest} />
+  );
+});
 
 export default SafeClusteredMapView;

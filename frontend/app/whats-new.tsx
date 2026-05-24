@@ -28,7 +28,7 @@ const RELEASES: Release[] = [
     date: 'March 2026',
     highlights: [
       'Premium Profile dashboard with creator analytics',
-      'Cinematic Explore map with branded pins + clustering',
+      'Cinematic Explore map with branded pins',
       '15-second API timeouts — the app feels snappier on flaky networks',
     ],
   },

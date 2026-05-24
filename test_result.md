@@ -12,6 +12,64 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "URGENT STABILITY — Full removal of map clustering"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/src/components/SafeClusteredMapView.tsx (REWRITTEN)
+        • Was: defensive wrapper around `react-native-map-clustering`
+          that still rendered cluster bubbles in production builds.
+        • Now: thin pass-through to plain react-native-maps `MapView`.
+          Silently drops any cluster-* prop a stale caller passes:
+          clusterColor / clusterTextColor / clusterFontFamily /
+          clusterFontSize / clusterStrokeColor / radius / renderCluster /
+          onClusterPress / spiralEnabled / spiderLineColor / maxZoom /
+          minZoom / nodeSize / etc. Region clamp + NaN-drop guards retained.
+      /app/frontend/src/components/maps-module.ts (REWRITTEN)
+        • Removed: `require('react-native-map-clustering')`.
+        • `ClusteredMapView` is now just an alias for plain MapView, kept
+          only for backward compatibility with any straggling imports.
+      /app/frontend/app/(tabs)/explore.tsx
+        • Deleted all clustering props (clusterColor, clusterTextColor,
+          clusterFontFamily, radius, spiderLineColor, animationEnabled).
+        • Deleted the entire `renderCluster: (cluster) => { ... }` block
+          including the cluster-tap zoom handler.
+        • Removed `PremiumMapCluster` from imports.
+        • Phase 4 parent-park markers preserved — those are first-class
+          data records (one marker per park row at low zoom), NOT
+          clusters.
+      /app/frontend/app/whats-new.tsx
+        • Marketing copy updated: "branded pins + clustering" → "branded pins".
+      /app/frontend/package.json + yarn.lock
+        • Removed: `react-native-map-clustering@^4.0.0` (via `yarn remove`).
+        • Transitive `supercluster@^8.0.0` also dropped automatically.
+        • Confirmed: both packages no longer exist in node_modules.
+      /app/frontend/src/components/SafeClusteredMapView.tsx.bak (DELETED)
+        • Removed the leftover backup so the old clustering implementation
+          can't be accidentally restored.
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Stability audit + removal pass complete:
+          • grep across /app/frontend/src + /app/frontend/app for any
+            runtime `from 'react-native-map-clustering'` / `from
+            'supercluster'` → ZERO hits.
+          • Active cluster-shaped props in source (renderCluster /
+            onClusterPress) → only the defensive drop-list inside
+            SafeClusteredMapView, all swallowed.
+          • node_modules/react-native-map-clustering and
+            node_modules/supercluster → both absent.
+          • Web bundle: clean 7.3s rebuild after restart.
+          • Backend smoke: /spots/markers (200, 37 items),
+            /parks/search (200, 6 parks), /spots (200) all healthy.
+          • Phase 4 parent-park markers preserved (data-row, not cluster).
+
+
+
   - task: "Feature 3 · Phase 6 — Offline draft queue for child spots (AsyncStorage + auto-sync)"
     implemented: true
     working: true

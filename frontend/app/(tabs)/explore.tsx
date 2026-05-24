@@ -28,7 +28,7 @@ import {
 } from '../../src/components/PremiumExploreRails';
 import ParksRail from '../../src/components/ParksRail';
 import ParkMapPin from '../../src/components/ParkMapPin';
-import { PremiumMapPin, PremiumMapCluster } from '../../src/components/PremiumMapPin';
+import { PremiumMapPin } from '../../src/components/PremiumMapPin';
 import ExploreErrorBoundary from '../../src/components/ExploreErrorBoundary';
 import SectionErrorBoundary from '../../src/components/SectionErrorBoundary';
 import SpotImageFallback from '../../src/components/SpotImageFallback';
@@ -1434,13 +1434,12 @@ export default function Explore() {
               // crash trigger and re-enable in a controlled rollout.
               customMapStyle: (Platform.OS === 'ios' && mapType === 'standard') ? MAP_STYLE_DARK : undefined,
               mapType: mapType,
-              // Clustering options (no-ops on plain MapView fallback)
-              clusterColor: colors.primary,
-              clusterTextColor: '#1a1300',
-              clusterFontFamily: font.bodyBold,
-              radius: 50,
-              spiderLineColor: colors.primary,
-              animationEnabled: true,
+              // STABILITY (Nov 2026): clustering removed. All cluster-shaped
+              // props that used to live here (clusterColor, clusterTextColor,
+              // clusterFontFamily, radius, spiderLineColor, animationEnabled,
+              // renderCluster) were silently dropped by SafeClusteredMapView
+              // and would never run again — they've been deleted to make
+              // the no-clustering contract obvious in the source.
               // Expo Go stability (June 2025): pause aggressive marker
               // refetches while the user is actively touching the map.
               // The onRegionChangeComplete will resume once they release.
@@ -1468,65 +1467,6 @@ export default function Explore() {
                       : null,
                   });
                 }
-              },
-              // Custom cluster — gold glowing disc with pulse ring.
-              //
-              // Batch #9A (May 2026) — FIX: the library-provided `onPress`
-              // closure was delegating to `fitToCoordinates` under the
-              // hood, which in our SafeClusteredMapView + RN-Maps SDK
-              // combination ended up reading stale children coords and
-              // widening the region (zoom OUT) on every tap instead of
-              // zooming IN. We now bypass that entirely and do a
-              // deterministic "halve the viewport centered on cluster"
-              // animation — every tap predictably zooms in ~2.4x until
-              // individual pins spread and become tappable.
-              renderCluster: (cluster: any) => {
-                const { id, geometry, properties } = cluster;
-                return (
-                  <Marker
-                    key={`cluster-${id}`}
-                    coordinate={{
-                      latitude: geometry.coordinates[1],
-                      longitude: geometry.coordinates[0],
-                    }}
-                    onPress={() => {
-                      try {
-                        Haptics.selectionAsync().catch(() => {});
-                      } catch { /* noop */ }
-                      // Prefer current region deltas if we have them; fall
-                      // back to a sensible default when the map hasn't
-                      // emitted a region yet. Clamp to a reasonable
-                      // minimum so repeated taps don't zoom to microscopic
-                      // fractions of a degree (that creates blank tiles).
-                      const cur = currentRegion.current;
-                      const latD = cur && Number.isFinite(cur.latitudeDelta)
-                        ? cur.latitudeDelta
-                        : 0.5;
-                      const lngD = cur && Number.isFinite(cur.longitudeDelta)
-                        ? cur.longitudeDelta
-                        : 0.5;
-                      const MIN = 0.004; // ≈ 400m — city-block detail.
-                      const target = {
-                        latitude: geometry.coordinates[1],
-                        longitude: geometry.coordinates[0],
-                        latitudeDelta: Math.max(MIN, latD / 2.4),
-                        longitudeDelta: Math.max(MIN, lngD / 2.4),
-                      };
-                      if (mapRef.current?.animateToRegion) {
-                        mapRef.current.animateToRegion(target, 420);
-                      }
-                      exploreLog('info', 'cluster_tap_zoom_in', {
-                        count: properties.point_count,
-                        newLatDelta: target.latitudeDelta,
-                      });
-                    }}
-                    tracksViewChanges={false}
-                    anchor={{ x: 0.5, y: 0.5 }}
-                    testID={`cluster-${id}`}
-                  >
-                    <PremiumMapCluster count={properties.point_count} />
-                  </Marker>
-                );
               },
               onRegionChangeComplete: handleRegionChangeComplete,
             },
