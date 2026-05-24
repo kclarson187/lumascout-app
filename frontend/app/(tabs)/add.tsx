@@ -34,6 +34,8 @@ import ScoutAICard from '../../src/components/ScoutAICard';
 import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
 import ParkPickerSheet, { ParkSummary } from '../../src/components/ParkPickerSheet';
 import PostSaveSpotSheet from '../../src/components/PostSaveSpotSheet';
+import { saveDraft as saveLocalDraft } from '../../src/utils/park-drafts';
+import { useDraftSync } from '../../src/hooks/useDraftSync';
 
 const STEPS = ['Photos', 'Location', 'Details', 'Ratings', 'Privacy', 'Review'];
 
@@ -202,6 +204,11 @@ function AddSpotImpl() {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  // Phase 6 — Offline draft queue. The hook auto-syncs on mount, app
+  // foreground, and NetInfo reachability flips. `count` drives the
+  // "N pending" pill; `syncNow` is wired to the Retry button.
+  const drafts = useDraftSync();
 
   useEffect(() => {
     (async () => {
@@ -793,8 +800,10 @@ function AddSpotImpl() {
       return;
     }
     setSubmitting(true);
+    const payload = buildPayload(false);
+    const childPark = locationType === 'park_child' && selectedPark ? selectedPark : null;
     try {
-      const created = await api.post('/spots', buildPayload(false));
+      const created = await api.post('/spots', payload);
       // Explore Speed CR — Batch 4 (June 2025): clear the Explore list
       // SWR cache so the user sees their newly-submitted spot on the
       // next Explore visit instead of the previous cached set.
@@ -809,7 +818,6 @@ function AddSpotImpl() {
       // session so reopening the app later surfaces the pickup banner.
       // Failures are non-fatal — the spot was already saved.
       const submittedSpotId = created?.spot_id || null;
-      const childPark = locationType === 'park_child' && selectedPark ? selectedPark : null;
       if (childPark) {
         try {
           await api.post('/me/park-session', {
@@ -824,8 +832,31 @@ function AddSpotImpl() {
         park_name: childPark?.name || null,
       });
       setPostSaveOpen(true);
-    } catch (e) {
-      Alert.alert('Could not submit', formatApiError(e));
+    } catch (e: any) {
+      // Phase 6 — Offline / poor-signal fallback. We treat anything
+      // that ISN'T a clear 4xx server validation as a transient
+      // network failure and queue the spot to AsyncStorage so the
+      // user doesn't lose their work walking around the park.
+      const status: number | undefined = e?.status ?? e?.response?.status;
+      const isNetworkFailure = !status || status >= 500;
+      if (isNetworkFailure) {
+        try {
+          await saveLocalDraft(payload, {
+            park_group_id: childPark?.park_id ?? null,
+            park_name:     childPark?.name ?? null,
+          });
+          await drafts.refreshCount();
+          Alert.alert(
+            'Saved as draft',
+            "You're offline or the network is unstable. We'll upload this spot the moment you're back online.",
+            [{ text: 'OK', onPress: () => { setDraft(initialDraft); setStep(0); router.replace('/(tabs)'); } }],
+          );
+        } catch {
+          Alert.alert('Could not save', 'Network failed and the local draft store is unavailable. Please try again.');
+        }
+      } else {
+        Alert.alert('Could not submit', formatApiError(e));
+      }
     } finally {
       setSubmitting(false);
     }
@@ -863,6 +894,34 @@ function AddSpotImpl() {
         <View style={styles.progress}>
           <View style={[styles.progressFill, { width: `${((step + 1) / STEPS.length) * 100}%` }]} />
         </View>
+
+        {/* Phase 6 — Offline drafts pending. Shows up only when we have
+            something queued; tapping Retry tries to drain immediately. */}
+        {drafts.count > 0 && (
+          <View style={styles.draftsBanner} testID="drafts-banner">
+            <View style={styles.draftsIcon}>
+              <FileText size={12} color={colors.primary} />
+            </View>
+            <Text style={styles.draftsTxt} numberOfLines={1}>
+              {drafts.count} spot{drafts.count === 1 ? '' : 's'} waiting to upload
+            </Text>
+            <TouchableOpacity
+              style={styles.draftsBtn}
+              onPress={async () => {
+                const r = await drafts.syncNow();
+                if (r.uploaded > 0) {
+                  Alert.alert('Synced', `Uploaded ${r.uploaded} spot${r.uploaded === 1 ? '' : 's'}.${r.remaining > 0 ? ` ${r.remaining} still queued.` : ''}`);
+                } else if (r.failed > 0) {
+                  Alert.alert('Still offline', `Couldn't reach the server. ${r.failed} spot${r.failed === 1 ? '' : 's'} remain queued.`);
+                }
+              }}
+              disabled={drafts.syncing}
+              testID="drafts-retry"
+            >
+              <Text style={styles.draftsBtnTxt}>{drafts.syncing ? 'Syncing…' : 'Retry'}</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* FIX(Commit 7.6 / 2026-04): keyboardDismissMode lets users swipe
             the form to dismiss the keyboard — iOS interactive tracking,
@@ -2110,4 +2169,24 @@ const styles = StyleSheet.create({
   parkPickedName: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   parkPickedMeta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12 },
   parkPickedChange: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 12 },
+
+  // Phase 6 — pending offline drafts banner
+  draftsBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginHorizontal: space.lg, marginTop: 6,
+    paddingHorizontal: 10, paddingVertical: 6, borderRadius: radii.md,
+    backgroundColor: 'rgba(245,166,35,0.10)',
+    borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(245,166,35,0.40)',
+  },
+  draftsIcon: {
+    width: 22, height: 22, borderRadius: 11,
+    backgroundColor: 'rgba(245,166,35,0.20)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  draftsTxt: { flex: 1, color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },
+  draftsBtn: {
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.pill,
+    backgroundColor: colors.primary,
+  },
+  draftsBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 11 },
 });

@@ -22,10 +22,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ChevronLeft, Save, AlertTriangle, Check } from 'lucide-react-native';
+import { Layers } from 'lucide-react-native';
 import { api, formatApiError } from '../../../../src/api';
 import { colors, font, space, radii } from '../../../../src/theme';
 import { FormField } from '../../../../src/components/FormField';
 import { useKeyboardHeight } from '../../../../src/hooks/useKeyboardHeight';
+import ParkPickerSheet, { ParkSummary } from '../../../../src/components/ParkPickerSheet';
 
 const BEST_TIMES: { key: string; label: string }[] = [
   { key: 'sunrise',     label: 'Sunrise' },
@@ -90,6 +92,13 @@ export default function AdminSpotEdit() {
   const [crowdLevel,  setCrowdLevel]  = useState<number | null>(null);
   const [safetyRating, setSafetyRating] = useState<number | null>(null);
 
+  // Phase 5 — parent park linkage (separate flow from PATCH /info)
+  const [parkGroupId, setParkGroupId] = useState<string | null>(null);
+  const [parkName, setParkName] = useState<string | null>(null);
+  const [parkPickerOpen, setParkPickerOpen] = useState(false);
+  const [parkBusy, setParkBusy] = useState(false);
+  const [parkPin, setParkPin] = useState<{ lat?: number; lng?: number }>({});
+
   const seed = (s: SpotShape) => {
     setInitial(s);
     setTitle(s.title || '');
@@ -105,6 +114,12 @@ export default function AdminSpotEdit() {
     setPermitNotes(s.permit_notes || '');
     setCrowdLevel(typeof s.crowd_level === 'number' ? s.crowd_level : null);
     setSafetyRating(typeof s.safety_rating === 'number' ? s.safety_rating : null);
+    setParkGroupId((s as any).park_group_id || null);
+    setParkName((s as any).park_name || null);
+    setParkPin({
+      lat: typeof (s as any).latitude === 'number' ? (s as any).latitude : undefined,
+      lng: typeof (s as any).longitude === 'number' ? (s as any).longitude : undefined,
+    });
   };
 
   // Preload spot via existing admin endpoint — returns the full doc.
@@ -370,8 +385,77 @@ export default function AdminSpotEdit() {
 
           <Text style={s.miniLabel}>Safety rating</Text>
           <RatingRow value={safetyRating} onChange={setSafetyRating} testIDPrefix="edit-safety-rating" />
+
+          {/* Phase 5 — Parent park linkage. Independent of the PATCH
+              /info save flow (uses POST /admin/spots/{id}/park). */}
+          <SectionLabel>Parent park</SectionLabel>
+          <View style={s.parkCard}>
+            <View style={s.parkIcon}>
+              <Layers size={15} color={colors.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              {parkGroupId && parkName ? (
+                <>
+                  <Text style={s.parkLabel}>Linked to</Text>
+                  <Text style={s.parkName} numberOfLines={1}>{parkName}</Text>
+                </>
+              ) : (
+                <>
+                  <Text style={s.parkLabel}>Standalone</Text>
+                  <Text style={s.parkHint}>Not currently part of a park.</Text>
+                </>
+              )}
+            </View>
+            <TouchableOpacity
+              style={s.parkBtn}
+              onPress={() => setParkPickerOpen(true)}
+              disabled={parkBusy}
+              testID="edit-park-change"
+            >
+              <Text style={s.parkBtnTxt}>{parkGroupId ? 'Move' : 'Add'}</Text>
+            </TouchableOpacity>
+            {parkGroupId ? (
+              <TouchableOpacity
+                style={[s.parkBtn, { marginLeft: 6 }]}
+                onPress={async () => {
+                  setParkBusy(true);
+                  try {
+                    await api.post(`/admin/spots/${spotId}/park`, { park_group_id: null });
+                    setParkGroupId(null);
+                    setParkName(null);
+                  } catch (e) {
+                    Alert.alert('Could not unlink', formatApiError(e));
+                  } finally {
+                    setParkBusy(false);
+                  }
+                }}
+                disabled={parkBusy}
+                testID="edit-park-unlink"
+              >
+                <Text style={s.parkBtnTxt}>Remove</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
+      <ParkPickerSheet
+        visible={parkPickerOpen}
+        onClose={() => setParkPickerOpen(false)}
+        onPick={async (p: ParkSummary) => {
+          setParkBusy(true);
+          try {
+            const r = await api.post(`/admin/spots/${spotId}/park`, { park_group_id: p.park_id });
+            setParkGroupId(r.park_group_id || p.park_id);
+            setParkName(r.park_name || p.name);
+          } catch (e) {
+            Alert.alert('Could not move spot', formatApiError(e));
+          } finally {
+            setParkBusy(false);
+          }
+        }}
+        nearLat={parkPin.lat ?? null}
+        nearLng={parkPin.lng ?? null}
+      />
     </SafeAreaView>
   );
 }
@@ -477,4 +561,26 @@ const s = StyleSheet.create({
     borderRadius: radii.md,
   },
   okBannerTxt: { color: colors.success, fontFamily: font.bodyMedium, fontSize: 12, flex: 1 },
+  // Phase 5 — parent park linkage card
+  parkCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    padding: 12, borderRadius: radii.md,
+    backgroundColor: colors.surface1,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
+    marginTop: 6,
+  },
+  parkIcon: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: 'rgba(245,166,35,0.16)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  parkLabel: { color: colors.textTertiary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase' },
+  parkName: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14, marginTop: 1 },
+  parkHint: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 1 },
+  parkBtn: {
+    paddingHorizontal: 10, paddingVertical: 6, borderRadius: radii.pill,
+    backgroundColor: colors.surface2,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
+  },
+  parkBtnTxt: { color: colors.text, fontFamily: font.bodyBold, fontSize: 11 },
 });

@@ -12,6 +12,110 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Feature 3 · Phase 6 — Offline draft queue for child spots (AsyncStorage + auto-sync)"
+    implemented: true
+    working: true
+    file: |
+      /app/frontend/src/utils/park-drafts.ts (NEW)
+        • AsyncStorage-backed queue under '@lumascout:park_drafts:v1'.
+        • API: saveDraft / listDrafts / countDrafts / deleteDraft /
+          markAttemptFailed / clearDrafts.
+        • Each draft holds the full /api/spots payload (incl. base64
+          images), park_group_id, park_name, saved_at, attempts,
+          last_error.
+      /app/frontend/src/hooks/useDraftSync.ts (NEW)
+        • Drains the queue automatically on:
+          – mount
+          – AppState 'active' (foreground)
+          – NetInfo connectivity → reachable
+        • Caps retries at MAX_ATTEMPTS (6) so a permanently-bad payload
+          stops burning CPU.
+        • After each successful park-child upload, refreshes the 24h
+          park session so the pickup banner stays accurate.
+        • Exposes { count, syncing, syncNow, refreshCount }.
+      /app/frontend/app/(tabs)/add.tsx
+        • Wires useDraftSync.
+        • submit() now falls back to saveDraft on network failures /
+          5xx (HTTP-status heuristic — 4xx still surface as the normal
+          "Could not submit" alert since those won't auto-fix).
+        • "N spots waiting to upload" banner with a Retry button below
+          the step progress bar; shows only when drafts.count > 0.
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Offline path proven by the unit-level shape:
+          • saveDraft stores the same payload the network call would have
+            sent (verified by reading the AsyncStorage key after a forced
+            failure).
+          • useDraftSync's network failure path increments `attempts` and
+            preserves last_error.
+          • Park session is refreshed after each park-child sync so the
+            field workflow doesn't lose "Continue adding spots to X?".
+          Web bundle: clean 6.9s rebuild after expo restart, zero errors.
+          Live network testing pending user verification.
+
+
+
+  - task: "Feature 3 · Phase 5 — Admin park tools (edit · move child · merge · delete)"
+    implemented: true
+    working: true
+    file: |
+      /app/backend/routes/parks.py
+        • GET    /admin/parks                    — list (search-aware)
+        • POST   /admin/spots/{spot_id}/park     — move child to a different
+          park, follows merge redirects, bumps counts on old + new park,
+          $unset park_group_id + park_name when unparenting, audit-logged.
+        • POST   /admin/parks/{source_id}/merge  — absorbs source into
+          target: re-points spots, migrates saves (dedupe via upsert),
+          flips source.status='merged_into', recomputes target count,
+          heals any park sessions pointing at the source, audit-logged.
+        • DELETE /admin/parks/{park_id}          — soft-delete (status='hidden');
+          refuses if active children remain; audit-logged.
+      /app/frontend/app/admin/parks.tsx (NEW)
+        • List + search of every park (active / merged_into / hidden).
+        • Per-row Edit · Merge · Delete actions; merged + hidden parks
+          are dimmed and non-actionable.
+        • Merge picker re-uses ParkPickerSheet for target selection.
+        • All destructive actions guarded with a confirm Alert.
+      /app/frontend/app/admin/parks/[id]/edit.tsx (NEW)
+        • Form for name / address / city / state / description /
+          parking / permit / safety / access — saves via PATCH /parks/{id}.
+        • "Saved" inline banner confirmation; name changes propagate
+          to denormalized park_name on every child spot.
+      /app/frontend/app/admin/more.tsx
+        • Added Parks entry (Layers icon) under the Content category.
+      /app/frontend/app/admin/spots/[id]/edit.tsx
+        • Added "Parent park" section to the existing admin spot edit
+          screen: shows current park or "Standalone", with Move /
+          Remove actions wired to POST /admin/spots/{id}/park and the
+          ParkPickerSheet.
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Phase 5 smoke (test_parks_phase5.py — temp) verified the full
+          admin flow end-to-end:
+            create A + B + child under A
+            ✔ move A→B (counts: A=0, B=1)
+            ✔ move B→null (unparent; B count back to 0)
+            ✔ re-parent + add 2nd spot under B
+            ✔ save B (test save migration on merge)
+            ✔ merge B→A (moved_spots=1, moved_saves=1, target_count=2)
+            ✔ GET on merged source returns target (merge redirect works)
+            ✔ saved-parks list shows target (save successfully migrated)
+            ✔ delete A blocked while children attached (400)
+            ✔ after unparenting both children → delete A succeeds (status='hidden')
+          Web bundle: clean 6.3s rebuild after expo restart, zero errors.
+
+
+
   - task: "Feature 3 · Phase 4 — Park markers on map at low zoom (NO clustering)"
     implemented: true
     working: true

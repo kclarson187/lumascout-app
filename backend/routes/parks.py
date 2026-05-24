@@ -45,6 +45,8 @@ from server import (
     get_optional_user,
     utcnow,
     haversine_km,
+    require_role,
+    audit_log,
 )
 
 router = APIRouter(prefix="/api", tags=["parks"])
@@ -642,3 +644,255 @@ async def list_my_saved_parks(
     by_id = {p["park_id"]: _park_public_view(p) for p in parks}
     items = [by_id[pid] for pid in park_ids if pid in by_id]
     return {"items": items, "total": len(items)}
+
+
+# ─── Admin operations (Phase 5) ────────────────────────────────────────
+
+
+class AdminMoveChildIn(BaseModel):
+    """Move a single child spot to a different parent park (or unparent)."""
+    park_group_id: Optional[str] = None  # None / "" → unparent (standalone)
+
+
+class AdminMergeParksIn(BaseModel):
+    """Absorb `source_park_id` into `target_park_id`.
+
+    All child spots are re-pointed to the target; the source park is
+    marked status="merged_into" and saved against the target so any
+    bookmarks / saves transparently follow.
+    """
+    target_park_id: str
+
+
+@router.get("/admin/parks")
+async def admin_list_parks(
+    q: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    me: dict = Depends(require_role("admin")),
+) -> Dict[str, Any]:
+    """List parks for the admin Parks tab.
+
+    Returns active + merged-into parks (merged ones flagged so the UI
+    can show them dimmed). Sortable by child_spot_count desc.
+    """
+    query: Dict[str, Any] = {}
+    if q and q.strip():
+        safe = re.escape(q.strip())
+        query["$or"] = [
+            {"name": {"$regex": safe, "$options": "i"}},
+            {"city": {"$regex": safe, "$options": "i"}},
+            {"address": {"$regex": safe, "$options": "i"}},
+        ]
+    docs = await db.parks.find(query, {"_id": 0}).sort([("status", 1), ("child_spot_count", -1), ("created_at", -1)]).limit(limit).to_list(limit)
+    return {"items": [_park_public_view(d) for d in docs], "total": len(docs)}
+
+
+@router.post("/admin/spots/{spot_id}/park")
+async def admin_move_spot_park(
+    spot_id: str,
+    body: AdminMoveChildIn,
+    me: dict = Depends(require_role("admin")),
+) -> Dict[str, Any]:
+    """Move a child spot from one park to another (or remove from a park).
+
+    Bumps `child_spot_count` on the relevant park(s). Audit-logged.
+    """
+    spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0})
+    if not spot:
+        raise HTTPException(status_code=404, detail="Spot not found")
+
+    old_park_id: Optional[str] = spot.get("park_group_id")
+    new_park_id: Optional[str] = (body.park_group_id or "").strip() or None
+    new_park_name: Optional[str] = None
+
+    if new_park_id:
+        new_park = await db.parks.find_one({"park_id": new_park_id}, {"_id": 0})
+        if not new_park:
+            raise HTTPException(status_code=404, detail="Target park not found")
+        # Follow 1 merge hop so we never point at a defunct record
+        if new_park.get("status") == "merged_into" and new_park.get("merged_into_park_id"):
+            canon = await db.parks.find_one({"park_id": new_park["merged_into_park_id"]}, {"_id": 0})
+            if canon:
+                new_park = canon
+                new_park_id = canon["park_id"]
+        new_park_name = new_park.get("name")
+
+    # No-op short-circuit
+    if (old_park_id or None) == (new_park_id or None):
+        return {"ok": True, "spot_id": spot_id, "park_group_id": new_park_id, "noop": True}
+
+    # Apply spot update
+    update_set: Dict[str, Any] = {"updated_at": utcnow()}
+    update_unset: Dict[str, Any] = {}
+    if new_park_id:
+        update_set["park_group_id"] = new_park_id
+        update_set["park_name"] = new_park_name
+    else:
+        update_unset["park_group_id"] = ""
+        update_unset["park_name"] = ""
+    update_doc: Dict[str, Any] = {"$set": update_set}
+    if update_unset:
+        update_doc["$unset"] = update_unset
+    await db.spots.update_one({"spot_id": spot_id}, update_doc)
+
+    # Adjust counts
+    if old_park_id:
+        await db.parks.update_one(
+            {"park_id": old_park_id},
+            {"$inc": {"child_spot_count": -1}, "$set": {"updated_at": utcnow()}},
+        )
+    if new_park_id:
+        await db.parks.update_one(
+            {"park_id": new_park_id},
+            {"$inc": {"child_spot_count": 1}, "$set": {"updated_at": utcnow()}},
+        )
+
+    await audit_log(
+        me, "spot.move_park", "spot", spot_id,
+        before={"park_group_id": old_park_id, "park_name": spot.get("park_name")},
+        after={"park_group_id": new_park_id, "park_name": new_park_name},
+        notes=f"admin re-parented spot {spot_id}",
+    )
+
+    return {
+        "ok": True, "spot_id": spot_id,
+        "park_group_id": new_park_id, "park_name": new_park_name,
+        "old_park_id": old_park_id,
+    }
+
+
+@router.post("/admin/parks/{source_park_id}/merge")
+async def admin_merge_parks(
+    source_park_id: str,
+    body: AdminMergeParksIn,
+    me: dict = Depends(require_role("admin")),
+) -> Dict[str, Any]:
+    """Absorb the source park into the target park.
+
+    • All child spots re-pointed to target (park_group_id + park_name updated).
+    • Target's child_spot_count = recomputed.
+    • Source park flipped to status="merged_into" with merged_into_park_id=target.
+    • Park saves on the source are also rewritten to target (deduped).
+    • Audit-logged.
+
+    Idempotent against re-merging an already-merged source.
+    """
+    target_id = (body.target_park_id or "").strip()
+    if not target_id or target_id == source_park_id:
+        raise HTTPException(status_code=400, detail="target_park_id must differ from source_park_id")
+
+    source = await db.parks.find_one({"park_id": source_park_id}, {"_id": 0})
+    if not source:
+        raise HTTPException(status_code=404, detail="Source park not found")
+    target = await db.parks.find_one({"park_id": target_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="Target park not found")
+
+    # If target is itself merged, resolve it
+    if target.get("status") == "merged_into" and target.get("merged_into_park_id"):
+        canon = await db.parks.find_one({"park_id": target["merged_into_park_id"]}, {"_id": 0})
+        if canon:
+            target = canon
+            target_id = canon["park_id"]
+            if target_id == source_park_id:
+                raise HTTPException(status_code=400, detail="Merge would create a loop")
+
+    # Re-point children
+    move_result = await db.spots.update_many(
+        {"park_group_id": source_park_id},
+        {"$set": {"park_group_id": target_id, "park_name": target.get("name"), "updated_at": utcnow()}},
+    )
+    moved = move_result.modified_count
+
+    # Re-point saves (merge into target's save set; dedupe via upsert + delete)
+    src_saves = await db.park_saves.find({"park_id": source_park_id}, {"_id": 0}).to_list(10_000)
+    for s in src_saves:
+        await db.park_saves.update_one(
+            {"user_id": s["user_id"], "park_id": target_id},
+            {"$setOnInsert": {"saved_at": s.get("saved_at") or utcnow()}},
+            upsert=True,
+        )
+    await db.park_saves.delete_many({"park_id": source_park_id})
+
+    # Flip source status
+    await db.parks.update_one(
+        {"park_id": source_park_id},
+        {"$set": {
+            "status": "merged_into",
+            "merged_into_park_id": target_id,
+            "updated_at": utcnow(),
+        }},
+    )
+
+    # Recompute target count (cheaper + safer than incremental)
+    new_count = await db.spots.count_documents({
+        "park_group_id": target_id,
+        "visibility_status": {"$nin": ["deleted", "rejected"]},
+    })
+    await db.parks.update_one(
+        {"park_id": target_id},
+        {"$set": {"child_spot_count": int(new_count), "updated_at": utcnow()}},
+    )
+
+    # Heal any park sessions still pointing at the source so users on
+    # the field don't see "Continue adding spots to <deleted park>".
+    await db.park_sessions.update_many(
+        {"active_park_id": source_park_id},
+        {"$set": {
+            "active_park_id": target_id,
+            "active_park_name": target.get("name"),
+        }},
+    )
+
+    await audit_log(
+        me, "park.merge", "park", source_park_id,
+        before={"name": source.get("name"), "status": source.get("status", "active"), "child_spot_count": source.get("child_spot_count", 0)},
+        after={"merged_into_park_id": target_id, "moved_spots": moved, "target_name": target.get("name")},
+        notes=f"merged into {target_id}",
+    )
+
+    return {
+        "ok": True,
+        "source_park_id": source_park_id,
+        "target_park_id": target_id,
+        "moved_spots": moved,
+        "moved_saves": len(src_saves),
+        "target_child_spot_count": int(new_count),
+    }
+
+
+@router.delete("/admin/parks/{park_id}")
+async def admin_delete_park(
+    park_id: str,
+    me: dict = Depends(require_role("admin")),
+) -> Dict[str, Any]:
+    """Soft-delete a park (status="hidden").
+
+    Refuses if the park still has children — admin must move them first
+    or merge. Use the merge endpoint to absorb into another park
+    instead of deletion when in doubt.
+    """
+    park = await db.parks.find_one({"park_id": park_id}, {"_id": 0})
+    if not park:
+        raise HTTPException(status_code=404, detail="Park not found")
+    children = await db.spots.count_documents({
+        "park_group_id": park_id,
+        "visibility_status": {"$nin": ["deleted", "rejected"]},
+    })
+    if children > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete park with {children} active child spot(s). Move or merge them first.",
+        )
+    await db.parks.update_one(
+        {"park_id": park_id},
+        {"$set": {"status": "hidden", "updated_at": utcnow()}},
+    )
+    await db.park_saves.delete_many({"park_id": park_id})
+    await db.park_sessions.delete_many({"active_park_id": park_id})
+    await audit_log(
+        me, "park.delete", "park", park_id,
+        before={"name": park.get("name"), "status": park.get("status", "active")},
+        after={"status": "hidden"},
+    )
+    return {"ok": True, "park_id": park_id, "status": "hidden"}
