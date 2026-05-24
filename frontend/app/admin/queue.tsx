@@ -23,7 +23,7 @@ import {
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
-  Flag, Map, Edit3, AlertTriangle, Check, X, ChevronRight, ShieldCheck,
+  Flag, Map, Edit3, AlertTriangle, Check, X, ChevronRight, ShieldCheck, Pencil,
 } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
@@ -399,7 +399,18 @@ function PendingSpotRow({ s, onDecide }: { s: any; onDecide: (id: string, approv
           <Map size={10} color={colors.warning} />
           <Text style={[styles.typeChipTxt, { color: colors.warning }]}>SPOT</Text>
         </View>
-        <Text style={styles.metaSm}>{fmtAgo(s.created_at)}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TouchableOpacity
+            style={styles.editPill}
+            onPress={() => router.push(`/admin/spots/${s.spot_id}/edit` as any)}
+            testID={`spot-edit-${s.spot_id}`}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          >
+            <Pencil size={10} color={colors.primary} />
+            <Text style={styles.editPillTxt}>Edit details</Text>
+          </TouchableOpacity>
+          <Text style={styles.metaSm}>{fmtAgo(s.created_at)}</Text>
+        </View>
       </View>
       <View style={styles.spotPreview}>
         {cover
@@ -479,6 +490,14 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
   },
   typeChipTxt: { fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.5 },
+  editPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 8, paddingVertical: 4,
+    borderRadius: radii.pill,
+    backgroundColor: 'rgba(245,166,35,0.12)',
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.primary,
+  },
+  editPillTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.3 },
   metaSm: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 10 },
   rowTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14, marginTop: 2 },
   rowMeta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11 },

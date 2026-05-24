@@ -13,7 +13,7 @@ import {
   ActivityIndicator, RefreshControl, TextInput, Image,
 } from 'react-native';
 import { router } from 'expo-router';
-import { Check, X, ShieldCheck, Crop, Search, Star, EyeOff, ImagePlus } from 'lucide-react-native';
+import { Check, X, ShieldCheck, Crop, Search, Star, EyeOff, ImagePlus, Pencil } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
 
@@ -170,6 +170,14 @@ export default function AdminSpots() {
                   <View style={styles.btnRow}>
                     <TouchableOpacity
                       style={[styles.actBtn, styles.actGhost]}
+                      onPress={() => router.push(`/admin/spots/${s.spot_id}/edit` as any)}
+                      testID={`admin-edit-${s.spot_id}`}
+                    >
+                      <Pencil size={12} color={colors.primary} />
+                      <Text style={[styles.actTxt, { color: colors.primary }]}>Edit</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.actBtn, styles.actGhost]}
                       onPress={() => router.push(`/admin/spots/${s.spot_id}/cover` as any)}
                       testID={`admin-cover-${s.spot_id}`}
                     >
@@ -206,7 +214,7 @@ export default function AdminSpots() {
           </View>
         ) : (
           <View style={{ paddingHorizontal: space.lg, gap: 8 }}>
-            <Text style={styles.hint}>Tap any row to open the cover editor.</Text>
+            <Text style={styles.hint}>Tap a row to edit details · use the Cover pill for hero crops.</Text>
             {allSpots.map((s: any) => {
               const cover = s.hero_cover_image_url
                 || (s.images && (s.images.find((i: any) => i.is_cover) || s.images[0]))?.image_url;
@@ -215,7 +223,7 @@ export default function AdminSpots() {
                   key={s.spot_id}
                   style={styles.row}
                   activeOpacity={0.75}
-                  onPress={() => router.push(`/admin/spots/${s.spot_id}/cover` as any)}
+                  onPress={() => router.push(`/admin/spots/${s.spot_id}/edit` as any)}
                   testID={`admin-row-${s.spot_id}`}
                 >
                   {cover ? (
@@ -238,9 +246,20 @@ export default function AdminSpots() {
                       Q{s.quality_score ?? '—'} · {(s.images || []).length} photo{(s.images || []).length === 1 ? '' : 's'}
                     </Text>
                   </View>
-                  <View style={styles.editChip}>
-                    <Crop size={12} color={colors.primary} />
-                    <Text style={styles.editChipTxt}>EDIT</Text>
+                  <View style={styles.rowChips}>
+                    <TouchableOpacity
+                      style={styles.coverChip}
+                      onPress={() => router.push(`/admin/spots/${s.spot_id}/cover` as any)}
+                      testID={`admin-row-cover-${s.spot_id}`}
+                      hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                    >
+                      <Crop size={11} color={colors.textSecondary} />
+                      <Text style={styles.coverChipTxt}>COVER</Text>
+                    </TouchableOpacity>
+                    <View style={styles.editChip}>
+                      <Pencil size={11} color={colors.primary} />
+                      <Text style={styles.editChipTxt}>EDIT</Text>
+                    </View>
                   </View>
                 </TouchableOpacity>
               );
@@ -315,6 +334,14 @@ const styles = StyleSheet.create({
   rowTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13, flex: 1 },
   rowMeta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, marginTop: 2 },
   rowMeta2: { color: colors.textTertiary, fontFamily: font.body, fontSize: 10, marginTop: 2 },
+  rowChips: { gap: 5, alignItems: 'flex-end' },
+  coverChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    paddingHorizontal: 8, paddingVertical: 4,
+    borderRadius: radii.sm,
+    backgroundColor: colors.surface2, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
+  },
+  coverChipTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.5 },
   editChip: {
     flexDirection: 'row', alignItems: 'center', gap: 3,
     paddingHorizontal: 8, paddingVertical: 4,
