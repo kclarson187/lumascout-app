@@ -12,6 +12,159 @@
 # END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
 #====================================================================================================
 
+  - task: "Feature 4 — Public Client-Share + Owner Visibility + Owner/Admin Spot Edits (backend)"
+    implemented: true
+    working: true
+    file: |
+      /app/backend/routes/spot_shares.py (NEW)
+        New module — registered in server.py via include_router. Endpoints:
+          POST   /api/spots/{spot_id}/share
+          DELETE /api/spots/{spot_id}/share/{token}
+          GET    /api/spots/{spot_id}/shares
+          PATCH  /api/spots/{spot_id}/visibility
+          PATCH  /api/spots/{spot_id}/info
+          GET    /api/spots/shared/{token}           (public, no auth)
+          GET    /api/public/location/{share_slug}   (public, HTML or JSON)
+        Tokens: secrets.token_urlsafe(24) → 32 url-safe chars (CSPRNG).
+        Collection: db.spot_shares with indexes on token (unique),
+        spot_id, revoked, (spot_id, revoked), created_at.
+        Visibility toggle maps to spots.privacy_mode (public/private) +
+        spots.location_display_mode (exact/approximate). Premium spots
+        rejected with 400.
+        Owner info edits restricted to OWNER_EDITABLE_FIELDS whitelist
+        (title, description, *_notes, ratings, etc.). Anything outside
+        the whitelist → 400.
+        Public sanitized view rules:
+          • PUBLIC spot → exact coords, real OG (hero + title), index
+          • PRIVATE + show_exact_location=False → coords rounded to 2
+            decimals (~1.1 km), generic OG card, noindex, robots
+          • PRIVATE + show_exact_location=True → exact coords, generic
+            OG card, noindex
+          • NEVER expose email, phone, owner identity, internal IDs,
+            moderation flags, or non-display fields.
+        Unavailable parity: identical 404 + JSON body
+          {"status":"unavailable","reason":"unavailable","message":...}
+        for revoked / suspended owner / rejected spot / deleted spot /
+        never-existed token. Both /api/spots/shared/{token} and
+        /api/public/location/{slug} share the same parity helper.
+        HTML render for /public/location: full sanitized page with
+        hero image, gallery, sectioned notes, coord block, "Open in
+        Maps" link. Honours Accept: application/json header → JSON
+        path; otherwise HTML.
+      /app/backend/server.py
+        • Imports + registers routes.spot_shares router.
+        • Adds db.spot_shares indexes (token unique, spot_id, revoked,
+          compound, created_at) at startup.
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -agent: "main"
+        -comment: |
+          Implemented Scope A of Feature 4. Backend reloaded clean (no
+          startup errors in /var/log/supervisor/backend.err.log).
+          Lint: ruff All checks passed on spot_shares.py.
+          PENDING: deep_testing_backend_v2 must verify:
+            • POST /api/spots/{id}/share returns CSPRNG token (32 chars,
+              url-safe, non-deterministic per call).
+            • DELETE revokes; subsequent public GETs return unavailable
+              parity (same body + 404 across all 5 unavailable states).
+            • PATCH /visibility flips privacy_mode + display_mode and
+              rejects premium with 400.
+            • PATCH /info accepts whitelisted fields and 400s on banned
+              keys (owner_user_id, visibility_status, etc.).
+            • GET /api/spots/shared/{token} on a PRIVATE spot rounds
+              coords to 2 decimals; PUBLIC spot keeps exact coords;
+              owner identity is hidden in both.
+            • GET /api/public/location/{token} with Accept: text/html
+              returns 200 HTML with og:image (real or generic depending
+              on visibility) and robots noindex on private; identical
+              404 unavailable HTML otherwise.
+            • Permission boundaries: non-owner non-admin gets 403 on
+              create/revoke/visibility/info.
+        -agent: "testing"
+        -comment: |
+          Backend testing complete (2026-05-25). Ran 43 assertions across
+          all 12 review-request test sections via /app/backend_test.py
+          against the public preview backend at
+          https://photo-finder-60.preview.emergentagent.com. ALL 43 PASSED.
+          (Note: primary super_admin kclarson187@gmail.com login still
+          returns 401; fell back to seed admin admin@lumascout.app as the
+          credentials note documents.)
+
+          ✔ Test 1 — POST /spots/{id}/share returns 32-char URL-safe
+            token, share_url contains /api/public/location/<token>,
+            and two consecutive mints produce distinct CSPRNG tokens.
+          ✔ Test 2 — stranger user → 403 on create/revoke/visibility/info;
+            admin → 200 on visibility & info as expected.
+          ✔ Test 3 — GET /spots/{id}/shares: owner sees both tokens with
+            all required fields (token, share_url, label, revoked,
+            created_at); stranger → 403.
+          ✔ Test 4 — PATCH /visibility: private default → approximate +
+            show_exact_location=false; private+show_exact_location:true
+            → exact; public → privacy_mode=public + display_mode=exact;
+            invalid value → 422.
+          ✔ Test 5 — PATCH /info: whitelisted fields (title, notes) saved
+            and reflected in GET /spots/{id}; banned keys (owner_user_id,
+            visibility_status) → 400 with detail
+            "Fields not editable here: owner_user_id, visibility_status"
+            for BOTH owner and admin callers.
+          ✔ Test 6 — Public sanitized view on PUBLIC spot: status=ok,
+            visibility=public, show_exact_location=true,
+            coord_precision=exact, robots=index,follow, lat=30.5 + lng=-98.5
+            EXACT, title/images/hero present, shared_by.display_name=
+            "A LumaScout photographer", og.title==spot.title,
+            og.image==hero. Deep-walk of the JSON tree confirmed ZERO
+            occurrences of owner_user_id / email / password_hash / phone /
+            visibility_status anywhere in the payload.
+          ✔ Test 7 — Public sanitized view on PRIVATE spot (default
+            approximate): visibility=private, show_exact_location=false,
+            coord_precision=approximate, robots=noindex,
+            lat/lng==round(orig,2), og.title=="Photo location · LumaScout",
+            og.image points at the generic /social-card.png. Spot title
+            still surfaced inside body.spot.title (allowed in the JSON
+            view; privacy protection is in the OG block, which is
+            generic).
+          ✔ Test 8 — PRIVATE + show_exact_location=True: exact coords
+            returned, robots stays noindex, og fields stay generic
+            (correct — private always means generic OG regardless of
+            show_exact_location).
+          ✔ Test 9 — UNAVAILABLE PARITY: all 5 scenarios returned the
+            IDENTICAL response (404 + Content-Type: application/json +
+            body {"status":"unavailable","reason":"unavailable",
+            "message":"This share link is no longer available. Ask the
+            photographer for a new one."}) for:
+              a) never-existed token
+              b) revoked token (after DELETE)
+              c) deleted spot (after DELETE /api/spots/{id})
+              d) rejected spot (after POST /api/admin/spots/{id}/reject)
+              e) suspended owner (after admin sanction type=suspend)
+            Byte-for-byte body match confirmed; status codes match; no
+            information leak.
+          ✔ Test 10 — /api/public/location/{token}: Accept: application/json
+            returns JSON identical-shape payload; default/text/html returns
+            HTTP 200 + Content-Type: text/html + <meta name="robots"
+            content="index,follow"> for public spots, content="noindex"
+            for private spots; unavailable HTML path returns 404 +
+            text/html + body containing "Link unavailable" / "no longer
+            available".
+          ✔ Test 11 — Idempotent revoke: DELETE the same token twice;
+            both calls returned 200 with {ok:true, revoked:true}. No
+            second-call 404 or 5xx.
+          ✔ Test 12 — Access counter: after 3 unauthenticated GETs to
+            /api/spots/shared/{token}, GET /spots/{id}/shares as owner
+            reports access_count=3 and a populated last_accessed_at
+            timestamp.
+
+          No backend errors observed in /var/log/supervisor/backend.err.log
+          during the run. Suspended-owner sanction was reverted via
+          /api/admin/users/{id}/unsanction at end of test. Test fixture
+          spots intentionally left in DB (DELETE attempts returned 403
+          because the test owner is not an admin and the admin DELETE
+          path uses the owner check). That doesn't affect Feature 4
+          correctness — main agent may run a manual cleanup if desired.
+
+
   - task: "Explore map stability Phase 2 follow-up — stock pins only, parks disabled, coord dedupe"
     implemented: true
     working: true
@@ -18419,4 +18572,51 @@ agent_communication:
           Backend untouched. Same /network/discover payload.
           Validation: TypeScript transpiles cleanly; metro bundles
           without resolve errors; no runtime console errors.
+
+
+
+agent_communication:
+    -agent: "testing"
+    -message: |
+      Feature 4 (Public Client-Share + Owner Visibility + Owner/Admin Spot
+      Edits) backend testing COMPLETE — all 43 assertions across the 12
+      review-request test sections passed cleanly against the public
+      preview backend. Highlights:
+
+        • CSPRNG tokens: 32 url-safe chars, distinct on every mint.
+        • Permission boundaries: stranger → 403 across create/revoke/
+          visibility/info; admin → 200.
+        • PATCH /visibility correctly maps public/private to privacy_mode
+          + location_display_mode; invalid value → 422.
+        • PATCH /info enforces OWNER_EDITABLE_FIELDS whitelist; rejects
+          owner_user_id / visibility_status with 400 even for admins.
+        • Public sanitized view: PUBLIC spot returns exact coords + real
+          OG hero + robots=index,follow; PRIVATE default returns
+          2-decimal-rounded coords + generic OG card + robots=noindex;
+          PRIVATE + show_exact_location=True keeps generic OG but
+          surfaces exact coords. No owner_user_id / email /
+          password_hash / phone / visibility_status anywhere in the
+          payload (walked the entire JSON tree).
+        • UNAVAILABLE PARITY: all 5 scenarios (never-existed, revoked,
+          deleted spot, rejected spot, suspended owner) returned the
+          IDENTICAL 404 + Content-Type: application/json + body
+          {"status":"unavailable","reason":"unavailable","message":"This
+          share link is no longer available. Ask the photographer for a
+          new one."} — byte-for-byte match confirmed.
+        • /api/public/location/{token}: Accept: application/json →
+          identical JSON shape; default text/html → 200 + correct
+          <meta name="robots" content="index,follow"> for public,
+          "noindex" for private; unavailable HTML → 404 + body
+          containing "Link unavailable" / "no longer available".
+        • Idempotent revoke confirmed (200 + {ok:true,revoked:true}
+          on both calls).
+        • Access counter increments from 3 unauthenticated GETs and
+          last_accessed_at is populated.
+
+      Test file: /app/backend_test.py (single-shot runnable script).
+      No backend errors logged. Note: super_admin
+      kclarson187@gmail.com still returns 401; testing fell back to
+      seed admin admin@lumascout.app per the credentials file note.
+      Recommend rotating that password if the super_admin lockout is
+      unintentional.
 
