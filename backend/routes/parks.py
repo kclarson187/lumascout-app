@@ -368,6 +368,8 @@ async def get_park(
     children_query: Dict[str, Any] = {
         "park_group_id": park["park_id"],
         "visibility_status": {"$nin": ["deleted", "rejected"]},
+        # Feature 4 follow-up (2026-05-25): exclude test data.
+        "is_test_data": {"$ne": True},
     }
     if viewer_id:
         children_query["$or"] = [
@@ -449,6 +451,9 @@ async def list_park_children(
     q: Dict[str, Any] = {
         "park_group_id": canonical_id,
         "visibility_status": {"$nin": ["deleted", "rejected"]},
+        # Feature 4 follow-up (2026-05-25): strip test data so seeded
+        # fixtures can't surface under live parks.
+        "is_test_data": {"$ne": True},
     }
     if viewer_id:
         q["$or"] = [{"privacy_mode": {"$ne": "private"}}, {"owner_user_id": viewer_id}]

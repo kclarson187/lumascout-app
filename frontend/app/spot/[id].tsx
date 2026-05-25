@@ -68,6 +68,9 @@ import { InfoCard, LogisticsRow, Badge } from '../../src/components/spot-detail/
 
 import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
 import SectionErrorBoundary from '../../src/components/SectionErrorBoundary';
+import ShareWithClientSheet from '../../src/components/ShareWithClientSheet';
+import VisibilityToggleSheet from '../../src/components/VisibilityToggleSheet';
+import { Link2, Globe, Lock, PencilLine } from 'lucide-react-native';
 
 export default function SpotDetail() {
   return (
@@ -136,6 +139,9 @@ function SpotDetailImpl() {
   const [reportOpen, setReportOpen] = useState(false);
   const [shotListOpen, setShotListOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // Feature 4 (Scope B) — share / visibility sheets owned by this screen
+  const [shareOpen, setShareOpen] = useState(false);
+  const [visibilityOpen, setVisibilityOpen] = useState(false);
   // May 2026 — admin / super_admin description editor.
   const [descEditOpen, setDescEditOpen] = useState(false);
 
@@ -913,6 +919,50 @@ function SpotDetailImpl() {
               <Text style={styles.requestEditTxt}>Request edits to this spot</Text>
             </Pressable>
           )}
+
+          {/* Feature 4 (Scope B, May 2026) — Owner / admin actions row.
+              Three actions on a private-spot owner's view:
+                • Share with client → ShareWithClientSheet
+                • Visibility       → VisibilityToggleSheet
+                • Edit spot        → /spot/edit/[id]
+              For admins viewing someone else's spot, the same row
+              shows. For non-owner non-admins, the entire row hides. */}
+          {(() => {
+            const isOwner = !!(user && user.user_id === spot.owner_user_id);
+            const isAdmin = user?.role === 'admin' || user?.role === 'super_admin' || user?.role === 'moderator';
+            if (!isOwner && !isAdmin) return null;
+            const isPublicSpot = spot.privacy_mode === 'public' || spot.privacy_mode === 'premium';
+            return (
+              <View style={ownerStyles.row} testID="spot-owner-actions">
+                <Pressable
+                  style={ownerStyles.btn}
+                  onPress={() => setShareOpen(true)}
+                  testID="spot-share-client"
+                >
+                  <Link2 size={16} color={colors.primary} />
+                  <Text style={ownerStyles.btnText}>Share with client</Text>
+                </Pressable>
+                <Pressable
+                  style={ownerStyles.btn}
+                  onPress={() => setVisibilityOpen(true)}
+                  testID="spot-visibility"
+                >
+                  {isPublicSpot
+                    ? <Globe size={16} color={colors.primary} />
+                    : <Lock size={16} color={colors.warning} />}
+                  <Text style={ownerStyles.btnText}>{isPublicSpot ? 'Public' : 'Private'}</Text>
+                </Pressable>
+                <Pressable
+                  style={ownerStyles.btn}
+                  onPress={() => router.push(`/spot/edit/${String(id)}` as any)}
+                  testID="spot-edit"
+                >
+                  <PencilLine size={16} color={colors.primary} />
+                  <Text style={ownerStyles.btnText}>Edit spot</Text>
+                </Pressable>
+              </View>
+            );
+          })()}
           {spot.park_group_id && spot.park_name ? (
             <TouchableOpacity
               style={styles.parkBreadcrumb}
@@ -1581,6 +1631,62 @@ function SpotDetailImpl() {
           }}
         />
       ) : null}
+
+      {/* Feature 4 (Scope B) — share + visibility sheets. Always
+          rendered (cheap, transparent when visible=false) so the gating
+          stays in props. */}
+      <ShareWithClientSheet
+        visible={shareOpen}
+        onClose={() => setShareOpen(false)}
+        spotId={String(id)}
+        spotTitle={spot.title}
+        spotIsPublic={spot.privacy_mode === 'public' || spot.privacy_mode === 'premium'}
+      />
+      <VisibilityToggleSheet
+        visible={visibilityOpen}
+        onClose={() => setVisibilityOpen(false)}
+        spotId={String(id)}
+        spotTitle={spot.title}
+        currentPrivacy={spot.privacy_mode || 'public'}
+        currentDisplayMode={spot.location_display_mode || 'exact'}
+        onSaved={(next) => {
+          setSpot((s: any) => (s ? {
+            ...s,
+            privacy_mode: next.visibility === 'public' ? 'public' : 'private',
+            location_display_mode: next.show_exact_location ? 'exact' : 'approximate',
+          } : s));
+        }}
+      />
     </View>
   );
 }
+
+// Feature 4 — owner / admin actions row styles. Kept local so the
+// surrounding spot-detail style file doesn't grow unbounded.
+const ownerStyles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    gap: space.sm,
+    marginTop: space.md,
+    marginBottom: space.sm,
+  },
+  btn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: colors.surface2,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    minHeight: 44, // iOS touch target
+  },
+  btnText: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+});

@@ -204,6 +204,12 @@ class ShareCreateIn(BaseModel):
     """POST /api/spots/{id}/share — optional client label (for owner UI)."""
 
     label: Optional[str] = Field(default=None, max_length=80)
+    # Per-share show_exact_location override. IMMUTABLE after creation —
+    # owner must revoke + re-mint to change it. This prevents an owner
+    # from silently downgrading a recipient from exact to approximate
+    # AFTER the link is already forwarded. None → defaults to "True if
+    # spot currently public, else False" at create time.
+    show_exact_location: Optional[bool] = None
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -281,10 +287,16 @@ async def _resolve_share_or_unavailable(token: str) -> Optional[Dict[str, Any]]:
 
     privacy = spot.get("privacy_mode") or "public"
     is_public_spot = privacy in ("public", "premium")
-    display = spot.get("location_display_mode") or "exact"
-    # On private spots, "approximate" / "hidden" both mean DO NOT show
-    # exact location. Only "exact" exposes precise coords.
-    show_exact_location = is_public_spot or (display == "exact")
+    # IMPORTANT (Feature 4): The exact-location decision is PER-SHARE,
+    # IMMUTABLE from the moment the link was minted. Read it off the
+    # share row. Older share rows (created before this field was added)
+    # fall back to the legacy spot-wide spots.location_display_mode so
+    # nothing breaks on rows minted in Scope A.
+    if "show_exact_location" in share:
+        show_exact_location = bool(share.get("show_exact_location"))
+    else:
+        display = spot.get("location_display_mode") or "exact"
+        show_exact_location = is_public_spot or (display == "exact")
 
     return {
         "share": share,
@@ -427,6 +439,16 @@ async def create_share_link(
         raise HTTPException(status_code=500, detail="Could not allocate share token")
 
     now = utcnow()
+    # Resolve show_exact_location: explicit body value takes precedence;
+    # otherwise default = True if the spot is currently public/premium,
+    # False if private. The value is then IMMUTABLE on this share row —
+    # owner must revoke and mint a new one to change it.
+    spot_is_public = (spot.get("privacy_mode") or "public") in ("public", "premium")
+    if body.show_exact_location is None:
+        show_exact = bool(spot_is_public)
+    else:
+        show_exact = bool(body.show_exact_location)
+
     share_doc = {
         "share_id": f"shr_{uuid.uuid4().hex[:12]}",
         "token": token,
@@ -435,6 +457,11 @@ async def create_share_link(
         "created_by_user_id": user.get("user_id"),
         "created_by_role": user.get("role") or "owner",
         "label": (body.label or "").strip() or None,
+        # IMMUTABLE: copy the visibility shape into the share row at
+        # create-time so subsequent owner toggles don't silently change
+        # what a forwarded link reveals.
+        "spot_visibility_at_create": "public" if spot_is_public else "private",
+        "show_exact_location": show_exact,
         "revoked": False,
         "revoked_at": None,
         "revoked_by_user_id": None,
@@ -467,6 +494,8 @@ async def create_share_link(
         "created_at": now.isoformat() if isinstance(now, datetime) else now,
         "label": share_doc["label"],
         "revoked": False,
+        "show_exact_location": show_exact,
+        "spot_visibility_at_create": share_doc["spot_visibility_at_create"],
     }
 
 
@@ -548,6 +577,8 @@ async def list_share_links(
             "created_by_role": r.get("created_by_role"),
             "last_accessed_at": r.get("last_accessed_at"),
             "access_count": int(r.get("access_count") or 0),
+            "show_exact_location": bool(r.get("show_exact_location", False)),
+            "spot_visibility_at_create": r.get("spot_visibility_at_create"),
         })
     return {"items": items, "count": len(items)}
 
@@ -749,17 +780,22 @@ async def public_location_view(share_slug: str, request: Request):
     accept = (request.headers.get("accept") or "").lower()
     wants_json = "application/json" in accept and "text/html" not in accept
 
+    # Canonical URL — emit exactly the path we were served from so a
+    # future move to `/share/location/{slug}` is a clean 301 + canonical
+    # update without breaking iMessage / WhatsApp / Slack cached previews.
+    canonical_url = f"{WEB_BASE}/api/public/location/{share_slug}"
+
     if not ctx:
         if wants_json:
             return _unavailable_response()
-        html = _render_unavailable_html()
+        html = _render_unavailable_html(canonical_url=canonical_url)
         return HTMLResponse(content=html, status_code=UNAVAILABLE_STATUS_CODE)
 
     await _bump_access_counter(share_slug)
     if wants_json:
         return _build_public_view(ctx)
 
-    return HTMLResponse(content=_render_public_html(ctx))
+    return HTMLResponse(content=_render_public_html(ctx, canonical_url=canonical_url))
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -779,7 +815,8 @@ def _esc(s: Any) -> str:
     )
 
 
-def _render_unavailable_html() -> str:
+def _render_unavailable_html(canonical_url: Optional[str] = None) -> str:
+    canonical_tag = f'<link rel="canonical" href="{_esc(canonical_url)}" />' if canonical_url else ""
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -787,6 +824,7 @@ def _render_unavailable_html() -> str:
 <title>Link unavailable · LumaScout</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <meta name="robots" content="noindex" />
+{canonical_tag}
 <meta property="og:title" content="{_esc(GENERIC_OG_TITLE)}" />
 <meta property="og:description" content="{_esc(UNAVAILABLE_BODY['message'])}" />
 <meta property="og:image" content="{_esc(GENERIC_OG_IMAGE)}" />
@@ -808,13 +846,14 @@ p {{ opacity:.7; line-height:1.5; }}
 </html>"""
 
 
-def _render_public_html(ctx: Dict[str, Any]) -> str:
+def _render_public_html(ctx: Dict[str, Any], canonical_url: Optional[str] = None) -> str:
     payload = _build_public_view(ctx)
     is_public = ctx["is_public_spot"]
     show_exact = ctx["show_exact_location"]
     spot = payload["spot"]
     og = payload["og"]
     robots = payload["robots"]
+    canonical_tag = f'<link rel="canonical" href="{_esc(canonical_url)}" />' if canonical_url else ""
 
     title = spot.get("title") or GENERIC_OG_TITLE
     desc = (spot.get("description") or "").strip()
@@ -861,6 +900,7 @@ def _render_public_html(ctx: Dict[str, Any]) -> str:
 <title>{_esc(title)} · LumaScout</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <meta name="robots" content="{_esc(robots)}" />
+{canonical_tag}
 <meta name="description" content="{_esc(desc[:200])}" />
 <meta property="og:type" content="website" />
 <meta property="og:title" content="{_esc(og.get('title') or title)}" />

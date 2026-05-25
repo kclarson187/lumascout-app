@@ -5511,7 +5511,15 @@ async def admin_ai_generate_editorial_LEGACY(
     title_stub, brief = EDITORIAL_TEMPLATES[idx]
 
     # Pull 6-10 recent approved spots (scoped by city when supplied) to ground the post.
-    q: dict = {"privacy_mode": "public"}
+    # Feature 4 follow-up (2026-05-25): widen to {public,premium} ∩ approved so
+    # premium spots are eligible for editorial coverage but pending/rejected
+    # rows never feed the prompt. Also strip test data so Scout AI never sees
+    # it.
+    q: dict = {
+        "privacy_mode": {"$in": ["public", "premium"]},
+        "visibility_status": "approved",
+        "is_test_data": {"$ne": True},
+    }
     if city:
         q["city"] = city
     spots = await db.spots.find(q, {

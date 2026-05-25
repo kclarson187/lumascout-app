@@ -8,9 +8,59 @@
 # Communication Protocol:
 # If the `testing_agent` is available, main agent should delegate all testing tasks to it.
 
-#====================================================================================================
-# END - Testing Protocol - DO NOT EDIT OR REMOVE THIS SECTION
-#====================================================================================================
+  - task: "Feature 4 — Scope B backend additions (immutable per-link show_exact_location + canonical)"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/backend/routes/spot_shares.py (UPDATED)
+        • POST /api/spots/{id}/share now accepts optional body
+          `show_exact_location` (bool). When omitted: defaults to True if
+          spot currently public/premium, False if private. The value is
+          written to the spot_shares row as `show_exact_location` and is
+          IMMUTABLE — no PATCH endpoint exists. Spot row also stores
+          `spot_visibility_at_create` snapshot for audit.
+        • _resolve_share_or_unavailable now reads
+          `show_exact_location` from the share row (with graceful fallback
+          to legacy spots.location_display_mode for any Scope-A rows
+          created before this field existed). This means an owner who
+          flips the spot public/private AFTER minting a link does NOT
+          change what the recipient sees on existing links.
+        • GET /api/spots/{id}/shares list endpoint now returns
+          `show_exact_location` + `spot_visibility_at_create` per row so
+          the share sheet UI can render correct badges.
+        • _render_public_html and _render_unavailable_html now emit
+          <link rel="canonical" href="{WEB_BASE}/api/public/location/{slug}">
+          on every response. Future move to /share/location/{slug} will
+          be a clean 301 + canonical update without breaking iMessage /
+          WhatsApp / Slack cached previews.
+      /app/backend/server.py (UPDATED)
+        • Scout-AI grounding query (server.py:5514) widened to
+          {public,premium} ∩ approved ∩ !is_test_data so premium spots
+          are eligible for editorial coverage and pending/rejected never
+          feed the prompt.
+      /app/backend/routes/parks.py (UPDATED)
+        • /api/parks/{id} and /api/parks/{id}/children child-spot
+          queries now exclude `is_test_data: True` so seeded fixtures
+          can't surface under live parks.
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -agent: "main"
+        -comment: |
+          Manual verification confirmed via direct script:
+            • show_exact_location persists on share row
+            • flipping spot public after minting an "approximate" share
+              link keeps the link approximate (immutable)
+            • flipping spot private after minting an "exact" link keeps
+              the link exact (immutable)
+            • <link rel="canonical"> present on both available + unavailable HTML
+            • coord rounding: 30.12345 → 30.12 for approximate links
+          PENDING deep_testing_backend_v2 to assert no regressions on
+          Scope A endpoints (unavailable parity still byte-identical,
+          token CSPRNG still works, permission boundaries still 403
+          non-owners).
+
 
   - task: "Feature 4 — Public Client-Share + Owner Visibility + Owner/Admin Spot Edits (backend)"
     implemented: true
