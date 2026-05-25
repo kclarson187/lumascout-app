@@ -1,27 +1,40 @@
 /**
- * ShareWithClientSheet — Feature 4 (Scope B).
+ * ShareWithClientSheet — Feature 4 (Scope B), bug-fix revision May 2026.
  *
- * Bottom sheet the owner / admin opens from the spot detail screen to:
- *   1. (PRIVATE spots only) see the privacy notice and explicitly tap to
- *      proceed before any token is minted.
- *   2. Optionally toggle "Show exact location" — per-link, IMMUTABLE
- *      once the link is generated. This matches the backend contract.
- *   3. Mint a new share link (calls POST /api/spots/{id}/share).
- *   4. View existing active links with copy + native share + revoke.
- *
- * The exact-location toggle is hidden / forced-true for public spots
- * (the recipient is going to see exact coords either way; toggling
- * "approximate" on a public spot is meaningless and we don't surface
- * the option). For private spots the toggle defaults to OFF so a new
- * link is approximate-only unless the owner explicitly opts in.
+ * UX bugs addressed:
+ * 1. The active link URL was truncated with ellipsis and not selectable,
+ *    so on iOS Safari / web preview a user had no way to read or
+ *    long-press it as a fallback when Copy silently failed.
+ *    → Replaced with a non-editable, selectable, multiline TextInput
+ *      (RN's selectTextOnFocus + iOS long-press > Select All > Copy is
+ *      the documented fallback path).
+ * 2. Copy button gave zero feedback. → Per-link "✓ Copied" state + a
+ *    transient toast bar at the bottom of the sheet.
+ * 3. expo-clipboard alone is not reliable on every browser. → Three-tier
+ *    fallback chain: expo-clipboard → web textarea + execCommand →
+ *    focus + setSelection on the input (manual long-press copy).
+ * 4. Native Share button rendered on desktop web where there is no
+ *    navigator.share. → Gated on Platform.OS !== 'web' || 'share' in
+ *    navigator.
+ * 5. A "Cannot read properties of undefined (reading 'align')" runtime
+ *    error was firing on sheet open. The culprit was a Pressable that
+ *    passed a style array with a conditional `undefined` entry (RN-web
+ *    flattens style arrays via deepMerge and crashes on undefined
+ *    inside `align*` props). All conditional style entries now resolve
+ *    to plain `false`/empty object, which RN flatten tolerates.
+ * 6. expo-clipboard on iOS Safari requires the call to happen within
+ *    the same synchronous user-activation tick as the press. The Copy
+ *    onPress handler kicks off Clipboard.setStringAsync immediately —
+ *    no awaited work runs before it — and uses .then/.catch so the
+ *    transient activation is preserved.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, Modal, TouchableOpacity, ScrollView,
-  ActivityIndicator, Share, Alert, Platform, Pressable,
+  ActivityIndicator, Share, Platform, Pressable, TextInput,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { X, Link2, Copy, Share2, Trash2, AlertTriangle, Eye, EyeOff, Plus } from 'lucide-react-native';
+import { X, Copy, Share2, Trash2, AlertTriangle, Eye, EyeOff, Plus, Check } from 'lucide-react-native';
 import { colors, font, space, radii } from '../theme';
 import { api, formatApiError } from '../api';
 
@@ -47,6 +60,20 @@ type Props = {
   spotIsPublic: boolean;
 };
 
+// Web Share API availability gate. On native this is always true (the
+// platform Share sheet is the real value). On web we only render the
+// button when navigator.share actually exists — desktop Chrome/Firefox
+// without it would otherwise no-op silently.
+const SHARE_AVAILABLE = (() => {
+  if (Platform.OS !== 'web') return true;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return typeof navigator !== 'undefined' && typeof (navigator as any).share === 'function';
+  } catch {
+    return false;
+  }
+})();
+
 export default function ShareWithClientSheet({
   visible, onClose, spotId, spotTitle, spotIsPublic,
 }: Props) {
@@ -60,12 +87,39 @@ export default function ShareWithClientSheet({
   const [showExactLocation, setShowExactLocation] = useState(false);
   const [recentlyMintedToken, setRecentlyMintedToken] = useState<string | null>(null);
 
+  // Copy feedback — token of the link copied last, and a transient toast.
+  const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const copyResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Refs to each link's read-only URL TextInput so the fallback copy
+  // chain can focus + select-all the input as a last resort.
+  const inputRefs = useRef<Record<string, TextInput | null>>({});
+
+  useEffect(() => () => {
+    if (copyResetTimer.current) clearTimeout(copyResetTimer.current);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+  }, []);
+
+  const flashToast = useCallback((msg: string, ms = 1800) => {
+    setToast(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), ms);
+  }, []);
+
+  const markCopied = useCallback((token: string) => {
+    setCopiedToken(token);
+    if (copyResetTimer.current) clearTimeout(copyResetTimer.current);
+    copyResetTimer.current = setTimeout(() => setCopiedToken(null), 1500);
+  }, []);
+
   const refresh = useCallback(async () => {
     setLoading(true); setErr(null);
     try {
       const r = await api.get(`/spots/${spotId}/shares`);
       setLinks(r.items || []);
-    } catch (e: any) {
+    } catch (e) {
       setErr(formatApiError(e));
     } finally {
       setLoading(false);
@@ -75,10 +129,12 @@ export default function ShareWithClientSheet({
   useEffect(() => {
     if (!visible) return;
     setRecentlyMintedToken(null);
-    // For public spots the privacy step is a no-op so we pre-acknowledge.
-    setAcknowledgedPrivacy(spotIsPublic);
-    // Default exact-location to true if public, false if private.
-    setShowExactLocation(spotIsPublic);
+    // Public spots — pre-acknowledge the privacy gate (it's a no-op).
+    setAcknowledgedPrivacy(!!spotIsPublic);
+    // Default exact-location: true for public spots, false for private.
+    setShowExactLocation(!!spotIsPublic);
+    setCopiedToken(null);
+    setToast(null);
     refresh();
   }, [visible, spotIsPublic, refresh]);
 
@@ -94,51 +150,130 @@ export default function ShareWithClientSheet({
       });
       setRecentlyMintedToken(r.token);
       await refresh();
-    } catch (e: any) {
+    } catch (e) {
       setErr(formatApiError(e));
     } finally {
       setBusy(false);
     }
   };
 
-  const copyLink = async (url: string) => {
+  /**
+   * Three-tier copy fallback chain. CRITICAL: the FIRST clipboard call
+   * happens synchronously inside the onPress handler so we don't lose
+   * the iOS Safari transient user-activation that
+   * navigator.clipboard.writeText requires.
+   */
+  const handleCopy = (link: ShareLink) => {
+    const url = link.share_url;
+    const token = link.token;
+
+    // Tier 1: expo-clipboard. setStringAsync returns Promise<boolean>.
+    // Kick it off synchronously and DO NOT await before this line.
+    let primary: Promise<boolean>;
     try {
-      await Clipboard.setStringAsync(url);
-      Alert.alert('Copied', 'Share link copied to clipboard.');
+      primary = Clipboard.setStringAsync(url);
     } catch {
-      Alert.alert('Could not copy', 'Try again.');
+      primary = Promise.resolve(false);
+    }
+
+    primary
+      .then((ok) => {
+        if (ok !== false) {
+          markCopied(token);
+          flashToast('Link copied to clipboard');
+          return;
+        }
+        webFallback(url, token);
+      })
+      .catch(() => webFallback(url, token));
+  };
+
+  const webFallback = (url: string, token: string) => {
+    // Tier 2: hidden textarea + document.execCommand('copy'). Works on
+    // older browsers and as a fallback when navigator.clipboard is
+    // blocked (e.g. non-HTTPS preview, missing user-activation).
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '-9999px';
+        ta.style.left = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ta.setSelectionRange(0, url.length);
+        const ok = document.execCommand && document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (ok) {
+          markCopied(token);
+          flashToast('Link copied to clipboard');
+          return;
+        }
+      } catch {
+        // fall through to tier 3
+      }
+    }
+
+    // Tier 3: focus the read-only input on the row and select all so
+    // the user can long-press → Copy manually. Surface guidance via
+    // toast so the user understands what to do.
+    const ref = inputRefs.current[token];
+    if (ref) {
+      try {
+        ref.focus();
+        // On web RN-web TextInput exposes setSelection; on native
+        // selectTextOnFocus already selected the whole content.
+        const node = ref as unknown as { setSelection?: (s: number, e: number) => void };
+        if (typeof node.setSelection === 'function') {
+          node.setSelection(0, url.length);
+        }
+      } catch {
+        /* ignored */
+      }
+    }
+    flashToast('Tap and hold the link, then Copy', 2500);
+  };
+
+  const shareNative = async (link: ShareLink) => {
+    if (!SHARE_AVAILABLE) {
+      // Shouldn't normally be reached — the button is hidden when not
+      // available — but guard defensively.
+      handleCopy(link);
+      return;
+    }
+    try {
+      await Share.share({
+        message: `${spotTitle} — shared via LumaScout\n${link.share_url}`,
+        url: link.share_url,
+      });
+    } catch {
+      /* user dismissed */
     }
   };
 
-  const shareNative = async (url: string) => {
-    try {
-      await Share.share({
-        message: `${spotTitle} — shared via LumaScout\n${url}`,
-        url,
-      });
-    } catch { /* user dismissed */ }
+  const confirmRevoke = (link: ShareLink) => {
+    // Use a simple in-sheet confirmation instead of Alert.alert so
+    // the action works on every platform (Alert.alert on web sometimes
+    // no-ops in iframes). We use the toast helper to ask, then a
+    // dedicated confirm-row.
+    setPendingRevoke(link);
   };
 
-  const confirmRevoke = (link: ShareLink) => {
-    Alert.alert(
-      'Revoke this link?',
-      'Anyone who already has it will see "Link unavailable" the next time they open it. This can\'t be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Revoke',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await api.delete(`/spots/${spotId}/share/${link.token}`);
-              await refresh();
-            } catch (e: any) {
-              Alert.alert('Could not revoke', formatApiError(e));
-            }
-          },
-        },
-      ],
-    );
+  const [pendingRevoke, setPendingRevoke] = useState<ShareLink | null>(null);
+
+  const actuallyRevoke = async () => {
+    const link = pendingRevoke;
+    if (!link) return;
+    setPendingRevoke(null);
+    try {
+      await api.delete(`/spots/${spotId}/share/${link.token}`);
+      flashToast('Link revoked');
+      await refresh();
+    } catch (e) {
+      flashToast(formatApiError(e) || 'Could not revoke', 2500);
+    }
   };
 
   const showPrivacyGate = !spotIsPublic && !acknowledgedPrivacy;
@@ -149,18 +284,18 @@ export default function ShareWithClientSheet({
         <View style={styles.sheet}>
           <View style={styles.handle} />
           <View style={styles.header}>
-            <View style={{ flex: 1 }}>
+            <View style={styles.headerText}>
               <Text style={styles.title}>Share with client</Text>
               <Text style={styles.sub} numberOfLines={1}>{spotTitle}</Text>
             </View>
-            <TouchableOpacity onPress={onClose} hitSlop={12} testID="share-sheet-close">
+            <TouchableOpacity onPress={onClose} hitSlop={12} testID="share-sheet-close" style={styles.closeBtn}>
               <X size={22} color={colors.textSecondary} />
             </TouchableOpacity>
           </View>
 
           <ScrollView
-            style={{ flex: 1 }}
-            contentContainerStyle={{ paddingBottom: space.xxxl }}
+            style={styles.scroll}
+            contentContainerStyle={styles.scrollContent}
             keyboardShouldPersistTaps="handled"
           >
             {err ? (
@@ -174,12 +309,11 @@ export default function ShareWithClientSheet({
                 </View>
                 <Text style={styles.privacyTitle}>This is a private spot</Text>
                 <Text style={styles.privacyBody}>
-                  Generating a link will let anyone with the URL view this
-                  location. By default we'll show only an{' '}
-                  <Text style={{ color: colors.text, fontWeight: '600' }}>approximate area</Text>
-                  {' '}(2-decimal precision, ~1 km). You can toggle exact
-                  location on next — that choice locks in when you generate
-                  the link.
+                  Generating a link will let anyone with the URL view this location. By default
+                  we&apos;ll show only an{' '}
+                  <Text style={styles.bold}>approximate area</Text>
+                  {' '}(2-decimal precision, ~1 km). You can toggle exact location next — that
+                  choice locks in when the link is generated.
                 </Text>
                 <TouchableOpacity
                   style={styles.primaryBtn}
@@ -190,7 +324,7 @@ export default function ShareWithClientSheet({
                 </TouchableOpacity>
               </View>
             ) : (
-              <>
+              <View>
                 {/* Exact-location toggle (private spots only) */}
                 {!spotIsPublic ? (
                   <View style={styles.section}>
@@ -200,8 +334,8 @@ export default function ShareWithClientSheet({
                       onPress={() => setShowExactLocation(v => !v)}
                       testID="share-exact-toggle"
                     >
-                      <View style={{ flex: 1 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <View style={styles.toggleRowText}>
+                        <View style={styles.toggleRowHeading}>
                           {showExactLocation
                             ? <Eye size={16} color={colors.primary} />
                             : <EyeOff size={16} color={colors.textSecondary} />}
@@ -213,30 +347,32 @@ export default function ShareWithClientSheet({
                             : 'Recipient sees only an approximate area (2-decimal coords).'}
                         </Text>
                       </View>
-                      <View style={[styles.switchTrack, showExactLocation && styles.switchTrackOn]}>
-                        <View style={[styles.switchThumb, showExactLocation && styles.switchThumbOn]} />
+                      <View style={[styles.switchTrack, showExactLocation ? styles.switchTrackOn : null]}>
+                        <View style={[styles.switchThumb, showExactLocation ? styles.switchThumbOn : null]} />
                       </View>
                     </Pressable>
                     <Text style={styles.lockedNote}>
-                      This setting is locked once the link is generated. To
-                      change it, revoke the link and create a new one.
+                      This setting is locked once the link is generated. To change it,
+                      revoke the link and create a new one.
                     </Text>
                   </View>
                 ) : null}
 
                 {/* Generate button */}
                 <TouchableOpacity
-                  style={[styles.primaryBtn, busy && { opacity: 0.6 }]}
+                  style={[styles.primaryBtn, busy ? styles.btnBusy : null]}
                   onPress={mint}
                   disabled={busy}
                   testID="share-generate-btn"
                 >
-                  {busy
-                    ? <ActivityIndicator color={colors.textInverse} />
-                    : <>
-                        <Plus size={18} color={colors.textInverse} />
-                        <Text style={styles.primaryBtnText}>Generate share link</Text>
-                      </>}
+                  {busy ? (
+                    <ActivityIndicator color={colors.textInverse} />
+                  ) : (
+                    <View style={styles.btnInner}>
+                      <Plus size={18} color={colors.textInverse} />
+                      <Text style={styles.primaryBtnText}>Generate share link</Text>
+                    </View>
+                  )}
                 </TouchableOpacity>
 
                 {/* Active links */}
@@ -245,7 +381,7 @@ export default function ShareWithClientSheet({
                     Active links {activeLinks.length ? `(${activeLinks.length})` : ''}
                   </Text>
                   {loading ? (
-                    <ActivityIndicator color={colors.textSecondary} style={{ marginTop: 12 }} />
+                    <ActivityIndicator color={colors.textSecondary} style={styles.loadingSpinner} />
                   ) : activeLinks.length === 0 ? (
                     <Text style={styles.emptyText}>No active links yet.</Text>
                   ) : (
@@ -254,9 +390,15 @@ export default function ShareWithClientSheet({
                         key={link.share_id}
                         link={link}
                         highlight={link.token === recentlyMintedToken}
-                        onCopy={() => copyLink(link.share_url)}
-                        onShare={() => shareNative(link.share_url)}
+                        justCopied={copiedToken === link.token}
+                        shareAvailable={SHARE_AVAILABLE}
+                        inputRef={(r) => { inputRefs.current[link.token] = r; }}
+                        onCopy={() => handleCopy(link)}
+                        onShare={() => shareNative(link)}
                         onRevoke={() => confirmRevoke(link)}
+                        confirmingRevoke={pendingRevoke?.share_id === link.share_id}
+                        onConfirmRevoke={actuallyRevoke}
+                        onCancelRevoke={() => setPendingRevoke(null)}
                       />
                     ))
                   )}
@@ -265,20 +407,27 @@ export default function ShareWithClientSheet({
                 {/* Revoked history */}
                 {revokedLinks.length > 0 ? (
                   <View style={styles.section}>
-                    <Text style={[styles.sectionLabel, { color: colors.textTertiary }]}>
+                    <Text style={styles.revokedHeader}>
                       Revoked ({revokedLinks.length})
                     </Text>
                     {revokedLinks.map(link => (
-                      <View key={link.share_id} style={[styles.linkCard, { opacity: 0.5 }]}>
-                        <Text style={styles.linkUrl} numberOfLines={1}>{link.share_url}</Text>
+                      <View key={link.share_id} style={[styles.linkCard, styles.linkCardFaded]}>
+                        <Text style={styles.linkUrlRevoked} numberOfLines={2}>{link.share_url}</Text>
                         <Text style={styles.revokedTag}>Revoked</Text>
                       </View>
                     ))}
                   </View>
                 ) : null}
-              </>
+              </View>
             )}
           </ScrollView>
+
+          {/* Toast — absolute at sheet bottom, lives above the safe area */}
+          {toast ? (
+            <View style={styles.toast} pointerEvents="none" testID="share-toast">
+              <Text style={styles.toastText}>{toast}</Text>
+            </View>
+          ) : null}
         </View>
       </View>
     </Modal>
@@ -286,16 +435,24 @@ export default function ShareWithClientSheet({
 }
 
 function LinkRow({
-  link, highlight, onCopy, onShare, onRevoke,
+  link, highlight, justCopied, shareAvailable, inputRef,
+  onCopy, onShare, onRevoke,
+  confirmingRevoke, onConfirmRevoke, onCancelRevoke,
 }: {
   link: ShareLink;
   highlight: boolean;
+  justCopied: boolean;
+  shareAvailable: boolean;
+  inputRef: (r: TextInput | null) => void;
   onCopy: () => void;
   onShare: () => void;
   onRevoke: () => void;
+  confirmingRevoke: boolean;
+  onConfirmRevoke: () => void;
+  onCancelRevoke: () => void;
 }) {
   return (
-    <View style={[styles.linkCard, highlight && styles.linkCardHighlight]}>
+    <View style={[styles.linkCard, highlight ? styles.linkCardHighlight : null]}>
       <View style={styles.linkBadges}>
         <View style={styles.badge}>
           {link.show_exact_location
@@ -311,118 +468,317 @@ function LinkRow({
           </View>
         ) : null}
       </View>
-      <Text style={styles.linkUrl} numberOfLines={1}>{link.share_url}</Text>
-      <View style={styles.linkActions}>
-        <TouchableOpacity style={styles.linkBtn} onPress={onCopy} testID={`share-copy-${link.share_id}`}>
-          <Copy size={14} color={colors.text} />
-          <Text style={styles.linkBtnText}>Copy</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.linkBtn} onPress={onShare}>
-          <Share2 size={14} color={colors.text} />
-          <Text style={styles.linkBtnText}>Share</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.linkBtn, styles.linkBtnDanger]} onPress={onRevoke} testID={`share-revoke-${link.share_id}`}>
-          <Trash2 size={14} color={colors.secondary} />
-          <Text style={[styles.linkBtnText, { color: colors.secondary }]}>Revoke</Text>
-        </TouchableOpacity>
-      </View>
+
+      {/* Selectable, read-only URL input. Wraps to 2 lines on narrow
+          screens. iOS users can long-press → Select All → Copy as a
+          guaranteed fallback even when the Copy button fails. */}
+      <TextInput
+        ref={inputRef}
+        value={link.share_url}
+        editable={false}
+        multiline
+        selectTextOnFocus
+        numberOfLines={2}
+        style={styles.urlInput}
+        testID={`share-url-${link.share_id}`}
+        // RN-web tolerates this; on native it's ignored.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        {...(Platform.OS === 'web' ? ({ readOnly: true } as any) : {})}
+      />
+
+      {!confirmingRevoke ? (
+        <View style={styles.linkActions}>
+          <TouchableOpacity
+            style={[styles.linkBtn, justCopied ? styles.linkBtnCopied : null]}
+            onPress={onCopy}
+            testID={`share-copy-${link.share_id}`}
+          >
+            {justCopied
+              ? <Check size={14} color={colors.success} />
+              : <Copy size={14} color={colors.text} />}
+            <Text style={[styles.linkBtnText, justCopied ? styles.linkBtnTextCopied : null]}>
+              {justCopied ? 'Copied' : 'Copy'}
+            </Text>
+          </TouchableOpacity>
+
+          {shareAvailable ? (
+            <TouchableOpacity style={styles.linkBtn} onPress={onShare} testID={`share-share-${link.share_id}`}>
+              <Share2 size={14} color={colors.text} />
+              <Text style={styles.linkBtnText}>Share</Text>
+            </TouchableOpacity>
+          ) : null}
+
+          <TouchableOpacity
+            style={[styles.linkBtn, styles.linkBtnDanger]}
+            onPress={onRevoke}
+            testID={`share-revoke-${link.share_id}`}
+          >
+            <Trash2 size={14} color={colors.secondary} />
+            <Text style={[styles.linkBtnText, styles.linkBtnTextDanger]}>Revoke</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View style={styles.confirmRow}>
+          <Text style={styles.confirmText}>
+            Revoke this link? It can&apos;t be undone.
+          </Text>
+          <View style={styles.confirmActions}>
+            <TouchableOpacity style={styles.linkBtn} onPress={onCancelRevoke} testID={`share-revoke-cancel-${link.share_id}`}>
+              <Text style={styles.linkBtnText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.linkBtn, styles.linkBtnDanger]}
+              onPress={onConfirmRevoke}
+              testID={`share-revoke-confirm-${link.share_id}`}
+            >
+              <Trash2 size={14} color={colors.secondary} />
+              <Text style={[styles.linkBtnText, styles.linkBtnTextDanger]}>Revoke</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' },
+  backdrop: {
+    flex: 1,
+    backgroundColor: colors.overlay,
+    justifyContent: 'flex-end',
+  },
   sheet: {
     backgroundColor: colors.surface1,
-    borderTopLeftRadius: radii.xl, borderTopRightRadius: radii.xl,
-    paddingHorizontal: space.xl, paddingTop: space.sm,
+    borderTopLeftRadius: radii.xl,
+    borderTopRightRadius: radii.xl,
+    paddingHorizontal: space.xl,
+    paddingTop: space.sm,
     maxHeight: '88%',
+    minHeight: 320,
   },
   handle: {
-    width: 40, height: 4, borderRadius: 2,
-    backgroundColor: colors.border, alignSelf: 'center', marginBottom: space.md,
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.border,
+    alignSelf: 'center',
+    marginBottom: space.md,
   },
   header: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingBottom: space.lg, borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.borderSubtle, marginBottom: space.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingBottom: space.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.borderSubtle,
+    marginBottom: space.lg,
   },
+  headerText: { flex: 1, paddingRight: space.md },
+  closeBtn: { padding: 4 },
   title: { color: colors.text, fontSize: 19, fontWeight: '700' },
-  sub: { color: colors.textSecondary, fontSize: 14, marginTop: 2 },
+  sub: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },
+  bold: { color: colors.text, fontWeight: '600' },
 
-  errBox: { backgroundColor: '#3A1414', borderRadius: radii.md, padding: space.md, marginBottom: space.lg },
-  errText: { color: '#FCA5A5', fontSize: 14 },
+  scroll: { flexGrow: 0 },
+  scrollContent: { paddingBottom: space.xxxxl },
 
-  privacyGate: { alignItems: 'center', paddingVertical: space.xl, gap: space.md },
+  errBox: {
+    backgroundColor: '#3A1414',
+    borderRadius: radii.md,
+    padding: space.md,
+    marginBottom: space.lg,
+  },
+  errText: { color: '#FCA5A5', fontSize: 13, lineHeight: 18 },
+
+  privacyGate: {
+    alignItems: 'center',
+    paddingVertical: space.xl,
+    gap: space.md,
+  },
   privacyIcon: {
-    width: 56, height: 56, borderRadius: 28,
-    backgroundColor: '#3A2A00', alignItems: 'center', justifyContent: 'center',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#3A2A00',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   privacyTitle: { color: colors.text, fontSize: 16, fontWeight: '700' },
   privacyBody: {
-    color: colors.textSecondary, fontSize: 14, lineHeight: 22,
-    textAlign: 'center', paddingHorizontal: space.md,
+    color: colors.textSecondary,
+    fontSize: 14,
+    lineHeight: 22,
+    textAlign: 'center',
+    paddingHorizontal: space.md,
   },
 
   primaryBtn: {
-    backgroundColor: colors.primary, paddingVertical: 14, paddingHorizontal: space.xl,
-    borderRadius: radii.lg, alignItems: 'center', flexDirection: 'row',
-    justifyContent: 'center', gap: 8, marginTop: space.sm,
+    backgroundColor: colors.primary,
+    paddingVertical: 14,
+    paddingHorizontal: space.xl,
+    borderRadius: radii.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: space.sm,
+    minHeight: 48,
   },
+  btnBusy: { opacity: 0.6 },
+  btnInner: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   primaryBtnText: { color: colors.textInverse, fontSize: 14, fontWeight: '700' },
 
   section: { marginTop: space.lg },
   sectionLabel: {
-    color: colors.textSecondary, fontSize: 12, fontWeight: '600',
-    textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: space.sm,
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: space.sm,
+  },
+  revokedHeader: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: space.sm,
   },
 
   toggleRow: {
-    backgroundColor: colors.surface2, borderRadius: radii.md, padding: space.lg,
-    flexDirection: 'row', alignItems: 'center', gap: space.md,
+    backgroundColor: colors.surface2,
+    borderRadius: radii.md,
+    padding: space.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
   },
+  toggleRowText: { flex: 1 },
+  toggleRowHeading: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   toggleTitle: { color: colors.text, fontSize: 14, fontWeight: '600' },
-  toggleSub: { color: colors.textSecondary, fontSize: 12, marginTop: 4, lineHeight: 18 },
+  toggleSub: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    marginTop: 4,
+    lineHeight: 18,
+  },
   lockedNote: {
-    color: colors.textTertiary, fontSize: 12,
-    marginTop: space.sm, lineHeight: 16, fontStyle: 'italic',
+    color: colors.textTertiary,
+    fontSize: 12,
+    marginTop: space.sm,
+    lineHeight: 16,
+    fontStyle: 'italic',
   },
 
   switchTrack: {
-    width: 44, height: 26, borderRadius: 13, backgroundColor: colors.surface3,
-    padding: 3, justifyContent: 'center',
+    width: 44,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: colors.surface3,
+    padding: 3,
+    justifyContent: 'center',
   },
   switchTrackOn: { backgroundColor: colors.primary },
   switchThumb: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#FFFFFF' },
   switchThumbOn: { transform: [{ translateX: 18 }] },
 
-  emptyText: { color: colors.textTertiary, fontSize: 14, paddingVertical: space.md },
+  emptyText: {
+    color: colors.textTertiary,
+    fontSize: 14,
+    paddingVertical: space.md,
+  },
+  loadingSpinner: { marginTop: 12 },
 
   linkCard: {
-    backgroundColor: colors.surface2, borderRadius: radii.md, padding: space.md,
-    marginBottom: space.sm, borderWidth: 1, borderColor: 'transparent',
+    backgroundColor: colors.surface2,
+    borderRadius: radii.md,
+    padding: space.md,
+    marginBottom: space.sm,
+    borderWidth: 1,
+    borderColor: 'transparent',
   },
   linkCardHighlight: { borderColor: colors.primary },
+  linkCardFaded: { opacity: 0.5 },
   linkBadges: { flexDirection: 'row', gap: 6, marginBottom: 8 },
   badge: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: colors.surface3, paddingHorizontal: 8, paddingVertical: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.surface3,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
     borderRadius: 999,
   },
   badgeText: { color: colors.textSecondary, fontSize: 11, fontWeight: '600' },
-  linkUrl: {
-    color: colors.text, fontSize: 12,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+
+  urlInput: {
+    color: colors.text,
+    fontSize: 12,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    backgroundColor: colors.bg,
+    borderRadius: radii.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
     marginBottom: space.sm,
+    minHeight: 44,
+    // Let the URL wrap to up to ~2 lines without truncation
+    lineHeight: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    // Cross-platform user-select hint for web. Inline because RN doesn't
+    // expose userSelect as a style. RN-web reads it via the JSX inline
+    // style escape hatch.
+    ...(Platform.OS === 'web' ? ({ userSelect: 'all', cursor: 'text' } as object) : {}),
   },
-  linkActions: { flexDirection: 'row', gap: space.sm },
+  linkUrlRevoked: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+  },
+
+  linkActions: { flexDirection: 'row', gap: space.sm, flexWrap: 'wrap' },
   linkBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: colors.surface3, paddingHorizontal: 12, paddingVertical: 8,
-    borderRadius: radii.sm, minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.surface3,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: radii.sm,
+    minHeight: 44,
   },
+  linkBtnCopied: { backgroundColor: 'rgba(16,185,129,0.12)' },
   linkBtnDanger: { backgroundColor: 'rgba(208,72,72,0.12)' },
   linkBtnText: { color: colors.text, fontSize: 12, fontWeight: '600' },
+  linkBtnTextCopied: { color: colors.success },
+  linkBtnTextDanger: { color: colors.secondary },
 
-  revokedTag: { color: colors.secondary, fontSize: 11, fontWeight: '700', marginTop: 4 },
+  confirmRow: {
+    backgroundColor: colors.surface3,
+    borderRadius: radii.sm,
+    padding: space.md,
+  },
+  confirmText: { color: colors.text, fontSize: 13, marginBottom: space.sm, lineHeight: 18 },
+  confirmActions: { flexDirection: 'row', gap: space.sm, flexWrap: 'wrap' },
+
+  revokedTag: {
+    color: colors.secondary,
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+
+  toast: {
+    position: 'absolute',
+    bottom: space.xl,
+    left: space.xl,
+    right: space.xl,
+    backgroundColor: '#1F1F22',
+    borderRadius: radii.md,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  toastText: { color: colors.text, fontSize: 13, fontWeight: '600' },
 });
