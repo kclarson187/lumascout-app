@@ -68,8 +68,18 @@ router = APIRouter(prefix="/api", tags=["spot-shares"])
 # ─────────────────────────────────────────────────────────────────────
 
 WEB_BASE = os.environ.get(
-    "LUMASCOUT_WEB_BASE",
-    "https://photo-finder-60.preview.emergentagent.com",
+    # Feature 4 (May 2026) — share URLs MUST use the permanent host,
+    # NOT request.base_url (which is whatever ephemeral preview the
+    # caller connected to). This constant is intentionally read from
+    # the .env at module-load time so the value is fixed regardless of
+    # which preview rotated in. PUBLIC_SHARE_BASE_URL is the canonical
+    # name; LUMASCOUT_WEB_BASE is kept as a legacy fallback so any
+    # external tooling that already set it keeps working.
+    "PUBLIC_SHARE_BASE_URL",
+    os.environ.get(
+        "LUMASCOUT_WEB_BASE",
+        "https://photo-finder-60.emergent.host",
+    ),
 ).rstrip("/")
 
 # Generic OG card for PRIVATE spots — must NOT reveal location title or
