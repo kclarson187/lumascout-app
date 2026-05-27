@@ -342,7 +342,7 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   header: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingHorizontal: space.md, paddingBottom: space.sm },
   backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  kicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.8 },
+  kicker: { color: colors.kicker, fontFamily: font.bodyBold, fontSize: 10,},
   title: { color: colors.text, fontFamily: font.display, fontSize: 22 },
   headerBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
   markAllBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: 'rgba(245,166,35,0.12)', borderWidth: 1, borderColor: 'rgba(245,166,35,0.5)' },

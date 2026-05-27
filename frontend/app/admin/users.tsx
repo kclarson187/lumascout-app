@@ -19,8 +19,7 @@ const PLAN_COLOR: Record<string, string> = {
   elite: colors.primary,
   comp_pro: colors.info,
   comp_elite: colors.primary,
-  suspended: colors.secondary,
-};
+  suspended: colors.secondary };
 
 export default function AdminUsers() {
   const { user: me } = useAuth();
@@ -78,8 +77,7 @@ export default function AdminUsers() {
       const res = await api.post('/admin/users/bulk-delete', {
         user_ids: ids,
         reason_code: 'other',
-        reason_note: `Bulk delete via super-admin panel`,
-      });
+        reason_note: `Bulk delete via super-admin panel` });
       const ok = (res.succeeded || []).length;
       const failed = (res.failed || []).length;
       setConfirmOpen(false);
@@ -318,9 +316,8 @@ function Pill({ label, color }: { label: string; color: string }) {
   return (
     <View style={{
       backgroundColor: color + '22', borderColor: color, borderWidth: 1,
-      paddingHorizontal: 7, paddingVertical: 2, borderRadius: radii.pill,
-    }}>
-      <Text style={{ color, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.4, textTransform: 'uppercase' }}>{label}</Text>
+      paddingHorizontal: 7, paddingVertical: 2, borderRadius: radii.pill }}>
+      <Text style={{ color, fontFamily: font.bodyBold, fontSize: 9 }}>{label}</Text>
     </View>
   );
 }
@@ -331,22 +328,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.xl, paddingVertical: 10,
     backgroundColor: 'rgba(245,166,35,0.08)',
     borderBottomColor: 'rgba(245,166,35,0.30)',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
+    borderBottomWidth: StyleSheet.hairlineWidth },
   actionBtn: {
     width: 32, height: 32, borderRadius: 16,
     alignItems: 'center', justifyContent: 'center',
-    backgroundColor: colors.surface1,
-  },
+    backgroundColor: colors.surface1 },
   actionTitle: {
     flex: 1,
-    color: colors.text, fontFamily: font.bodyBold, fontSize: 15,
-  },
+    color: colors.text, fontFamily: font.bodyBold, fontSize: 15 },
   deleteBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingHorizontal: 14, paddingVertical: 8,
-    borderRadius: radii.md, backgroundColor: colors.primary,
-  },
+    borderRadius: radii.md, backgroundColor: colors.primary },
   deleteBtnDisabled: { backgroundColor: colors.surface2 },
   deleteBtnTxt: { color: '#1a0a06', fontFamily: font.bodyBold, fontSize: 13 },
 
@@ -354,8 +347,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingHorizontal: 12, paddingVertical: 9,
     borderRadius: radii.md, backgroundColor: colors.surface1,
-    borderColor: colors.border, borderWidth: 1,
-  },
+    borderColor: colors.border, borderWidth: 1 },
   selectBtnTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 12 },
 
   filterBar: { paddingHorizontal: space.xl, paddingTop: space.sm, flexDirection: 'row', gap: space.sm, alignItems: 'center' },
@@ -363,33 +355,28 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
-    borderRadius: radii.md, paddingHorizontal: space.md, paddingVertical: 10,
-  },
+    borderRadius: radii.md, paddingHorizontal: space.md, paddingVertical: 10 },
   searchInput: { flex: 1, color: colors.text, fontFamily: font.body, fontSize: 14 },
   chipsStrip: { paddingHorizontal: space.xl, paddingVertical: space.sm, gap: 6, alignItems: 'center' },
   chip: {
     paddingHorizontal: 10, paddingVertical: 5, borderRadius: radii.pill,
-    backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
-  },
+    backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
   chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   chipTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
   chipTxtActive: { color: colors.textInverse, fontFamily: font.bodySemibold },
-  totals: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.3, marginBottom: 4 },
+  totals: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, marginBottom: 4 },
   row: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     padding: space.md, borderRadius: radii.md,
-    backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
-  },
+    backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
   rowSelected: {
     borderColor: colors.primary,
-    backgroundColor: 'rgba(245,166,35,0.06)',
-  },
+    backgroundColor: 'rgba(245,166,35,0.06)' },
   checkboxWrap: { width: 28, alignItems: 'center', justifyContent: 'center' },
   checkboxLocked: {
     width: 22, height: 22, borderRadius: 11,
     alignItems: 'center', justifyContent: 'center',
-    borderColor: colors.textTertiary, borderWidth: 1, borderStyle: 'dashed',
-  },
+    borderColor: colors.textTertiary, borderWidth: 1, borderStyle: 'dashed' },
   avatar: { width: 40, height: 40, borderRadius: 20 },
   name: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
   sub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12 },
@@ -404,44 +391,35 @@ const styles = StyleSheet.create({
   modalBackdrop: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.7)',
     alignItems: 'center', justifyContent: 'center',
-    paddingHorizontal: space.xl,
-  },
+    paddingHorizontal: space.xl },
   modalCard: {
     width: '100%', maxWidth: 400,
     backgroundColor: colors.surface1,
     borderRadius: radii.xl,
     borderColor: colors.border, borderWidth: 1,
     padding: space.xl,
-    alignItems: 'center',
-  },
+    alignItems: 'center' },
   modalIconWrap: {
     width: 56, height: 56, borderRadius: 28,
     backgroundColor: 'rgba(217,80,67,0.15)',
     alignItems: 'center', justifyContent: 'center',
-    marginBottom: space.md,
-  },
+    marginBottom: space.md },
   modalTitle: {
     color: colors.text, fontFamily: font.bodyBold, fontSize: 17,
-    textAlign: 'center', marginBottom: 8, letterSpacing: -0.2,
-  },
+    textAlign: 'center', marginBottom: 8, letterSpacing: -0.2 },
   modalBody: {
     color: colors.textSecondary, fontFamily: font.body, fontSize: 13,
-    textAlign: 'center', lineHeight: 19, marginBottom: space.lg,
-  },
+    textAlign: 'center', lineHeight: 19, marginBottom: space.lg },
   modalActions: {
-    flexDirection: 'row', gap: space.md, width: '100%',
-  },
+    flexDirection: 'row', gap: space.md, width: '100%' },
   modalBtn: {
     flex: 1,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
     paddingVertical: 12,
-    borderRadius: radii.md,
-  },
+    borderRadius: radii.md },
   modalBtnGhost: {
     backgroundColor: colors.surface2,
-    borderColor: colors.border, borderWidth: 1,
-  },
+    borderColor: colors.border, borderWidth: 1 },
   modalBtnGhostTxt: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   modalBtnDanger: { backgroundColor: colors.secondary },
-  modalBtnDangerTxt: { color: '#fff', fontFamily: font.bodyBold, fontSize: 14 },
-});
+  modalBtnDangerTxt: { color: '#fff', fontFamily: font.bodyBold, fontSize: 14 } });

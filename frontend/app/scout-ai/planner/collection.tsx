@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Image,
-  KeyboardAvoidingView, Platform, ActivityIndicator, Alert,
-} from 'react-native';
+  KeyboardAvoidingView, Platform, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { ChevronLeft, FolderPlus, Sparkles, CheckCircle2, Bookmark } from 'lucide-react-native';
@@ -36,8 +35,7 @@ export default function CollectionPlanner() {
       const res = await api.post('/ai/plan/collection', {
         theme: theme.trim(),
         city: city.trim() || undefined,
-        min_count: 5, max_count: 10,
-      });
+        min_count: 5, max_count: 10 });
       setPlan(res);
     } catch (e) {
       setErr(formatApiError(e));
@@ -53,8 +51,7 @@ export default function CollectionPlanner() {
       const col = await api.post('/collections', {
         name: plan.name,
         description: plan.description,
-        is_private: false,
-      });
+        is_private: false });
       const col_id = col.collection_id || col.id;
       if (col_id) {
         for (const s of plan.spots) {
@@ -177,7 +174,7 @@ const styles = StyleSheet.create({
   iconBubble: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(116,216,143,0.14)', borderWidth: 1, borderColor: 'rgba(116,216,143,0.35)', marginBottom: space.md },
   head: { color: colors.text, fontFamily: font.display, fontSize: 26, letterSpacing: -0.5 },
   sub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13.5, lineHeight: 20, marginTop: 6 },
-  label: { color: colors.textSecondary, fontFamily: font.bodySemibold, fontSize: 11, letterSpacing: 0.4, textTransform: 'uppercase', marginTop: space.lg, marginBottom: 6 },
+  label: { color: colors.textSecondary, fontFamily: font.bodySemibold, fontSize: 11, marginTop: space.lg, marginBottom: 6 },
   input: { backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, borderRadius: radii.md, paddingHorizontal: 12, paddingVertical: 12, color: colors.text, fontFamily: font.body, fontSize: 14, minHeight: 48, textAlignVertical: 'top' },
   err: { color: colors.secondary, fontFamily: font.body, fontSize: 12, marginTop: 8 },
   cta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: colors.primary, paddingVertical: 14, borderRadius: radii.md, marginTop: space.lg },
@@ -192,5 +189,4 @@ const styles = StyleSheet.create({
   spotTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   spotMeta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, marginTop: 1 },
   spotReason: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11.5, lineHeight: 16, marginTop: 4 },
-  disclosure: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 10, textAlign: 'center' },
-});
+  disclosure: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 10, textAlign: 'center' } });

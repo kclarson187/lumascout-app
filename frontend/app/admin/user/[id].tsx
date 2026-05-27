@@ -88,8 +88,7 @@ export default function AdminUserDetail() {
       await api.post(`/admin/users/${u.user_id}/grant-plan`, {
         plan,
         duration_days: days,
-        reason: `comp grant (${days ? days + 'd' : 'permanent'})`,
-      });
+        reason: `comp grant (${days ? days + 'd' : 'permanent'})` });
       await load();
       Alert.alert('Plan granted', `User is now on ${plan}${days ? ` for ${days} days.` : ' (permanent).'}`);
     } catch (e) {
@@ -162,8 +161,7 @@ export default function AdminUserDetail() {
     try {
       const res = await api.delete(`/admin/users/${u.user_id}`, {
         reason_code: code || undefined,
-        reason_note: note || undefined,
-      });
+        reason_note: note || undefined });
       Alert.alert(
         'User deleted',
         `@${u.username || u.user_id} has been soft-deleted. Stripe cancelled: ${res.stripe_cancelled ? 'yes' : 'no'}.`,
@@ -520,9 +518,8 @@ function Pill({ label, color }: { label: string; color: string }) {
   return (
     <View style={{
       backgroundColor: color + '22', borderColor: color, borderWidth: 1,
-      paddingHorizontal: 8, paddingVertical: 3, borderRadius: radii.pill,
-    }}>
-      <Text style={{ color, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.4, textTransform: 'uppercase' }}>{label}</Text>
+      paddingHorizontal: 8, paddingVertical: 3, borderRadius: radii.pill }}>
+      <Text style={{ color, fontFamily: font.bodyBold, fontSize: 10 }}>{label}</Text>
     </View>
   );
 }
@@ -543,10 +540,10 @@ const styles = StyleSheet.create({
   sub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12 },
   stat: { flex: 1, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, padding: space.md, borderRadius: radii.md, alignItems: 'center' },
   statVal: { color: colors.text, fontFamily: font.display, fontSize: 26, letterSpacing: -0.3 },
-  statLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10, letterSpacing: 0.4, textTransform: 'uppercase' },
+  statLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10 },
   section: { gap: space.sm, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, padding: space.md, borderRadius: radii.lg },
   sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  sectionTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14, textTransform: 'uppercase', letterSpacing: 0.5 },
+  sectionTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
   lockTxt: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 10 },
   chipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   optChip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border },
@@ -556,8 +553,7 @@ const styles = StyleSheet.create({
   helper: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 4 },
   giftBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: colors.info, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radii.md,
-  },
+    backgroundColor: colors.info, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radii.md },
   giftBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 12 },
   warn: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, backgroundColor: 'rgba(251,191,36,0.08)', padding: 8, borderRadius: radii.md, borderColor: colors.warning, borderWidth: 1, marginTop: 6 },
   warnTxt: { flex: 1, color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17 },
@@ -566,14 +562,13 @@ const styles = StyleSheet.create({
   roleLegend: { gap: 8, marginTop: 12 },
   roleDefCard: {
     backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border,
-    borderRadius: radii.md, padding: 12, gap: 4,
-  },
+    borderRadius: radii.md, padding: 12, gap: 4 },
   roleDefCardCurrent: { borderColor: colors.primary, backgroundColor: 'rgba(245,166,35,0.06)' },
   roleDefHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
   roleDefDot: { width: 8, height: 8, borderRadius: 4 },
   roleDefLabel: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13 },
   roleDefCurrentPill: { marginLeft: 'auto', paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.sm, backgroundColor: colors.primary },
-  roleDefCurrentTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.5 },
+  roleDefCurrentTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 9 },
   roleDefTagline: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, marginBottom: 4, fontStyle: 'italic' },
   roleDefRow: { flexDirection: 'row', gap: 6, alignItems: 'flex-start' },
   roleDefBullet: { color: colors.textTertiary, fontFamily: font.body, fontSize: 12, lineHeight: 17 },
@@ -585,14 +580,11 @@ const styles = StyleSheet.create({
     borderRadius: radii.sm,
     backgroundColor: 'rgba(245,166,35,0.10)',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.primary,
-  },
+    borderColor: colors.primary },
   fsCompedTxt: {
     color: colors.primary,
     fontFamily: font.bodyBold,
-    fontSize: 11,
-    letterSpacing: 0.3,
-  },
+    fontSize: 11 },
   fsCompBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -603,13 +595,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(245,166,35,0.10)',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.primary,
-    marginBottom: space.sm,
-  },
+    marginBottom: space.sm },
   fsCompBannerTxt: {
     color: colors.primary,
     fontFamily: font.bodyBold,
-    fontSize: 13,
-  },
+    fontSize: 13 },
   actBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 10, borderRadius: radii.md },
   actTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 13 },
   noteInputRow: { flexDirection: 'row', gap: 8 },
@@ -631,5 +621,4 @@ const styles = StyleSheet.create({
   modalBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 19 },
   modalInput: { backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border, borderRadius: radii.md, paddingHorizontal: 12, paddingVertical: 12, color: colors.text, fontFamily: font.bodyMedium, fontSize: 14 },
   modalConfirm: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: colors.primary, paddingVertical: 14, borderRadius: radii.md, marginTop: 6, marginBottom: 20 },
-  modalConfirmTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 14 },
-});
+  modalConfirmTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 14 } });

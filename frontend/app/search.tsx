@@ -100,7 +100,6 @@ const styles = StyleSheet.create({
   },
   input: { flex: 1, color: colors.text, fontFamily: font.body, fontSize: 15, paddingVertical: 12 },
   suggestHead: {
-    color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11,
-    letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: space.md,
+    color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, marginBottom: space.md,
   },
 });

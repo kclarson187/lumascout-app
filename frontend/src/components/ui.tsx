@@ -6,8 +6,7 @@ export function Chip({
   label,
   active,
   onPress,
-  testID,
-}: {
+  testID }: {
   label: string;
   active?: boolean;
   onPress?: () => void;
@@ -52,8 +51,7 @@ export function EmptyState({
   title,
   subtitle,
   action,
-  icon,
-}: {
+  icon }: {
   title: string;
   subtitle?: string;
   action?: React.ReactNode;
@@ -72,8 +70,7 @@ export function EmptyState({
 export function SectionHeader({
   title,
   action,
-  onAction,
-}: {
+  onAction }: {
   title: string;
   action?: string;
   onAction?: () => void;
@@ -97,21 +94,15 @@ const styles = StyleSheet.create({
     borderRadius: radii.pill,
     backgroundColor: colors.surface2,
     borderWidth: 1,
-    borderColor: colors.border,
-  },
+    borderColor: colors.border },
   chipText: {
     color: colors.text,
     fontSize: 12,
-    fontFamily: font.bodyMedium,
-    letterSpacing: 0.2,
-  },
+    fontFamily: font.bodyMedium },
   label: {
     color: colors.textSecondary,
     fontSize: 12,
-    fontFamily: font.bodyMedium,
-    letterSpacing: 0.4,
-    textTransform: 'uppercase',
-  },
+    fontFamily: font.bodyMedium },
   input: {
     backgroundColor: colors.surface1,
     borderWidth: 1,
@@ -121,55 +112,45 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     color: colors.text,
     fontSize: 15,
-    fontFamily: font.body,
-  },
+    fontFamily: font.body },
   error: {
     color: colors.secondary,
     fontSize: 12,
-    fontFamily: font.body,
-  },
+    fontFamily: font.body },
   empty: {
     alignItems: 'center',
     paddingVertical: space.xxxl,
-    paddingHorizontal: space.xl,
-  },
+    paddingHorizontal: space.xl },
   emptyIcon: {
     width: 64, height: 64, borderRadius: 32,
     backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
     alignItems: 'center', justifyContent: 'center',
-    marginBottom: space.md,
-  },
+    marginBottom: space.md },
   emptyTitle: {
     color: colors.text,
     fontSize: 20,
     fontFamily: font.display,
     marginBottom: 6,
-    textAlign: 'center',
-  },
+    textAlign: 'center' },
   emptySub: {
     color: colors.textSecondary,
     fontSize: 14,
     fontFamily: font.body,
     textAlign: 'center',
-    lineHeight: 20,
-  },
+    lineHeight: 20 },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-end',
     paddingHorizontal: space.xl,
     marginTop: space.xl,
-    marginBottom: space.md,
-  },
+    marginBottom: space.md },
   sectionTitle: {
     color: colors.text,
     fontSize: 22,
     fontFamily: font.display,
-    letterSpacing: -0.3,
-  },
+    letterSpacing: -0.3 },
   sectionAction: {
     color: colors.primary,
     fontSize: 13,
-    fontFamily: font.bodyMedium,
-  },
-});
+    fontFamily: font.bodyMedium } });

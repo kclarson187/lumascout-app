@@ -471,7 +471,7 @@ export default function HomeMinimal() {
 
               {/* Bottom-left content */}
               <View style={s.heroContent} pointerEvents="none">
-                <Text style={s.greatLightLabel}>GREAT LIGHT</Text>
+                <Text style={s.greatLightLabel}>Great light</Text>
                 <Text style={s.heroTitle} numberOfLines={1}>{hero.title}</Text>
                 <View style={s.heroLocRow}>
                   <View style={s.heroLocPin}>
@@ -674,7 +674,11 @@ const s = StyleSheet.create({
   headline: { color: colors.text, fontFamily: font.displayBold, fontSize: 26, letterSpacing: -0.5, lineHeight: 30 },
   subRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
   subText: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13 },
-  subTextGold: { color: colors.primary, fontFamily: font.bodySemibold },
+  // Was gold (#F5A623) in v1; demoted to white-on-weight per May 2026
+  // design refresh — gold is reserved for primary CTAs, Pro/Elite
+  // tier badges, and premium map pins only. The countdown still gets
+  // visual weight via fontSemibold.
+  subTextGold: { color: colors.text, fontFamily: font.bodySemibold },
 
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   iconBtn: {

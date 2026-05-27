@@ -12,8 +12,7 @@ const SEASONS = [
 ];
 
 export default function SeasonalTimelineSection({
-  spotId, initial,
-}: { spotId: string; initial?: Record<string, any[]> }) {
+  spotId, initial }: { spotId: string; initial?: Record<string, any[]> }) {
   const [timeline, setTimeline] = useState<Record<string, any[]>>(initial || {});
   const [ready, setReady] = useState(!!initial);
 
@@ -63,7 +62,6 @@ export default function SeasonalTimelineSection({
 const styles = StyleSheet.create({
   seasonRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: space.xl },
   seasonBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: radii.pill, borderWidth: 1 },
-  seasonLbl: { fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase' },
+  seasonLbl: { fontFamily: font.bodyBold, fontSize: 10 },
   count: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
-  img: { width: 108, height: 108, borderRadius: radii.md },
-});
+  img: { width: 108, height: 108, borderRadius: radii.md } });

@@ -1,8 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, Modal, Pressable, TouchableOpacity, TextInput,
-  KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator,
-} from 'react-native';
+  KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator } from 'react-native';
 import { AlertTriangle, Trash2, X } from 'lucide-react-native';
 import { colors, font, space, radii } from '../theme';
 
@@ -40,8 +39,7 @@ type Props = {
 
 export default function DeleteConfirmSheet({
   visible, onClose, onConfirm, title, warning, targetLabel,
-  confirmPhrase, presets, destructiveCta,
-}: Props) {
+  confirmPhrase, presets, destructiveCta }: Props) {
   const [code, setCode] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -182,15 +180,13 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24, borderTopRightRadius: 24,
     padding: space.xl,
     maxHeight: '90%',
-    borderTopWidth: 2, borderColor: 'rgba(255,64,90,0.35)',
-  },
+    borderTopWidth: 2, borderColor: 'rgba(255,64,90,0.35)' },
   head: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: space.md },
   warnBubble: {
     width: 38, height: 38, borderRadius: 19,
     backgroundColor: 'rgba(255,64,90,0.12)',
     borderWidth: 1, borderColor: 'rgba(255,64,90,0.35)',
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   title: { color: colors.text, fontFamily: font.display, fontSize: 19, letterSpacing: -0.3 },
   target: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12, marginTop: 2 },
   warn: {
@@ -198,14 +194,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,64,90,0.06)',
     borderWidth: 1, borderColor: 'rgba(255,64,90,0.25)',
     padding: 10, borderRadius: radii.md,
-    marginBottom: space.md,
-  },
-  label: { color: colors.textSecondary, fontFamily: font.bodySemibold, fontSize: 11, letterSpacing: 0.4, textTransform: 'uppercase', marginBottom: 6 },
+    marginBottom: space.md },
+  label: { color: colors.textSecondary, fontFamily: font.bodySemibold, fontSize: 11, marginBottom: 6 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: {
     paddingHorizontal: 10, paddingVertical: 6, borderRadius: radii.pill,
-    backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border,
-  },
+    backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border },
   chipActive: { backgroundColor: colors.secondary, borderColor: colors.secondary },
   chipTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
   chipTxtActive: { color: '#fff', fontFamily: font.bodySemibold },
@@ -214,22 +208,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border, borderRadius: radii.md,
     paddingHorizontal: 12, paddingVertical: 10,
     color: colors.text, fontFamily: font.body, fontSize: 13,
-    minHeight: 70, textAlignVertical: 'top',
-  },
+    minHeight: 70, textAlignVertical: 'top' },
   confirmInput: {
     backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.secondary, borderRadius: radii.md,
     paddingHorizontal: 12, paddingVertical: 12,
-    color: colors.text, fontFamily: font.bodySemibold, fontSize: 14,
-  },
+    color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
   errBox: {
     marginTop: 10, padding: 10, borderRadius: radii.md,
-    backgroundColor: 'rgba(255,64,90,0.1)', borderWidth: 1, borderColor: colors.secondary,
-  },
+    backgroundColor: 'rgba(255,64,90,0.1)', borderWidth: 1, borderColor: colors.secondary },
   errTxt: { color: colors.secondary, fontFamily: font.body, fontSize: 12 },
   cta: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     backgroundColor: colors.secondary, paddingVertical: 15, borderRadius: radii.md,
-    marginTop: space.sm,
-  },
-  ctaTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 },
-});
+    marginTop: space.sm },
+  ctaTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 } });

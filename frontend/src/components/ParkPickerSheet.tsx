@@ -18,8 +18,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Modal, View, Text, StyleSheet, TextInput, TouchableOpacity,
   ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable,
-  Alert,
-} from 'react-native';
+  Alert } from 'react-native';
 import { X, Search, MapPin, Plus, AlertTriangle, Check } from 'lucide-react-native';
 import { api, formatApiError } from '../api';
 import { colors, font, space, radii } from '../theme';
@@ -56,8 +55,7 @@ export default function ParkPickerSheet({
   visible, onClose, onPick,
   nearLat, nearLng,
   defaultCity, defaultState, defaultCountryCode,
-  initialQuery,
-}: Props) {
+  initialQuery }: Props) {
   const [mode, setMode] = useState<'search' | 'create'>('search');
   const [q, setQ] = useState('');
   const [results, setResults] = useState<ParkSummary[]>([]);
@@ -163,8 +161,7 @@ export default function ParkPickerSheet({
         country_code: defaultCountryCode || undefined,
         latitude: nearLat,
         longitude: nearLng,
-        force_create: forceCreate,
-      };
+        force_create: forceCreate };
       const r = await api.post('/parks', body);
       onPick(r as ParkSummary);
       onClose();
@@ -406,8 +403,7 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: space.lg, paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
-  },
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   headerBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   headerTitle: { flex: 1, textAlign: 'center', color: colors.text, fontFamily: font.display, fontSize: 18 },
 
@@ -415,8 +411,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 8,
     marginHorizontal: space.lg, marginTop: 12,
     padding: 11, borderRadius: radii.md,
-    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-  },
+    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   searchInput: { flex: 1, color: colors.text, fontFamily: font.body, fontSize: 14 },
   hint: { color: colors.textTertiary, fontFamily: font.body, fontSize: 12, marginBottom: 4 },
   noMatches: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13 },
@@ -425,20 +420,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 10,
     padding: 12, borderRadius: radii.md,
     backgroundColor: colors.surface1,
-    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-  },
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   rowIcon: {
     width: 32, height: 32, borderRadius: 16,
     backgroundColor: 'rgba(245,166,35,0.16)',
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   rowTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
   rowMeta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 1 },
   countPill: {
     minWidth: 22, paddingHorizontal: 6, height: 22, borderRadius: 11,
     backgroundColor: 'rgba(245,166,35,0.16)',
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   countPillTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 11 },
 
   footer: {
@@ -446,54 +438,45 @@ const styles = StyleSheet.create({
     padding: space.lg, gap: 8,
     flexDirection: 'row',
     backgroundColor: colors.bg,
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border,
-  },
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   createBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
     paddingVertical: 14, borderRadius: radii.md,
-    backgroundColor: colors.primary,
-  },
+    backgroundColor: colors.primary },
   createBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 },
   backBtn: {
     flex: 1, alignItems: 'center', justifyContent: 'center',
     paddingVertical: 14, borderRadius: radii.md,
-    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-  },
+    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   backBtnTxt: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
 
   // Create form
-  label: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.5, textTransform: 'uppercase' },
+  label: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11 },
   input: {
     padding: 12, borderRadius: radii.md,
     backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-    color: colors.text, fontFamily: font.body, fontSize: 14,
-  },
+    color: colors.text, fontFamily: font.body, fontSize: 14 },
   metaNote: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, lineHeight: 16, marginTop: 4 },
 
   errBox: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     padding: 10, borderRadius: radii.md,
     backgroundColor: 'rgba(208,72,72,0.10)',
-    borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(208,72,72,0.35)',
-  },
+    borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(208,72,72,0.35)' },
   errTxt: { color: colors.secondary, fontFamily: font.bodyMedium, fontSize: 12, flex: 1 },
 
   dupBox: {
     padding: 12, borderRadius: radii.md, gap: 6,
     backgroundColor: 'rgba(251,191,36,0.08)',
-    borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(251,191,36,0.45)',
-  },
+    borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(251,191,36,0.45)' },
   dupTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   dupSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginBottom: 6 },
   dupRow: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     padding: 8, borderRadius: radii.sm,
     backgroundColor: colors.surface1,
-    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-  },
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   dupForceBtn: {
     marginTop: 6, paddingVertical: 10, alignItems: 'center', borderRadius: radii.sm,
-    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-  },
-  dupForceTxt: { color: colors.textSecondary, fontFamily: font.bodySemibold, fontSize: 13 },
-});
+    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+  dupForceTxt: { color: colors.textSecondary, fontFamily: font.bodySemibold, fontSize: 13 } });

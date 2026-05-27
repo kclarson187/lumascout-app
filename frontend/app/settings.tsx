@@ -6,8 +6,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert,
-  Linking, Platform, RefreshControl, Image,
-} from 'react-native';
+  Linking, Platform, RefreshControl, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import Constants from 'expo-constants';
@@ -24,8 +23,7 @@ import {
   GraduationCap, MapPin, Camera, Compass, HelpCircle, LifeBuoy,
   Flag, UserX, Lightbulb, Shield, FileText, Gavel, ScrollText,
   RotateCcw, Trash2, Info, Sparkles, Star, AtSign, Settings as Cog,
-  ArrowUpRight, Lock, ShieldCheck, ChevronsRight, Zap,
-} from 'lucide-react-native';
+  ArrowUpRight, Lock, ShieldCheck, ChevronsRight, Zap } from 'lucide-react-native';
 import { useAuth } from '../src/auth';
 import { api } from '../src/api';
 import { colors, font, space, radii } from '../src/theme';
@@ -44,8 +42,7 @@ const INSTAGRAM_URL = 'https://instagram.com/lumascout';
 const STORE_URL = Platform.select({
   ios: 'https://apps.apple.com/app/lumascout',
   android: 'https://play.google.com/store/apps/details?id=com.lumascout.app',
-  default: 'https://lumascout.app',
-});
+  default: 'https://lumascout.app' });
 
 const STAFF_ROLES = ['admin', 'super_admin', 'moderator'];
 
@@ -103,8 +100,7 @@ export default function SettingsHub() {
       setStats({
         saved: Number(d.saves_count ?? d.saved_count ?? user?.saved_count ?? 0),
         followers: Number(d.followers_count ?? user?.followers_count ?? 0),
-        views_7d: Number(viewers.data?.count_7d ?? 0),
-      });
+        views_7d: Number(viewers.data?.count_7d ?? 0) });
     } catch {}
   }, [user]);
 
@@ -140,32 +136,27 @@ export default function SettingsHub() {
       key: 'profile', icon: User,
       title: 'Profile',
       subtitle: 'Name, bio, photo, specialties, socials',
-      onPress: () => router.push('/(tabs)/profile'),
-    },
+      onPress: () => router.push('/(tabs)/profile') },
     {
       key: 'email', icon: AtSign,
       title: 'Email address',
       subtitle: user?.email ? user.email : 'Update your login email',
-      onPress: () => router.push('/settings/email' as any),
-    },
+      onPress: () => router.push('/settings/email' as any) },
     {
       key: 'membership', icon: CreditCard,
       title: 'Membership',
       subtitle: `${entitlementPlanLabel(user)} · Tap to manage, upgrade, or view history`,
-      onPress: () => router.push('/billing'),
-    },
+      onPress: () => router.push('/billing') },
     {
       key: 'notifications', icon: Bell,
       title: 'Notifications',
       subtitle: 'Push, quiet hours, category alerts',
-      onPress: () => router.push('/settings/notifications'),
-    },
+      onPress: () => router.push('/settings/notifications') },
     {
       key: 'saved-data', icon: Bookmark,
       title: 'Saved data',
       subtitle: 'Spots · Collections · Downloads',
-      onPress: () => router.push('/(tabs)/saved'),
-    },
+      onPress: () => router.push('/(tabs)/saved') },
   ];
 
   const creatorTools: RowSpec[] = [
@@ -174,41 +165,35 @@ export default function SettingsHub() {
       title: 'Marketplace dashboard',
       subtitle: 'Products, earnings, Stripe payouts',
       onPress: () => router.push('/me/seller'),
-      badge: plan === 'elite' ? undefined : { kind: 'elite', label: 'Elite' },
-    },
+      badge: plan === 'elite' ? undefined : { kind: 'elite', label: 'Elite' } },
     {
       key: 'packs', icon: PackageOpen,
       title: 'Creator packs',
       subtitle: plan === 'elite' ? 'Create + manage premium spot packs' : 'Elite unlocks pack creation',
       onPress: () => router.push('/creator/packs'),
-      badge: plan === 'elite' ? undefined : { kind: 'locked', label: 'Elite' },
-    },
+      badge: plan === 'elite' ? undefined : { kind: 'locked', label: 'Elite' } },
     {
       key: 'referrals', icon: Briefcase,
       title: 'Referral marketplace',
       subtitle: 'Posted jobs, applications, collaborations',
-      onPress: () => router.push('/me-referrals'),
-    },
+      onPress: () => router.push('/me-referrals') },
     {
       key: 'network', icon: Users,
       title: 'Photographer network',
       subtitle: 'Followers · Following · Message requests',
-      onPress: () => router.push('/(tabs)/network'),
-    },
+      onPress: () => router.push('/(tabs)/network') },
     {
       key: 'viewers', icon: Eye,
       title: 'Who viewed you',
       subtitle: plan === 'free' ? 'Pro unlocks viewer analytics' : 'See who checked your profile',
       onPress: () => router.push('/profile-viewers'),
-      badge: plan === 'free' ? { kind: 'pro', label: 'Pro' } : undefined,
-    },
+      badge: plan === 'free' ? { kind: 'pro', label: 'Pro' } : undefined },
     {
       key: 'mentors', icon: GraduationCap,
       title: 'Mentorship',
       subtitle: 'Find a mentor · Become a mentor',
       onPress: () => router.push('/mentors'),
-      badge: { kind: 'new', label: 'New' },
-    },
+      badge: { kind: 'new', label: 'New' } },
   ];
 
   const fieldTools: RowSpec[] = [
@@ -216,20 +201,17 @@ export default function SettingsHub() {
       key: 'location', icon: MapPin,
       title: 'Location preferences',
       subtitle: 'Discovery radius · Default city · GPS · Privacy',
-      onPress: () => router.push('/settings/location' as any),
-    },
+      onPress: () => router.push('/settings/location' as any) },
     {
       key: 'camera', icon: Camera,
       title: 'Camera gear',
       subtitle: 'Brand, body, favorite lenses, shoot styles',
-      onPress: () => router.push('/settings/gear' as any),
-    },
+      onPress: () => router.push('/settings/gear' as any) },
     {
       key: 'explore', icon: Compass,
       title: 'Travel & explore',
       subtitle: 'Travel radius · Paid jobs · Bucket list',
-      onPress: () => router.push('/settings/travel' as any),
-    },
+      onPress: () => router.push('/settings/travel' as any) },
   ];
 
   const support: RowSpec[] = [
@@ -237,32 +219,27 @@ export default function SettingsHub() {
       key: 'help', icon: HelpCircle,
       title: 'Help center',
       subtitle: 'Searchable FAQs for photographers',
-      onPress: () => router.push('/help' as any),
-    },
+      onPress: () => router.push('/help' as any) },
     {
       key: 'contact', icon: LifeBuoy,
       title: 'Contact support',
       subtitle: 'Reach the team in-app',
-      onPress: () => openUrl('mailto:support@lumascout.app?subject=LumaScout%20Support'),
-    },
+      onPress: () => openUrl('mailto:support@lumascout.app?subject=LumaScout%20Support') },
     {
       key: 'report-spot', icon: Flag,
       title: 'Report a bad spot',
       subtitle: 'Wrong location · closed · unsafe · duplicate',
-      onPress: () => openUrl('mailto:support@lumascout.app?subject=LumaScout%20%E2%80%94%20Report%20a%20bad%20spot&body=Spot%20name%3A%0ASpot%20URL%2Fid%3A%0AReason%20(wrong%20location%20%2F%20closed%20%2F%20unsafe%20%2F%20duplicate)%3A%0AAdditional%20notes%3A'),
-    },
+      onPress: () => openUrl('mailto:support@lumascout.app?subject=LumaScout%20%E2%80%94%20Report%20a%20bad%20spot&body=Spot%20name%3A%0ASpot%20URL%2Fid%3A%0AReason%20(wrong%20location%20%2F%20closed%20%2F%20unsafe%20%2F%20duplicate)%3A%0AAdditional%20notes%3A') },
     {
       key: 'report-user', icon: UserX,
       title: 'Report a user',
       subtitle: 'Spam · harassment · fake content',
-      onPress: () => openUrl('mailto:support@lumascout.app?subject=LumaScout%20%E2%80%94%20Report%20a%20user&body=User%20handle%3A%0AUser%20URL%2Fid%3A%0AReason%20(spam%20%2F%20harassment%20%2F%20fake)%3A%0AEvidence%2Fcontext%3A'),
-    },
+      onPress: () => openUrl('mailto:support@lumascout.app?subject=LumaScout%20%E2%80%94%20Report%20a%20user&body=User%20handle%3A%0AUser%20URL%2Fid%3A%0AReason%20(spam%20%2F%20harassment%20%2F%20fake)%3A%0AEvidence%2Fcontext%3A') },
     {
       key: 'feature', icon: Lightbulb,
       title: 'Feature request',
       subtitle: 'Tell us what to build next',
-      onPress: () => openUrl('mailto:feedback@lumascout.app?subject=LumaScout%20Feature%20Request'),
-    },
+      onPress: () => openUrl('mailto:feedback@lumascout.app?subject=LumaScout%20Feature%20Request') },
   ];
 
   const legal: RowSpec[] = [
@@ -282,8 +259,7 @@ export default function SettingsHub() {
           { text: 'Contact us to proceed', onPress: () => openUrl('mailto:support@lumascout.app?subject=Delete%20my%20LumaScout%20account') },
         ],
       ),
-      destructive: true,
-    },
+      destructive: true },
   ];
 
   const about: RowSpec[] = [
@@ -291,32 +267,27 @@ export default function SettingsHub() {
       key: 'about', icon: Info,
       title: 'About LumaScout',
       subtitle: 'Our mission + the team',
-      onPress: () => router.push('/about' as any),
-    },
+      onPress: () => router.push('/about' as any) },
     {
       key: 'version', icon: Sparkles,
       title: 'Version',
       subtitle: `v${appVersion}${buildNumber ? ` (${buildNumber})` : ''} · ${envTag}`,
-      onPress: () => {},
-    },
+      onPress: () => {} },
     {
       key: 'whats-new', icon: Zap,
       title: "What's new",
       subtitle: 'Release notes and what changed',
-      onPress: () => router.push('/whats-new' as any),
-    },
+      onPress: () => router.push('/whats-new' as any) },
     {
       key: 'rate', icon: Star,
       title: 'Rate the app',
       subtitle: 'Love it? Leave a review',
-      onPress: () => openUrl(STORE_URL!),
-    },
+      onPress: () => openUrl(STORE_URL!) },
     {
       key: 'instagram', icon: AtSign,
       title: 'Follow on Instagram',
       subtitle: '@lumascout',
-      onPress: () => openUrl(INSTAGRAM_URL),
-    },
+      onPress: () => openUrl(INSTAGRAM_URL) },
   ];
 
   const staffTools: RowSpec[] = isStaff ? [
@@ -324,8 +295,7 @@ export default function SettingsHub() {
       key: 'admin-dash', icon: ShieldCheck,
       title: 'Admin dashboard',
       subtitle: 'Moderation, approvals, reports, flags',
-      onPress: () => router.push('/admin'),
-    },
+      onPress: () => router.push('/admin') },
   ] : [];
 
   // Stat header values
@@ -537,12 +507,10 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   head: {
     flexDirection: 'row', alignItems: 'center', gap: space.md,
-    paddingHorizontal: space.xl, paddingBottom: space.lg, paddingTop: space.sm,
-  },
+    paddingHorizontal: space.xl, paddingBottom: space.lg, paddingTop: space.sm },
   backBtn: {
     width: 40, height: 40, borderRadius: 20,
-    backgroundColor: colors.surface2, alignItems: 'center', justifyContent: 'center',
-  },
+    backgroundColor: colors.surface2, alignItems: 'center', justifyContent: 'center' },
   title: { fontFamily: font.display, fontSize: 30, color: colors.text, letterSpacing: -0.5 },
   subtitle: { fontFamily: font.body, fontSize: 12, color: colors.textSecondary, marginTop: 2 },
 
@@ -554,39 +522,34 @@ const styles = StyleSheet.create({
     borderRadius: radii.xl,
     padding: space.lg,
     borderWidth: 1,
-    borderColor: colors.border,
-  },
+    borderColor: colors.border },
   heroTop: { flexDirection: 'row', alignItems: 'center' },
   heroAvatar: {
     width: 48, height: 48, borderRadius: 24,
     backgroundColor: colors.surface3, alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: colors.border,
-  },
+    borderWidth: 1, borderColor: colors.border },
   heroName: { fontFamily: font.bodyBold, fontSize: 16, color: colors.text },
   heroHandle: { fontFamily: font.body, fontSize: 12, color: colors.textSecondary, marginTop: 2 },
   heroEdit: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: 10, paddingVertical: 6,
     backgroundColor: colors.surface3, borderRadius: radii.pill,
-    borderWidth: 1, borderColor: colors.border,
-  },
+    borderWidth: 1, borderColor: colors.border },
   heroEditTxt: { fontFamily: font.bodySemibold, fontSize: 11, color: colors.text },
 
   statsRow: { flexDirection: 'row', marginTop: space.lg, justifyContent: 'space-between' },
   statCell: { flex: 1, alignItems: 'center' },
   statValue: { fontFamily: font.bodyBold, fontSize: 17, color: colors.text, letterSpacing: -0.3 },
-  statLabel: { fontFamily: font.body, fontSize: 10, color: colors.textTertiary, marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.5 },
+  statLabel: { fontFamily: font.body, fontSize: 10, color: colors.textTertiary, marginTop: 2 },
 
   // Upsell
   upsell: {
     flexDirection: 'row', alignItems: 'center', gap: space.md,
     backgroundColor: colors.primary, borderRadius: radii.xl,
-    padding: space.lg, marginTop: space.lg,
-  },
+    padding: space.lg, marginTop: space.lg },
   upsellIconWrap: {
     width: 40, height: 40, borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.18)', alignItems: 'center', justifyContent: 'center',
-  },
+    backgroundColor: 'rgba(0,0,0,0.18)', alignItems: 'center', justifyContent: 'center' },
   upsellTitle: { fontFamily: font.bodyBold, fontSize: 15, color: colors.textInverse, letterSpacing: -0.2 },
   upsellBody: { fontFamily: font.body, fontSize: 12, color: 'rgba(0,0,0,0.8)', marginTop: 2 },
 
@@ -598,14 +561,12 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radii.xl,
     paddingVertical: space.md, paddingHorizontal: space.lg,
-    marginTop: space.lg,
-  },
+    marginTop: space.lg },
   compIconWrap: {
     width: 40, height: 40, borderRadius: 20,
     backgroundColor: 'rgba(245,166,35,0.15)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  compTitle: { fontFamily: font.bodyBold, fontSize: 14, color: colors.primary, letterSpacing: 0.5 },
+    alignItems: 'center', justifyContent: 'center' },
+  compTitle: { fontFamily: font.bodyBold, fontSize: 14, color: colors.primary },
   compBody: { fontFamily: font.body, fontSize: 12.5, color: colors.textSecondary, marginTop: 2 },
 
   // Section
@@ -614,31 +575,25 @@ const styles = StyleSheet.create({
     fontFamily: font.bodySemibold,
     fontSize: 11,
     color: colors.textTertiary,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
     marginBottom: space.sm,
-    marginLeft: space.sm,
-  },
+    marginLeft: space.sm },
   card: {
     backgroundColor: colors.surface1,
     borderRadius: radii.xl,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: colors.border,
-  },
+    borderColor: colors.border },
 
   // Row
   row: {
     flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 14, paddingHorizontal: space.lg, minHeight: 58,
-  },
+    paddingVertical: 14, paddingHorizontal: space.lg, minHeight: 58 },
   rowDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   iconBox: {
     width: 34, height: 34, borderRadius: 10,
     backgroundColor: colors.surface3,
     alignItems: 'center', justifyContent: 'center', marginRight: space.md,
-    borderWidth: 1, borderColor: colors.border,
-  },
+    borderWidth: 1, borderColor: colors.border },
   iconBoxDestructive: { backgroundColor: 'rgba(255,95,86,0.12)', borderColor: 'rgba(255,95,86,0.3)' },
   rowTitle: { fontFamily: font.bodySemibold, fontSize: 14, color: colors.text, letterSpacing: -0.1 },
   rowSubtitle: { fontFamily: font.body, fontSize: 11.5, color: colors.textSecondary, marginTop: 2, lineHeight: 15 },
@@ -648,14 +603,12 @@ const styles = StyleSheet.create({
   badge: {
     flexDirection: 'row', alignItems: 'center', gap: 3,
     paddingHorizontal: 8, paddingVertical: 3,
-    borderRadius: radii.pill,
-  },
+    borderRadius: radii.pill },
   badgeLocked: {
     backgroundColor: 'rgba(245,166,35,0.12)',
-    borderWidth: 1, borderColor: 'rgba(245,166,35,0.4)',
-  },
-  badgeTxt: { fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.4, textTransform: 'uppercase' },
-  badgeTxtLocked: { fontFamily: font.bodyBold, fontSize: 10, color: colors.primary, letterSpacing: 0.4, textTransform: 'uppercase' },
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.4)' },
+  badgeTxt: { fontFamily: font.bodyBold, fontSize: 10 },
+  badgeTxtLocked: { fontFamily: font.bodyBold, fontSize: 10, color: colors.primary },
 
   // Sign out
   signOut: {
@@ -663,8 +616,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface1,
     borderRadius: radii.xl,
     borderWidth: 1, borderColor: colors.border,
-    paddingVertical: space.lg, alignItems: 'center',
-  },
+    paddingVertical: space.lg, alignItems: 'center' },
   signOutTxt: { fontFamily: font.bodyBold, fontSize: 14, color: '#FF5F56', letterSpacing: -0.1 },
 
   foot: {
@@ -672,6 +624,4 @@ const styles = StyleSheet.create({
     fontFamily: font.body,
     fontSize: 11,
     color: colors.textTertiary,
-    marginTop: space.xl,
-  },
-});
+    marginTop: space.xl } });

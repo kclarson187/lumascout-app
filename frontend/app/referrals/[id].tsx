@@ -12,14 +12,12 @@ import {
   Image,
   Alert,
   ActivityIndicator,
-  TextInput,
-} from 'react-native';
+  TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams, Stack, useFocusEffect } from 'expo-router';
 import {
   ArrowLeft, MapPin, Clock, DollarSign, Zap, Users, MessageCircle,
-  CheckCircle2, XCircle, Briefcase, AlertCircle,
-} from 'lucide-react-native';
+  CheckCircle2, XCircle, Briefcase, AlertCircle } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
@@ -34,8 +32,7 @@ const GIG_LABELS: Record<string, string> = {
   content_creator: 'Content Creator',
   pet_session: 'Pet Session',
   wedding_support: 'Wedding Support',
-  event_coverage: 'Event Coverage',
-};
+  event_coverage: 'Event Coverage' };
 
 type Application = {
   app_id: string;
@@ -381,31 +378,27 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: space.lg, paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: colors.border,
-  },
+    borderBottomWidth: 1, borderBottomColor: colors.border },
   backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   headerTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 16 },
 
   heroCard: {
     backgroundColor: colors.surface1, borderWidth: 1, borderColor: 'rgba(245,166,35,0.28)',
-    borderRadius: radii.lg, padding: space.lg, gap: space.md,
-  },
+    borderRadius: radii.lg, padding: space.lg, gap: space.md },
   badgeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   gigPill: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: 10, paddingVertical: 5, borderRadius: radii.sm,
-    backgroundColor: 'rgba(245,166,35,0.12)',
-  },
-  gigPillTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.4 },
+    backgroundColor: 'rgba(245,166,35,0.12)' },
+  gigPillTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 11 },
   urgentPill: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 8, paddingVertical: 4, borderRadius: radii.sm, backgroundColor: '#ef4444' },
-  urgentTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.6 },
+  urgentTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 10 },
   featuredPill: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: radii.sm, backgroundColor: colors.primary },
-  featuredTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.6 },
+  featuredTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 10 },
   statusPill: {
     paddingHorizontal: 8, paddingVertical: 4, borderRadius: radii.sm,
-    backgroundColor: colors.surface2,
-  },
-  statusTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.6 },
+    backgroundColor: colors.surface2 },
+  statusTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 10 },
 
   title: { color: colors.text, fontFamily: font.display, fontSize: 22, letterSpacing: -0.3, lineHeight: 28 },
 
@@ -415,15 +408,13 @@ const styles = StyleSheet.create({
 
   card: {
     backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
-    borderRadius: radii.lg, padding: space.md, gap: space.sm,
-  },
-  sectionLabel: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase' },
+    borderRadius: radii.lg, padding: space.md, gap: space.sm },
+  sectionLabel: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11 },
   notes: { color: colors.text, fontFamily: font.body, fontSize: 14, lineHeight: 21 },
 
   posterCard: {
     backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
-    borderRadius: radii.lg, padding: space.md, gap: space.sm,
-  },
+    borderRadius: radii.lg, padding: space.md, gap: space.sm },
   posterAvatar: { width: 44, height: 44, borderRadius: 22 },
   posterName: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   posterMeta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12 },
@@ -432,8 +423,7 @@ const styles = StyleSheet.create({
 
   applicantRow: {
     flexDirection: 'row', gap: 10, paddingTop: space.sm,
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border,
-  },
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   appAvatar: { width: 38, height: 38, borderRadius: 19 },
   appName: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13 },
   appMeta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, marginTop: 2 },
@@ -442,8 +432,7 @@ const styles = StyleSheet.create({
 
   smallBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingVertical: 6, paddingHorizontal: 10, borderRadius: radii.sm,
-  },
+    paddingVertical: 6, paddingHorizontal: 10, borderRadius: radii.sm },
   smallBtnPrimary: { backgroundColor: colors.primary },
   smallBtnGhost: { backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border },
   smallBtnTxtPrimary: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 11 },
@@ -452,8 +441,7 @@ const styles = StyleSheet.create({
   pitchInput: {
     backgroundColor: colors.bg, color: colors.text, fontFamily: font.body, fontSize: 14,
     borderWidth: 1, borderColor: colors.border, borderRadius: radii.sm,
-    padding: space.md, minHeight: 100, textAlignVertical: 'top',
-  },
+    padding: space.md, minHeight: 100, textAlignVertical: 'top' },
   pitchHint: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
 
   linkPrimary: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 12 },
@@ -463,12 +451,10 @@ const styles = StyleSheet.create({
     position: 'absolute', bottom: 0, left: 0, right: 0,
     padding: space.md, gap: space.sm,
     backgroundColor: colors.bg,
-    borderTopWidth: 1, borderTopColor: colors.border,
-  },
+    borderTopWidth: 1, borderTopColor: colors.border },
   bottomBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    paddingVertical: 13, borderRadius: radii.md,
-  },
+    paddingVertical: 13, borderRadius: radii.md },
   bottomBtnPrimary: { backgroundColor: colors.primary },
   bottomBtnSecondary: { backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(245,166,35,0.4)' },
   bottomBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 },
@@ -476,7 +462,5 @@ const styles = StyleSheet.create({
   appStatusPill: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
     padding: 8, borderRadius: radii.sm,
-    backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border,
-  },
-  appStatusTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
-});
+    backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border },
+  appStatusTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 } });

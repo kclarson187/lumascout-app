@@ -15,8 +15,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-nati
 import { router } from 'expo-router';
 import {
   Activity, Wrench, FileText, Flag, Edit3, AlertTriangle,
-  ShoppingBag, Receipt, Sparkles, MessageSquare, Settings, ChevronRight, Layers,
-} from 'lucide-react-native';
+  ShoppingBag, Receipt, Sparkles, MessageSquare, Settings, ChevronRight, Layers } from 'lucide-react-native';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 
@@ -31,8 +30,7 @@ type Item = {
 };
 
 const ROLE_RANK: Record<string, number> = {
-  user: 0, moderator: 1, support: 1, admin: 3, super_admin: 4,
-};
+  user: 0, moderator: 1, support: 1, admin: 3, super_admin: 4 };
 
 const SECTIONS: { title: string; items: Item[] }[] = [
   {
@@ -41,8 +39,7 @@ const SECTIONS: { title: string; items: Item[] }[] = [
       { key: 'analytics',   label: 'System Health',  helper: 'Signups, approvals, charts', icon: Activity, route: '/admin/analytics', iconColor: colors.success },
       { key: 'diagnostics', label: 'Diagnostics',    helper: 'Backend URL · runtime · sample image', icon: Wrench, route: '/admin/diagnostics', iconColor: colors.info },
       { key: 'audit',       label: 'Activity Log',   helper: 'Admin actions audit trail', icon: FileText, route: '/admin/audit', iconColor: colors.textSecondary, minRole: 'admin' },
-    ],
-  },
+    ] },
   {
     title: 'Content',
     items: [
@@ -50,23 +47,20 @@ const SECTIONS: { title: string; items: Item[] }[] = [
       { key: 'edits',    label: 'Edit Requests',  helper: 'Uploader proposed spot edits',   icon: Edit3, route: '/admin/edit-requests', iconColor: colors.info },
       { key: 'posts',    label: 'Community Posts', helper: 'Browse, filter, restore posts', icon: AlertTriangle, route: '/admin/posts', iconColor: colors.primary },
       { key: 'parks',    label: 'Parks',           helper: 'Edit · merge · move child spots', icon: Layers, route: '/admin/parks', iconColor: colors.primary },
-    ],
-  },
+    ] },
   {
     title: 'Business',
     items: [
       { key: 'mkt',   label: 'Marketplace',         helper: 'Listings, payouts, refunds',     icon: ShoppingBag, route: '/admin/marketplace',           iconColor: colors.primary },
       { key: 'mktp', label: 'Marketplace Purchases', helper: 'Order history & receipts',       icon: Receipt,    route: '/admin/marketplace-purchases', iconColor: colors.info },
-    ],
-  },
+    ] },
   {
     title: 'Platform',
     items: [
       { key: 'ai',        label: 'Scout AI Controls', helper: 'Cadence, editorial, replies', icon: Sparkles, route: '/admin/ai-controls', iconColor: colors.primary },
       { key: 'community', label: 'Community Tools',   helper: 'Member status & escalations', icon: MessageSquare, route: '/admin/community', iconColor: colors.success },
       { key: 'settings',  label: 'Admin Settings',    helper: 'Global flags & owner-only',   icon: Settings, route: '/admin/settings', iconColor: colors.textSecondary, minRole: 'super_admin' },
-    ],
-  },
+    ] },
 ];
 
 export default function AdminMore() {
@@ -119,29 +113,21 @@ export default function AdminMore() {
 
 const styles = StyleSheet.create({
   intro: {
-    color: colors.textTertiary, fontFamily: font.body, fontSize: 12, lineHeight: 16,
-  },
+    color: colors.textTertiary, fontFamily: font.body, fontSize: 12, lineHeight: 16 },
   sectionLabel: {
-    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11,
-    letterSpacing: 0.7, textTransform: 'uppercase', marginBottom: 8,
-  },
+    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, marginBottom: 8 },
   list: {
     backgroundColor: colors.surface1,
     borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
     borderRadius: radii.md,
-    overflow: 'hidden',
-  },
+    overflow: 'hidden' },
   row: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingHorizontal: space.md, paddingVertical: 12,
-  },
+    paddingHorizontal: space.md, paddingVertical: 12 },
   rowDivider: {
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border,
-  },
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   iconBox: {
     width: 30, height: 30, borderRadius: 15,
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   label: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
-  helper: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 2 },
-});
+  helper: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 2 } });

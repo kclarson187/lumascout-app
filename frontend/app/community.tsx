@@ -409,7 +409,7 @@ function PostCard({ post, onLike, meId }: { post: any; onLike: () => void; meId?
 
 const styles = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: space.xl, paddingVertical: space.md, gap: 8 },
-  kicker: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase' },
+  kicker: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10,},
   title: { color: colors.text, fontFamily: font.display, fontSize: 22, lineHeight: 27, letterSpacing: -0.3 },
   iconBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   composeBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: colors.primary },
@@ -430,7 +430,7 @@ const styles = StyleSheet.create({
   authorName: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
   authorMeta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11 },
   catBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 7, paddingVertical: 3, borderRadius: radii.pill, borderWidth: 1 },
-  catTxt: { fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.4 },
+  catTxt: { fontFamily: font.bodyBold, fontSize: 9,},
   postTitle: { color: colors.text, fontFamily: font.display, fontSize: 18, letterSpacing: -0.3, lineHeight: 22 },
   postBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 19 },
   postImg: { width: '100%', aspectRatio: 16 / 10, borderRadius: radii.md },
@@ -441,7 +441,7 @@ const styles = StyleSheet.create({
   spotAttachCover: { width: '100%', aspectRatio: 16 / 9 },
   spotAttachOverlay: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 10, backgroundColor: 'rgba(0,0,0,0.55)' },
   spotAttachKickerWrap: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 2 },
-  spotAttachKicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.6 },
+  spotAttachKicker: { color: colors.kicker, fontFamily: font.bodyBold, fontSize: 9,},
   spotAttachTitle: { color: '#fff', fontFamily: font.bodySemibold, fontSize: 13 },
   spotAttachLoc: { color: 'rgba(255,255,255,0.8)', fontFamily: font.body, fontSize: 11, marginTop: 1 },
   actions: { flexDirection: 'row', gap: 18, alignItems: 'center', marginTop: 4 },
@@ -462,7 +462,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 7, borderRadius: radii.pill,
     backgroundColor: colors.primary,
   },
-  composerCtaTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 12, letterSpacing: 0.2 },
+  composerCtaTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 12,},
 
   // PRD #7 — Context chip row + author specialty chips + engagement prompt.
   contextRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 3 },
@@ -472,11 +472,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border,
     maxWidth: 140,
   },
-  ctxTxt: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 10, letterSpacing: 0.2 },
+  ctxTxt: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 10,},
   specChip: {
     paddingHorizontal: 6, paddingVertical: 1, borderRadius: radii.pill,
     backgroundColor: 'rgba(245,166,35,0.10)', borderWidth: 1, borderColor: colors.primary,
   },
-  specChipTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.4, textTransform: 'uppercase' },
+  specChipTxt: { color: colors.kicker, fontFamily: font.bodyBold, fontSize: 9,},
   promptTxt: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 11, fontStyle: 'italic', flex: 1, marginLeft: 4 },
 });

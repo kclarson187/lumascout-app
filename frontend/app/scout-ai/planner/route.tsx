@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Image,
-  KeyboardAvoidingView, Platform, ActivityIndicator,
-} from 'react-native';
+  KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { ChevronLeft, MapPinned, Sparkles, Navigation2, LocateFixed } from 'lucide-react-native';
@@ -62,8 +61,7 @@ export default function RoutePlanner() {
         base_lat: la, base_lng: lo,
         max_stops: maxStops,
         focus: focus.trim() || undefined,
-        radius_km: 80,
-      });
+        radius_km: 80 });
       setPlan(res);
     } catch (e) {
       setErr(formatApiError(e));
@@ -176,7 +174,7 @@ const styles = StyleSheet.create({
   sub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13.5, lineHeight: 20, marginTop: 6 },
   locBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginTop: space.md, paddingVertical: 8, paddingHorizontal: 12, borderRadius: radii.pill, backgroundColor: 'rgba(32,130,255,0.12)', borderWidth: 1, borderColor: 'rgba(32,130,255,0.35)' },
   locTxt: { color: colors.primary, fontFamily: font.bodySemibold, fontSize: 12 },
-  label: { color: colors.textSecondary, fontFamily: font.bodySemibold, fontSize: 11, letterSpacing: 0.4, textTransform: 'uppercase', marginTop: space.lg, marginBottom: 6 },
+  label: { color: colors.textSecondary, fontFamily: font.bodySemibold, fontSize: 11, marginTop: space.lg, marginBottom: 6 },
   input: { backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, borderRadius: radii.md, paddingHorizontal: 12, paddingVertical: 12, color: colors.text, fontFamily: font.body, fontSize: 14 },
   seg: { flex: 1, paddingVertical: 12, borderRadius: radii.md, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, alignItems: 'center' },
   segActive: { backgroundColor: colors.primary, borderColor: colors.primary },
@@ -199,5 +197,4 @@ const styles = StyleSheet.create({
   legRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
   legTxt: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
   spotReason: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11.5, lineHeight: 16, marginTop: 4 },
-  disclosure: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 10, textAlign: 'center', lineHeight: 16 },
-});
+  disclosure: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 10, textAlign: 'center', lineHeight: 16 } });

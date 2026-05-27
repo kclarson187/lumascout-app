@@ -49,8 +49,7 @@ export function timeAgo(iso?: string | null): string {
 
 /** Small chip used in compact meta rows (no icon, just the label). */
 export function ConditionChip({
-  tag, selected = false, onPress, testID,
-}: { tag: string; selected?: boolean; onPress?: () => void; testID?: string }) {
+  tag, selected = false, onPress, testID }: { tag: string; selected?: boolean; onPress?: () => void; testID?: string }) {
   const spec = CONDITION_MAP[tag];
   if (!spec) return null;
   const Icon = spec.Icon;
@@ -73,8 +72,7 @@ export function ConditionChip({
 
 /** Larger activity badge — surfaces on spot detail hero / list rows. */
 export function ActivityBadge({
-  lastActivityAt, recentUploadCount7d,
-}: { lastActivityAt?: string | null; recentUploadCount7d?: number }) {
+  lastActivityAt, recentUploadCount7d }: { lastActivityAt?: string | null; recentUploadCount7d?: number }) {
   if (!lastActivityAt) return null;
   const ageH = (Date.now() - new Date(lastActivityAt).getTime()) / 3600000;
   if (!Number.isFinite(ageH) || ageH > 24 * 14) return null; // hide after 2 weeks
@@ -102,15 +100,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: 9, paddingVertical: 5,
     borderRadius: radii.pill,
-    backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
-  },
+    backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
   chipTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
   badge: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: 8, paddingVertical: 4,
     borderRadius: radii.pill,
     borderWidth: StyleSheet.hairlineWidth,
-    alignSelf: 'flex-start',
-  },
-  badgeTxt: { fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.4, textTransform: 'uppercase' },
-});
+    alignSelf: 'flex-start' },
+  badgeTxt: { fontFamily: font.bodyBold, fontSize: 10 } });

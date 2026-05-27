@@ -15,8 +15,7 @@ import {
   KeyboardAvoidingView,
   Modal,
   Pressable,
-  RefreshControl,
-} from 'react-native';
+  RefreshControl } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
@@ -46,8 +45,7 @@ import {
   Inbox as InboxIcon,
   Globe as GlobeIcon2,
   MapPin as MapPinIcon,
-  MessageSquare as MessageSquareIcon,
-} from 'lucide-react-native';
+  MessageSquare as MessageSquareIcon } from 'lucide-react-native';
 import GlobeIcon from '../../src/components/icons/GlobeIcon';
 import { useAuth } from '../../src/auth';
 import { api, formatApiError } from '../../src/api';
@@ -87,8 +85,7 @@ const emptyForm = {
   available_for_second_shooter: false,
   mentorship_available: false,
   primary_country: 'US',
-  specialties: [] as string[],
-};
+  specialties: [] as string[] };
 
 import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
 
@@ -164,8 +161,7 @@ function ProfileImpl() {
         available_for_second_shooter: !!user.available_for_second_shooter,
         mentorship_available: !!user.mentorship_available,
         primary_country: user.primary_country || 'US',
-        specialties: user.specialties || [],
-      });
+        specialties: user.specialties || [] });
     }
   }, [user, editMode]);
 
@@ -205,8 +201,7 @@ function ProfileImpl() {
       available_for_second_shooter: form.available_for_second_shooter,
       mentorship_available: form.mentorship_available,
       primary_country: form.primary_country,
-      specialties: form.specialties,
-    };
+      specialties: form.specialties };
     const years = parseInt(form.years_experience, 10);
     const radius = parseInt(form.service_radius_miles, 10);
     if (!Number.isNaN(years)) body.years_experience = years;
@@ -224,8 +219,7 @@ function ProfileImpl() {
       ...prev,
       specialties: prev.specialties.includes(s)
         ? prev.specialties.filter((x) => x !== s)
-        : [...prev.specialties, s],
-    }));
+        : [...prev.specialties, s] }));
   };
 
   const pickAndUpload = async (kind: 'banner' | 'avatar') => {
@@ -239,8 +233,7 @@ function ProfileImpl() {
       quality: 1,
       base64: false,
       allowsEditing: true,
-      aspect: kind === 'banner' ? [3, 1] : [1, 1],
-    });
+      aspect: kind === 'banner' ? [3, 1] : [1, 1] });
     if (res.canceled) return;
     const asset = res.assets[0];
     setUploading(kind);
@@ -287,8 +280,7 @@ function ProfileImpl() {
         user_id: user.user_id || user.id,
         display_name: user.name || user.display_name,
         username: user.username,
-        specialty: user.specialty || user.photographer_specialty,
-      });
+        specialty: user.specialty || user.photographer_specialty });
     } catch {}
   };
 
@@ -606,36 +598,31 @@ function ProfileImpl() {
               badges.push({
                 key: 'verified', label: 'Verified',
                 color: colors.info, bg: 'rgba(96,165,250,0.14)',
-                icon: <ShieldCheck size={12} color={colors.info} />,
-              });
+                icon: <ShieldCheck size={12} color={colors.info} /> });
             }
             if (plan !== 'free') {
               badges.push({
                 key: 'plan', label: planLabel,
                 color: colors.primary, bg: 'rgba(245,166,35,0.14)',
-                icon: <Crown size={12} color={colors.primary} />,
-              });
+                icon: <Crown size={12} color={colors.primary} /> });
             }
             if ((user.years_experience ?? 0) >= 3) {
               badges.push({
                 key: 'years', label: `${user.years_experience}+ yrs`,
                 color: colors.success, bg: 'rgba(16,185,129,0.14)',
-                icon: <GraduationCap size={12} color={colors.success} />,
-              });
+                icon: <GraduationCap size={12} color={colors.success} /> });
             }
             if ((stats.spots_created ?? mySpots.length) >= 1) {
               badges.push({
                 key: 'contrib', label: 'Contributor',
                 color: colors.text, bg: colors.surface2,
-                icon: <MapPin size={12} color={colors.text} />,
-              });
+                icon: <MapPin size={12} color={colors.text} /> });
             }
             if ((stats.spots_created ?? mySpots.length) >= 10) {
               badges.push({
                 key: 'scout', label: 'Top Scout',
                 color: colors.primary, bg: 'rgba(245,166,35,0.14)',
-                icon: <Store size={12} color={colors.primary} />,
-              });
+                icon: <Store size={12} color={colors.primary} /> });
             }
             if (badges.length === 0) return null;
             return (
@@ -1061,8 +1048,7 @@ function CompactProfileStatCell({ label, value, onPress }: { label: string; valu
  * Messages). One short row, evenly flexed, no excessive height.
  */
 function QuickCell({
-  icon, label, onPress, testID,
-}: { icon: React.ReactNode; label: string; onPress: () => void; testID?: string }) {
+  icon, label, onPress, testID }: { icon: React.ReactNode; label: string; onPress: () => void; testID?: string }) {
   return (
     <TouchableOpacity onPress={onPress} style={styles.quickCell} activeOpacity={0.85} testID={testID}>
       <View style={styles.quickIcon}>{icon}</View>
@@ -1132,13 +1118,11 @@ const viewersStyles = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(245,166,35,0.28)',
     borderRadius: radii.lg,
     marginHorizontal: space.xl, marginBottom: space.md,
-    paddingVertical: 14, paddingHorizontal: 14,
-  },
+    paddingVertical: 14, paddingHorizontal: 14 },
   iconWrap: {
     width: 38, height: 38, borderRadius: 19,
     backgroundColor: 'rgba(245,166,35,0.12)',
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   headline: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   sub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2 },
   proPill: {
@@ -1146,10 +1130,8 @@ const viewersStyles = StyleSheet.create({
     paddingHorizontal: 8, paddingVertical: 4,
     borderRadius: radii.sm,
     backgroundColor: 'rgba(245,166,35,0.15)',
-    borderWidth: 1, borderColor: 'rgba(245,166,35,0.4)',
-  },
-  proTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.4 },
-});
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.4)' },
+  proTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10 } });
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
@@ -1160,42 +1142,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.xl,
     paddingTop: space.sm,
     paddingBottom: space.sm,
-    gap: 8,
-  },
+    gap: 8 },
   kickerLabel: {
     color: colors.primary,
     fontFamily: font.bodyBold,
-    fontSize: 10,
-    letterSpacing: 0.8,
-  },
+    fontSize: 10 },
   kickerTitle: {
     color: colors.text,
     fontFamily: font.display,
     fontSize: 22,
     marginTop: 2,
-    letterSpacing: -0.3,
-  },
+    letterSpacing: -0.3 },
   kickerIconBtn: {
     width: 36, height: 36, borderRadius: 18,
     alignItems: 'center', justifyContent: 'center',
     backgroundColor: colors.surface1,
     borderWidth: 1,
-    borderColor: colors.border,
-  },
+    borderColor: colors.border },
   loadingWrap: { flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center', gap: 16, padding: space.xl },
   loadingTitle: { color: colors.text, fontFamily: font.display, fontSize: 28 },
 
   banner: {
-    height: 160, backgroundColor: colors.surface1, position: 'relative', overflow: 'hidden',
-  },
+    height: 160, backgroundColor: colors.surface1, position: 'relative', overflow: 'hidden' },
   bannerFallback: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: colors.surface1,
-  },
+    backgroundColor: colors.surface1 },
   bannerOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.25)',
-  },
+    backgroundColor: 'rgba(0,0,0,0.25)' },
   bannerEdit: {
     // FIX(Commit 7d / 2026-04): 60% black scrim + thin white hairline border
     // for premium frosted-glass look. Previously 55% scrim only — pill got
@@ -1208,25 +1182,19 @@ const styles = StyleSheet.create({
     // iOS-only shadow for lift over bright imagery.
     ...Platform.select({
       ios: { shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
-      android: { elevation: 2 },
-    }),
-  },
-  bannerEditTxt: { color: '#FFFFFF', fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.3 },
+      android: { elevation: 2 } }) },
+  bannerEditTxt: { color: '#FFFFFF', fontFamily: font.bodyBold, fontSize: 11 },
   bannerTopRight: {
-    position: 'absolute', top: space.md, right: space.xl, flexDirection: 'row', gap: 8,
-  },
+    position: 'absolute', top: space.md, right: space.xl, flexDirection: 'row', gap: 8 },
   iconBtnDark: {
     width: 36, height: 36, borderRadius: 18,
-    backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center',
-  },
+    backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center' },
 
   avatarWrap: {
-    alignItems: 'center', marginTop: -44,
-  },
+    alignItems: 'center', marginTop: -44 },
   avatar: {
     width: 104, height: 104, borderRadius: 52,
-    borderWidth: 4, borderColor: colors.bg, backgroundColor: colors.surface2,
-  },
+    borderWidth: 4, borderColor: colors.bg, backgroundColor: colors.surface2 },
   avatarEditBadge: {
     // FIX(Commit 7d): bump size 26→28 and add subtle shadow so it reads as
     // tappable over any avatar colour, not just light-skinned ones.
@@ -1235,16 +1203,13 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     ...Platform.select({
       ios: { shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 4, shadowOffset: { width: 0, height: 1 } },
-      android: { elevation: 3 },
-    }),
-  },
+      android: { elevation: 3 } }) },
 
   headerText: { paddingHorizontal: space.xl, paddingTop: space.md, alignItems: 'center' },
   name: { color: colors.text, fontFamily: font.display, fontSize: 28, letterSpacing: -0.3, textAlign: 'center' },
   verifiedDot: {
     width: 22, height: 22, borderRadius: 11, backgroundColor: colors.info,
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   handle: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13, marginTop: 2 },
   locRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 },
   locTxt: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 12 },
@@ -1252,22 +1217,19 @@ const styles = StyleSheet.create({
   specs: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.md, justifyContent: 'center' },
   specPill: {
     backgroundColor: colors.surface2, paddingHorizontal: 10, paddingVertical: 4,
-    borderRadius: radii.pill, borderColor: colors.border, borderWidth: 1,
-  },
-  specTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.3 },
+    borderRadius: radii.pill, borderColor: colors.border, borderWidth: 1 },
+  specTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 11 },
 
   availRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.sm, justifyContent: 'center' },
   availBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: 8, paddingVertical: 4, borderRadius: radii.pill, borderWidth: 1,
-  },
-  availTxt: { fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.3 },
+    paddingHorizontal: 8, paddingVertical: 4, borderRadius: radii.pill, borderWidth: 1 },
+  availTxt: { fontFamily: font.bodyBold, fontSize: 10 },
 
   linkRow: { flexDirection: 'row', gap: 8, marginTop: space.md, justifyContent: 'center' },
   linkBtn: {
     width: 32, height: 32, borderRadius: 16, backgroundColor: colors.surface1,
-    borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center',
-  },
+    borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
   // PRD: Portfolio CTA button — full pill with globe icon + "Portfolio"
   // label. Lives in the social link row but visually dominates so it reads
   // as the photographer's hero destination (published work), while the
@@ -1284,21 +1246,17 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     backgroundColor: 'rgba(245,166,35,0.08)',
     borderColor: 'rgba(245,166,35,0.55)',
-    borderWidth: 1.2,
-  },
+    borderWidth: 1.2 },
   portfolioBtnTxt: {
     color: colors.primary,
     fontFamily: font.bodyBold,
     fontSize: 12.5,
-    letterSpacing: 0.4,
-    includeFontPadding: false,
-  },
+    includeFontPadding: false },
   // PRD: Portfolio empty-state sheet
   portfolioEmptyBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.72)',
-    justifyContent: 'flex-end',
-  },
+    justifyContent: 'flex-end' },
   portfolioEmptySheet: {
     backgroundColor: colors.surface1,
     borderTopLeftRadius: radii.xl,
@@ -1310,28 +1268,23 @@ const styles = StyleSheet.create({
     paddingBottom: space.xxl + space.sm,
     alignItems: 'center',
     gap: 6,
-    overflow: 'hidden',
-  },
+    overflow: 'hidden' },
   portfolioEmptyGlyph: {
     width: 60, height: 60, borderRadius: 30,
     alignItems: 'center', justifyContent: 'center',
     backgroundColor: 'rgba(245,166,35,0.14)',
     borderWidth: 1, borderColor: 'rgba(245,166,35,0.42)',
-    marginBottom: space.sm,
-  },
+    marginBottom: space.sm },
   portfolioEmptyTitle: {
     color: colors.text, fontFamily: font.display,
-    fontSize: 24, letterSpacing: -0.2, textAlign: 'center',
-  },
+    fontSize: 24, letterSpacing: -0.2, textAlign: 'center' },
   portfolioEmptyBody: {
     color: colors.textSecondary, fontFamily: font.body,
     fontSize: 14, lineHeight: 20, textAlign: 'center',
-    paddingHorizontal: 8,
-  },
+    paddingHorizontal: 8 },
   portfolioEmptyDismiss: { paddingVertical: 10, marginTop: 4 },
   portfolioEmptyDismissTxt: {
-    color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13,
-  },
+    color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13 },
 
   ctaRow: { flexDirection: 'row', gap: 8, marginTop: space.lg, width: '100%' },
 
@@ -1347,34 +1300,27 @@ const styles = StyleSheet.create({
     borderRadius: radii.lg,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.06)',
-    alignItems: 'center',
-  },
+    alignItems: 'center' },
   statsDivider: {
     width: StyleSheet.hairlineWidth,
     height: 28,
     backgroundColor: 'rgba(255,255,255,0.10)',
-    alignSelf: 'center',
-  },
+    alignSelf: 'center' },
   statValue: {
     color: colors.text,
     fontFamily: font.displaySemibold || font.bodyBold,
     fontSize: 18,
     letterSpacing: -0.3,
-    marginBottom: 2,
-  },
+    marginBottom: 2 },
   statLabel: {
     color: colors.textSecondary,
     fontFamily: font.bodyMedium,
-    fontSize: 10.5,
-    letterSpacing: 0.4,
-    textTransform: 'uppercase',
-  },
+    fontSize: 10.5 },
   quickRow: {
     flexDirection: 'row',
     gap: 8,
     paddingHorizontal: space.xl,
-    marginTop: 12,
-  },
+    marginTop: 12 },
   quickCell: {
     flex: 1,
     paddingVertical: 12,
@@ -1385,78 +1331,63 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface1,
     borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
-  },
+    borderColor: 'rgba(255,255,255,0.06)' },
   quickIcon: {
     width: 32, height: 32, borderRadius: 16,
     alignItems: 'center', justifyContent: 'center',
-    backgroundColor: 'rgba(245,166,35,0.12)',
-  },
+    backgroundColor: 'rgba(245,166,35,0.12)' },
   quickLabel: {
     color: colors.text,
     fontFamily: font.bodyMedium,
-    fontSize: 11.5,
-  },
+    fontSize: 11.5 },
 
   statsRow: {
     flexDirection: 'row', marginTop: space.lg, paddingHorizontal: space.xl,
-    gap: 8,
-  },
+    gap: 8 },
   statCell: {
     flex: 1, alignItems: 'center', paddingVertical: 10,
-    backgroundColor: colors.surface1, borderRadius: radii.md, borderColor: colors.border, borderWidth: 1,
-  },
+    backgroundColor: colors.surface1, borderRadius: radii.md, borderColor: colors.border, borderWidth: 1 },
   statVal: { color: colors.text, fontFamily: font.display, fontSize: 20 },
-  statLbl: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10, letterSpacing: 0.4, textTransform: 'uppercase', marginTop: 2 },
+  statLbl: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10, marginTop: 2 },
 
   actionsRow: {
     flexDirection: 'row', flexWrap: 'wrap', gap: 8,
-    paddingHorizontal: space.xl, marginTop: space.sm,
-  },
+    paddingHorizontal: space.xl, marginTop: space.sm },
   actionCard: {
     flexBasis: '48%', flexGrow: 1, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
-    padding: space.md, borderRadius: radii.md, gap: 6, minHeight: 80,
-  },
+    padding: space.md, borderRadius: radii.md, gap: 6, minHeight: 80 },
   adminCard: { backgroundColor: colors.primary, borderColor: colors.primary },
   actionTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12, lineHeight: 16 },
   sectionLabel: {
-    color: colors.textTertiary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.8,
-    textTransform: 'uppercase', paddingHorizontal: space.xl, marginTop: space.xl, marginBottom: space.xs,
-  },
+    color: colors.textTertiary, fontFamily: font.bodyBold, fontSize: 10, paddingHorizontal: space.xl, marginTop: space.xl, marginBottom: space.xs },
   signOutRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
     marginTop: space.lg, marginHorizontal: space.xl, paddingVertical: 10,
-    borderRadius: radii.md, borderWidth: 1, borderColor: colors.border, backgroundColor: 'transparent',
-  },
-  signOutTxt: { color: colors.secondary, fontFamily: font.bodyBold, fontSize: 12, letterSpacing: 0.3 },
+    borderRadius: radii.md, borderWidth: 1, borderColor: colors.border, backgroundColor: 'transparent' },
+  signOutTxt: { color: colors.secondary, fontFamily: font.bodyBold, fontSize: 12 },
 
   editCard: {
     backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
-    padding: space.lg, borderRadius: radii.lg, gap: space.md, margin: space.xl,
-  },
-  editLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6, marginTop: 4 },
+    padding: space.lg, borderRadius: radii.lg, gap: space.md, margin: space.xl },
+  editLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, marginTop: 4 },
   toggleRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingVertical: 6,
-  },
+    paddingVertical: 6 },
   toggleLabel: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 14, flex: 1 },
 
   tabStrip: {
-    marginTop: space.lg, borderBottomWidth: 1, borderBottomColor: colors.border,
-  },
+    marginTop: space.lg, borderBottomWidth: 1, borderBottomColor: colors.border },
   tabBtn: { paddingVertical: 12 },
-  tabTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 14, letterSpacing: 0.2 },
+  tabTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 14 },
   tabTxtActive: { color: colors.text },
   tabUnderline: {
     height: 2, backgroundColor: colors.primary, marginTop: 8,
-    marginHorizontal: -2, borderRadius: 2,
-  },
+    marginHorizontal: -2, borderRadius: 2 },
 
   postCard: {
     backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
-    borderRadius: radii.md, padding: space.md, gap: 6,
-  },
-  postCategory: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.8 },
+    borderRadius: radii.md, padding: space.md, gap: 6 },
+  postCategory: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10 },
   postTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 15 },
   postBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 18 },
   postMeta: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 11, marginTop: 4 },
@@ -1469,21 +1400,17 @@ const styles = StyleSheet.create({
 
   photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginHorizontal: -space.xl / 2 },
   photoTile: {
-    width: '32%', backgroundColor: colors.surface2, borderRadius: radii.sm, overflow: 'hidden',
-  },
+    width: '32%', backgroundColor: colors.surface2, borderRadius: radii.sm, overflow: 'hidden' },
   // PRD #4: Badges strip
   badgesStrip: {
     paddingHorizontal: space.xl, paddingVertical: space.sm,
-    gap: 6,
-  },
+    gap: 6 },
   badgePill: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
     paddingHorizontal: 10, paddingVertical: 5,
-    borderRadius: radii.pill, borderWidth: 1,
-  },
+    borderRadius: radii.pill, borderWidth: 1 },
   badgePillTxt: {
-    fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.3,
-  },
+    fontFamily: font.bodyBold, fontSize: 11 },
   // PRD #4: Premium Upgrade CTA for Free users
   upgradeCard: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
@@ -1492,21 +1419,18 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface1,
     borderColor: 'rgba(245,166,35,0.35)', borderWidth: 1,
     borderRadius: radii.lg,
-    overflow: 'hidden',
-  },
+    overflow: 'hidden' },
   upgradeCrown: {
     width: 42, height: 42, borderRadius: 21,
     backgroundColor: 'rgba(245,166,35,0.2)',
     borderColor: 'rgba(245,166,35,0.45)', borderWidth: 1,
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   upgradeTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   upgradeBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17 },
   upgradeArrow: {
     paddingHorizontal: 10, paddingVertical: 6,
-    backgroundColor: colors.primary, borderRadius: radii.pill,
-  },
-  upgradeArrowTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.3 },
+    backgroundColor: colors.primary, borderRadius: radii.pill },
+  upgradeArrowTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 11 },
   // PRD #11: Share LumaScout row
   shareAppRow: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
@@ -1515,23 +1439,19 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface1,
     borderColor: 'rgba(245,166,35,0.28)', borderWidth: 1,
     borderRadius: radii.lg,
-    overflow: 'hidden',
-  },
+    overflow: 'hidden' },
   shareAppIcon: {
     width: 42, height: 42, borderRadius: 21,
     backgroundColor: 'rgba(245,166,35,0.18)',
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   shareAppTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   shareAppBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17, marginTop: 2 },
 
   aboutCard: {
     backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
-    borderRadius: radii.md, padding: space.lg, gap: space.sm,
-  },
+    borderRadius: radii.md, padding: space.lg, gap: space.sm },
   aboutRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4, gap: 12 },
   aboutLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
   aboutVal: { color: colors.text, fontFamily: font.body, fontSize: 13, flexShrink: 1, textAlign: 'right' },
 
-  empty: { color: colors.textSecondary, fontFamily: font.body, fontSize: 14, textAlign: 'center', paddingVertical: space.xxl },
-});
+  empty: { color: colors.textSecondary, fontFamily: font.body, fontSize: 14, textAlign: 'center', paddingVertical: space.xxl } });

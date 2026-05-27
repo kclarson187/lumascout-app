@@ -1232,7 +1232,7 @@ function SpotDetailImpl() {
                   {items.map((it) => (
                     <View key={it.label} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                       <Text style={{ color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13 }}>{it.label}</Text>
-                      <Text style={{ color: colors.primary, fontFamily: font.bodyBold, fontSize: 13, letterSpacing: 1 }}>{it.value}</Text>
+                      <Text style={{ color: colors.text, fontFamily: font.bodyBold, fontSize: 13 }}>{it.value}</Text>
                     </View>
                   ))}
                 </View>

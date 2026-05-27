@@ -124,11 +124,10 @@ const styles = StyleSheet.create({
   lock: { padding: space.md, borderRadius: radii.md, backgroundColor: 'rgba(208,72,72,0.08)', borderColor: colors.secondary, borderWidth: 1 },
   lockTxt: { color: colors.secondary, fontFamily: font.bodyMedium, fontSize: 12 },
   section: { gap: 4, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, padding: space.md, borderRadius: radii.lg },
-  sectionTitle: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 4 },
+  sectionTitle: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, marginBottom: 4 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
   rowLabel: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
   rowHelp: { color: colors.textTertiary, fontFamily: font.body, fontSize: 10 },
   input: { backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border, borderRadius: radii.sm, paddingHorizontal: 10, paddingVertical: 8, color: colors.text, fontFamily: font.body, fontSize: 13 },
   saveBtn: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: radii.sm, backgroundColor: colors.primary },
-  saveBtnTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 11 },
-});
+  saveBtnTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 11 } });

@@ -20,13 +20,11 @@
 import React, { useCallback, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Alert,
-  Pressable, ActivityIndicator, Switch, KeyboardAvoidingView, Platform,
-} from 'react-native';
+  Pressable, ActivityIndicator, Switch, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import {
-  Camera, User as UserIcon, Trash2, Plus, X as XIcon,
-} from 'lucide-react-native';
+  Camera, User as UserIcon, Trash2, Plus, X as XIcon } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { api, formatApiError } from '../../src/api';
@@ -78,8 +76,7 @@ export default function OnboardingPhotographer() {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: square,
       aspect: square ? [1, 1] : undefined,
-      quality: 0.8,
-    });
+      quality: 0.8 });
     if (result.canceled || !result.assets?.[0]?.uri) return null;
     const manip = await ImageManipulator.manipulateAsync(
       result.assets[0].uri,
@@ -144,8 +141,7 @@ export default function OnboardingPhotographer() {
       instagram: instagram.trim() || null,
       tiktok_url: tiktok.trim() || null,
       facebook_url: facebook.trim() || null,
-      directory_visible: markVisible,
-    };
+      directory_visible: markVisible };
   };
 
   const onFinish = useCallback(async () => {
@@ -372,8 +368,7 @@ export default function OnboardingPhotographer() {
 }
 
 function ToggleRow({
-  label, sub, value, onChange, testID,
-}: { label: string; sub: string; value: boolean; onChange: (v: boolean) => void; testID?: string }) {
+  label, sub, value, onChange, testID }: { label: string; sub: string; value: boolean; onChange: (v: boolean) => void; testID?: string }) {
   return (
     <View style={styles.toggleRow}>
       <View style={{ flex: 1 }}>
@@ -402,28 +397,24 @@ const styles = StyleSheet.create({
 
   head: { color: colors.text, fontFamily: font.display, fontSize: 28, letterSpacing: -0.4, lineHeight: 34 },
   sub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 14, marginTop: 6, lineHeight: 20 },
-  req: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase' },
+  req: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 10 },
 
   photoRow: { flexDirection: 'row', gap: 14, alignItems: 'center', marginTop: space.xl },
   photoCircle: {
     width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
-  },
+    backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
   photoImg: { width: 72, height: 72, borderRadius: 36 },
   photoCam: {
     position: 'absolute', right: -2, bottom: -2,
     width: 22, height: 22, borderRadius: 11,
     alignItems: 'center', justifyContent: 'center',
-    backgroundColor: colors.primary, borderWidth: 2, borderColor: '#000000',
-  },
+    backgroundColor: colors.primary, borderWidth: 2, borderColor: '#000000' },
   photoLabel: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
   photoHelp:  { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, lineHeight: 15 },
 
   sectionLabel: {
     color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11,
-    letterSpacing: 0.7, textTransform: 'uppercase',
-    marginTop: space.xl, marginBottom: 10,
-  },
+    marginTop: space.xl, marginBottom: 10 },
   smallHelp: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: -6, lineHeight: 15 },
 
   chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
@@ -431,8 +422,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 8, borderRadius: radii.pill,
     backgroundColor: colors.surface1,
     borderWidth: 1, borderColor: colors.border,
-    minHeight: 36, justifyContent: 'center',
-  },
+    minHeight: 36, justifyContent: 'center' },
   chipOn: { backgroundColor: 'rgba(245,166,35,0.16)', borderColor: colors.primary },
   chipTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 13 },
   chipTxtOn: { color: colors.primary, fontFamily: font.bodyBold },
@@ -440,31 +430,26 @@ const styles = StyleSheet.create({
   samplesRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
   sampleCell: {
     flex: 1, aspectRatio: 1, borderRadius: radii.md, overflow: 'hidden',
-    position: 'relative',
-  },
+    position: 'relative' },
   sampleEmpty: {
     backgroundColor: colors.surface1,
     borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed',
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   sampleImg: { width: '100%', height: '100%' },
   sampleRemove: {
     position: 'absolute', top: 4, right: 4,
     width: 20, height: 20, borderRadius: 10,
     backgroundColor: 'rgba(0,0,0,0.6)',
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
 
   toggleList: {
     backgroundColor: colors.surface1,
     borderWidth: 1, borderColor: colors.border,
-    borderRadius: radii.md, paddingHorizontal: space.md,
-  },
+    borderRadius: radii.md, paddingHorizontal: space.md },
   toggleRow: {
     flexDirection: 'row', alignItems: 'center',
     paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
-  },
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   toggleLabel: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
   toggleSub:   { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 2 },
 
@@ -473,9 +458,7 @@ const styles = StyleSheet.create({
   primaryBtn: {
     backgroundColor: colors.primary, borderRadius: radii.md,
     paddingVertical: 14, alignItems: 'center', justifyContent: 'center',
-    minHeight: 48,
-  },
-  primaryBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 15, letterSpacing: 0.2 },
+    minHeight: 48 },
+  primaryBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 15 },
   skipBtn: { paddingVertical: 12, alignItems: 'center' },
-  skipTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13 },
-});
+  skipTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13 } });

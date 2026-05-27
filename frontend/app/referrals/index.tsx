@@ -14,8 +14,7 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   RefreshControl,
-  FlatList,
-} from 'react-native';
+  FlatList } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack, useFocusEffect } from 'expo-router';
 import { ArrowLeft, Plus, Briefcase, ClipboardList } from 'lucide-react-native';
@@ -178,11 +177,10 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: space.lg, paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: colors.border,
-  },
+    borderBottomWidth: 1, borderBottomColor: colors.border },
   backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   myBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 16, letterSpacing: 0.3 },
+  headerTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 16 },
 
   intro: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
@@ -190,33 +188,27 @@ const styles = StyleSheet.create({
     padding: space.md,
     backgroundColor: colors.surface1,
     borderWidth: 1, borderColor: 'rgba(245,166,35,0.22)',
-    borderRadius: radii.lg,
-  },
+    borderRadius: radii.lg },
   introIcon: {
     width: 36, height: 36, borderRadius: 18,
     backgroundColor: 'rgba(245,166,35,0.12)',
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   introTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   introSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2, lineHeight: 16 },
 
   railHead: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: space.xl, marginBottom: space.sm,
-  },
-  railTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13, letterSpacing: 0.3 },
+    paddingHorizontal: space.xl, marginBottom: space.sm },
+  railTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13 },
   railCount: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 11 },
 
   sectionHead: {
-    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11,
-    letterSpacing: 1, textTransform: 'uppercase', marginBottom: space.md,
-  },
+    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, marginBottom: space.md },
 
   emptyCard: {
     alignItems: 'center', padding: space.xl, gap: 4,
     backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
-    borderRadius: radii.md,
-  },
+    borderRadius: radii.md },
   emptyHead: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   emptySub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, textAlign: 'center', lineHeight: 18 },
 
@@ -226,7 +218,5 @@ const styles = StyleSheet.create({
     paddingVertical: 14, paddingHorizontal: 20,
     backgroundColor: colors.primary, borderRadius: 28,
     shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
-  },
-  fabTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14, letterSpacing: 0.3 },
-});
+    elevation: 6 },
+  fabTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 } });

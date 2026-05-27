@@ -1,21 +1,59 @@
+/**
+ * LumaScout design tokens — May 2026 premium-polish revision.
+ *
+ * GOALS (per design refresh ask):
+ *  1. Editorial serif (Playfair Display) for display + body sans (Inter)
+ *  2. Restrict gold/amber accent to: primary-CTA backgrounds, Pro/Elite
+ *     tier badges, premium map pins. Everything else uses white / muted
+ *     gray / subdued tones.
+ *  3. Consistent dark-theme elevation system:
+ *       bg        = #0A0A0A (page base)
+ *       surface1  = #141414 (cards / sheet bg)
+ *       surface2  = #1E1E1E (raised elements / inputs)
+ *       surface3  = #262626 (hover / pressed / micro-controls)
+ *  4. Sentence-case labels — no uppercase kickers. Use `kicker` token
+ *     (= muted gray, no letter-spacing) for section labels.
+ */
 export const colors = {
+  // Base elevation system
   bg: '#0A0A0A',
-  surface1: '#141416',
-  surface2: '#1E1E21',
-  surface3: '#26262B',
+  surface1: '#141414',
+  surface2: '#1E1E1E',
+  surface3: '#262626',
   overlay: 'rgba(10,10,10,0.6)',
-  border: '#2A2A2E',
-  borderSubtle: '#1E1E21',
+  border: '#2A2A2A',
+  borderSubtle: '#1E1E1E',
+
+  // Gold accent — RESTRICTED USE.
+  //   • primary  : the only color allowed on primary-CTA backgrounds.
+  //   • accent   : alias of primary for explicit "premium-only" surfaces
+  //                (Pro/Elite tier badges, premium map pin). Same hex,
+  //                separate token so a future re-color won't accidentally
+  //                affect CTAs.
+  // NEVER use these on section labels, kickers, chips, follow stats, or
+  // generic "highlight" elements — use `kicker` or `text` instead.
   primary: '#F5A623',
   primaryDark: '#D48B1B',
+  accent: '#F5A623',
+
+  // Action colors
   secondary: '#D04848',
   success: '#10B981',
   warning: '#FBBF24',
   info: '#60A5FA',
+
+  // Text scale
   text: '#FFFFFF',
   textSecondary: '#A1A1AA',
   textTertiary: '#71717A',
   textInverse: '#000000',
+
+  // Section labels / kickers / chips that previously used gold. ALL
+  // such labels now resolve to this token so the editorial palette
+  // stays consistent. Sentence case, no letter-spacing.
+  kicker: '#A1A1AA',
+
+  // Map pins (the gold premium pin keeps the brand color)
   pinPublic: '#FFFFFF',
   pinPremium: '#F5A623',
   pinSaved: '#60A5FA',
@@ -41,13 +79,28 @@ export const radii = {
   pill: 999,
 };
 
+/**
+ * Typography tokens.
+ *
+ * Display = Playfair Display (editorial serif, photo-magazine feel).
+ * Body    = Inter (clean geometric sans, replaces Manrope May 2026).
+ *
+ * NOTE: the body* family aliases are kept so existing screens that
+ * reference `font.body` / `font.bodyBold` / `font.bodyMedium` /
+ * `font.bodySemibold` keep working without a global rename. Each now
+ * resolves to the corresponding Inter weight.
+ */
 export const font = {
   display: 'PlayfairDisplay_700Bold',
+  // Alias for any code path that referenced font.displayBold (pre-2026
+  // typo that silently fell back to the system font). Kept as an alias
+  // so we don't have to chase 2 callsites this round.
+  displayBold: 'PlayfairDisplay_700Bold',
   displayItalic: 'PlayfairDisplay_600SemiBold_Italic',
-  body: 'Manrope_400Regular',
-  bodyMedium: 'Manrope_500Medium',
-  bodySemibold: 'Manrope_600SemiBold',
-  bodyBold: 'Manrope_700Bold',
+  body: 'Inter_400Regular',
+  bodyMedium: 'Inter_500Medium',
+  bodySemibold: 'Inter_600SemiBold',
+  bodyBold: 'Inter_700Bold',
 };
 
 import { Platform } from 'react-native';

@@ -205,7 +205,7 @@ export default function CreatorPacks() {
 function Stat({ label, value }: { label: string; value: any }) {
   return (
     <View style={{ flex: 1 }}>
-      <Text style={{ color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</Text>
+      <Text style={{ color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10,}}>{label}</Text>
       <Text style={{ color: colors.text, fontFamily: font.bodyBold, fontSize: 16, marginTop: 2 }}>{value}</Text>
     </View>
   );
@@ -243,7 +243,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.md, paddingVertical: 12, borderRadius: radii.md,
     color: colors.text, fontFamily: font.body, fontSize: 15,
   },
-  label: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 },
+  label: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, marginBottom: 8 },
   spotRow: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     padding: space.sm, borderRadius: radii.md, backgroundColor: colors.surface2,

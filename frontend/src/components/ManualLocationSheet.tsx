@@ -28,8 +28,7 @@ const empty: ManualLocation = {
   state: 'TX',
   postal_code: '',
   country: 'USA',
-  landmark_notes: '',
-};
+  landmark_notes: '' };
 
 /**
  * Manual location entry sheet — for spots that don't exist in geocoders or
@@ -40,8 +39,7 @@ export default function ManualLocationSheet({
   visible,
   onClose,
   onConfirm,
-  initial,
-}: {
+  initial }: {
   visible: boolean;
   onClose: () => void;
   onConfirm: (loc: ManualLocation) => void;
@@ -93,8 +91,7 @@ export default function ManualLocationSheet({
         latitude: lat,
         longitude: lng,
         original_address_input,
-        geocode_status: 'skipped',
-      });
+        geocode_status: 'skipped' });
       onClose();
       return;
     }
@@ -138,8 +135,7 @@ export default function ManualLocationSheet({
         state: (v.state || hit.state || v.state).slice(0, 2).toUpperCase(),
         original_address_input,
         geocode_status: status,
-        geocode_confidence: confidence,
-      });
+        geocode_confidence: confidence });
       onClose();
     } catch (e: any) {
       setGeocodeError('Could not find this address. Please refine the address or drop a pin manually.');
@@ -270,8 +266,8 @@ const styles = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: space.xl, paddingTop: Platform.OS === 'ios' ? 14 : space.xl, paddingBottom: space.md, gap: 8 },
   title: { color: colors.text, fontFamily: font.display, fontSize: 24 },
   help: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 18 },
-  sectionLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.5, textTransform: 'uppercase', marginTop: 8 },
-  fieldLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.5, textTransform: 'uppercase' },
+  sectionLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, marginTop: 8 },
+  fieldLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
   input: { backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, borderRadius: radii.md, paddingHorizontal: space.md, paddingVertical: 12, color: colors.text, fontFamily: font.body, fontSize: 15 },
   confirmBtn: { marginTop: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: colors.primary, paddingVertical: 14, borderRadius: radii.md },
   confirmTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 14 },
@@ -279,7 +275,5 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: 'rgba(208,72,72,0.08)',
     borderWidth: 1, borderColor: 'rgba(208,72,72,0.28)',
-    borderRadius: radii.md, padding: 12, marginTop: 4,
-  },
-  errorTxt: { flex: 1, color: colors.secondary, fontFamily: font.bodyMedium, fontSize: 13, lineHeight: 17 },
-});
+    borderRadius: radii.md, padding: 12, marginTop: 4 },
+  errorTxt: { flex: 1, color: colors.secondary, fontFamily: font.bodyMedium, fontSize: 13, lineHeight: 17 } });

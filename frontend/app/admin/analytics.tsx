@@ -161,12 +161,11 @@ const styles = StyleSheet.create({
   totals: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   totalCard: { flexBasis: '47%', flexGrow: 1, padding: space.md, backgroundColor: colors.surface1, borderWidth: 1, borderRadius: radii.md, gap: 2 },
   totalVal: { color: colors.text, fontFamily: font.display, fontSize: 26, letterSpacing: -0.3 },
-  totalLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.4, textTransform: 'uppercase' },
+  totalLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
   card: { backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, padding: space.md, borderRadius: radii.lg, gap: 6 },
-  cardTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13, textTransform: 'uppercase', letterSpacing: 0.5 },
+  cardTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
   savedRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   rank: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 12, width: 28 },
   savedName: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 13 },
   savedMeta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11 },
-  savedCount: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 14 },
-});
+  savedCount: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 14 } });

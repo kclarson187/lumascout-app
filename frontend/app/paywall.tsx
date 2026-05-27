@@ -309,16 +309,14 @@ const styles = StyleSheet.create({
   head: { flexDirection: 'row', paddingHorizontal: space.xl, paddingTop: space.sm, position: 'absolute', top: space.sm, left: 0, right: 0, zIndex: 10 },
   backBtn: {
     width: 40, height: 40, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: 'rgba(10,10,10,0.55)', borderRadius: 20,
-  },
+    backgroundColor: 'rgba(10,10,10,0.55)', borderRadius: 20 },
   // (Apr 2026 minor cleanup) Replaced 220px hero+gradient with a slim
   // header strip so pricing tiers sit higher on the screen.
   cleanHead: {
     paddingTop: space.xxl,
     paddingBottom: space.lg,
     alignItems: 'center',
-    backgroundColor: '#000000',
-  },
+    backgroundColor: '#000000' },
   heroImg: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
   heroBadge: {
     flexDirection: 'row',
@@ -332,48 +330,39 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(10,10,10,0.65)',
     borderColor: 'rgba(245,166,35,0.45)',
     borderWidth: 1,
-    borderRadius: radii.pill,
-  },
+    borderRadius: radii.pill },
   heroBadgeTxt: {
     color: colors.primary,
     fontFamily: font.bodyBold,
-    fontSize: 10,
-    letterSpacing: 1.2,
-  },
+    fontSize: 10 },
   title: {
     color: colors.text, fontFamily: font.display, fontSize: 36,
-    lineHeight: 40, letterSpacing: -0.5, textAlign: 'center', marginTop: space.xl,
-  },
+    lineHeight: 40, letterSpacing: -0.5, textAlign: 'center', marginTop: space.xl },
   sub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 15, textAlign: 'center', marginTop: space.sm, lineHeight: 22 },
 
   cycleWrap: {
     flexDirection: 'row', alignSelf: 'center', marginTop: space.xl,
     backgroundColor: colors.surface1, borderRadius: radii.pill, padding: 4,
-    borderColor: colors.border, borderWidth: 1,
-  },
+    borderColor: colors.border, borderWidth: 1 },
   cycleBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 18, paddingVertical: 8, borderRadius: radii.pill,
-  },
+    paddingHorizontal: 18, paddingVertical: 8, borderRadius: radii.pill },
   cycleBtnActive: { backgroundColor: colors.primary },
   cycleBtnTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 13 },
   cycleBtnTxtActive: { color: colors.textInverse },
   saveBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 3,
-    backgroundColor: 'rgba(0,0,0,0.18)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.pill,
-  },
-  saveBadgeTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.3 },
+    backgroundColor: 'rgba(0,0,0,0.18)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.pill },
+  saveBadgeTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 9 },
 
   planCard: {
     padding: space.xl, backgroundColor: colors.surface1,
-    borderColor: colors.border, borderWidth: 1, borderRadius: radii.lg,
-  },
+    borderColor: colors.border, borderWidth: 1, borderRadius: radii.lg },
   planPopular: { borderColor: colors.primary },
   popBadge: {
     position: 'absolute', top: -10, left: space.xl,
-    backgroundColor: colors.primary, paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.pill,
-  },
-  popBadgeTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.5 },
+    backgroundColor: colors.primary, paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.pill },
+  popBadgeTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 10 },
   planName: { color: colors.text, fontFamily: font.display, fontSize: 26 },
   planPrice: { color: colors.primary, fontFamily: font.display, fontSize: 26 },
   planPeriod: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13 },
@@ -385,8 +374,7 @@ const styles = StyleSheet.create({
   compare: { borderRadius: radii.md, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' },
   cmpRow: { flexDirection: 'row', paddingVertical: 12, paddingHorizontal: space.md, alignItems: 'center' },
   cmpHead: { backgroundColor: colors.surface2, borderBottomWidth: 1, borderBottomColor: colors.border },
-  cmpHeadTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase' },
+  cmpHeadTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11 },
   cmpCell: { flex: 1, color: colors.text, fontFamily: font.bodyMedium, fontSize: 12, textAlign: 'center', paddingVertical: 10, paddingHorizontal: 4 },
   cmpCellMuted: { color: colors.textTertiary },
-  cmpCellYes: { color: colors.text, fontFamily: font.bodyBold },
-});
+  cmpCellYes: { color: colors.text, fontFamily: font.bodyBold } });

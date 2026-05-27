@@ -31,8 +31,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, Modal, TouchableOpacity, ScrollView,
-  ActivityIndicator, Share, Platform, Pressable, TextInput,
-} from 'react-native';
+  ActivityIndicator, Share, Platform, Pressable, TextInput } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { X, Copy, Share2, Trash2, AlertTriangle, Eye, EyeOff, Plus, Check } from 'lucide-react-native';
 import { colors, font, space, radii } from '../theme';
@@ -75,8 +74,7 @@ const SHARE_AVAILABLE = (() => {
 })();
 
 export default function ShareWithClientSheet({
-  visible, onClose, spotId, spotTitle, spotIsPublic,
-}: Props) {
+  visible, onClose, spotId, spotTitle, spotIsPublic }: Props) {
   const [links, setLinks] = useState<ShareLink[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -146,8 +144,7 @@ export default function ShareWithClientSheet({
     setBusy(true); setErr(null);
     try {
       const r = await api.post(`/spots/${spotId}/share`, {
-        show_exact_location: showExactLocation,
-      });
+        show_exact_location: showExactLocation });
       setRecentlyMintedToken(r.token);
       await refresh();
     } catch (e) {
@@ -246,8 +243,7 @@ export default function ShareWithClientSheet({
     try {
       await Share.share({
         message: `${spotTitle} — shared via LumaScout\n${link.share_url}`,
-        url: link.share_url,
-      });
+        url: link.share_url });
     } catch {
       /* user dismissed */
     }
@@ -437,8 +433,7 @@ export default function ShareWithClientSheet({
 function LinkRow({
   link, highlight, justCopied, shareAvailable, inputRef,
   onCopy, onShare, onRevoke,
-  confirmingRevoke, onConfirmRevoke, onCancelRevoke,
-}: {
+  confirmingRevoke, onConfirmRevoke, onCancelRevoke }: {
   link: ShareLink;
   highlight: boolean;
   justCopied: boolean;
@@ -545,8 +540,7 @@ const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
     backgroundColor: colors.overlay,
-    justifyContent: 'flex-end',
-  },
+    justifyContent: 'flex-end' },
   sheet: {
     backgroundColor: colors.surface1,
     borderTopLeftRadius: radii.xl,
@@ -554,24 +548,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.xl,
     paddingTop: space.sm,
     maxHeight: '88%',
-    minHeight: 320,
-  },
+    minHeight: 320 },
   handle: {
     width: 40,
     height: 4,
     borderRadius: 2,
     backgroundColor: colors.border,
     alignSelf: 'center',
-    marginBottom: space.md,
-  },
+    marginBottom: space.md },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingBottom: space.lg,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.borderSubtle,
-    marginBottom: space.lg,
-  },
+    marginBottom: space.lg },
   headerText: { flex: 1, paddingRight: space.md },
   closeBtn: { padding: 4 },
   title: { color: colors.text, fontSize: 19, fontWeight: '700' },
@@ -585,31 +576,27 @@ const styles = StyleSheet.create({
     backgroundColor: '#3A1414',
     borderRadius: radii.md,
     padding: space.md,
-    marginBottom: space.lg,
-  },
+    marginBottom: space.lg },
   errText: { color: '#FCA5A5', fontSize: 13, lineHeight: 18 },
 
   privacyGate: {
     alignItems: 'center',
     paddingVertical: space.xl,
-    gap: space.md,
-  },
+    gap: space.md },
   privacyIcon: {
     width: 56,
     height: 56,
     borderRadius: 28,
     backgroundColor: '#3A2A00',
     alignItems: 'center',
-    justifyContent: 'center',
-  },
+    justifyContent: 'center' },
   privacyTitle: { color: colors.text, fontSize: 16, fontWeight: '700' },
   privacyBody: {
     color: colors.textSecondary,
     fontSize: 14,
     lineHeight: 22,
     textAlign: 'center',
-    paddingHorizontal: space.md,
-  },
+    paddingHorizontal: space.md },
 
   primaryBtn: {
     backgroundColor: colors.primary,
@@ -619,8 +606,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: space.sm,
-    minHeight: 48,
-  },
+    minHeight: 48 },
   btnBusy: { opacity: 0.6 },
   btnInner: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   primaryBtnText: { color: colors.textInverse, fontSize: 14, fontWeight: '700' },
@@ -630,18 +616,12 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 11,
     fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: space.sm,
-  },
+    marginBottom: space.sm },
   revokedHeader: {
     color: colors.textTertiary,
     fontSize: 11,
     fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: space.sm,
-  },
+    marginBottom: space.sm },
 
   toggleRow: {
     backgroundColor: colors.surface2,
@@ -649,8 +629,7 @@ const styles = StyleSheet.create({
     padding: space.lg,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.md,
-  },
+    gap: space.md },
   toggleRowText: { flex: 1 },
   toggleRowHeading: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   toggleTitle: { color: colors.text, fontSize: 14, fontWeight: '600' },
@@ -658,15 +637,13 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 12,
     marginTop: 4,
-    lineHeight: 18,
-  },
+    lineHeight: 18 },
   lockedNote: {
     color: colors.textTertiary,
     fontSize: 12,
     marginTop: space.sm,
     lineHeight: 16,
-    fontStyle: 'italic',
-  },
+    fontStyle: 'italic' },
 
   switchTrack: {
     width: 44,
@@ -674,8 +651,7 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     backgroundColor: colors.surface3,
     padding: 3,
-    justifyContent: 'center',
-  },
+    justifyContent: 'center' },
   switchTrackOn: { backgroundColor: colors.primary },
   switchThumb: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#FFFFFF' },
   switchThumbOn: { transform: [{ translateX: 18 }] },
@@ -683,8 +659,7 @@ const styles = StyleSheet.create({
   emptyText: {
     color: colors.textTertiary,
     fontSize: 14,
-    paddingVertical: space.md,
-  },
+    paddingVertical: space.md },
   loadingSpinner: { marginTop: 12 },
 
   linkCard: {
@@ -693,8 +668,7 @@ const styles = StyleSheet.create({
     padding: space.md,
     marginBottom: space.sm,
     borderWidth: 1,
-    borderColor: 'transparent',
-  },
+    borderColor: 'transparent' },
   linkCardHighlight: { borderColor: colors.primary },
   linkCardFaded: { opacity: 0.5 },
   linkBadges: { flexDirection: 'row', gap: 6, marginBottom: 8 },
@@ -705,8 +679,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface3,
     paddingHorizontal: 8,
     paddingVertical: 3,
-    borderRadius: 999,
-  },
+    borderRadius: 999 },
   badgeText: { color: colors.textSecondary, fontSize: 11, fontWeight: '600' },
 
   urlInput: {
@@ -726,13 +699,11 @@ const styles = StyleSheet.create({
     // Cross-platform user-select hint for web. Inline because RN doesn't
     // expose userSelect as a style. RN-web reads it via the JSX inline
     // style escape hatch.
-    ...(Platform.OS === 'web' ? ({ userSelect: 'all', cursor: 'text' } as object) : {}),
-  },
+    ...(Platform.OS === 'web' ? ({ userSelect: 'all', cursor: 'text' } as object) : {}) },
   linkUrlRevoked: {
     color: colors.textSecondary,
     fontSize: 12,
-    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
-  },
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }) },
 
   linkActions: { flexDirection: 'row', gap: space.sm, flexWrap: 'wrap' },
   linkBtn: {
@@ -743,8 +714,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: radii.sm,
-    minHeight: 44,
-  },
+    minHeight: 44 },
   linkBtnCopied: { backgroundColor: 'rgba(16,185,129,0.12)' },
   linkBtnDanger: { backgroundColor: 'rgba(208,72,72,0.12)' },
   linkBtnText: { color: colors.text, fontSize: 12, fontWeight: '600' },
@@ -754,8 +724,7 @@ const styles = StyleSheet.create({
   confirmRow: {
     backgroundColor: colors.surface3,
     borderRadius: radii.sm,
-    padding: space.md,
-  },
+    padding: space.md },
   confirmText: { color: colors.text, fontSize: 13, marginBottom: space.sm, lineHeight: 18 },
   confirmActions: { flexDirection: 'row', gap: space.sm, flexWrap: 'wrap' },
 
@@ -763,8 +732,7 @@ const styles = StyleSheet.create({
     color: colors.secondary,
     fontSize: 11,
     fontWeight: '700',
-    marginTop: 4,
-  },
+    marginTop: 4 },
 
   toast: {
     position: 'absolute',
@@ -778,7 +746,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-  },
-  toastText: { color: colors.text, fontSize: 13, fontWeight: '600' },
-});
+    borderColor: colors.border },
+  toastText: { color: colors.text, fontSize: 13, fontWeight: '600' } });

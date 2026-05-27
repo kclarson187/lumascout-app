@@ -1,14 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Alert, Platform, RefreshControl,
-} from 'react-native';
+  ActivityIndicator, Alert, Platform, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
   ChevronLeft, Receipt, Calendar, CreditCard, Crown,
-  ExternalLink, AlertTriangle, CheckCircle2,
-} from 'lucide-react-native';
+  ExternalLink, AlertTriangle, CheckCircle2 } from 'lucide-react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { api, formatApiError } from '../src/api';
 import { useAuth } from '../src/auth';
@@ -248,32 +246,26 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontFamily: font.display, fontSize: 26 },
   banner: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
-    padding: space.md, borderRadius: radii.md, borderWidth: 1,
-  },
+    padding: space.md, borderRadius: radii.md, borderWidth: 1 },
   bannerTxt: { flex: 1, color: colors.text, fontFamily: font.bodyMedium, fontSize: 12, lineHeight: 17 },
   planCard: {
     padding: space.xl, backgroundColor: colors.surface1,
-    borderColor: colors.border, borderWidth: 1, borderRadius: radii.lg,
-  },
+    borderColor: colors.border, borderWidth: 1, borderRadius: radii.lg },
   crownBubble: {
     width: 44, height: 44, borderRadius: 22,
     backgroundColor: colors.surface2, borderColor: colors.border, borderWidth: 1,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  planLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 },
+    alignItems: 'center', justifyContent: 'center' },
+  planLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
   planName: { color: colors.text, fontFamily: font.display, fontSize: 28, letterSpacing: -0.3, marginTop: 2 },
   statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.pill },
-  statusTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.5 },
+  statusTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 10 },
   detailCard: {
     padding: space.lg, backgroundColor: colors.surface1,
-    borderColor: colors.border, borderWidth: 1, borderRadius: radii.lg, gap: 10,
-  },
-  sectionLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 },
+    borderColor: colors.border, borderWidth: 1, borderRadius: radii.lg, gap: 10 },
+  sectionLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
   detailRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   detailTxt: { color: colors.text, fontFamily: font.body, fontSize: 13, flex: 1 },
   invRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.borderSubtle,
-  },
-  fine: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, textAlign: 'center', marginTop: space.md, lineHeight: 16 },
-});
+    paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.borderSubtle },
+  fine: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, textAlign: 'center', marginTop: space.md, lineHeight: 16 } });

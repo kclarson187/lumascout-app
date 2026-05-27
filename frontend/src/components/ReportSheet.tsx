@@ -11,8 +11,7 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  ScrollView,
-} from 'react-native';
+  ScrollView } from 'react-native';
 import { X, Flag, Check } from 'lucide-react-native';
 import { api, formatApiError } from '../api';
 import { colors, font, radii, space } from '../theme';
@@ -35,8 +34,7 @@ export default function ReportSheet({
   targetType,
   targetId,
   onSubmitted,
-  title,
-}: {
+  title }: {
   visible: boolean;
   onClose: () => void;
   targetType: ReportTargetType;
@@ -74,8 +72,7 @@ export default function ReportSheet({
         target_type: targetType,
         target_id: targetId,
         reason: selected,
-        details: details.trim().slice(0, 500),
-      });
+        details: details.trim().slice(0, 500) });
       onSubmitted?.();
       onClose();
       Alert.alert('Report submitted', 'Thanks — our moderators will review this shortly.');
@@ -159,49 +156,39 @@ const styles = StyleSheet.create({
   bg: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)' },
   sheetWrap: {
     position: 'absolute',
-    left: 0, right: 0, bottom: 0,
-  },
+    left: 0, right: 0, bottom: 0 },
   sheet: {
     backgroundColor: colors.surface1,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     maxHeight: '92%',
-    paddingBottom: space.xl,
-  },
+    paddingBottom: space.xl },
   handle: {
     width: 44, height: 4, borderRadius: 2,
     backgroundColor: colors.border,
     alignSelf: 'center',
     marginTop: space.sm,
-    marginBottom: space.sm,
-  },
+    marginBottom: space.sm },
   head: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingHorizontal: space.xl, paddingBottom: space.sm,
-  },
+    paddingHorizontal: space.xl, paddingBottom: space.sm },
   iconWrap: {
     width: 36, height: 36, borderRadius: 18,
     backgroundColor: 'rgba(208,72,72,0.12)',
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   title: { color: colors.text, fontFamily: font.display, fontSize: 22, letterSpacing: -0.3 },
   subtitle: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2 },
   sectionLabel: {
-    color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11,
-    textTransform: 'uppercase', letterSpacing: 0.6,
-  },
+    color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
   row: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: space.md, paddingVertical: 14,
     borderRadius: radii.md, backgroundColor: colors.surface2,
-    borderWidth: 1, borderColor: colors.border,
-  },
+    borderWidth: 1, borderColor: colors.border },
   rowActive: { borderColor: colors.primary, backgroundColor: 'rgba(245,166,35,0.08)' },
   rowTxt: { flex: 1, color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 14 },
   textArea: {
     backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border,
     paddingHorizontal: space.md, paddingVertical: 12, borderRadius: radii.md,
-    color: colors.text, fontFamily: font.body, fontSize: 14, minHeight: 90, textAlignVertical: 'top',
-  },
-  charCount: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, textAlign: 'right' },
-});
+    color: colors.text, fontFamily: font.body, fontSize: 14, minHeight: 90, textAlignVertical: 'top' },
+  charCount: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, textAlign: 'right' } });

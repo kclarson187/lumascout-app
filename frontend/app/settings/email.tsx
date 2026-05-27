@@ -158,7 +158,7 @@ const s = StyleSheet.create({
   headBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   headTitle: { flex: 1, textAlign: 'center', color: colors.text, fontFamily: font.bodyBold, fontSize: 16 },
   card: { backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, borderRadius: 22, padding: 16, gap: 8 },
-  kicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 1 },
+  kicker: { color: colors.kicker, fontFamily: font.bodyBold, fontSize: 10,},
   curEmail: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 15 },
   helper: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17 },
   label: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13, marginBottom: 6 },

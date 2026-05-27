@@ -27,8 +27,7 @@ export default function ReviewScreen() {
         status_summary: accessIssue ? 'Access issue' : 'Still great',
         crowd_level: crowd,
         access_issue: accessIssue,
-        notes: checkinNote,
-      });
+        notes: checkinNote });
       Alert.alert('Posted', 'Thanks for the update — this keeps spots fresh.', [
         { text: 'OK', onPress: () => router.back() },
       ]);
@@ -111,10 +110,8 @@ const styles = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: space.xl, paddingVertical: space.md, gap: 8 },
   backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   title: { color: colors.text, fontFamily: font.display, fontSize: 24 },
-  label: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase' },
+  label: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
   ratingDot: {
     width: 48, height: 48, borderRadius: 24,
     backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
-    alignItems: 'center', justifyContent: 'center',
-  },
-});
+    alignItems: 'center', justifyContent: 'center' } });

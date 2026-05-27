@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Image,
-  KeyboardAvoidingView, Platform, ActivityIndicator,
-} from 'react-native';
+  KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { ChevronLeft, CalendarDays, Sparkles, Sun, Sunrise, Sunset } from 'lucide-react-native';
@@ -42,8 +41,7 @@ export default function WeekendPlanner() {
       const res = await api.post('/ai/plan/weekend', {
         city: city.trim(),
         focus: focus.trim() || undefined,
-        days,
-      });
+        days });
       setPlan(res);
     } catch (e) {
       setErr(formatApiError(e));
@@ -158,7 +156,7 @@ const styles = StyleSheet.create({
   iconBubble: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,181,71,0.14)', borderWidth: 1, borderColor: 'rgba(255,181,71,0.35)', marginBottom: space.md },
   head: { color: colors.text, fontFamily: font.display, fontSize: 26, letterSpacing: -0.5 },
   sub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13.5, lineHeight: 20, marginTop: 6 },
-  label: { color: colors.textSecondary, fontFamily: font.bodySemibold, fontSize: 11, letterSpacing: 0.4, textTransform: 'uppercase', marginTop: space.lg, marginBottom: 6 },
+  label: { color: colors.textSecondary, fontFamily: font.bodySemibold, fontSize: 11, marginTop: space.lg, marginBottom: 6 },
   input: { backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, borderRadius: radii.md, paddingHorizontal: 12, paddingVertical: 12, color: colors.text, fontFamily: font.body, fontSize: 14 },
   seg: { flex: 1, paddingVertical: 12, borderRadius: radii.md, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, alignItems: 'center' },
   segActive: { backgroundColor: colors.primary, borderColor: colors.primary },
@@ -171,7 +169,7 @@ const styles = StyleSheet.create({
   planBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13.5, lineHeight: 20, marginTop: 4, marginBottom: space.md },
   slotCard: { backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, borderRadius: radii.lg, padding: space.md, marginBottom: 10 },
   slotHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  slotLabel: { color: colors.text, fontFamily: font.bodyBold, fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4 },
+  slotLabel: { color: colors.text, fontFamily: font.bodyBold, fontSize: 12 },
   slotTime: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
   slotSpot: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.surface2, borderRadius: radii.md, padding: 8, marginBottom: 6 },
   thumb: { width: 48, height: 48, borderRadius: radii.sm },
@@ -179,5 +177,4 @@ const styles = StyleSheet.create({
   spotMeta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, marginTop: 1 },
   slotText: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12.5, lineHeight: 18 },
   slotTip: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 11.5, lineHeight: 17, marginTop: 6 },
-  disclosure: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 10, textAlign: 'center' },
-});
+  disclosure: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 10, textAlign: 'center' } });

@@ -14,13 +14,11 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator,
   TouchableOpacity, Image, RefreshControl, Platform, Linking,
-  ImageBackground,
-} from 'react-native';
+  ImageBackground } from 'react-native';
 import { router, useLocalSearchParams, Stack } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
-  ChevronLeft, MapPin, Plus, Layers, Lock, Heart, Navigation, Share2,
-} from 'lucide-react-native';
+  ChevronLeft, MapPin, Plus, Layers, Lock, Heart, Navigation, Share2 } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { api } from '../../src/api';
 import { resolveImageUrl } from '../../src/utils/image-url';
@@ -139,8 +137,7 @@ export default function ParkDetailScreen() {
     try {
       const r = await api.get(`/parks/${park.park_id}/children`, {
         limit: 30,
-        cursor: cursor || undefined,
-      });
+        cursor: cursor || undefined });
       const next: ChildSpot[] = r.items || [];
       // Dedupe — backend cursor is created_at, so first item on the
       // second page should not overlap, but be defensive anyway.
@@ -450,8 +447,7 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: space.lg, paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
-  },
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   iconBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   headerTitle: { flex: 1, textAlign: 'center', color: colors.text, fontFamily: font.display, fontSize: 17 },
 
@@ -460,44 +456,37 @@ const styles = StyleSheet.create({
   heroImgInner: { resizeMode: 'cover' },
   heroScrim: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-  },
+    backgroundColor: 'rgba(0,0,0,0.45)' },
   heroOverlay: { padding: space.xl, gap: 6 },
   heroPill: {
     alignSelf: 'flex-start',
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: 8, paddingVertical: 3,
     borderRadius: radii.pill,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-  },
-  heroPillTxt: { color: '#fff', fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.4 },
+    backgroundColor: 'rgba(255,255,255,0.18)' },
+  heroPillTxt: { color: '#fff', fontFamily: font.bodyBold, fontSize: 10 },
   heroOverlayTitle: { color: '#fff', fontFamily: font.display, fontSize: 24 },
   heroOverlaySub: { color: 'rgba(255,255,255,0.85)', fontFamily: font.body, fontSize: 12 },
 
   heroFallback: {
     padding: space.xl, gap: 8, alignItems: 'center',
     backgroundColor: colors.surface1,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
-  },
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   heroIcon: {
     width: 56, height: 56, borderRadius: 28,
     backgroundColor: 'rgba(245,166,35,0.16)',
-    alignItems: 'center', justifyContent: 'center', marginBottom: 4,
-  },
+    alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
   heroFallbackSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, textAlign: 'center' },
 
   // Actions
   actionRow: {
     flexDirection: 'row', gap: 8,
-    paddingHorizontal: space.xl, paddingTop: space.lg, paddingBottom: 4,
-  },
+    paddingHorizontal: space.xl, paddingTop: space.lg, paddingBottom: 4 },
   actBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    paddingVertical: 12, borderRadius: radii.md,
-  },
+    paddingVertical: 12, borderRadius: radii.md },
   actBtnGhost: {
-    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-  },
+    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   actBtnPrimary: { backgroundColor: colors.primary },
   actBtnTxt: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13 },
 
@@ -506,49 +495,42 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     flexDirection: 'row', alignItems: 'center', gap: 5,
     paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.pill,
-    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-  },
+    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   distancePillTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
 
   section: { gap: 6 },
   sectionTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   body: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 19 },
-  noteLabel: { color: colors.textTertiary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 2 },
+  noteLabel: { color: colors.textTertiary, fontFamily: font.bodyBold, fontSize: 10, marginBottom: 2 },
 
   spotsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   spotsCount: {
     color: colors.primary, fontFamily: font.bodyBold, fontSize: 13,
     paddingHorizontal: 8, paddingVertical: 2, borderRadius: radii.pill,
-    backgroundColor: 'rgba(245,166,35,0.12)',
-  },
+    backgroundColor: 'rgba(245,166,35,0.12)' },
 
   childRow: {
     flexDirection: 'row', gap: 10, padding: 8,
     borderRadius: radii.md, backgroundColor: colors.surface1,
-    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-  },
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   childImg: { width: 64, height: 64, borderRadius: radii.sm },
   childTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   childMeta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12 },
   distChip: {
     color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11,
     paddingHorizontal: 6, paddingVertical: 1, borderRadius: radii.sm,
-    backgroundColor: colors.surface2,
-  },
+    backgroundColor: colors.surface2 },
   privatePill: {
     alignSelf: 'flex-start', marginTop: 4,
     flexDirection: 'row', alignItems: 'center', gap: 3,
     paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.sm,
-    backgroundColor: colors.surface2,
-  },
-  privatePillTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.5 },
+    backgroundColor: colors.surface2 },
+  privatePillTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 9 },
 
   loadMoreBtn: {
     alignSelf: 'center', marginTop: 6, paddingHorizontal: 20, paddingVertical: 10,
     borderRadius: radii.pill,
-    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-  },
+    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   loadMoreTxt: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
 
-  empty: { color: colors.textTertiary, fontFamily: font.body, fontSize: 13, textAlign: 'center', marginTop: 20 },
-});
+  empty: { color: colors.textTertiary, fontFamily: font.body, fontSize: 13, textAlign: 'center', marginTop: 20 } });

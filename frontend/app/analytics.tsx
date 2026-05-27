@@ -185,8 +185,7 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: space.lg, paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: colors.border,
-  },
+    borderBottomWidth: 1, borderBottomColor: colors.border },
   backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   headerTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 16 },
 
@@ -194,16 +193,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingVertical: 6, paddingHorizontal: 10,
     backgroundColor: 'rgba(245,166,35,0.08)',
-    borderRadius: radii.sm, alignSelf: 'flex-start',
-  },
-  planLabel: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.4 },
+    borderRadius: radii.sm, alignSelf: 'flex-start' },
+  planLabel: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 11 },
 
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
   statCard: {
     width: '48%', flexGrow: 1,
     backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
-    borderRadius: radii.md, padding: space.md, gap: 4,
-  },
+    borderRadius: radii.md, padding: space.md, gap: 4 },
   statHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   statValue: { color: colors.text, fontFamily: font.display, fontSize: 26, letterSpacing: -0.5 },
   statLabel: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11 },
@@ -211,16 +208,14 @@ const styles = StyleSheet.create({
 
   rateCard: {
     backgroundColor: colors.surface1, borderWidth: 1, borderColor: 'rgba(245,166,35,0.28)',
-    borderRadius: radii.lg, padding: space.lg, alignItems: 'center', gap: 4,
-  },
-  rateTitle: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase' },
+    borderRadius: radii.lg, padding: space.lg, alignItems: 'center', gap: 4 },
+  rateTitle: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11 },
   rateNumber: { color: colors.primary, fontFamily: font.display, fontSize: 42, letterSpacing: -1 },
   rateHint: { color: colors.textTertiary, fontFamily: font.body, fontSize: 12, textAlign: 'center', marginTop: 4 },
 
   trendCard: {
     backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
-    borderRadius: radii.lg, padding: space.md,
-  },
+    borderRadius: radii.lg, padding: space.md },
   trendTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13 },
   trendRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', height: 70, paddingHorizontal: 4 },
   trendBarCol: { alignItems: 'center', flex: 1, gap: 4 },
@@ -229,8 +224,7 @@ const styles = StyleSheet.create({
 
   funnelCard: {
     backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
-    borderRadius: radii.lg, padding: space.md, gap: 10,
-  },
+    borderRadius: radii.lg, padding: space.md, gap: 10 },
   funnelTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13 },
   funnelRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   funnelLabel: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, width: 120 },
@@ -240,15 +234,12 @@ const styles = StyleSheet.create({
 
   upgradeCard: {
     backgroundColor: colors.surface1, borderWidth: 1, borderColor: 'rgba(245,166,35,0.4)',
-    borderRadius: radii.lg, padding: space.lg, gap: 8,
-  },
+    borderRadius: radii.lg, padding: space.lg, gap: 8 },
   upgradeHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   upgradeTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   upgradeBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17 },
   upgradeBtn: {
     alignSelf: 'flex-start', marginTop: 6,
     paddingVertical: 10, paddingHorizontal: 20,
-    backgroundColor: colors.primary, borderRadius: radii.md,
-  },
-  upgradeBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 13, letterSpacing: 0.3 },
-});
+    backgroundColor: colors.primary, borderRadius: radii.md },
+  upgradeBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 13 } });

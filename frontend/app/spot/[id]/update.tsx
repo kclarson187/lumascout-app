@@ -146,7 +146,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   header: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingHorizontal: space.md, paddingBottom: space.sm },
   backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  kicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase' },
+  kicker: { color: colors.kicker, fontFamily: font.bodyBold, fontSize: 10,},
   title: { color: colors.text, fontFamily: font.display, fontSize: 20 },
   sectionTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
   optional: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },

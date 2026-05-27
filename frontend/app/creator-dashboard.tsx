@@ -90,7 +90,7 @@ export default function CreatorDashboard() {
 
         {!isElite && (
           <View style={styles.upgradeCard}>
-            <Text style={{ color: colors.primary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.8, textTransform: 'uppercase' }}>Creator monetization</Text>
+            <Text style={{ color: colors.primary, fontFamily: font.bodyBold, fontSize: 11 }}>Creator monetization</Text>
             <Text style={{ color: colors.text, fontFamily: font.display, fontSize: 22, marginTop: 6 }}>Earn from your best spots</Text>
             <Text style={{ color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 20, marginTop: 6 }}>
               Sell premium spot packs, offer private curated guides, and build a following. Stripe checkout launches in the next release.
@@ -187,26 +187,22 @@ const styles = StyleSheet.create({
   tile: {
     width: '48%', backgroundColor: colors.surface1,
     borderColor: colors.border, borderWidth: 1,
-    padding: space.lg, borderRadius: radii.lg, gap: 6,
-  },
+    padding: space.lg, borderRadius: radii.lg, gap: 6 },
   earningsTile: { borderColor: colors.primary, position: 'relative', overflow: 'hidden' }, // reserved for future
   tileIcon: {
     width: 36, height: 36, borderRadius: 18,
     backgroundColor: 'rgba(245,166,35,0.12)',
-    alignItems: 'center', justifyContent: 'center', marginBottom: 4,
-  },
+    alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
   tileVal: { color: colors.text, fontFamily: font.display, fontSize: 34, letterSpacing: -0.5 },
-  tileLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.5, textTransform: 'uppercase' },
+  tileLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
   upgradeCard: {
     backgroundColor: colors.surface1, borderColor: colors.primary, borderWidth: 1,
-    padding: space.lg, borderRadius: radii.lg,
-  },
+    padding: space.lg, borderRadius: radii.lg },
   sectionTitle: { color: colors.text, fontFamily: font.display, fontSize: 22, marginTop: space.md },
   chartCard: {
     backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
-    padding: space.lg, borderRadius: radii.lg,
-  },
-  chartLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase' },
+    padding: space.lg, borderRadius: radii.lg },
+  chartLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
   chartTitle: { color: colors.text, fontFamily: font.display, fontSize: 20, letterSpacing: -0.3, marginTop: 2 },
   legend: { gap: 4 },
   legendTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
@@ -215,13 +211,10 @@ const styles = StyleSheet.create({
   ctaCard: {
     flexDirection: 'row', alignItems: 'center', gap: 14,
     padding: space.lg, borderRadius: radii.lg,
-    backgroundColor: colors.surface1, borderWidth: 1,
-  },
+    backgroundColor: colors.surface1, borderWidth: 1 },
   ctaIcon: {
     width: 40, height: 40, borderRadius: 20,
     backgroundColor: 'rgba(245,166,35,0.12)',
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   ctaTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 15 },
-  ctaSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2 },
-});
+  ctaSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2 } });

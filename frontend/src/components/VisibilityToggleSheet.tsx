@@ -18,8 +18,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, Modal, TouchableOpacity, ScrollView,
-  ActivityIndicator, Pressable,
-} from 'react-native';
+  ActivityIndicator, Pressable } from 'react-native';
 import { X, Globe, Lock, Eye, EyeOff, AlertTriangle } from 'lucide-react-native';
 import { colors, font, space, radii } from '../theme';
 import { api, formatApiError } from '../api';
@@ -36,8 +35,7 @@ type Props = {
 
 export default function VisibilityToggleSheet({
   visible, onClose, spotId, spotTitle,
-  currentPrivacy, currentDisplayMode, onSaved,
-}: Props) {
+  currentPrivacy, currentDisplayMode, onSaved }: Props) {
   const initialIsPublic = currentPrivacy === 'public' || currentPrivacy === 'premium';
   const initialShowExact = initialIsPublic || currentDisplayMode === 'exact';
 
@@ -91,12 +89,10 @@ export default function VisibilityToggleSheet({
     try {
       const r = await api.patch(`/spots/${spotId}/visibility`, {
         visibility: isPublic ? 'public' : 'private',
-        show_exact_location: isPublic ? true : showExact,
-      });
+        show_exact_location: isPublic ? true : showExact });
       onSaved({
         visibility: r.visibility,
-        show_exact_location: r.show_exact_location,
-      });
+        show_exact_location: r.show_exact_location });
       onClose();
     } catch (e: any) {
       setErr(formatApiError(e));
@@ -247,25 +243,21 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface1,
     borderTopLeftRadius: radii.xl, borderTopRightRadius: radii.xl,
     paddingHorizontal: space.xl, paddingTop: space.sm,
-    maxHeight: '88%',
-  },
+    maxHeight: '88%' },
   handle: {
     width: 40, height: 4, borderRadius: 2,
-    backgroundColor: colors.border, alignSelf: 'center', marginBottom: space.md,
-  },
+    backgroundColor: colors.border, alignSelf: 'center', marginBottom: space.md },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: space.md,
     paddingBottom: space.lg, borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.borderSubtle, marginBottom: space.lg,
-  },
+    borderBottomColor: colors.borderSubtle, marginBottom: space.lg },
   title: { color: colors.text, fontSize: 19, fontWeight: '700' },
   sub: { color: colors.textSecondary, fontSize: 14, marginTop: 2 },
 
   warnBox: {
     flexDirection: 'row', alignItems: 'flex-start', gap: space.sm,
     backgroundColor: '#3A2A00', borderRadius: radii.md, padding: space.md,
-    marginBottom: space.lg,
-  },
+    marginBottom: space.lg },
   warnText: { color: colors.warning, flex: 1, fontSize: 12, lineHeight: 18 },
 
   errBox: { backgroundColor: '#3A1414', borderRadius: radii.md, padding: space.md, marginBottom: space.md },
@@ -273,35 +265,29 @@ const styles = StyleSheet.create({
 
   section: { marginBottom: space.lg },
   sectionLabel: {
-    color: colors.textSecondary, fontSize: 12, fontWeight: '600',
-    textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: space.sm,
-  },
+    color: colors.textSecondary, fontSize: 12, fontWeight: '600', marginBottom: space.sm },
   optionRow: {
     flexDirection: 'row', alignItems: 'center', gap: space.md,
     backgroundColor: colors.surface2, borderRadius: radii.md, padding: space.lg,
-    marginBottom: space.sm, borderWidth: 1, borderColor: 'transparent',
-  },
+    marginBottom: space.sm, borderWidth: 1, borderColor: 'transparent' },
   optionRowOn: { borderColor: colors.primary },
   optionTitle: { color: colors.text, fontSize: 14, fontWeight: '600' },
   optionSub: { color: colors.textSecondary, fontSize: 12, marginTop: 2, lineHeight: 18 },
   radio: {
     width: 22, height: 22, borderRadius: 11,
-    borderWidth: 2, borderColor: colors.border,
-  },
+    borderWidth: 2, borderColor: colors.border },
   radioOn: { borderColor: colors.primary, backgroundColor: colors.primary },
 
   toggleRow: {
     backgroundColor: colors.surface2, borderRadius: radii.md, padding: space.lg,
-    flexDirection: 'row', alignItems: 'center', gap: space.md,
-  },
+    flexDirection: 'row', alignItems: 'center', gap: space.md },
   toggleRowDisabled: { opacity: 0.55 },
   toggleTitle: { color: colors.text, fontSize: 14, fontWeight: '600' },
   toggleSub: { color: colors.textSecondary, fontSize: 12, marginTop: 4, lineHeight: 18 },
 
   switchTrack: {
     width: 44, height: 26, borderRadius: 13, backgroundColor: colors.surface3,
-    padding: 3, justifyContent: 'center',
-  },
+    padding: 3, justifyContent: 'center' },
   switchTrackOn: { backgroundColor: colors.primary },
   switchTrackDisabled: { opacity: 0.5 },
   switchThumb: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#FFFFFF' },
@@ -309,19 +295,14 @@ const styles = StyleSheet.create({
 
   impactBox: {
     backgroundColor: colors.surface2, borderRadius: radii.md, padding: space.lg,
-    marginBottom: space.lg, borderLeftWidth: 3, borderLeftColor: colors.warning,
-  },
+    marginBottom: space.lg, borderLeftWidth: 3, borderLeftColor: colors.warning },
   impactLabel: {
-    color: colors.warning, fontSize: 12, fontWeight: '700',
-    textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: space.sm,
-  },
+    color: colors.warning, fontSize: 12, fontWeight: '700', marginBottom: space.sm },
   impactRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
   impactBullet: { color: colors.textSecondary, fontSize: 14, lineHeight: 20 },
   impactText: { flex: 1, color: colors.text, fontSize: 12, lineHeight: 20 },
 
   primaryBtn: {
     backgroundColor: colors.primary, paddingVertical: 14,
-    borderRadius: radii.lg, alignItems: 'center', marginTop: space.sm,
-  },
-  primaryBtnText: { color: colors.textInverse, fontSize: 14, fontWeight: '700' },
-});
+    borderRadius: radii.lg, alignItems: 'center', marginTop: space.sm },
+  primaryBtnText: { color: colors.textInverse, fontSize: 14, fontWeight: '700' } });

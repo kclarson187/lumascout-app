@@ -712,13 +712,13 @@ function ToggleRow({ label, value, onChange }: { label: string; value: boolean; 
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   scroll: { paddingHorizontal: space.lg, paddingTop: space.md },
-  kicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 1.4, marginBottom: 6 },
+  kicker: { color: colors.kicker, fontFamily: font.bodyBold, fontSize: 11, marginBottom: 6 },
   title: { color: colors.text, fontFamily: font.display, fontSize: 26, lineHeight: 32 },
   subtitle: { color: colors.textSecondary, fontFamily: font.body, fontSize: 14, lineHeight: 20, marginTop: 8 },
-  sectionLabel: { color: colors.textTertiary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 1.2, marginTop: space.xl, marginBottom: 4 },
+  sectionLabel: { color: colors.textTertiary, fontFamily: font.bodyBold, fontSize: 11, marginTop: space.xl, marginBottom: 4 },
   sectionHint: { color: colors.textTertiary, fontFamily: font.body, fontSize: 12, marginBottom: space.sm },
 
-  fieldLabel: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 12, letterSpacing: 0.4, marginBottom: 6 },
+  fieldLabel: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 12, marginBottom: 6 },
   optionalTag: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
   hintTxt: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 4 },
   errorTxt: { color: colors.secondary, fontFamily: font.body, fontSize: 12, marginTop: 4 },

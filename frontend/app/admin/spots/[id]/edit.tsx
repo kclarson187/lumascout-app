@@ -17,8 +17,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Pressable,
-  ActivityIndicator, Alert, Switch, KeyboardAvoidingView, Platform,
-} from 'react-native';
+  ActivityIndicator, Alert, Switch, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ChevronLeft, Save, AlertTriangle, Check } from 'lucide-react-native';
@@ -118,8 +117,7 @@ export default function AdminSpotEdit() {
     setParkName((s as any).park_name || null);
     setParkPin({
       lat: typeof (s as any).latitude === 'number' ? (s as any).latitude : undefined,
-      lng: typeof (s as any).longitude === 'number' ? (s as any).longitude : undefined,
-    });
+      lng: typeof (s as any).longitude === 'number' ? (s as any).longitude : undefined });
   };
 
   // Preload spot via existing admin endpoint — returns the full doc.
@@ -465,8 +463,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 function RatingRow({
-  value, onChange, testIDPrefix,
-}: { value: number | null; onChange: (v: number | null) => void; testIDPrefix: string }) {
+  value, onChange, testIDPrefix }: { value: number | null; onChange: (v: number | null) => void; testIDPrefix: string }) {
   return (
     <View style={s.ratingRow}>
       {[1, 2, 3, 4, 5].map((n) => {
@@ -491,36 +488,30 @@ const s = StyleSheet.create({
   head: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: space.lg, paddingVertical: 8, gap: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
-  },
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   backBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   title: { flex: 1, color: colors.text, fontFamily: font.display, fontSize: 18, letterSpacing: -0.3 },
   saveBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
     paddingHorizontal: 12, paddingVertical: 8, borderRadius: radii.sm,
-    backgroundColor: colors.primary, minHeight: 32,
-  },
+    backgroundColor: colors.primary, minHeight: 32 },
   saveTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 12 },
 
   scrollBody: { padding: space.lg, paddingBottom: space.xxxl, gap: 14 },
 
   sectionLabel: {
     marginTop: 8,
-    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11,
-    letterSpacing: 0.7, textTransform: 'uppercase',
-  },
+    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11 },
   miniLabel: {
     color: colors.text, fontFamily: font.bodySemibold, fontSize: 13,
-    marginTop: 2, marginBottom: 6,
-  },
+    marginTop: 2, marginBottom: 6 },
 
   chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 4 },
   chip: {
     paddingHorizontal: 10, paddingVertical: 6, borderRadius: radii.pill,
     backgroundColor: colors.surface1,
     borderWidth: 1, borderColor: colors.border,
-    minHeight: 30, justifyContent: 'center',
-  },
+    minHeight: 30, justifyContent: 'center' },
   chipOn: { backgroundColor: 'rgba(245,166,35,0.16)', borderColor: colors.primary },
   chipTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },
   chipTxtOn: { color: colors.primary, fontFamily: font.bodyBold },
@@ -529,8 +520,7 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 12,
     paddingHorizontal: space.md, paddingVertical: 12,
     backgroundColor: colors.surface1,
-    borderRadius: radii.md, borderWidth: 1, borderColor: colors.border,
-  },
+    borderRadius: radii.md, borderWidth: 1, borderColor: colors.border },
   toggleLabel: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
   toggleSub:   { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 2, lineHeight: 15 },
 
@@ -539,8 +529,7 @@ const s = StyleSheet.create({
     flex: 1, alignItems: 'center', justifyContent: 'center',
     paddingVertical: 10, borderRadius: radii.sm,
     backgroundColor: colors.surface1,
-    borderWidth: 1, borderColor: colors.border,
-  },
+    borderWidth: 1, borderColor: colors.border },
   ratingOn: { backgroundColor: 'rgba(245,166,35,0.18)', borderColor: colors.primary },
   ratingTxt: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   ratingTxtOn: { color: colors.primary },
@@ -550,16 +539,14 @@ const s = StyleSheet.create({
     paddingHorizontal: space.md, paddingVertical: 10,
     backgroundColor: 'rgba(208,72,72,0.10)',
     borderWidth: 1, borderColor: 'rgba(208,72,72,0.35)',
-    borderRadius: radii.md,
-  },
+    borderRadius: radii.md },
   errBannerTxt: { color: colors.secondary, fontFamily: font.bodyMedium, fontSize: 12, flex: 1 },
   okBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingHorizontal: space.md, paddingVertical: 10,
     backgroundColor: 'rgba(16,185,129,0.10)',
     borderWidth: 1, borderColor: 'rgba(16,185,129,0.35)',
-    borderRadius: radii.md,
-  },
+    borderRadius: radii.md },
   okBannerTxt: { color: colors.success, fontFamily: font.bodyMedium, fontSize: 12, flex: 1 },
   // Phase 5 — parent park linkage card
   parkCard: {
@@ -567,20 +554,16 @@ const s = StyleSheet.create({
     padding: 12, borderRadius: radii.md,
     backgroundColor: colors.surface1,
     borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-    marginTop: 6,
-  },
+    marginTop: 6 },
   parkIcon: {
     width: 32, height: 32, borderRadius: 16,
     backgroundColor: 'rgba(245,166,35,0.16)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  parkLabel: { color: colors.textTertiary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase' },
+    alignItems: 'center', justifyContent: 'center' },
+  parkLabel: { color: colors.textTertiary, fontFamily: font.bodyBold, fontSize: 10 },
   parkName: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14, marginTop: 1 },
   parkHint: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 1 },
   parkBtn: {
     paddingHorizontal: 10, paddingVertical: 6, borderRadius: radii.pill,
     backgroundColor: colors.surface2,
-    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-  },
-  parkBtnTxt: { color: colors.text, fontFamily: font.bodyBold, fontSize: 11 },
-});
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+  parkBtnTxt: { color: colors.text, fontFamily: font.bodyBold, fontSize: 11 } });

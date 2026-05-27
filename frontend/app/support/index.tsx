@@ -110,13 +110,12 @@ export default function SupportIndex() {
 const styles = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: space.xl, paddingTop: space.sm, paddingBottom: space.md },
   backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  kicker: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.8 },
+  kicker: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11 },
   title: { color: colors.text, fontFamily: font.display, fontSize: 28, letterSpacing: -0.3 },
   lead: { color: colors.textSecondary, fontFamily: font.body, fontSize: 14, lineHeight: 21 },
-  sectionLabel: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase' },
+  sectionLabel: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11 },
   faqRow: { padding: space.md, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1, borderRadius: radii.md, gap: 8 },
   faqQ: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14, flex: 1 },
   faqA: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 19 },
   statusDot: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: radii.pill, backgroundColor: colors.primary },
-  statusTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.4 },
-});
+  statusTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 9 } });

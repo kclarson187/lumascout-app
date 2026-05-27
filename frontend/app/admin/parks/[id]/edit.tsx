@@ -12,8 +12,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity,
-  ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
-} from 'react-native';
+  ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { router, useLocalSearchParams, Stack } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChevronLeft, Check, Layers } from 'lucide-react-native';
@@ -95,8 +94,7 @@ export default function AdminParkEditScreen() {
         general_parking_notes: parking.trim() || null,
         general_permit_notes: permit.trim() || null,
         general_safety_notes: safety.trim() || null,
-        general_access_notes: access.trim() || null,
-      };
+        general_access_notes: access.trim() || null };
       const r = await api.patch(`/parks/${park.park_id}`, patch);
       setPark(r as Park);
       setSaved(true);
@@ -217,8 +215,7 @@ function Header({ title, onBack }: { title: string; onBack: () => void }) {
 }
 
 function Field({
-  label, value, onChange, placeholder, multiline, autoCapitalize, maxLength,
-}: {
+  label, value, onChange, placeholder, multiline, autoCapitalize, maxLength }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
@@ -249,8 +246,7 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: space.lg, paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
-  },
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   iconBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   headerTitle: { flex: 1, textAlign: 'center', color: colors.text, fontFamily: font.display, fontSize: 17 },
 
@@ -258,13 +254,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 12,
     padding: 12, borderRadius: radii.md,
     backgroundColor: colors.surface1,
-    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-  },
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   heroIcon: {
     width: 38, height: 38, borderRadius: 19,
     backgroundColor: 'rgba(245,166,35,0.16)',
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   heroTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 15 },
   heroSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 1 },
 
@@ -273,37 +267,31 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10, paddingVertical: 6, borderRadius: radii.pill,
     alignSelf: 'flex-start',
     backgroundColor: 'rgba(45,160,90,0.12)',
-    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.success,
-  },
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.success },
   savedTxt: { color: colors.success, fontFamily: font.bodyBold, fontSize: 12 },
 
-  label: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 4 },
+  label: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, marginBottom: 4 },
   input: {
     padding: 12, borderRadius: radii.md,
     backgroundColor: colors.surface1,
     borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-    color: colors.text, fontFamily: font.body, fontSize: 14,
-  },
+    color: colors.text, fontFamily: font.body, fontSize: 14 },
 
   footer: {
     position: 'absolute', left: 0, right: 0, bottom: 0,
     padding: space.lg, paddingBottom: Platform.OS === 'ios' ? 24 : space.lg,
     flexDirection: 'row', gap: 8,
     backgroundColor: colors.bg,
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border,
-  },
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   cancelBtn: {
     flex: 1, alignItems: 'center', justifyContent: 'center',
     paddingVertical: 13, borderRadius: radii.md,
-    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-  },
+    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   cancelTxt: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
   saveBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
     paddingVertical: 13, borderRadius: radii.md,
-    backgroundColor: colors.primary,
-  },
+    backgroundColor: colors.primary },
   saveTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 13 },
 
-  empty: { color: colors.textTertiary, fontFamily: font.body, fontSize: 13, textAlign: 'center', marginTop: 20 },
-});
+  empty: { color: colors.textTertiary, fontFamily: font.body, fontSize: 13, textAlign: 'center', marginTop: 20 } });

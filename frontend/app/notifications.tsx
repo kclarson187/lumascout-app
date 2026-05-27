@@ -139,7 +139,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   header: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingHorizontal: space.md, paddingVertical: space.sm },
   backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  kicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase' },
+  kicker: { color: colors.kicker, fontFamily: font.bodyBold, fontSize: 10,},
   pageTitle: { color: colors.text, fontFamily: font.display, fontSize: 20 },
   markBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
   markBtnTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },

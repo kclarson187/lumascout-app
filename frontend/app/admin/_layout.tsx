@@ -3,8 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-nati
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Slot, router, usePathname } from 'expo-router';
 import {
-  LayoutDashboard, Inbox, Users, Map, MoreHorizontal, ChevronLeft, ShieldCheck,
-} from 'lucide-react-native';
+  LayoutDashboard, Inbox, Users, Map, MoreHorizontal, ChevronLeft, ShieldCheck } from 'lucide-react-native';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 
@@ -21,8 +20,7 @@ const TABS = [
 ];
 
 const ROLE_RANK: Record<string, number> = {
-  user: 0, moderator: 1, support: 1, admin: 3, super_admin: 4,
-};
+  user: 0, moderator: 1, support: 1, admin: 3, super_admin: 4 };
 
 export default function AdminLayout() {
   const { user } = useAuth();
@@ -137,42 +135,32 @@ const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: colors.bg },
   head: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: space.lg, paddingVertical: 8, gap: 4,
-  },
+    paddingHorizontal: space.lg, paddingVertical: 8, gap: 4 },
   backBtn: {
-    width: 32, height: 32, alignItems: 'center', justifyContent: 'center',
-  },
+    width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   title: {
-    color: colors.text, fontFamily: font.display, fontSize: 22, letterSpacing: -0.3,
-  },
+    color: colors.text, fontFamily: font.display, fontSize: 22, letterSpacing: -0.3 },
   roleBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: 8, paddingVertical: 3, borderRadius: radii.pill,
     borderColor: 'rgba(245,166,35,0.35)', borderWidth: 1,
-    backgroundColor: 'rgba(245,166,35,0.08)',
-  },
+    backgroundColor: 'rgba(245,166,35,0.08)' },
   roleBadgeTxt: {
-    color: colors.primary, fontFamily: font.bodyBold, fontSize: 10,
-    letterSpacing: 0.4, textTransform: 'uppercase',
-  },
+    color: colors.primary, fontFamily: font.bodyBold, fontSize: 10 },
 
   tabsRow: {
     flexDirection: 'row',
     paddingHorizontal: space.xs,
-    alignItems: 'stretch',
-  },
+    alignItems: 'stretch' },
   tab: {
     flex: 1,
     alignItems: 'center', justifyContent: 'flex-start',
-    paddingVertical: 8, gap: 3,
-  },
+    paddingVertical: 8, gap: 3 },
   tabTxt: {
-    color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11,
-  },
+    color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
   tabTxtActive: { color: colors.primary, fontFamily: font.bodyBold },
   tabUnderline: {
-    marginTop: 4, height: 2, width: 24, borderRadius: 1, backgroundColor: colors.primary,
-  },
+    marginTop: 4, height: 2, width: 24, borderRadius: 1, backgroundColor: colors.primary },
   tabUnderlineHidden: { marginTop: 4, height: 2, width: 24 },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
 
@@ -181,5 +169,4 @@ const styles = StyleSheet.create({
   gateTitle: { color: colors.text, fontFamily: font.display, fontSize: 26, textAlign: 'center' },
   gateBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 14, textAlign: 'center', lineHeight: 20 },
   gateBtn: { marginTop: 14, paddingHorizontal: 20, paddingVertical: 12, borderRadius: radii.md, backgroundColor: colors.primary },
-  gateBtnTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 14 },
-});
+  gateBtnTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 14 } });

@@ -19,13 +19,11 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator,
-  RefreshControl, Image,
-} from 'react-native';
+  RefreshControl, Image } from 'react-native';
 import { router } from 'expo-router';
 import {
   AlertTriangle, Map, Edit3, Flag, Users as UsersIcon, Activity, Settings,
-  Wrench, FileText, TrendingUp, ChevronRight, Crown, Sparkles,
-} from 'lucide-react-native';
+  Wrench, FileText, TrendingUp, ChevronRight, Crown, Sparkles } from 'lucide-react-native';
 import { api } from '../../src/api';
 import { colors, font, space, radii } from '../../src/theme';
 import VerifiedBadge from '../../src/components/VerifiedBadge';
@@ -356,17 +354,12 @@ function fmtAgo(iso?: string): string {
 
 const styles = StyleSheet.create({
   sectionLabel: {
-    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11,
-    letterSpacing: 0.7, textTransform: 'uppercase', marginBottom: 8,
-  },
+    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, marginBottom: 8 },
   sectionLabelRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    marginBottom: 8,
-  },
+    marginBottom: 8 },
   linkTxt: {
-    color: colors.primary, fontFamily: font.bodySemibold, fontSize: 11,
-    letterSpacing: 0.3, textTransform: 'uppercase',
-  },
+    color: colors.primary, fontFamily: font.bodySemibold, fontSize: 11 },
 
   // Attention grid (2x2)
   attnGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
@@ -375,18 +368,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface1,
     borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
     borderRadius: radii.md,
-    paddingHorizontal: space.md, paddingVertical: 10, gap: 2,
-  },
+    paddingHorizontal: space.md, paddingVertical: 10, gap: 2 },
   attnIcon: {
     width: 24, height: 24, borderRadius: 12,
-    alignItems: 'center', justifyContent: 'center', marginBottom: 4,
-  },
+    alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
   attnCount: {
-    color: colors.text, fontFamily: font.display, fontSize: 22, letterSpacing: -0.4,
-  },
+    color: colors.text, fontFamily: font.display, fontSize: 22, letterSpacing: -0.4 },
   attnLabel: {
-    color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11,
-  },
+    color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
 
   // System overview horizontal stats
   statsRow: {
@@ -394,17 +383,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface1,
     borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
     borderRadius: radii.md,
-    paddingVertical: 10,
-  },
+    paddingVertical: 10 },
   statCell: { flex: 1, alignItems: 'center', gap: 2 },
   statCellDivider: {
-    borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: colors.border,
-  },
+    borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: colors.border },
   statValue: { fontFamily: font.display, fontSize: 18, letterSpacing: -0.3 },
   statLabel: {
-    color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 10,
-    letterSpacing: 0.4, textTransform: 'uppercase',
-  },
+    color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 10 },
 
   // Quick actions
   qaRow: { flexDirection: 'row', gap: 6 },
@@ -414,37 +399,29 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
     borderRadius: radii.md,
     paddingVertical: 10, paddingHorizontal: 8,
-    alignItems: 'center', gap: 6,
-  },
+    alignItems: 'center', gap: 6 },
   qaIconBox: {
     width: 28, height: 28, borderRadius: 14,
     backgroundColor: 'rgba(245,166,35,0.10)',
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   qaLabel: {
     color: colors.text, fontFamily: font.bodySemibold, fontSize: 10,
-    textAlign: 'center',
-  },
+    textAlign: 'center' },
 
   // Revenue
   revCard: {
     backgroundColor: colors.surface1,
     borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(245,166,35,0.25)',
     borderRadius: radii.md,
-    paddingHorizontal: space.lg, paddingVertical: 12,
-  },
+    paddingHorizontal: space.lg, paddingVertical: 12 },
   revHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
   revHeadTxt: {
-    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11,
-    letterSpacing: 0.5, textTransform: 'uppercase',
-  },
+    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11 },
   revRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    flexWrap: 'wrap', gap: 8,
-  },
+    flexWrap: 'wrap', gap: 8 },
   revAmount: {
-    color: colors.text, fontFamily: font.display, fontSize: 26, letterSpacing: -0.5,
-  },
+    color: colors.text, fontFamily: font.display, fontSize: 26, letterSpacing: -0.5 },
   revUnit: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12 },
   revPlanRow: { flexDirection: 'row', gap: 10 },
   planTick: { flexDirection: 'row', alignItems: 'center', gap: 4 },
@@ -456,13 +433,10 @@ const styles = StyleSheet.create({
   ghCard: {
     backgroundColor: colors.surface1,
     borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-    borderRadius: radii.md, paddingHorizontal: space.md, paddingVertical: 8,
-  },
+    borderRadius: radii.md, paddingHorizontal: space.md, paddingVertical: 8 },
   ghHead: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6 },
   ghHeadTxt: {
-    color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 11,
-    letterSpacing: 0.4, textTransform: 'uppercase',
-  },
+    color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 11 },
   userRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
   userRowDiv: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   avatar: { width: 28, height: 28, borderRadius: 14 },
@@ -477,14 +451,11 @@ const styles = StyleSheet.create({
   activityCard: {
     backgroundColor: colors.surface1,
     borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-    borderRadius: radii.md, paddingHorizontal: space.md,
-  },
+    borderRadius: radii.md, paddingHorizontal: space.md },
   activityRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
   activityDot: {
-    width: 6, height: 6, borderRadius: 3, backgroundColor: colors.primary,
-  },
+    width: 6, height: 6, borderRadius: 3, backgroundColor: colors.primary },
   activityTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 12 },
   activitySub: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 1 },
   activityEmpty: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 14 },
-  activityEmptyTxt: { color: colors.textTertiary, fontFamily: font.body, fontSize: 12 },
-});
+  activityEmptyTxt: { color: colors.textTertiary, fontFamily: font.body, fontSize: 12 } });

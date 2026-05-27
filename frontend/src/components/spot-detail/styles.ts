@@ -37,21 +37,17 @@ export const styles = StyleSheet.create({
   heroHead: {
     position: 'absolute', top: 0, left: 0, right: 0,
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingHorizontal: space.xl, paddingTop: space.sm,
-  },
+    paddingHorizontal: space.xl, paddingTop: space.sm },
   headBtn: {
     width: 40, height: 40, borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center',
-  },
+    backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
   headBtnAdmin: {
     backgroundColor: colors.primary,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.25)',
-  },
+    borderColor: 'rgba(255,255,255,0.25)' },
   dots: {
     position: 'absolute', bottom: space.md, alignSelf: 'center',
-    flexDirection: 'row', gap: 4,
-  },
+    flexDirection: 'row', gap: 4 },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.4)' },
   dotActive: { width: 20, backgroundColor: colors.primary },
   // CR #1 Item 2 (June 2025): minimal "2 / 6" hero counter. Replaces
@@ -66,14 +62,11 @@ export const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: 'rgba(0,0,0,0.55)',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.22)',
-  },
+    borderColor: 'rgba(255,255,255,0.22)' },
   heroCounterTxt: {
     color: '#fff',
     fontFamily: font.bodySemibold,
-    fontSize: 11,
-    letterSpacing: 0.5,
-  },
+    fontSize: 11 },
   // Hero swipe-arrow buttons (June 2025) — additive UX on top of the
   // existing pagingEnabled ScrollView. Centered vertically on the
   // hero with a soft 50%-opacity black circle so the arrow remains
@@ -92,8 +85,7 @@ export const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(255,255,255,0.25)',
     alignItems: 'center',
-    justifyContent: 'center',
-  },
+    justifyContent: 'center' },
   heroArrowLeft: { left: space.md },
   heroArrowRight: { right: space.md },
   // Hero Carousel CR (June 2025 v2.0.20) — community attribution pill.
@@ -116,14 +108,11 @@ export const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.62)',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(255,255,255,0.28)',
-    maxWidth: '70%',
-  },
+    maxWidth: '70%' },
   heroCommunityPillTxt: {
     color: '#fff',
     fontFamily: font.bodySemibold,
-    fontSize: 11,
-    letterSpacing: 0.3,
-  },
+    fontSize: 11 },
   // May 2026 batch #4 update #2.1 — admin photo DELETE pill.
   //
   // Moved from top-right to BOTTOM-LEFT (May 2026) so it never
@@ -151,14 +140,11 @@ export const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.35,
     shadowRadius: 4,
-    elevation: 4,
-  },
+    elevation: 4 },
   photoDeletePillTxt: {
     color: '#fff',
     fontFamily: font.bodyBold,
-    fontSize: 11,
-    letterSpacing: 0.9,
-  },
+    fontSize: 11 },
   // ADMIN context tag — mirrored on BOTTOM-RIGHT. Gold-tinted,
   // informational only (non-tappable). Height matched to the pill
   // so both sit cleanly on the same baseline above the dots row.
@@ -174,14 +160,11 @@ export const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: 'rgba(0,0,0,0.55)',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(245,166,35,0.45)',
-  },
+    borderColor: 'rgba(245,166,35,0.45)' },
   photoAdminTagTxt: {
     color: colors.primary,
     fontFamily: font.bodyBold,
-    fontSize: 10.5,
-    letterSpacing: 0.6,
-  },
+    fontSize: 10.5 },
   content: { padding: space.xl, gap: 6 },
   // Park-Based Multi-Spot Workflow (Phase 3): "Inside <park>" breadcrumb
   // shown on spot detail when the spot has a park_group_id. Tapping
@@ -193,14 +176,12 @@ export const styles = StyleSheet.create({
     borderRadius: radii.pill,
     backgroundColor: 'rgba(245,166,35,0.10)',
     borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(245,166,35,0.40)',
-    maxWidth: '100%',
-  },
+    maxWidth: '100%' },
   parkBreadcrumbIcon: {
     width: 18, height: 18, borderRadius: 9,
     backgroundColor: 'rgba(245,166,35,0.20)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  parkBreadcrumbLabel: { color: colors.textTertiary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.6 },
+    alignItems: 'center', justifyContent: 'center' },
+  parkBreadcrumbLabel: { color: colors.textTertiary, fontFamily: font.bodyBold, fontSize: 10 },
   parkBreadcrumbName: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 12, flexShrink: 1 },
   title: { color: colors.text, fontFamily: font.display, fontSize: 32, letterSpacing: -0.5, lineHeight: 38 },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
@@ -210,12 +191,11 @@ export const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: 8, paddingVertical: 4,
     borderRadius: radii.sm,
-    backgroundColor: '#16a34a',
-  },
-  onSiteBadgeTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.4 },
+    backgroundColor: '#16a34a' },
+  onSiteBadgeTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 10 },
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.md },
   tag: { backgroundColor: colors.surface2, paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.pill },
-  tagText: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.3 },
+  tagText: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 11 },
   // PRD #3 Golden-hour window
   goldenWindow: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
@@ -223,14 +203,12 @@ export const styles = StyleSheet.create({
     paddingHorizontal: space.md, paddingVertical: 12,
     backgroundColor: 'rgba(245,166,35,0.08)',
     borderColor: 'rgba(245,166,35,0.38)', borderWidth: 1,
-    borderRadius: radii.md,
-  },
+    borderRadius: radii.md },
   goldenIcon: {
     width: 34, height: 34, borderRadius: 17,
     backgroundColor: 'rgba(245,166,35,0.18)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  goldenTitle: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 15, letterSpacing: 0.2 },
+    alignItems: 'center', justifyContent: 'center' },
+  goldenTitle: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 15 },
   goldenSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11, marginTop: 2 },
   // May 2026 — Best light notes card (primary: shown when `best_light_notes`
   // exists). Intentionally softer than the golden-hour window: this is
@@ -244,43 +222,35 @@ export const styles = StyleSheet.create({
     paddingHorizontal: space.md, paddingVertical: 12,
     backgroundColor: colors.surface1,
     borderColor: colors.border, borderWidth: 1,
-    borderRadius: radii.md,
-  },
+    borderRadius: radii.md },
   bestLightIcon: {
     width: 28, height: 28, borderRadius: 14,
     backgroundColor: 'rgba(245,166,35,0.14)',
     alignItems: 'center', justifyContent: 'center',
-    marginTop: 1,
-  },
+    marginTop: 1 },
   bestLightLabel: {
     color: colors.textSecondary, fontFamily: font.bodyMedium,
-    fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.6,
-  },
+    fontSize: 10 },
   bestLightBody: {
     color: colors.text, fontFamily: font.body,
-    fontSize: 14, lineHeight: 20, marginTop: 3,
-  },
+    fontSize: 14, lineHeight: 20, marginTop: 3 },
   // Legacy fallback chip — shown only when `best_light_notes` is absent.
   bestTimeChipRow: {
-    flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.md,
-  },
+    flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.md },
   bestTimeChip: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
     paddingHorizontal: 10, paddingVertical: 5,
     borderRadius: radii.pill,
     backgroundColor: 'rgba(245,166,35,0.12)',
-    borderWidth: 1, borderColor: 'rgba(245,166,35,0.35)',
-  },
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.35)' },
   bestTimeChipTxt: {
     color: colors.primary, fontFamily: font.bodyMedium,
-    fontSize: 11, letterSpacing: 0.3, textTransform: 'capitalize',
-  },
+    fontSize: 11, textTransform: 'capitalize' },
   ownerRow: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     marginTop: space.xl, padding: space.md,
     backgroundColor: colors.surface1, borderRadius: radii.md,
-    borderColor: colors.border, borderWidth: 1,
-  },
+    borderColor: colors.border, borderWidth: 1 },
   ownerAvatar: { width: 40, height: 40, borderRadius: 20 },
   desc: { color: colors.textSecondary, fontFamily: font.body, fontSize: 15, lineHeight: 22, marginTop: space.lg },
   // ─── Description block (May 2026) ──────────────────────────────────
@@ -288,21 +258,17 @@ export const styles = StyleSheet.create({
   // affordance. The wrapper exists so the header row sits above the
   // text without bleeding the marginTop of `desc` into the layout.
   descBlock: {
-    marginTop: space.lg,
-  },
+    marginTop: space.lg },
   descHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.sm,
-    marginBottom: 6,
-  },
+    marginBottom: 6 },
   descHeaderLabel: {
     flex: 1,
     color: colors.textTertiary,
     fontFamily: font.bodyBold,
-    fontSize: 10,
-    letterSpacing: 1.2,
-  },
+    fontSize: 10 },
   descEditBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -310,45 +276,37 @@ export const styles = StyleSheet.create({
     paddingVertical: 4,
     paddingHorizontal: 8,
     borderRadius: 999,
-    backgroundColor: 'rgba(245,166,35,0.10)',
-  },
+    backgroundColor: 'rgba(245,166,35,0.10)' },
   descEditTxt: {
     color: colors.primary,
     fontFamily: font.bodyBold,
-    fontSize: 11,
-    letterSpacing: 0.2,
-  },
+    fontSize: 11 },
   descPlaceholder: {
     color: colors.textTertiary,
     fontFamily: font.body,
     fontStyle: 'italic',
     fontSize: 14,
-    lineHeight: 20,
-  },
+    lineHeight: 20 },
   privacyNote: {
     flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: space.md,
     padding: space.md, backgroundColor: 'rgba(96,165,250,0.1)',
-    borderColor: 'rgba(96,165,250,0.3)', borderWidth: 1, borderRadius: radii.md,
-  },
+    borderColor: 'rgba(96,165,250,0.3)', borderWidth: 1, borderRadius: radii.md },
   privacyNoteTxt: { color: colors.info, fontFamily: font.bodyMedium, fontSize: 12, flex: 1, lineHeight: 16 },
   directionsBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     marginTop: space.md, paddingHorizontal: space.md, paddingVertical: 12,
-    backgroundColor: colors.primary, borderRadius: radii.md,
-  },
+    backgroundColor: colors.primary, borderRadius: radii.md },
   directionsBtnTitle: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 },
   directionsBtnSub: { color: 'rgba(255,255,255,0.82)', fontFamily: font.bodyMedium, fontSize: 11, marginTop: 2 },
   aiBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     marginTop: space.sm, paddingHorizontal: space.md, paddingVertical: 12,
     backgroundColor: colors.surface1, borderRadius: radii.md,
-    borderWidth: 1, borderColor: 'rgba(245,166,35,0.35)',
-  },
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.35)' },
   aiIconBubble: {
     width: 32, height: 32, borderRadius: 16,
     backgroundColor: 'rgba(245,166,35,0.15)',
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   aiBtnTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   aiBtnSub: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, marginTop: 2 },
   sectionH: { color: colors.text, fontFamily: font.display, fontSize: 20, marginTop: space.xl, letterSpacing: -0.2 },
@@ -363,50 +321,42 @@ export const styles = StyleSheet.create({
   scoreGrid: {
     flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: space.md,
     padding: space.lg, backgroundColor: colors.surface1, borderRadius: radii.lg,
-    borderColor: colors.border, borderWidth: 1, justifyContent: 'space-between',
-  },
+    borderColor: colors.border, borderWidth: 1, justifyContent: 'space-between' },
   infoRow: { flexDirection: 'row', gap: 8, marginTop: space.md, flexWrap: 'wrap' },
   infoCard: {
     flex: 1, minWidth: '22%', backgroundColor: colors.surface1,
     borderColor: colors.border, borderWidth: 1, padding: space.md,
-    borderRadius: radii.md, gap: 4, alignItems: 'flex-start',
-  },
-  infoLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.6 },
+    borderRadius: radii.md, gap: 4, alignItems: 'flex-start' },
+  infoLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10 },
   infoValue: { color: colors.text, fontFamily: font.bodyBold, fontSize: 15 },
   logRow: {
     flexDirection: 'row', gap: 12, alignItems: 'flex-start',
     padding: space.md, backgroundColor: colors.surface1,
-    borderColor: colors.border, borderWidth: 1, borderRadius: radii.md,
-  },
+    borderColor: colors.border, borderWidth: 1, borderRadius: radii.md },
   logIcon: {
     width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(245,166,35,0.12)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  logLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 },
+    alignItems: 'center', justifyContent: 'center' },
+  logLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
   logText: { color: colors.text, fontFamily: font.body, fontSize: 13, lineHeight: 18, marginTop: 2 },
   badgesRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.md },
   badge: {
     backgroundColor: 'rgba(16,185,129,0.15)',
     paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.pill,
-    borderColor: 'rgba(16,185,129,0.4)', borderWidth: 1,
-  },
-  badgeText: { color: colors.success, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.3 },
+    borderColor: 'rgba(16,185,129,0.4)', borderWidth: 1 },
+  badgeText: { color: colors.success, fontFamily: font.bodyMedium, fontSize: 11 },
   reviewCard: {
     padding: space.md, backgroundColor: colors.surface1,
-    borderColor: colors.border, borderWidth: 1, borderRadius: radii.md,
-  },
+    borderColor: colors.border, borderWidth: 1, borderRadius: radii.md },
   actionBar: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     flexDirection: 'row', gap: 8,
     paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.xl,
     backgroundColor: 'rgba(10,10,10,0.95)',
-    borderTopWidth: 1, borderTopColor: colors.border,
-  },
+    borderTopWidth: 1, borderTopColor: colors.border },
   actBtn: {
     flex: 1, flexDirection: 'row', gap: 6, alignItems: 'center', justifyContent: 'center',
     paddingVertical: 12, borderRadius: radii.md,
-    backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border,
-  },
+    backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border },
   actBtnPrimary: { backgroundColor: colors.primary, borderColor: colors.primary, flex: 1.4 },
   actTxt: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
   pendingBanner: {
@@ -414,12 +364,10 @@ export const styles = StyleSheet.create({
     padding: space.md, borderRadius: radii.md,
     backgroundColor: 'rgba(245,166,35,0.08)',
     borderColor: colors.primary, borderWidth: 1,
-    marginBottom: space.md,
-  },
+    marginBottom: space.md },
   pendingDot: {
     width: 10, height: 10, borderRadius: 5, backgroundColor: colors.primary,
-    marginLeft: 4,
-  },
+    marginLeft: 4 },
   pendingTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
   pendingBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17, marginTop: 2 },
   requestEditBtn: { alignSelf: 'flex-start', marginTop: 10, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radii.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface1 },
@@ -441,51 +389,43 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 14,
     marginTop: space.lg,
-    gap: 0,
-  },
+    gap: 0 },
   lightDriveCol: {
     flex: 1,
     minWidth: 0,
     paddingHorizontal: 6,
-    gap: 4,
-  },
+    gap: 4 },
   lightDriveLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   lightDriveLabel: {
     color: colors.textSecondary,
     fontFamily: font.bodyMedium,
-    fontSize: 11,
-    letterSpacing: 0.2,
-  },
+    fontSize: 11 },
   lightDriveValueGold: {
     color: colors.primary,
     fontFamily: font.displaySemibold || font.bodyBold,
     fontSize: 19,
     letterSpacing: -0.4,
     marginTop: 2,
-    lineHeight: 22,
-  },
+    lineHeight: 22 },
   lightDriveValueBlue: {
     color: '#60A5FA',
     fontFamily: font.displaySemibold || font.bodyBold,
     fontSize: 19,
     letterSpacing: -0.4,
     marginTop: 2,
-    lineHeight: 22,
-  },
+    lineHeight: 22 },
   lightDriveValuePlain: {
     color: colors.text,
     fontFamily: font.displaySemibold || font.bodyBold,
     fontSize: 19,
     letterSpacing: -0.4,
     marginTop: 2,
-    lineHeight: 22,
-  },
+    lineHeight: 22 },
   lightDriveSub: {
     color: colors.textTertiary,
     fontFamily: font.body,
     fontSize: 10.5,
-    marginTop: 1,
-  },
+    marginTop: 1 },
   // June 2025 — inline "Enable" pill shown in the Drive-time column
   // when location permission is missing. Tiny gold outline that won't
   // disturb the visual rhythm of the 3-column card. Becomes "Settings"
@@ -498,26 +438,21 @@ export const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.primary,
-    backgroundColor: 'rgba(245,166,35,0.10)',
-  },
+    backgroundColor: 'rgba(245,166,35,0.10)' },
   lightDriveEnableTxt: {
     color: colors.primary,
     fontFamily: font.bodyBold,
-    fontSize: 11,
-    letterSpacing: 0.2,
-  },
+    fontSize: 11 },
   lightDriveDivider: {
     width: StyleSheet.hairlineWidth,
     backgroundColor: 'rgba(255,255,255,0.08)',
-    alignSelf: 'stretch',
-  },
+    alignSelf: 'stretch' },
 
   // Primary 3-up action row (Directions / Save / Check-in)
   primaryActions: {
     flexDirection: 'row',
     gap: 8,
-    marginTop: space.lg,
-  },
+    marginTop: space.lg },
   primaryActionBtn: {
     flex: 1,
     flexDirection: 'row',
@@ -528,39 +463,32 @@ export const styles = StyleSheet.create({
     borderRadius: radii.md,
     backgroundColor: colors.surface2,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
-  },
+    borderColor: 'rgba(255,255,255,0.06)' },
   primaryActionBtnGold: {
     backgroundColor: colors.primary,
-    borderColor: colors.primary,
-  },
+    borderColor: colors.primary },
   primaryActionTxt: {
     color: colors.text,
     fontFamily: font.bodyBold,
-    fontSize: 13,
-  },
+    fontSize: 13 },
   primaryActionTxtGold: {
     color: '#1a1300',
     fontFamily: font.bodyBold,
-    fontSize: 13,
-  },
+    fontSize: 13 },
 
   // Why photographers love this spot — chip rail
   whyLoveSection: {
-    marginTop: space.xl + 4,
-  },
+    marginTop: space.xl + 4 },
   whyLoveTitle: {
     color: colors.text,
     fontFamily: font.bodyBold,
     fontSize: 16,
     letterSpacing: -0.1,
-    marginBottom: 10,
-  },
+    marginBottom: 10 },
   whyLoveRow: {
     flexDirection: 'row',
     gap: 10,
-    paddingRight: 16,
-  },
+    paddingRight: 16 },
   whyLoveChip: {
     width: 96,
     minHeight: 92,
@@ -572,15 +500,13 @@ export const styles = StyleSheet.create({
     paddingVertical: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-  },
+    gap: 8 },
   whyLoveTxt: {
     color: colors.text,
     fontFamily: font.bodyMedium,
     fontSize: 11,
     textAlign: 'center',
-    lineHeight: 14,
-  },
+    lineHeight: 14 },
 
   // Recent photos section header w/ See all link
   sectionHeader: {
@@ -588,44 +514,36 @@ export const styles = StyleSheet.create({
     alignItems: 'baseline',
     justifyContent: 'space-between',
     marginTop: space.xl + 4,
-    marginBottom: 12,
-  },
+    marginBottom: 12 },
   sectionHeaderTitle: {
     color: colors.text,
     fontFamily: font.bodyBold,
     fontSize: 16,
-    letterSpacing: -0.1,
-  },
+    letterSpacing: -0.1 },
   sectionHeaderLink: {
     color: colors.primary,
     fontFamily: font.bodyMedium,
-    fontSize: 12.5,
-  },
+    fontSize: 12.5 },
   sectionFilterRow: {
     flexDirection: 'row',
     gap: 6,
-    marginBottom: 10,
-  },
+    marginBottom: 10 },
   sectionFilterChip: {
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: radii.pill,
     backgroundColor: colors.surface1,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
-  },
+    borderColor: 'rgba(255,255,255,0.06)' },
   sectionFilterChipActive: {
     backgroundColor: 'rgba(245,166,35,0.14)',
-    borderColor: 'rgba(245,166,35,0.45)',
-  },
+    borderColor: 'rgba(245,166,35,0.45)' },
   sectionFilterTxt: {
     color: colors.textSecondary,
     fontFamily: font.bodyMedium,
-    fontSize: 11.5,
-  },
+    fontSize: 11.5 },
   sectionFilterTxtActive: {
-    color: colors.primary,
-  },
+    color: colors.primary },
 
   // Similar nearby compact horizontal card
   similarCard: {
@@ -633,53 +551,44 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     paddingVertical: 10,
-    paddingRight: 8,
-  },
+    paddingRight: 8 },
   similarThumb: {
     width: 88,
     height: 60,
     borderRadius: 8,
     backgroundColor: colors.surface2,
-    overflow: 'hidden',
-  },
+    overflow: 'hidden' },
   similarTitle: {
     color: colors.text,
     fontFamily: font.bodyBold,
-    fontSize: 14,
-  },
+    fontSize: 14 },
   similarMeta: {
     color: colors.textSecondary,
     fontFamily: font.body,
     fontSize: 12,
-    marginTop: 2,
-  },
+    marginTop: 2 },
   similarTagRow: {
     flexDirection: 'row',
     gap: 6,
-    marginTop: 4,
-  },
+    marginTop: 4 },
   similarTag: {
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: radii.pill,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-  },
+    backgroundColor: 'rgba(255,255,255,0.04)' },
   similarTagTxt: {
     color: colors.textSecondary,
     fontFamily: font.bodyMedium,
-    fontSize: 10.5,
-  },
+    fontSize: 10.5 },
   similarDrive: {
     color: '#22c55e',
     fontFamily: font.bodyBold,
-    fontSize: 13,
-  },
+    fontSize: 13 },
   similarDriveSub: {
     color: colors.textTertiary,
     fontFamily: font.body,
     fontSize: 10.5,
-    marginTop: 1,
-  },
+    marginTop: 1 },
   similarSaveBtn: {
     width: 36,
     height: 36,
@@ -687,8 +596,7 @@ export const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.12)',
     alignItems: 'center',
-    justifyContent: 'center',
-  },
+    justifyContent: 'center' },
 
   // Know before you go — chip strip (replaces logistics cards)
   kbygSection: { marginTop: space.xl + 4 },
@@ -702,19 +610,16 @@ export const styles = StyleSheet.create({
     borderRadius: radii.pill,
     backgroundColor: colors.surface1,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
-  },
+    borderColor: 'rgba(255,255,255,0.06)' },
   kbygChipTxt: {
     color: colors.text,
     fontFamily: font.bodyMedium,
-    fontSize: 12,
-  },
+    fontSize: 12 },
 
   // Secondary action row — AI shot list / Scout AI / Add update etc.
   secondarySection: {
     marginTop: space.xl + 4,
-    gap: 8,
-  },
+    gap: 8 },
   secondaryRow: { flexDirection: 'row', gap: 8 },
   secondaryBtn: {
     flex: 1,
@@ -726,13 +631,11 @@ export const styles = StyleSheet.create({
     borderRadius: radii.md,
     backgroundColor: colors.surface1,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
-  },
+    borderColor: 'rgba(255,255,255,0.06)' },
   secondaryBtnTxt: {
     color: colors.text,
     fontFamily: font.bodyMedium,
-    fontSize: 12.5,
-  },
+    fontSize: 12.5 },
 
   // Slimmer sticky action bar — Save / Directions (gold) / Check-in
   stickyBar: {
@@ -744,8 +647,7 @@ export const styles = StyleSheet.create({
     paddingTop: 10,
     backgroundColor: 'rgba(10,10,10,0.96)',
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.06)',
-  },
+    borderTopColor: 'rgba(255,255,255,0.06)' },
   stickyBtn: {
     flex: 1,
     flexDirection: 'row',
@@ -756,24 +658,19 @@ export const styles = StyleSheet.create({
     borderRadius: radii.md,
     backgroundColor: 'transparent',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
-  },
+    borderColor: 'rgba(255,255,255,0.10)' },
   stickyBtnGold: {
     flex: 1.3,
     backgroundColor: colors.primary,
-    borderColor: colors.primary,
-  },
+    borderColor: colors.primary },
   stickyBtnTxt: {
     color: colors.text,
     fontFamily: font.bodySemibold,
-    fontSize: 13,
-  },
+    fontSize: 13 },
   stickyBtnTxtGold: {
     color: '#1a1300',
     fontFamily: font.bodyBold,
-    fontSize: 13,
-  },
-});
+    fontSize: 13 } });
 
 // Destructive-action palette — red/danger treatments for super-admin
 // Delete Spot zone and photo-manager card. Kept separate so the
@@ -785,16 +682,14 @@ export const sadStyles = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(255,64,90,0.35)',
     borderRadius: radii.lg,
     padding: space.md,
-    gap: space.sm,
-  },
+    gap: space.sm },
   dangerHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  dangerTitle: { color: colors.secondary, fontFamily: font.bodyBold, fontSize: 12, letterSpacing: 0.4, textTransform: 'uppercase' },
+  dangerTitle: { color: colors.secondary, fontFamily: font.bodyBold, fontSize: 12 },
   dangerBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17 },
   dangerBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
     backgroundColor: colors.secondary, paddingVertical: 12, borderRadius: radii.md,
-    alignSelf: 'flex-start', paddingHorizontal: 14,
-  },
+    alignSelf: 'flex-start', paddingHorizontal: 14 },
   dangerBtnTxt: { color: '#fff', fontFamily: font.bodyBold, fontSize: 13 },
   photoMgrCard: {
     marginTop: space.xl,
@@ -802,13 +697,10 @@ export const sadStyles = StyleSheet.create({
     backgroundColor: colors.surface1,
     borderWidth: 1, borderColor: 'rgba(245,166,35,0.35)',
     borderRadius: radii.lg,
-    padding: space.md,
-  },
+    padding: space.md },
   photoMgrIcon: {
     width: 36, height: 36, borderRadius: 18,
     backgroundColor: 'rgba(245,166,35,0.14)',
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   photoMgrTitle: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 14 },
-  photoMgrSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2, lineHeight: 16 },
-});
+  photoMgrSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2, lineHeight: 16 } });

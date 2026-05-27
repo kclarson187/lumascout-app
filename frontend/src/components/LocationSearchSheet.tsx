@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Modal, View, Text, StyleSheet, TextInput, TouchableOpacity,
-  ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable,
-} from 'react-native';
+  ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable } from 'react-native';
 import { X, Search, MapPin, Plus } from 'lucide-react-native';
 import { api } from '../api';
 import { colors, font, space, radii } from '../theme';
@@ -30,8 +29,7 @@ export default function LocationSearchSheet({
   visible,
   onClose,
   onPick,
-  onManualEntry,
-}: {
+  onManualEntry }: {
   visible: boolean;
   onClose: () => void;
   onPick: (place: PlaceResult) => void;
@@ -210,8 +208,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
     marginHorizontal: space.xl, paddingHorizontal: space.md, paddingVertical: 12,
-    borderRadius: radii.md, marginBottom: space.md,
-  },
+    borderRadius: radii.md, marginBottom: space.md },
   input: { flex: 1, color: colors.text, fontFamily: font.body, fontSize: 16 },
   hintWrap: { paddingHorizontal: space.xl, gap: 4, marginTop: 20 },
   hint: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13 },
@@ -222,17 +219,14 @@ const styles = StyleSheet.create({
   manualBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     backgroundColor: colors.primary, paddingHorizontal: 14, paddingVertical: 10,
-    borderRadius: radii.md, marginTop: 10,
-  },
+    borderRadius: radii.md, marginTop: 10 },
   manualBtnTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 13 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12 },
   pinWrap: {
     width: 32, height: 32, borderRadius: 16,
-    backgroundColor: 'rgba(245,166,35,0.12)', alignItems: 'center', justifyContent: 'center',
-  },
+    backgroundColor: 'rgba(245,166,35,0.12)', alignItems: 'center', justifyContent: 'center' },
   rowName: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
   rowMeta: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2 },
   typeBadge: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: radii.pill, backgroundColor: 'rgba(245,166,35,0.12)', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(245,166,35,0.4)' },
-  typeBadgeTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.4, textTransform: 'uppercase' },
-  sep: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
-});
+  typeBadgeTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 9 },
+  sep: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border } });

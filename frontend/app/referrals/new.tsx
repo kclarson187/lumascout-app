@@ -11,8 +11,7 @@ import {
   TouchableOpacity,
   Alert,
   Switch,
-  ActivityIndicator,
-} from 'react-native';
+  ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, Stack } from 'expo-router';
 import { ArrowLeft, Zap, Camera, X } from 'lucide-react-native';
@@ -56,8 +55,7 @@ export default function PostReferral() {
     if (perm.status !== 'granted') { Alert.alert('Permission required'); return; }
     const r = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      quality: 0.7, allowsEditing: false,
-    });
+      quality: 0.7, allowsEditing: false });
     if (r.canceled || !r.assets?.[0]?.uri) return;
     const manipulated = await ImageManipulator.manipulateAsync(
       r.assets[0].uri,
@@ -77,8 +75,7 @@ export default function PostReferral() {
         shoot_type: shootType,
         gig_type: gigType,
         city: city.trim(), state: state.trim() || null,
-        urgency: isUrgent ? 'urgent' : 'normal',
-      };
+        urgency: isUrgent ? 'urgent' : 'normal' };
       if (eventDate.trim()) payload.event_date = eventDate.trim();
       if (durationHours) payload.duration_hours = Number(durationHours) || null;
       if (budgetMin) payload.budget_min = Number(budgetMin) || null;
@@ -268,40 +265,33 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: space.lg, paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: colors.border,
-  },
+    borderBottomWidth: 1, borderBottomColor: colors.border },
   backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   headerTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 16 },
 
   card: {
     backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border,
-    borderRadius: radii.lg, padding: space.md, gap: space.md,
-  },
+    borderRadius: radii.lg, padding: space.md, gap: space.md },
   section: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   label: {
-    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11,
-    letterSpacing: 0.6, textTransform: 'uppercase', marginTop: 4,
-  },
+    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, marginTop: 4 },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
 
   refRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   refThumbWrap: { position: 'relative' },
   refThumb: {
     width: 70, height: 70, borderRadius: radii.sm,
-    borderWidth: 1, borderColor: colors.border,
-  },
+    borderWidth: 1, borderColor: colors.border },
   refRemove: {
     position: 'absolute', top: -6, right: -6, zIndex: 2,
     width: 22, height: 22, borderRadius: 11,
     backgroundColor: '#ef4444',
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   refAdd: {
     width: 70, height: 70, borderRadius: radii.sm,
     borderWidth: 1, borderColor: 'rgba(245,166,35,0.4)', borderStyle: 'dashed',
     backgroundColor: 'rgba(245,166,35,0.06)',
-    alignItems: 'center', justifyContent: 'center', gap: 2,
-  },
+    alignItems: 'center', justifyContent: 'center', gap: 2 },
   refAddTxt: { color: colors.primary, fontFamily: font.bodyMedium, fontSize: 10 },
 
   urgentRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -312,7 +302,5 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     paddingVertical: 14, borderRadius: radii.md,
     alignItems: 'center', justifyContent: 'center',
-    marginTop: space.md,
-  },
-  submitTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14, letterSpacing: 0.3 },
-});
+    marginTop: space.md },
+  submitTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 } });

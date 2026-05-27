@@ -16,8 +16,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Pressable,
-  ActivityIndicator, Alert,
-} from 'react-native';
+  ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Sparkles, Check } from 'lucide-react-native';
@@ -52,8 +51,7 @@ export default function OnboardingPersonalize() {
       await api.patch('/auth/me', {
         specialties,
         goals,
-        experience_level: experience,
-      });
+        experience_level: experience });
       await refresh();
       router.replace(next as any);
     } catch (e) {
@@ -191,20 +189,16 @@ const styles = StyleSheet.create({
 
   sectionLabel: {
     color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11,
-    letterSpacing: 0.7, textTransform: 'uppercase',
-    marginTop: space.xl, marginBottom: 10,
-  },
+    marginTop: space.xl, marginBottom: 10 },
 
   chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: {
     paddingHorizontal: 12, paddingVertical: 8, borderRadius: radii.pill,
     backgroundColor: colors.surface1,
     borderWidth: 1, borderColor: colors.border,
-    minHeight: 36, justifyContent: 'center',
-  },
+    minHeight: 36, justifyContent: 'center' },
   chipOn: {
-    backgroundColor: 'rgba(245,166,35,0.16)', borderColor: colors.primary,
-  },
+    backgroundColor: 'rgba(245,166,35,0.16)', borderColor: colors.primary },
   chipTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 13 },
   chipTxtOn: { color: colors.primary, fontFamily: font.bodyBold },
 
@@ -214,14 +208,12 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
     backgroundColor: colors.surface1,
     borderWidth: 1, borderColor: colors.border,
-    minHeight: 56,
-  },
+    minHeight: 56 },
   expRowOn: { borderColor: colors.primary, backgroundColor: 'rgba(245,166,35,0.08)' },
   radio: {
     width: 18, height: 18, borderRadius: 9,
     borderWidth: 1.5, borderColor: colors.textTertiary,
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   radioOn: { borderColor: colors.primary, backgroundColor: colors.primary },
   expLabel: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
   expHelper: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 2 },
@@ -229,10 +221,8 @@ const styles = StyleSheet.create({
   primaryBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     backgroundColor: colors.primary, borderRadius: radii.md,
-    paddingVertical: 14, minHeight: 48,
-  },
+    paddingVertical: 14, minHeight: 48 },
   primaryBtnDim: { opacity: 0.6 },
   primaryBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 15 },
   skipBtn: { paddingVertical: 12, alignItems: 'center' },
-  skipTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13 },
-});
+  skipTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13 } });

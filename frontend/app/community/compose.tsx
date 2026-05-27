@@ -39,8 +39,7 @@ export default function Compose() {
   const pickImage = async () => {
     const r = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      quality: 0.7, base64: true, allowsEditing: true, aspect: [16, 10],
-    });
+      quality: 0.7, base64: true, allowsEditing: true, aspect: [16, 10] });
     if (!r.canceled && r.assets[0]?.base64) {
       setImageUri(`data:image/jpeg;base64,${r.assets[0].base64}`);
     }
@@ -57,8 +56,7 @@ export default function Compose() {
     try {
       const payload: any = {
         category, title: title.trim(), body: body.trim(), image_url: imageUri,
-        city: user?.city, state: user?.state,
-      };
+        city: user?.city, state: user?.state };
       if (category === 'poll') {
         payload.poll_options = pollOptions.map((o) => o.trim()).filter(Boolean);
       }
@@ -232,14 +230,13 @@ const styles = StyleSheet.create({
   postBtnTxt: { color: colors.textInverse, fontFamily: font.bodySemibold, fontSize: 13 },
   tipCard: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: space.md, borderRadius: radii.md, backgroundColor: 'rgba(245,166,35,0.08)', borderColor: colors.primary, borderWidth: 1 },
   tipTxt: { flex: 1, color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17 },
-  label: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.5, textTransform: 'uppercase' },
+  label: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
   catGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   catChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
   catChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   catHintCard: {
     padding: space.md, borderRadius: radii.md,
-    backgroundColor: colors.surface2, borderColor: colors.border, borderWidth: 1, marginTop: -4,
-  },
+    backgroundColor: colors.surface2, borderColor: colors.border, borderWidth: 1, marginTop: -4 },
   catHint: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 13, lineHeight: 19 },
   catTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
   catTxtActive: { color: colors.textInverse, fontFamily: font.bodySemibold },
@@ -252,5 +249,4 @@ const styles = StyleSheet.create({
   addOptBtn: { padding: 10, borderRadius: radii.md, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1, borderStyle: 'dashed', alignItems: 'center', marginTop: 4 },
   addOptTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 13 },
   // FIX(Commit 6c): char-counter line — matches spot Notes counter style.
-  counter: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: -8, textAlign: 'right' },
-});
+  counter: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: -8, textAlign: 'right' } });

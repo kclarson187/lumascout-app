@@ -129,59 +129,46 @@ const styles = StyleSheet.create({
   scroll: {
     flexGrow: 1, justifyContent: 'center', alignItems: 'center',
     padding: space.xl,
-    gap: space.md,
-  },
+    gap: space.md },
   iconWrap: {
     width: 64, height: 64, borderRadius: 32,
     backgroundColor: 'rgba(245,166,35,0.12)',
     borderWidth: 1, borderColor: 'rgba(245,166,35,0.35)',
     alignItems: 'center', justifyContent: 'center',
-    marginBottom: space.md,
-  },
+    marginBottom: space.md },
   title: {
     color: colors.text, fontFamily: font.headline, fontSize: 20,
-    textAlign: 'center', marginTop: space.sm,
-  },
+    textAlign: 'center', marginTop: space.sm },
   body: {
     color: colors.textSecondary, fontFamily: font.body, fontSize: 14,
-    lineHeight: 21, textAlign: 'center', maxWidth: 320,
-  },
+    lineHeight: 21, textAlign: 'center', maxWidth: 320 },
   devBox: {
     marginTop: space.lg,
     padding: space.md,
     backgroundColor: colors.surface1,
     borderColor: colors.border, borderWidth: 1,
     borderRadius: radii.md,
-    maxWidth: 360, width: '100%',
-  },
+    maxWidth: 360, width: '100%' },
   devLabel: {
     color: colors.textTertiary, fontFamily: font.bodyMedium,
-    fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.6,
-  },
+    fontSize: 10 },
   devMsg: {
     color: colors.textSecondary, fontFamily: font.body,
-    fontSize: 12, lineHeight: 17, marginTop: 4,
-  },
+    fontSize: 12, lineHeight: 17, marginTop: 4 },
   ctas: {
     flexDirection: 'row', gap: space.sm, marginTop: space.lg,
-    flexWrap: 'wrap', justifyContent: 'center',
-  },
+    flexWrap: 'wrap', justifyContent: 'center' },
   btn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 8,
     minHeight: Platform.OS === 'ios' ? 44 : 48,
     paddingHorizontal: space.lg,
-    borderRadius: radii.pill,
-  },
+    borderRadius: radii.pill },
   btnPrimary: { backgroundColor: colors.primary },
   btnPrimaryTxt: {
-    color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14, letterSpacing: 0.2,
-  },
+    color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 },
   btnGhost: {
     backgroundColor: colors.surface1,
-    borderWidth: 1, borderColor: colors.border,
-  },
+    borderWidth: 1, borderColor: colors.border },
   btnGhostTxt: {
-    color: colors.text, fontFamily: font.bodyMedium, fontSize: 14, letterSpacing: 0.2,
-  },
-});
+    color: colors.text, fontFamily: font.bodyMedium, fontSize: 14 } });

@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, RefreshControl, TextInput,
-} from 'react-native';
+  ActivityIndicator, RefreshControl, TextInput } from 'react-native';
 import { Search, ChevronDown, ChevronRight, User as UserIcon, MapPin, FileText, Flag, Shield, ShieldCheck, Crown } from 'lucide-react-native';
 import EmptyState from '../../src/components/EmptyState';
 import { api } from '../../src/api';
@@ -27,69 +26,55 @@ const HUMAN: Record<string, (a: Audit) => { title: string; summary: string; Icon
   'user.grant_plan': (a) => ({
     title: 'Plan granted',
     summary: `${a.admin_email || 'Admin'} set ${targetLabel(a)} to ${(a.after?.plan || '').toUpperCase()}`,
-    Icon: Crown, color: colors.primary,
-  }),
+    Icon: Crown, color: colors.primary }),
   'user.suspend': (a) => ({
     title: 'User suspended',
     summary: `${a.admin_email || 'Admin'} suspended ${targetLabel(a)}${a.notes ? ` — ${a.notes}` : ''}`,
-    Icon: Shield, color: colors.secondary,
-  }),
+    Icon: Shield, color: colors.secondary }),
   'user.unsuspend': (a) => ({
     title: 'User unsuspended',
     summary: `${a.admin_email || 'Admin'} restored ${targetLabel(a)}`,
-    Icon: UserIcon, color: colors.success,
-  }),
+    Icon: UserIcon, color: colors.success }),
   'user.update': (a) => ({
     title: 'User updated',
     summary: `${a.admin_email || 'Admin'} edited ${targetLabel(a)} — ${changeSummary(a.before, a.after)}`,
-    Icon: UserIcon, color: colors.text,
-  }),
+    Icon: UserIcon, color: colors.text }),
   'spot.approve': (a) => ({
     title: 'Spot approved',
     summary: `${a.admin_email || 'Admin'} approved ${targetLabel(a)}`,
-    Icon: MapPin, color: colors.success,
-  }),
+    Icon: MapPin, color: colors.success }),
   'spot.reject': (a) => ({
     title: 'Spot rejected',
     summary: `${a.admin_email || 'Admin'} rejected ${targetLabel(a)}${a.notes ? ` — ${a.notes}` : ''}`,
-    Icon: MapPin, color: colors.secondary,
-  }),
+    Icon: MapPin, color: colors.secondary }),
   'spot.remove': (a) => ({
     title: 'Spot removed',
     summary: `${a.admin_email || 'Admin'} removed ${targetLabel(a)}`,
-    Icon: MapPin, color: colors.secondary,
-  }),
+    Icon: MapPin, color: colors.secondary }),
   'spot.delete_hard': (a) => ({
     title: 'Spot deleted (super admin)',
     summary: `${a.admin_email || 'Super admin'} permanently deleted ${a.before?.title ? `"${a.before.title}"` : targetLabel(a)}${a.notes ? ` — ${stripPrefix(a.notes)}` : ''}`,
-    Icon: MapPin, color: colors.secondary,
-  }),
+    Icon: MapPin, color: colors.secondary }),
   'user.delete_soft': (a) => ({
     title: 'User deleted (super admin)',
     summary: `${a.admin_email || 'Super admin'} soft-deleted ${a.before?.username ? `@${a.before.username}` : targetLabel(a)}${a.notes ? ` — ${stripPrefix(a.notes)}` : ''}`,
-    Icon: UserIcon, color: colors.secondary,
-  }),
+    Icon: UserIcon, color: colors.secondary }),
   'post.remove': (a) => ({
     title: 'Post removed',
     summary: `${a.admin_email || 'Admin'} removed community post ${a.target_id}`,
-    Icon: FileText, color: colors.secondary,
-  }),
+    Icon: FileText, color: colors.secondary }),
   'post.restore': (a) => ({
     title: 'Post restored',
     summary: `${a.admin_email || 'Admin'} restored community post ${a.target_id}`,
-    Icon: FileText, color: colors.success,
-  }),
+    Icon: FileText, color: colors.success }),
   'report.resolve': (a) => ({
     title: 'Report resolved',
     summary: `${a.admin_email || 'Admin'} resolved report ${a.target_id}${a.notes ? ` — ${a.notes}` : ''}`,
-    Icon: Flag, color: colors.success,
-  }),
+    Icon: Flag, color: colors.success }),
   'report.dismiss': (a) => ({
     title: 'Report dismissed',
     summary: `${a.admin_email || 'Admin'} dismissed report ${a.target_id}`,
-    Icon: Flag, color: colors.textTertiary,
-  }),
-};
+    Icon: Flag, color: colors.textTertiary }) };
 
 function targetLabel(a: Audit) {
   if (!a.target_type) return 'item';
@@ -131,8 +116,7 @@ function humanize(a: Audit) {
     title: rest.join(' ').replace(/_/g, ' ') || a.action || 'action',
     summary: `${a.admin_email || 'Admin'} · ${ns || 'system'} · ${targetLabel(a)}`,
     Icon: FileText as any,
-    color: colors.text,
-  };
+    color: colors.text };
 }
 
 function relativeTime(iso: string) {
@@ -268,14 +252,13 @@ const styles = StyleSheet.create({
   summary: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, lineHeight: 17, marginTop: 2 },
   meta: { color: colors.textTertiary, fontFamily: font.body, fontSize: 10, marginTop: 4 },
   tag: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: radii.pill, borderWidth: 1 },
-  tagTxt: { fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.4, textTransform: 'uppercase' },
+  tagTxt: { fontFamily: font.bodyBold, fontSize: 9 },
   diffWrap: { backgroundColor: colors.surface2, padding: 8, borderRadius: radii.sm, marginTop: 6, gap: 4 },
-  diffLabel: { color: colors.textTertiary, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.4, textTransform: 'uppercase' },
+  diffLabel: { color: colors.textTertiary, fontFamily: font.bodyBold, fontSize: 9 },
   diffBefore: { color: colors.secondary, fontFamily: 'Menlo', fontSize: 10 },
   diffAfter: { color: colors.success, fontFamily: 'Menlo', fontSize: 10 },
   notes: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, fontStyle: 'italic', marginTop: 6 },
   pager: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14, paddingVertical: space.lg },
   pagerBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: radii.md, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border },
   pagerTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },
-  pagerPage: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 },
-});
+  pagerPage: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 12 } });

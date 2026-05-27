@@ -477,7 +477,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: colors.border,
   },
   backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 16, letterSpacing: 0.3 },
+  headerTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 16,},
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
   hero: {
@@ -500,8 +500,7 @@ const styles = StyleSheet.create({
   heroSub: { color: colors.textTertiary, fontFamily: font.body, fontSize: 12, marginTop: 4 },
 
   sectionLabel: {
-    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11,
-    letterSpacing: 1, textTransform: 'uppercase', marginTop: space.xl, marginBottom: space.md,
+    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, marginTop: space.xl, marginBottom: space.md,
   },
 
   // Free teaser
@@ -547,7 +546,7 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
     flexDirection: 'row', alignItems: 'center', gap: 8,
   },
-  upgradeBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14, letterSpacing: 0.3 },
+  upgradeBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14,},
 
   perksRow: {
     alignSelf: 'stretch',
@@ -557,8 +556,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   perksHeadline: {
-    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11,
-    letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 4,
+    color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, marginBottom: 4,
   },
   perkRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   perkDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.primary },
@@ -597,8 +595,7 @@ const styles = StyleSheet.create({
   analyticsWrap: { marginTop: space.xl, gap: space.md },
   analyticsHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   analyticsLabel: {
-    color: colors.primary, fontFamily: font.bodyBold, fontSize: 11,
-    letterSpacing: 1, textTransform: 'uppercase',
+    color: colors.kicker, fontFamily: font.bodyBold, fontSize: 11,
   },
   analyticsCardsRow: { flexDirection: 'row', gap: space.md },
   analyticsCard: {

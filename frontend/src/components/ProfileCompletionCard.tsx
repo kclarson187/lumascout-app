@@ -84,33 +84,28 @@ const styles = StyleSheet.create({
     padding: space.md,
     backgroundColor: colors.surface1,
     borderWidth: 1, borderColor: 'rgba(245,166,35,0.25)',
-    borderRadius: radii.md,
-  },
+    borderRadius: radii.md },
   head: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   iconBox: {
     width: 26, height: 26, borderRadius: 13,
     backgroundColor: 'rgba(245,166,35,0.14)',
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   title: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
   sub: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 1 },
 
   barTrack: {
     height: 4, borderRadius: 2,
     backgroundColor: 'rgba(255,255,255,0.07)',
-    marginTop: 10, overflow: 'hidden',
-  },
+    marginTop: 10, overflow: 'hidden' },
   barFill: { height: 4, backgroundColor: colors.primary },
 
   row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   dot: {
     width: 5, height: 5, borderRadius: 3,
-    backgroundColor: colors.textTertiary,
-  },
+    backgroundColor: colors.textTertiary },
   rowTxt: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, flex: 1 },
 
   cta: { marginTop: 10, alignSelf: 'flex-start' },
-  ctaTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 0.5, textTransform: 'uppercase' },
-});
+  ctaTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 11 } });
 
 export default ProfileCompletionCard;

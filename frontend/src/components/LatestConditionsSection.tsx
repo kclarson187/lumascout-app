@@ -15,8 +15,7 @@ type Update = {
 };
 
 export default function LatestConditionsSection({
-  spotId, initial,
-}: { spotId: string; initial?: Update[] }) {
+  spotId, initial }: { spotId: string; initial?: Update[] }) {
   const [items, setItems] = useState<Update[]>(initial || []);
   const [loading, setLoading] = useState(!initial);
 
@@ -88,7 +87,6 @@ const styles = StyleSheet.create({
   avatar: { width: 32, height: 32, borderRadius: 16 },
   author: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
   time: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
-  pending: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.5, marginLeft: 4 },
+  pending: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 9, marginLeft: 4 },
   text: { color: colors.text, fontFamily: font.body, fontSize: 13, marginTop: 3 },
-  tags: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 },
-});
+  tags: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 } });

@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@babel/runtime": "^7.20.6",
+    "@expo-google-fonts/inter": "^0.4.2",
     "@expo-google-fonts/manrope": "^0.4.2",
     "@expo-google-fonts/playfair-display": "^0.4.2",
     "@expo/metro-runtime": "^6.1.2",

@@ -22,8 +22,7 @@ type Upload = {
 };
 
 export default function CommunityUploadsSection({
-  spotId, initial, onAny,
-}: { spotId: string; initial?: Upload[]; onAny?: () => void }) {
+  spotId, initial, onAny }: { spotId: string; initial?: Upload[]; onAny?: () => void }) {
   const { user } = useAuth();
   const [items, setItems] = useState<Upload[]>(initial || []);
   const [loading, setLoading] = useState(!initial);
@@ -45,8 +44,7 @@ export default function CommunityUploadsSection({
     setItems((prev) => prev.map((x) => x.upload_id === u.upload_id ? {
       ...x,
       liked_by_me: !x.liked_by_me,
-      like_count: (x.like_count || 0) + (x.liked_by_me ? -1 : 1),
-    } : x));
+      like_count: (x.like_count || 0) + (x.liked_by_me ? -1 : 1) } : x));
     try {
       await api.post(`/spot-uploads/${u.upload_id}/react?kind=like`, {});
       onAny?.();
@@ -55,8 +53,7 @@ export default function CommunityUploadsSection({
       setItems((prev) => prev.map((x) => x.upload_id === u.upload_id ? {
         ...x,
         liked_by_me: !x.liked_by_me,
-        like_count: (x.like_count || 0) + (x.liked_by_me ? -1 : 1),
-      } : x));
+        like_count: (x.like_count || 0) + (x.liked_by_me ? -1 : 1) } : x));
     } finally {
       setReactingId(null);
     }
@@ -146,7 +143,7 @@ const styles = StyleSheet.create({
   card: { width: 260, backgroundColor: colors.surface1, borderRadius: radii.md, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' },
   cover: { width: '100%', aspectRatio: 16 / 10 },
   pendingBadge: { position: 'absolute', top: 8, left: 8, backgroundColor: 'rgba(245,166,35,0.9)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: radii.pill },
-  pendingBadgeTxt: { color: '#000', fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.4, textTransform: 'uppercase' },
+  pendingBadgeTxt: { color: '#000', fontFamily: font.bodyBold, fontSize: 10 },
   meta: { padding: 10, gap: 6 },
   avatar: { width: 24, height: 24, borderRadius: 12 },
   author: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 12 },
@@ -155,5 +152,4 @@ const styles = StyleSheet.create({
   tags: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
   actionsRow: { flexDirection: 'row', gap: 12, marginTop: 2 },
   actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  actionTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
-});
+  actionTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 } });

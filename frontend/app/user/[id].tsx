@@ -626,14 +626,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface2, paddingHorizontal: 10, paddingVertical: 4,
     borderRadius: radii.pill, borderColor: colors.border, borderWidth: 1,
   },
-  specTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.3 },
+  specTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 11,},
 
   availRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.sm, justifyContent: 'center' },
   availBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: 8, paddingVertical: 4, borderRadius: radii.pill, borderWidth: 1,
   },
-  availTxt: { fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.3 },
+  availTxt: { fontFamily: font.bodyBold, fontSize: 10,},
 
   linkRow: { flexDirection: 'row', gap: 8, marginTop: space.md, justifyContent: 'center' },
   linkBtn: {
@@ -659,16 +659,14 @@ const styles = StyleSheet.create({
     borderWidth: 1.2,
   },
   portfolioBtnTxt: {
-    color: colors.primary,
-    fontFamily: font.bodyBold,
-    fontSize: 12.5,
-    letterSpacing: 0.4,
+    color: colors.kicker,
+    fontFamily: font.bodyBold, fontSize: 12.5,
     includeFontPadding: false,
   },
 
   ctaRow: { flexDirection: 'row', gap: 8, marginTop: space.lg, width: '100%' },
   selfNotice: { marginTop: space.lg, gap: 8, alignItems: 'stretch', width: '100%', paddingHorizontal: space.md, paddingVertical: space.md, borderRadius: radii.md, backgroundColor: 'rgba(245,166,35,0.08)', borderWidth: 1, borderColor: 'rgba(245,166,35,0.25)' },
-  selfNoticeKicker: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 11, letterSpacing: 1.2, textAlign: 'center' },
+  selfNoticeKicker: { color: colors.kicker, fontFamily: font.bodyBold, fontSize: 11, textAlign: 'center' },
   selfNoticeTxt: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, textAlign: 'center' },
   // PRD #12: Block / unblock UI
   blockedBanner: {
@@ -690,7 +688,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 4, marginTop: space.sm, paddingVertical: 8,
   },
-  blockLinkTxt: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 11, letterSpacing: 0.3 },
+  blockLinkTxt: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 11,},
 
   statsRow: {
     flexDirection: 'row', marginTop: space.lg, paddingHorizontal: space.xl, gap: 8,
@@ -700,12 +698,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface1, borderRadius: radii.md, borderColor: colors.border, borderWidth: 1,
   },
   statVal: { color: colors.text, fontFamily: font.display, fontSize: 20 },
-  statLbl: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10, letterSpacing: 0.4, textTransform: 'uppercase', marginTop: 2 },
+  statLbl: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 10, marginTop: 2 },
 
   tabStrip: { marginTop: space.lg, borderBottomWidth: 1, borderBottomColor: colors.border },
   tabStripScroll: { flexGrow: 0, flexShrink: 0, maxHeight: 44 },
   tabBtn: { paddingVertical: 12 },
-  tabTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 14, letterSpacing: 0.2 },
+  tabTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 14,},
   tabTxtActive: { color: colors.text },
   tabUnderline: {
     height: 2, backgroundColor: colors.primary, marginTop: 8, marginHorizontal: -2, borderRadius: 2,
@@ -715,7 +713,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,
     borderRadius: radii.md, padding: space.md, gap: 6,
   },
-  postCategory: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.8 },
+  postCategory: { color: colors.kicker, fontFamily: font.bodyBold, fontSize: 10,},
   postTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 15 },
   postBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 18 },
   postMeta: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 11, marginTop: 4 },

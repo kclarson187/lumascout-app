@@ -95,10 +95,9 @@ const styles = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: space.xl, paddingTop: space.sm, paddingBottom: space.md },
   backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   title: { color: colors.text, fontFamily: font.display, fontSize: 24, letterSpacing: -0.3 },
-  label: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 },
+  label: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11 },
   input: { backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, borderRadius: radii.md, paddingHorizontal: space.md, paddingVertical: 12, color: colors.text, fontFamily: font.body, fontSize: 15 },
   chip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: radii.pill, backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1 },
   chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   chipTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 12 },
-  chipTxtActive: { color: colors.textInverse },
-});
+  chipTxtActive: { color: colors.textInverse } });

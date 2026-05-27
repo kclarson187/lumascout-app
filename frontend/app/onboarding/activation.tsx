@@ -33,8 +33,7 @@ const CARDS: Card[] = [
     cta:    'Open Network',
     route:  '/(tabs)/network',
     tint:   '#60A5FA',
-    testID: 'activation-follow',
-  },
+    testID: 'activation-follow' },
   {
     key:    'save',
     icon:   MapPin,
@@ -43,8 +42,7 @@ const CARDS: Card[] = [
     cta:    'Open Explore',
     route:  '/(tabs)/explore',
     tint:   colors.success,
-    testID: 'activation-save',
-  },
+    testID: 'activation-save' },
   {
     key:    'search',
     icon:   Search,
@@ -53,8 +51,7 @@ const CARDS: Card[] = [
     cta:    'Search now',
     route:  '/(tabs)/explore',
     tint:   colors.primary,
-    testID: 'activation-search',
-  },
+    testID: 'activation-search' },
 ];
 
 export default function OnboardingActivation() {
@@ -132,32 +129,26 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(245,166,35,0.12)',
     borderWidth: 1, borderColor: 'rgba(245,166,35,0.30)',
     alignItems: 'center', justifyContent: 'center',
-    marginTop: space.md, marginBottom: space.md,
-  },
+    marginTop: space.md, marginBottom: space.md },
   head: { color: colors.text, fontFamily: font.display, fontSize: 28, textAlign: 'center', letterSpacing: -0.4 },
   sub: {
     color: colors.textSecondary, fontFamily: font.body, fontSize: 14,
-    textAlign: 'center', lineHeight: 20, marginTop: 6,
-  },
+    textAlign: 'center', lineHeight: 20, marginTop: 6 },
 
   card: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     paddingHorizontal: space.md, paddingVertical: space.md,
     backgroundColor: colors.surface1,
     borderRadius: radii.md,
-    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
-  },
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   cardIcon: {
     width: 36, height: 36, borderRadius: 18,
-    alignItems: 'center', justifyContent: 'center',
-  },
+    alignItems: 'center', justifyContent: 'center' },
   cardTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
   cardBody: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2, lineHeight: 16 },
-  cardCta: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 11, marginTop: 6, letterSpacing: 0.3, textTransform: 'uppercase' },
+  cardCta: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 11, marginTop: 6 },
 
   primaryBtn: {
     backgroundColor: colors.primary, borderRadius: radii.md,
-    paddingVertical: 14, alignItems: 'center', justifyContent: 'center', minHeight: 48,
-  },
-  primaryBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 15, letterSpacing: 0.2 },
-});
+    paddingVertical: 14, alignItems: 'center', justifyContent: 'center', minHeight: 48 },
+  primaryBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 15 } });
