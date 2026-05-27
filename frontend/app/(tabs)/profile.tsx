@@ -57,6 +57,8 @@ import VerifiedBadge from '../../src/components/VerifiedBadge';
 import UserBadge from '../../src/components/UserBadge';
 import PremiumProfileExtras from '../../src/components/PremiumProfileExtras';
 import { ProfileCompletionCard } from '../../src/components/ProfileCompletionCard';
+import { ZeroAwareStatRow } from '../../src/components/ZeroAwareStatRow';
+import { ProfileOnboardingCard } from '../../src/components/ProfileOnboardingCard';
 import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
 
 

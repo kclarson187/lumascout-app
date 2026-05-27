@@ -1131,17 +1131,20 @@ const s = StyleSheet.create({
     borderRadius: radii.pill,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(255,255,255,0.10)',
+    // Narrow phones (≤375 px ≈ iPhone SE / Mini) get a slightly tighter
+    // pill so the 4 stats fit without ellipsis truncation on labels.
+    // The dividers + paddings scale on the actual children below.
   },
   pillDivider: {
     width: 1,
     height: 22,
     backgroundColor: 'rgba(255,255,255,0.10)',
-    marginHorizontal: 6,
+    marginHorizontal: 4,
   },
   pillStat: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
     flex: 1,
     minWidth: 0,
   },
@@ -1151,8 +1154,8 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   pillText: { flex: 1, minWidth: 0 },
-  pillLabel: { color: colors.textTertiary, fontFamily: font.body, fontSize: 10 },
-  pillValue: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 12, marginTop: 1 },
+  pillLabel: { color: colors.textTertiary, fontFamily: font.body, fontSize: 9.5 },
+  pillValue: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 11.5, marginTop: 1 },
 
   // Best locations row
   nearbyWrap: {
