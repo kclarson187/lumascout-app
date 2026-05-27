@@ -25,8 +25,12 @@ import {
   TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
+  Animated,
+  useWindowDimensions,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
 import { router } from 'expo-router';
 import {
   MessageCircle,
@@ -36,13 +40,14 @@ import {
   Bookmark,
   Plus,
   Sun,
+  Moon,
   Users,
-  Sparkles,
   CloudSun,
   MapPin,
   Mountain,
   Car,
   ChevronRight,
+  Sparkles,
 } from 'lucide-react-native';
 import SafeImage from '../../src/components/SafeImage';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -55,6 +60,7 @@ import { readCache, writeCache } from '../../src/utils/swrCache';
 import { resolveSpotCoverForListCard } from '../../src/utils/spot-cover';
 import { calculateDistanceMiles } from '../../src/utils/distance';
 import { goldenHourLabel } from '../../src/utils/sun';
+import { nextLightWindow, formatCountdownHHMM, headerForWindow, labelForWindow } from '../../src/utils/light-windows';
 import { getCachedCoords, setCachedCoords } from '../../src/utils/cached-coords';
 
 type Feed = Record<string, any[]>;
@@ -351,10 +357,63 @@ export default function HomeMinimal() {
     if (!hero || !effectiveCoords || heroLat == null || heroLng == null) return null;
     return calculateDistanceMiles(effectiveCoords.latitude, effectiveCoords.longitude, heroLat, heroLng);
   }, [hero, effectiveCoords, heroLat, heroLng]);
-  const heroGolden = useMemo(() => {
-    if (heroLat == null || heroLng == null) return '—';
-    return heroGoldenMinutes({ latitude: heroLat, longitude: heroLng } as any);
-  }, [heroLat, heroLng]);
+
+  // Re-evaluate the light-window countdown every second. The hook is
+  // independent of the hero memo so a slow scroll doesn't re-run pick.
+  const [lightTick, setLightTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setLightTick(t => (t + 1) % 1_000_000), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const lightWindow = useMemo(() => {
+    if (heroLat == null || heroLng == null) return null;
+    return nextLightWindow({ latitude: heroLat, longitude: heroLng });
+    // lightTick is intentional — it forces re-eval without coords change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [heroLat, heroLng, lightTick]);
+
+  // "Best Locations Right Now Near You" companion row — 3 spots from
+  // the existing feed, excluding the hero. Use the same priority order
+  // as pickHeroSpot.
+  const nearbySpots = useMemo(() => {
+    const heroId = hero?.spot_id;
+    const pool: any[] = [];
+    for (const k of ['nearby', 'near_you', 'trending', 'recent', 'freshly_updated']) {
+      const arr = (feed as any)?.[k];
+      if (Array.isArray(arr)) pool.push(...arr);
+    }
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (const s of pool) {
+      const id = s?.spot_id;
+      if (!id || id === heroId || seen.has(id)) continue;
+      seen.add(id);
+      out.push(s);
+      if (out.length >= 3) break;
+    }
+    return out;
+  }, [feed, hero]);
+
+  // Web-only subtle parallax — Animated drives transform on the hero
+  // image. On native (iOS / Android) we leave the image static — the
+  // user's stability/performance ask explicitly says "disable on lower-
+  // powered devices or if it causes jank". RN-web is a pure CSS path
+  // so the cost is one transform per frame, well within budget.
+  const scrollY = useRef(new Animated.Value(0)).current;
+  const onHomeScroll = Platform.OS === 'web'
+    ? Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })
+    : undefined;
+  const parallaxTranslate = Platform.OS === 'web'
+    ? scrollY.interpolate({ inputRange: [0, 400], outputRange: [0, -40], extrapolate: 'clamp' })
+    : 0;
+
+  const { width: windowWidth } = useWindowDimensions();
+  const isWide = windowWidth >= 768;
+  // Mobile: 380. Web/desktop: at least 420 per spec. Cap so it doesn't
+  // dominate large screens.
+  const heroHeight = Platform.OS === 'web'
+    ? Math.max(420, Math.min(560, Math.round(windowWidth * 0.42)))
+    : 380;
   const heroCover = useMemo(() => (hero ? resolveSpotCoverForListCard(hero) : null), [hero]);
 
   // Weather fetch for the hero. Best-effort — endpoint may not exist on all
@@ -383,6 +442,11 @@ export default function HomeMinimal() {
       <ScrollView
         contentContainerStyle={s.scroll}
         showsVerticalScrollIndicator={false}
+        // Parallax: web only — Animated.event on contentOffset.y drives
+        // the hero image translate. Native gets a noop so it never
+        // triggers the JS thread per scroll frame.
+        onScroll={onHomeScroll as any}
+        scrollEventThrottle={16}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
         }
@@ -428,51 +492,61 @@ export default function HomeMinimal() {
           </View>
         </View>
 
-        {/* ─── Hero Card ────────────────────────────────────────────── */}
+        {/* ─── Featured Spot Hero ─────────────────────────────────────
+            Premium hero (May 2026 redesign):
+              • Full-bleed image with subtle dark gradient
+              • Top-right glowing countdown to the next light window
+                (golden or blue) — color-coded
+              • Bottom: frosted-glass pill bar with golden/blue, crowd,
+                great-for, drive-time
+              • AI-PICK badge removed → italic recommendation caption
+                under the spot name
+              • Web-only parallax via Animated.transform on scrollY
+        */}
         {loading && !hero ? (
-          <View style={[s.hero, s.heroSkeleton]}>
+          <View style={[s.hero, { height: heroHeight }]}>
             <ActivityIndicator color={colors.primary} />
           </View>
         ) : hero ? (
-          <View style={s.hero}>
+          <View style={[s.hero, { height: heroHeight }]}>
             <TouchableOpacity
               activeOpacity={0.95}
               onPress={() => router.push(`/spot/${hero.spot_id}` as any)}
-              style={s.heroImageWrap}
+              style={[s.heroImageWrap, { height: heroHeight }]}
             >
               {heroCover ? (
-                <SafeImage source={{ uri: heroCover }} style={s.heroImg} />
+                <Animated.View
+                  style={[
+                    StyleSheet.absoluteFill,
+                    Platform.OS === 'web'
+                      ? { transform: [{ translateY: parallaxTranslate as any }] }
+                      : null,
+                  ]}
+                >
+                  <SafeImage source={{ uri: heroCover }} style={s.heroImg} />
+                </Animated.View>
               ) : (
                 <View style={[s.heroImg, { backgroundColor: colors.surface2 }]} />
               )}
+              {/* Two-stop gradient: subtle top dim for countdown legibility,
+                  stronger bottom for pill-bar + title contrast. */}
               <LinearGradient
-                colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.85)']}
-                locations={[0.45, 1]}
+                colors={['rgba(0,0,0,0.40)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0.85)']}
+                locations={[0, 0.32, 1]}
                 style={StyleSheet.absoluteFill}
                 pointerEvents="none"
               />
 
-              {/* Top-left AI pick pill */}
-              <View style={s.aiPill} pointerEvents="none">
-                <Sparkles size={12} color="#5dd96f" />
-                <Text style={s.aiPillTxt}>AI PICK FOR YOU</Text>
-              </View>
+              {/* Top-right glowing countdown */}
+              <LightCountdownBadge window={lightWindow} />
 
-              {/* Top-right weather pill */}
-              {weather ? (
-                <View style={s.weatherPill} pointerEvents="none">
-                  <CloudSun size={14} color="#cfd6e0" />
-                  <View>
-                    <Text style={s.weatherTemp}>{weather.temp_f}°F</Text>
-                    <Text style={s.weatherLabel} numberOfLines={1}>{weather.label}</Text>
-                  </View>
-                </View>
-              ) : null}
-
-              {/* Bottom-left content */}
-              <View style={s.heroContent} pointerEvents="none">
-                <Text style={s.greatLightLabel}>Great light</Text>
-                <Text style={s.heroTitle} numberOfLines={1}>{hero.title}</Text>
+              {/* Bottom-left content — name + italic recommendation
+                  caption. NO badge. */}
+              <View style={[s.heroContent, { bottom: 84 }]} pointerEvents="none">
+                <Text style={s.heroTitle} numberOfLines={2}>{hero.title}</Text>
+                <Text style={s.heroCaption} numberOfLines={1}>
+                  Recommended based on your location.
+                </Text>
                 <View style={s.heroLocRow}>
                   <View style={s.heroLocPin}>
                     <MapPin size={11} color={colors.text} />
@@ -483,44 +557,36 @@ export default function HomeMinimal() {
                   </Text>
                 </View>
               </View>
+
+              {/* Frosted-glass pill bar at bottom of image — replaces
+                  the old below-image stats row. BlurView falls back to
+                  a translucent surface on platforms that don't blur. */}
+              <View style={s.heroPillBarWrap} pointerEvents="box-none">
+                <BlurView
+                  intensity={Platform.OS === 'ios' ? 40 : 30}
+                  tint="dark"
+                  style={s.heroPillBar}
+                >
+                  <PillStat
+                    icon={lightWindow?.type === 'blue'
+                      ? <Moon size={13} color="#7DD3FC" />
+                      : <Sun size={13} color={colors.primary} />}
+                    label={lightWindow?.type === 'blue' ? 'Blue hour' : 'Golden hour'}
+                    value={lightWindow
+                      ? (lightWindow.isActive ? 'Now' : formatCountdownHHMM(lightWindow.minsUntil))
+                      : 'Soon'}
+                  />
+                  <View style={s.pillDivider} />
+                  <PillStat icon={<Users size={13} color={colors.textSecondary} />} label="Crowd" value="Low" />
+                  <View style={s.pillDivider} />
+                  <PillStat icon={<Mountain size={13} color={colors.textSecondary} />} label="Great for" value={inferGreatFor(hero)} />
+                  <View style={s.pillDivider} />
+                  <PillStat icon={<Car size={13} color={colors.textSecondary} />} label="Drive" value={driveTimeFromMi(heroDistanceMi)} />
+                </BlurView>
+              </View>
             </TouchableOpacity>
 
-            {/* Stats row inside the card body (below image) */}
-            <View style={s.statsRow}>
-              <Stat
-                icon={<Sun size={14} color={colors.primary} />}
-                bg="rgba(255,184,76,0.14)"
-                label="Golden hour"
-                value={heroGolden}
-                valueColor={colors.primary}
-              />
-              <View style={s.statDivider} />
-              <Stat
-                icon={<Users size={14} color="#5dd96f" />}
-                bg="rgba(46,160,67,0.14)"
-                label="Crowd"
-                value="Low"
-                valueColor="#5dd96f"
-              />
-              <View style={s.statDivider} />
-              <Stat
-                icon={<Mountain size={14} color="#5dd96f" />}
-                bg="rgba(46,160,67,0.14)"
-                label="Great for"
-                value={inferGreatFor(hero)}
-                valueColor="#5dd96f"
-              />
-              <View style={s.statDivider} />
-              <Stat
-                icon={<Car size={14} color={colors.text} />}
-                bg="rgba(255,255,255,0.10)"
-                label="Drive time"
-                value={driveTimeFromMi(heroDistanceMi)}
-                valueColor={colors.text}
-              />
-            </View>
-
-            {/* CTA row */}
+            {/* CTA row stays below the image */}
             <View style={s.ctaRow}>
               <TouchableOpacity
                 style={[s.cta, s.ctaSecondary]}
@@ -539,6 +605,35 @@ export default function HomeMinimal() {
                 <Text style={s.ctaPrimaryTxt}>Save Spot</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        ) : null}
+
+        {/* ─── Best Locations Right Now Near You ──────────────────── */}
+        {nearbySpots.length > 0 ? (
+          <View style={s.nearbyWrap}>
+            <Text style={s.nearbyHeading}>Best locations right now near you</Text>
+            {isWide ? (
+              <View style={s.nearbyRowGrid}>
+                {nearbySpots.map(sp => (
+                  <NearbyCard
+                    key={sp.spot_id}
+                    spot={sp}
+                    viewerCoords={effectiveCoords}
+                    style={s.nearbyCardWide}
+                  />
+                ))}
+              </View>
+            ) : (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={s.nearbyRowScroll}
+              >
+                {nearbySpots.map(sp => (
+                  <NearbyCard key={sp.spot_id} spot={sp} viewerCoords={effectiveCoords} />
+                ))}
+              </ScrollView>
+            )}
           </View>
         ) : null}
 
@@ -651,6 +746,126 @@ function QuickAction({ icon, label, onPress, highlighted }: {
     <TouchableOpacity style={[s.qa, highlighted && s.qaHighlighted]} onPress={onPress} activeOpacity={0.85}>
       <View style={s.qaIcon}>{icon}</View>
       <Text style={[s.qaLabel, highlighted && { color: colors.primary }]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+// ─── Featured Hero pieces (May 2026 redesign) ──────────────────────────
+
+/** Top-right glowing countdown to the next light window.
+ *  Falls back to "Best light soon" copy if no window can be computed.
+ *  Color theme: amber for golden, cyan for blue. */
+function LightCountdownBadge({ window }: { window: any /* NextLightWindow|null */ }) {
+  const isBlue = window?.type === 'blue';
+  const glow = isBlue ? '#7DD3FC' : colors.primary;
+  const bg   = isBlue ? 'rgba(14, 116, 144, 0.18)' : 'rgba(245,166,35,0.12)';
+  const border = isBlue ? 'rgba(125,211,252,0.45)' : 'rgba(245,166,35,0.45)';
+  const Icon = isBlue ? Moon : Sun;
+  const header = headerForWindow(window);
+  const value = window
+    ? (window.isActive ? 'Now' : formatCountdownHHMM(window.minsUntil))
+    : '—';
+  const hasValue = value !== '—';
+
+  return (
+    <View
+      style={[s.countdown, { backgroundColor: bg, borderColor: border }]}
+      pointerEvents="none"
+    >
+      <View style={s.countdownHeader}>
+        <Icon size={12} color={glow} />
+        <Text style={[s.countdownLabel, { color: glow }]}>{header}</Text>
+      </View>
+      <Text
+        style={[
+          s.countdownValue,
+          {
+            color: glow,
+            // RN-web textShadow is the documented glow path; on native
+            // it falls back to the plain color (no jank).
+            textShadowColor: glow,
+            textShadowRadius: 12,
+            textShadowOffset: { width: 0, height: 0 },
+          },
+        ]}
+      >
+        {hasValue ? value : 'Soon'}
+      </Text>
+    </View>
+  );
+}
+
+/** Single pill stat used inside the frosted-glass overlay. */
+function PillStat({ icon, label, value }: {
+  icon: React.ReactNode; label: string; value: string;
+}) {
+  return (
+    <View style={s.pillStat}>
+      <View style={s.pillIcon}>{icon}</View>
+      <View style={s.pillText}>
+        <Text style={s.pillLabel} numberOfLines={1}>{label}</Text>
+        <Text style={s.pillValue} numberOfLines={1}>{value}</Text>
+      </View>
+    </View>
+  );
+}
+
+/** Small horizontal-row card for "Best locations right now near you". */
+function NearbyCard({ spot, viewerCoords, style }: {
+  spot: any;
+  viewerCoords: { latitude: number; longitude: number } | null;
+  style?: any;
+}) {
+  const cover = resolveSpotCoverForListCard(spot);
+  const lat = spot?.latitude ?? spot?.coords?.latitude;
+  const lng = spot?.longitude ?? spot?.coords?.longitude;
+  const miles = viewerCoords && lat != null && lng != null
+    ? calculateDistanceMiles(viewerCoords.latitude, viewerCoords.longitude, lat, lng)
+    : null;
+  const driveLabel = driveTimeFromMi(miles);
+
+  // Per-spot current light window — same logic as hero, scoped to
+  // this card's coords. Memoised per render; the home tab's lightTick
+  // is at the parent and re-runs the render anyway.
+  const lw = useMemo(() => {
+    if (lat == null || lng == null) return null;
+    return nextLightWindow({ latitude: lat, longitude: lng });
+  }, [lat, lng]);
+  const isBlue = lw?.type === 'blue';
+  const glow = isBlue ? '#7DD3FC' : colors.primary;
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.9}
+      style={[s.nearbyCard, style]}
+      onPress={() => router.push(`/spot/${spot.spot_id}` as any)}
+    >
+      {cover ? (
+        <SafeImage source={{ uri: cover }} style={s.nearbyImg} />
+      ) : (
+        <View style={[s.nearbyImg, { backgroundColor: colors.surface2 }]} />
+      )}
+      <LinearGradient
+        colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.85)']}
+        locations={[0.4, 1]}
+        style={s.nearbyImgOverlay}
+        pointerEvents="none"
+      />
+      <View style={s.nearbyTextWrap} pointerEvents="none">
+        <Text style={s.nearbyTitle} numberOfLines={2}>{spot.title}</Text>
+        <View style={s.nearbyMetaRow}>
+          <Text style={s.nearbyMeta} numberOfLines={1}>
+            {miles != null ? `${miles.toFixed(0)} mi` : '—'}
+            {driveLabel ? ` · ${driveLabel}` : ''}
+          </Text>
+          <View style={s.nearbyDot} />
+          <Text style={[s.nearbyMeta, { color: glow }]} numberOfLines={1}>
+            {lw
+              ? `${labelForWindow(lw.type)} ${lw.isActive ? 'now' : `in ${formatCountdownHHMM(lw.minsUntil)}`}`
+              : 'Best light soon'}
+          </Text>
+        </View>
+      </View>
     </TouchableOpacity>
   );
 }
@@ -865,4 +1080,136 @@ const s = StyleSheet.create({
   },
   insightTitle: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 14 },
   insightSub: { color: colors.textTertiary, fontFamily: font.body, fontSize: 12, marginTop: 2 },
+
+  // ─── Hero redesign (May 2026) ──────────────────────────────────────
+  heroCaption: {
+    color: colors.textSecondary,
+    fontFamily: font.body,
+    fontStyle: 'italic',
+    fontSize: 13,
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  countdown: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    borderRadius: radii.lg,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    alignItems: 'flex-end',
+    minWidth: 110,
+    // Soft glow halo on web; ignored on native — the textShadow on the
+    // value provides the cinematic glow without GPU cost.
+    ...(Platform.OS === 'web' ? { backdropFilter: 'blur(6px)' as any } : {}),
+  },
+  countdownHeader: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  countdownLabel: { fontFamily: font.bodySemibold, fontSize: 10 },
+  countdownValue: {
+    fontFamily: font.displayBold,
+    fontSize: 26,
+    letterSpacing: 0.5,
+    marginTop: 2,
+    lineHeight: 28,
+  },
+
+  heroPillBarWrap: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 12,
+    borderRadius: radii.pill,
+    overflow: 'hidden',
+  },
+  heroPillBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(10,10,10,0.45)',
+    borderRadius: radii.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.10)',
+  },
+  pillDivider: {
+    width: 1,
+    height: 22,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    marginHorizontal: 6,
+  },
+  pillStat: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+    minWidth: 0,
+  },
+  pillIcon: {
+    width: 20, height: 20, borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  pillText: { flex: 1, minWidth: 0 },
+  pillLabel: { color: colors.textTertiary, fontFamily: font.body, fontSize: 10 },
+  pillValue: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 12, marginTop: 1 },
+
+  // Best locations row
+  nearbyWrap: {
+    marginTop: space.xxl,
+    marginBottom: space.lg,
+  },
+  nearbyHeading: {
+    color: colors.text,
+    fontFamily: font.displayBold,
+    fontSize: 22,
+    marginBottom: space.md,
+  },
+  nearbyRowScroll: {
+    gap: space.md,
+    paddingRight: space.lg,
+  },
+  nearbyRowGrid: {
+    flexDirection: 'row',
+    gap: space.md,
+  },
+  nearbyCard: {
+    width: 220,
+    height: 180,
+    borderRadius: radii.lg,
+    overflow: 'hidden',
+    backgroundColor: colors.surface2,
+  },
+  nearbyCardWide: { flex: 1, width: undefined },
+  nearbyImg: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    width: '100%', height: '100%',
+  },
+  nearbyImgOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+  nearbyTextWrap: {
+    position: 'absolute',
+    left: 12, right: 12, bottom: 10,
+  },
+  nearbyTitle: {
+    color: colors.text,
+    fontFamily: font.displayBold,
+    fontSize: 16,
+    lineHeight: 20,
+    marginBottom: 4,
+  },
+  nearbyMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+  },
+  nearbyMeta: {
+    color: colors.textSecondary,
+    fontFamily: font.body,
+    fontSize: 11,
+  },
+  nearbyDot: {
+    width: 3, height: 3, borderRadius: 1.5,
+    backgroundColor: colors.textTertiary,
+  },
 });
