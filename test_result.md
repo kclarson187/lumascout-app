@@ -8,6 +8,130 @@
 # Communication Protocol:
 # If the `testing_agent` is available, main agent should delegate all testing tasks to it.
 
+
+  - task: "Plan This Shoot — backend (shoot-plan generation + versioned save)"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/backend/routes/shoot_plan.py (NEW)
+        • GET  /api/spots/{spot_id}/shoot-plan
+          - Optional auth (get_optional_user). Private spots gated to owner+admins.
+          - Computes:
+              * best_time_to_arrive (astral + timezonefinder, returned in
+                spot-local time)
+              * light_quality_timeline (24-hour array with quality buckets:
+                excellent / great / okay / poor) using local sunrise/sunset
+              * sun_events (sunrise / sunset / golden / blue hour windows
+                with both ISO and human-readable local labels)
+              * five_day_weather (Open-Meteo, 4.5s timeout, non-critical —
+                returns null if the upstream fails so the rest of the plan
+                still renders)
+              * composition_tips (rule-based table keyed off
+                spot.category / shoot_types; falls back to GENERIC_TIPS)
+              * gear_suggestions (small heuristic table per category)
+              * nearby_backup_spots (≤2 within 10 mi / 16.1 km, excludes
+                current spot + private/unapproved/test data; sorted by
+                distance then quality_score)
+          - All sub-tasks run in parallel via asyncio.gather, so weather
+            latency doesn't block the rest.
+          - Missing lat/lng returns a safe fallback (no sun/weather).
+        • POST /api/collections/save-shoot-plan
+          - Requires auth.
+          - Ensures a default user collection named "Shoot Plans" with
+            `is_shoot_plans: true` exists (creates idempotently).
+          - Adds the spot to that collection (no-op if already present).
+          - Inserts a NEW versioned doc in `shoot_plans` Mongo collection
+            on every save so history is kept:
+              plan_id / user_id / spot_id / spot_name / coordinates /
+              best_time_to_arrive / light_quality_timeline /
+              weather_snapshot / gear_suggestions / composition_tips /
+              backup_spot_ids / collection_id / notes / created_at
+        • GET /api/me/shoot-plans?spot_id=&limit=
+          - Lists the signed-in user's plans, newest-first.
+          - Optional `spot_id` filter so the modal can later show
+            "You've planned this N times before".
+      /app/backend/server.py (UPDATED — registered the router)
+      /app/backend/requirements.txt (UPDATED — added astral, timezonefinder)
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            New Jun 2025 feature. Manually smoke-tested via curl:
+              • Real spot (Bluebonnet @ Spicewood, TX) returns local-tz
+                sunrise 6:31 AM / sunset 8:26 PM, "Evening golden hour
+                7:53 PM", 5-day Open-Meteo forecast, 1 backup spot.
+              • POST /save-shoot-plan creates Mongo docs verified:
+                shoot_plans now has 1 row, collections has the auto-
+                created "Shoot Plans" with the spot added.
+            Edge cases NOT yet automated — please run.
+        - working: true
+          agent: "testing"
+          comment: |
+            Backend testing complete (2026-05-27). Ran 49 assertions
+            covering Sections A/B/C/D from review request via
+            /app/backend_test.py against http://localhost:8001.
+            ALL 49 PASSED.
+
+            ✔ A.1 — Anonymous GET /spots/spot_6829d0a67f60/shoot-plan
+              returns 200 with all 12 required top-level keys
+              (spot_id, spot_name, coordinates, best_time_to_arrive,
+              light_quality_timeline, sun_events, five_day_weather,
+              weather_available, composition_tips, gear_suggestions,
+              nearby_backup_spots, generated_at). Timeline length=24,
+              five_day_weather length=5, sunrise_local matches
+              "H:MM AM/PM", composition_tips populated.
+            ✔ A.2 — Same request authed as super_admin
+              (kclarson187@gmail.com) returns 200, identical shape.
+            ✔ A.3 — Non-existent spot "spot_nope_xxxxxx" → 404.
+            ✔ A.4 — Perf: anon=0.57s, auth=0.52s (both well under 6s).
+              Open-Meteo upstream latency observed ~0.4-0.5s.
+
+            ✔ B.1 — Unauthenticated POST /collections/save-shoot-plan
+              returns 403.
+            ✔ B.2 — Authed minimal body {"spot_id":...} returns 200
+              with ok=true, plan_id, collection_id,
+              collection_name="Shoot Plans", message.
+            ✔ B.3 — Authed full payload (spot_name, lat/lng,
+              best_time_to_arrive, light_quality_timeline,
+              weather_snapshot, composition_tips, gear_suggestions,
+              backup_spot_ids, notes) returns 200.
+            ✔ B.4a — Two distinct shoot_plans docs were inserted for
+              the two saves (no overwrite). Each plan_id unique.
+            ✔ B.4b — collections doc exists with name="Shoot Plans",
+              is_shoot_plans=True, spot_ids includes SPOT_ID,
+              owner_user_id == viewer.
+            ✔ B.4c — Full payload doc persisted composition_tips,
+              weather_snapshot, backup_spot_ids, and coordinates
+              exactly as posted.
+            ✔ B.5 — Save with non-existent spot_id → 404.
+
+            ✔ C.1 — Unauth GET /me/shoot-plans → 403.
+            ✔ C.2 — Authed returns {items, count}; count == len(items);
+              items sorted newest-first; both plan_ids from section B
+              present.
+            ✔ C.3 — ?spot_id=spot_6829d0a67f60 filter — every returned
+              item.spot_id == spot_6829d0a67f60 (2 items in this run,
+              both matched).
+
+            ✔ D.1 — Inserted a temp public/approved spot with NO
+              latitude/longitude. GET /shoot-plan returned 200 (NOT
+              500) with coordinates=null, light_quality_timeline=[],
+              five_day_weather=null, weather_available=false, and
+              composition_tips still populated. Cleaned up afterward.
+            ✔ D.2 — Open-Meteo success path validated in A.1
+              (weather_available=true, five_day_weather len=5).
+              Graceful-fallback path semantically validated via D.1.
+
+            No 5xx observed during the run. No non-2xx for valid
+            requests. No structural mismatches in the response. No
+            flakiness across repeated invocations. Test fixture rows
+            (shoot_plans + collection) intentionally left in DB so
+            main agent can re-run UI verification.
+
+
   - task: "Feature 4 — Scope B backend additions (immutable per-link show_exact_location + canonical)"
     implemented: true
     working: "NA"

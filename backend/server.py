@@ -7651,6 +7651,10 @@ from routes import share as _share_routes  # noqa: E402
 from routes import img_proxy as _img_proxy_routes  # noqa: E402
 from routes import parks as _parks_routes  # noqa: E402
 from routes import spot_shares as _spot_shares_routes  # noqa: E402
+# Jun 2025 — "Plan This Shoot". See routes/shoot_plan.py for the full
+# contract (sun-based light timeline + Open-Meteo 5-day weather +
+# composition tips + nearby backup spots + versioned save).
+from routes import shoot_plan as _shoot_plan_routes  # noqa: E402
 
 app.include_router(_scout_ai_routes.router)
 app.include_router(_support_routes.router)
@@ -7669,6 +7673,7 @@ app.include_router(_parks_routes.router)
 # Feature 4 (June 2025) — Public Client-Share, Owner Visibility, Owner/
 # Admin spot edits. See routes/spot_shares.py for the full contract.
 app.include_router(_spot_shares_routes.router)
+app.include_router(_shoot_plan_routes.router)
 # CR Items 7 & 8 (May 2026) — smart-link share endpoints (HTML responses,
 # returned outside of `api` APIRouter because they're consumed by external
 # clients pasting the URL into iMessage / Twitter / Slack and need full

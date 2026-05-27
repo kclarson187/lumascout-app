@@ -47,6 +47,7 @@ import FreshnessBadge from '../../src/components/FreshnessBadge';
 import ReportSheet from '../../src/components/ReportSheet';
 import ShotListSheet from '../../src/components/ShotListSheet';
 import ScoutAICard from '../../src/components/ScoutAICard';
+import ShootPlanSheet from '../../src/components/ShootPlanSheet';
 import DeleteConfirmSheet, { SPOT_DELETE_PRESETS } from '../../src/components/DeleteConfirmSheet';
 import { goldenHourLabel } from '../../src/utils/sun';
 import { goldenHourBrief, blueHourBrief, goldenHourPlanning, blueHourPlanning } from '../../src/utils/sun-windows';
@@ -137,6 +138,10 @@ function SpotDetailImpl() {
 
   const [atcOpen, setAtcOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  // Jun 2025 — "Plan This Shoot" modal. Lazy — we never fetch the
+  // shoot plan until the user explicitly taps the CTA, so Spot Detail
+  // pages still open instantly.
+  const [shootPlanOpen, setShootPlanOpen] = useState(false);
   const [shotListOpen, setShotListOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   // Feature 4 (Scope B) — share / visibility sheets owned by this screen
@@ -1165,6 +1170,38 @@ function SpotDetailImpl() {
             </View>
           )}
 
+          {/* ── "Plan This Shoot" CTA (Jun 2025) ──────────────────────
+              Opens a full-screen ShootPlanSheet modal that aggregates
+              sun-based light timeline, 5-day Open-Meteo weather,
+              composition tips, and up to 2 nearby backup spots within
+              10 mi. The shoot plan is fetched ONLY when the modal is
+              opened so Spot Detail keeps rendering instantly. */}
+          <TouchableOpacity
+            style={shootPlanCtaStyles.btn}
+            activeOpacity={0.9}
+            onPress={() => setShootPlanOpen(true)}
+            testID="spot-plan-this-shoot"
+          >
+            <LinearGradient
+              colors={['rgba(245,166,35,0.22)', 'rgba(245,166,35,0.05)']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={shootPlanCtaStyles.gradient}
+            >
+              <View style={shootPlanCtaStyles.glyph}>
+                <Sunrise size={20} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={shootPlanCtaStyles.kicker}>Build a shoot plan</Text>
+                <Text style={shootPlanCtaStyles.title}>Plan this shoot</Text>
+                <Text style={shootPlanCtaStyles.sub} numberOfLines={2}>
+                  Best light times, 5-day weather, composition tips, and backup spots — all in one place.
+                </Text>
+              </View>
+              <ChevronRight size={18} color={colors.primary} />
+            </LinearGradient>
+          </TouchableOpacity>
+
           {/* ── 5. Why photographers love this spot (chips) ─────── */}
           {(() => {
             type Chip = { icon: any; label: string };
@@ -1586,6 +1623,14 @@ function SpotDetailImpl() {
       )}
 
       <AddToCollectionSheet visible={atcOpen} onClose={() => setAtcOpen(false)} spotId={id} />
+      {/* Plan This Shoot modal — Jun 2025. Lazy fetched. Renders even
+          when `spot` is fully loaded so we don't crash on visibility. */}
+      <ShootPlanSheet
+        visible={shootPlanOpen}
+        onClose={() => setShootPlanOpen(false)}
+        spotId={id as string}
+        spotName={spot?.title}
+      />
       <ReportSheet
         visible={reportOpen}
         onClose={() => setReportOpen(false)}
@@ -1690,3 +1735,33 @@ const ownerStyles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+
+// "Plan This Shoot" CTA card styles (Jun 2025). Kept local so the
+// main spot-detail StyleSheet doesn't grow unbounded. Premium dark-mode
+// look — subtle gold gradient, rounded corners, single-tap target.
+const shootPlanCtaStyles = StyleSheet.create({
+  btn: {
+    marginTop: space.lg,
+    borderRadius: radii.lg,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(245,166,35,0.35)',
+  },
+  gradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+  },
+  glyph: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: 'rgba(245,166,35,0.18)',
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.45)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  kicker: { color: colors.kicker, fontFamily: font.bodySemibold, fontSize: 10, letterSpacing: 0.4 },
+  title: { color: colors.text, fontFamily: font.display, fontSize: 18, letterSpacing: -0.2, marginTop: 1 },
+  sub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 3, lineHeight: 16 },
+});
+
