@@ -217,11 +217,18 @@ function driveTimeFromMi(mi: number | null | undefined): string {
 }
 
 /** Format the hero golden-hour countdown the same way as the header line so
- *  the two read consistently. Returns "42 min", "1h 12m", or "—". */
-function heroGoldenMinutes(coords?: { latitude: number; longitude: number } | null, now: Date = new Date()): string {
-  const parts = goldenCountdownParts(coords, now);
-  return parts ? parts.gold : '—';
-}
+ *  the two read consistently. Returns "42 min", "1h 12m", or "—".
+ *
+ *  NOTE (Jun 2025 cleanup): retained as a low-level utility but the
+ *  Home Hero no longer uses it directly — the cinematic hero now
+ *  shows a `LightCountdownBadge` driven by `nextLightWindow`. Kept
+ *  in this file because the header line still references the same
+ *  underlying `goldenCountdownParts` helper through the hour-line
+ *  component below. */
+// Removed in Jun 2025 cleanup — replaced by the LightCountdownBadge /
+// `formatCountdownHHMM` path. Kept as a tombstone so the next reader
+// doesn't reintroduce it.
+// function heroGoldenMinutes(...) { ... }
 
 // ─── Screen ────────────────────────────────────────────────────────────
 
@@ -409,6 +416,12 @@ export default function HomeMinimal() {
 
   const { width: windowWidth } = useWindowDimensions();
   const isWide = windowWidth >= 768;
+  // Narrow phones (≤ 440 px ≈ iPhone SE through iPhone 16 Pro Max,
+  // plus most Android phones) get a 2×2 pill grid instead of a
+  // 4-column row so labels like "Golden hour" / "Landscape" never
+  // truncate. Tablets and desktop web (≥ 441) keep the single-row
+  // pill which reads more cinematic on wide screens.
+  const isNarrowPillBar = windowWidth <= 440;
   // Mobile: 380. Web/desktop: at least 420 per spec. Cap so it doesn't
   // dominate large screens.
   const heroHeight = Platform.OS === 'web'
@@ -542,7 +555,7 @@ export default function HomeMinimal() {
 
               {/* Bottom-left content — name + italic recommendation
                   caption. NO badge. */}
-              <View style={[s.heroContent, { bottom: 84 }]} pointerEvents="none">
+              <View style={[s.heroContent, { bottom: isNarrowPillBar ? 130 : 84 }]} pointerEvents="none">
                 <Text style={s.heroTitle} numberOfLines={2}>{hero.title}</Text>
                 <Text style={s.heroCaption} numberOfLines={1}>
                   Recommended based on your location.
@@ -560,28 +573,57 @@ export default function HomeMinimal() {
 
               {/* Frosted-glass pill bar at bottom of image — replaces
                   the old below-image stats row. BlurView falls back to
-                  a translucent surface on platforms that don't blur. */}
+                  a translucent surface on platforms that don't blur.
+                  On narrow phones (≤ 440 px ≈ most phones) the bar
+                  becomes two explicit rows of 2 stats each so labels
+                  like "Golden hour" / "Landscape" never truncate. */}
               <View style={s.heroPillBarWrap} pointerEvents="box-none">
                 <BlurView
                   intensity={Platform.OS === 'ios' ? 40 : 30}
                   tint="dark"
-                  style={s.heroPillBar}
+                  style={[s.heroPillBar, isNarrowPillBar && s.heroPillBarGrid]}
                 >
-                  <PillStat
-                    icon={lightWindow?.type === 'blue'
-                      ? <Moon size={13} color="#7DD3FC" />
-                      : <Sun size={13} color={colors.primary} />}
-                    label={lightWindow?.type === 'blue' ? 'Blue hour' : 'Golden hour'}
-                    value={lightWindow
-                      ? (lightWindow.isActive ? 'Now' : formatCountdownHHMM(lightWindow.minsUntil))
-                      : 'Soon'}
-                  />
-                  <View style={s.pillDivider} />
-                  <PillStat icon={<Users size={13} color={colors.textSecondary} />} label="Crowd" value="Low" />
-                  <View style={s.pillDivider} />
-                  <PillStat icon={<Mountain size={13} color={colors.textSecondary} />} label="Great for" value={inferGreatFor(hero)} />
-                  <View style={s.pillDivider} />
-                  <PillStat icon={<Car size={13} color={colors.textSecondary} />} label="Drive" value={driveTimeFromMi(heroDistanceMi)} />
+                  {isNarrowPillBar ? (
+                    <>
+                      <View style={s.pillRow}>
+                        <PillStat
+                          grid
+                          icon={lightWindow?.type === 'blue'
+                            ? <Moon size={13} color="#7DD3FC" />
+                            : <Sun size={13} color={colors.primary} />}
+                          label={lightWindow?.type === 'blue' ? 'Blue hour' : 'Golden hour'}
+                          value={lightWindow
+                            ? (lightWindow.isActive ? 'Now' : formatCountdownHHMM(lightWindow.minsUntil))
+                            : 'Soon'}
+                        />
+                        <View style={s.pillDivider} />
+                        <PillStat grid icon={<Users size={13} color={colors.textSecondary} />} label="Crowd" value="Low" />
+                      </View>
+                      <View style={s.pillRow}>
+                        <PillStat grid icon={<Mountain size={13} color={colors.textSecondary} />} label="Great for" value={inferGreatFor(hero)} />
+                        <View style={s.pillDivider} />
+                        <PillStat grid icon={<Car size={13} color={colors.textSecondary} />} label="Drive" value={driveTimeFromMi(heroDistanceMi)} />
+                      </View>
+                    </>
+                  ) : (
+                    <>
+                      <PillStat
+                        icon={lightWindow?.type === 'blue'
+                          ? <Moon size={13} color="#7DD3FC" />
+                          : <Sun size={13} color={colors.primary} />}
+                        label={lightWindow?.type === 'blue' ? 'Blue hour' : 'Golden hour'}
+                        value={lightWindow
+                          ? (lightWindow.isActive ? 'Now' : formatCountdownHHMM(lightWindow.minsUntil))
+                          : 'Soon'}
+                      />
+                      <View style={s.pillDivider} />
+                      <PillStat icon={<Users size={13} color={colors.textSecondary} />} label="Crowd" value="Low" />
+                      <View style={s.pillDivider} />
+                      <PillStat icon={<Mountain size={13} color={colors.textSecondary} />} label="Great for" value={inferGreatFor(hero)} />
+                      <View style={s.pillDivider} />
+                      <PillStat icon={<Car size={13} color={colors.textSecondary} />} label="Drive" value={driveTimeFromMi(heroDistanceMi)} />
+                    </>
+                  )}
                 </BlurView>
               </View>
             </TouchableOpacity>
@@ -725,19 +767,10 @@ function GoldenHourLine({ coords }: { coords?: { latitude: number; longitude: nu
   );
 }
 
-function Stat({ icon, bg, label, value, valueColor }: {
-  icon: React.ReactNode; bg: string; label: string; value: string; valueColor: string;
-}) {
-  return (
-    <View style={s.stat}>
-      <View style={[s.statIconBg, { backgroundColor: bg }]}>{icon}</View>
-      <View style={{ flex: 1 }}>
-        <Text style={s.statLabel} numberOfLines={1}>{label}</Text>
-        <Text style={[s.statValue, { color: valueColor }]} numberOfLines={1}>{value}</Text>
-      </View>
-    </View>
-  );
-}
+// Removed in Jun 2025 cleanup — the old `Stat()` cell rendered the
+// below-image stat row that the cinematic hero replaced with a
+// frosted-glass pill bar (`PillStat`). Tombstoned to prevent revival.
+// function Stat(...) { ... }
 
 function QuickAction({ icon, label, onPress, highlighted }: {
   icon: React.ReactNode; label: string; onPress: () => void; highlighted?: boolean;
@@ -795,12 +828,14 @@ function LightCountdownBadge({ window }: { window: any /* NextLightWindow|null *
   );
 }
 
-/** Single pill stat used inside the frosted-glass overlay. */
-function PillStat({ icon, label, value }: {
-  icon: React.ReactNode; label: string; value: string;
+/** Single pill stat used inside the frosted-glass overlay. When
+ *  `grid` is true (narrow-phone layout) the cell takes 50% width
+ *  with a bit more vertical padding so it reads as a 2×2 grid. */
+function PillStat({ icon, label, value, grid }: {
+  icon: React.ReactNode; label: string; value: string; grid?: boolean;
 }) {
   return (
-    <View style={s.pillStat}>
+    <View style={[s.pillStat, grid && s.pillStatGrid]}>
       <View style={s.pillIcon}>{icon}</View>
       <View style={s.pillText}>
         <Text style={s.pillLabel} numberOfLines={1}>{label}</Text>
@@ -1131,9 +1166,23 @@ const s = StyleSheet.create({
     borderRadius: radii.pill,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(255,255,255,0.10)',
-    // Narrow phones (≤375 px ≈ iPhone SE / Mini) get a slightly tighter
-    // pill so the 4 stats fit without ellipsis truncation on labels.
-    // The dividers + paddings scale on the actual children below.
+  },
+  // Narrow-phone variant — column container holding two `pillRow`s.
+  // Softer corner radius (the bar is no longer a single horizontal
+  // pill), more breathing room between rows.
+  heroPillBarGrid: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    borderRadius: radii.lg,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    gap: 10,
+  },
+  // Inner row inside the narrow-phone grid: 2 cells + 1 divider, all
+  // flex-row aligned center.
+  pillRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   pillDivider: {
     width: 1,
@@ -1145,6 +1194,14 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
+    flex: 1,
+    minWidth: 0,
+  },
+  // Grid-mode cell — also flex:1 (50% of its row after subtracting the
+  // divider), since each pillRow contains exactly 2 PillStats. We keep
+  // flex:1 here so the dividers stay centered and the cells expand to
+  // their parent width.
+  pillStatGrid: {
     flex: 1,
     minWidth: 0,
   },

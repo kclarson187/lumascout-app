@@ -41,6 +41,7 @@ import { EmptyState } from '../../src/components/ui';
 import SpotCard from '../../src/components/SpotCard';
 import FeaturedBadge from '../../src/components/FeaturedBadge';
 import UserBadge from '../../src/components/UserBadge';
+import { ZeroAwareStatRow } from '../../src/components/ZeroAwareStatRow';
 
 // May 2026 — PRD-aligned tab set: About / Spots / Posts / Reviews.
 // `photos` dropped; the user's photos are visible inline on each of
@@ -437,12 +438,42 @@ export default function UserProfile() {
           )}
         </View>
 
-        {/* Stats row */}
-        <View style={styles.statsRow}>
-          <StatCell label="Followers" value={stats.followers ?? 0} />
-          <StatCell label="Following" value={stats.following ?? 0} />
-          <StatCell label="Spots"     value={stats.spots_created ?? stats.spots ?? spots.length} />
-          <StatCell label="Posts"     value={stats.posts_count ?? posts.length} />
+        {/* Stats row — routed through ZeroAwareStatRow. Cells with
+            value=0 hide the "0" and show a short, encouraging prompt
+            (e.g. "Be the first to follow"). If ALL stats are zero,
+            the row collapses to one "Just getting started" card so
+            another user's profile never reads as broken. */}
+        <View style={{ paddingHorizontal: space.xl, marginTop: space.lg }}>
+          <ZeroAwareStatRow
+            items={[
+              {
+                label: 'Followers',
+                value: stats.followers ?? 0,
+                kind: 'followers',
+                zeroCopy: 'Be the first to follow',
+              },
+              {
+                label: 'Following',
+                value: stats.following ?? 0,
+                kind: 'following',
+                zeroCopy: 'Discovering photographers',
+              },
+              {
+                label: 'Spots',
+                value: stats.spots_created ?? stats.spots ?? spots.length ?? 0,
+                kind: 'spots',
+                zeroCopy: 'No spots yet',
+              },
+              {
+                label: 'Posts',
+                value: stats.posts_count ?? posts.length ?? 0,
+                kind: 'posts',
+                zeroCopy: 'No posts yet',
+              },
+            ]}
+            allZeroTitle="Just getting started"
+            allZeroSubtitle={`${profile.name || 'This photographer'} is new here — check back as they share more.`}
+          />
         </View>
 
         {/* Tabs */}

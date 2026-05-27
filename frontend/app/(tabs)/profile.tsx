@@ -46,6 +46,7 @@ import {
   Globe as GlobeIcon2,
   MapPin as MapPinIcon,
   MessageSquare as MessageSquareIcon } from 'lucide-react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import GlobeIcon from '../../src/components/icons/GlobeIcon';
 import { useAuth } from '../../src/auth';
 import { api, formatApiError } from '../../src/api';
@@ -56,10 +57,14 @@ import SpotCard from '../../src/components/SpotCard';
 import VerifiedBadge from '../../src/components/VerifiedBadge';
 import UserBadge from '../../src/components/UserBadge';
 import PremiumProfileExtras from '../../src/components/PremiumProfileExtras';
-import { ProfileCompletionCard } from '../../src/components/ProfileCompletionCard';
 import { ZeroAwareStatRow } from '../../src/components/ZeroAwareStatRow';
 import { ProfileOnboardingCard } from '../../src/components/ProfileOnboardingCard';
 import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
+
+// AsyncStorage key — sticky "user has tapped Share Profile at least
+// once" flag. Used to mark the 4th onboarding step (Share Profile)
+// as complete since we don't track share events server-side yet.
+const PROFILE_SHARED_FLAG = 'lumascout_profile_shared_v1';
 
 
 type TabKey = 'posts' | 'spots' | 'photos' | 'reviews' | 'collections' | 'about';
@@ -115,6 +120,15 @@ function ProfileImpl() {
   const [uploading, setUploading] = useState<'banner' | 'avatar' | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [refreshing, setRefreshing] = useState(false);
+  // Sticky "user has tapped Share Profile at least once" flag — used to
+  // mark the 4th onboarding step as complete since we don't track share
+  // events server-side. Re-hydrated on mount, persisted via AsyncStorage.
+  const [hasSharedProfile, setHasSharedProfile] = useState(false);
+  useEffect(() => {
+    AsyncStorage.getItem(PROFILE_SHARED_FLAG)
+      .then((v) => { if (v === '1') setHasSharedProfile(true); })
+      .catch(() => {});
+  }, []);
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -283,6 +297,9 @@ function ProfileImpl() {
         display_name: user.name || user.display_name,
         username: user.username,
         specialty: user.specialty || user.photographer_specialty });
+      // Mark the onboarding "Share Profile" step complete.
+      setHasSharedProfile(true);
+      AsyncStorage.setItem(PROFILE_SHARED_FLAG, '1').catch(() => {});
     } catch {}
   };
 
@@ -380,12 +397,19 @@ function ProfileImpl() {
             </TouchableOpacity>
           </View>
 
-          {/* Phase 2.1 (Jun 2025) — soft "Complete your profile" card.
-              Self-hides when profile_completion_percent === 100 OR the
-              missing-for-directory list is empty. */}
-          <ProfileCompletionCard
-            percent={user?.profile_completion_percent}
-            missing={user?.missing_for_directory as any}
+          {/* Jun 2025 redesign — replaces the character-count progress
+              nudge (ProfileCompletionCard) with a clean 4-step
+              illustrated onboarding card. Auto-hides when all 4 steps
+              are complete so the profile returns to clean content. */}
+          <ProfileOnboardingCard
+            hasAvatar={!!(user.avatar_image_url || user.avatar_url)}
+            hasBio={(user.bio || '').trim().length >= 12}
+            hasSpot={mySpots.length > 0}
+            hasShared={hasSharedProfile}
+            onAddPhoto={() => pickAndUpload('avatar')}
+            onWriteBio={() => setEditMode(true)}
+            onUploadSpot={() => router.push('/(tabs)/add' as any)}
+            onShareProfile={shareProfile}
           />
 
           {/* Banner */}
@@ -528,31 +552,47 @@ function ProfileImpl() {
             </View>
           </View>
 
-          {/* June 2025 — replaced PremiumProfileExtras (dense dashboard) with
-              one compact stats card + a 4-up quick-actions row. Stats numbers
-              come from the same `stats`/viewers state already in scope so
-              there's no new network surface. */}
-          <View style={styles.statsCard}>
-            <CompactProfileStatCell
-              label="Followers"
-              value={(stats.followers ?? 0).toLocaleString()}
-              onPress={() => router.push(`/user/${user.user_id}/followers` as any)}
-            />
-            <View style={styles.statsDivider} />
-            <CompactProfileStatCell
-              label="Following"
-              value={(stats.following ?? 0).toLocaleString()}
-              onPress={() => router.push(`/user/${user.user_id}/following` as any)}
-            />
-            <View style={styles.statsDivider} />
-            <CompactProfileStatCell
-              label="Views"
-              value={(stats.profile_views ?? 0).toLocaleString()}
-            />
-            <View style={styles.statsDivider} />
-            <CompactProfileStatCell
-              label="Saves"
-              value={(stats.total_spot_saves ?? mySpots.reduce((acc: number, s: any) => acc + (s.save_count || 0), 0)).toLocaleString()}
+          {/* Jun 2025 — Stats row routed through ZeroAwareStatRow.
+              Cells with value=0 hide the "0" and show a short,
+              encouraging prompt. If ALL stats are zero, the row
+              collapses to one "Just getting started" card so the
+              profile never reads as an empty grid. */}
+          <View style={{ paddingHorizontal: space.xl, marginTop: space.lg }}>
+            <ZeroAwareStatRow
+              items={[
+                {
+                  label: 'Followers',
+                  value: stats.followers ?? 0,
+                  kind: 'followers',
+                  onPress: () => router.push(`/user/${user.user_id}/followers` as any),
+                  promptOnPress: shareProfile,
+                  zeroCopy: 'Share your profile to grow',
+                },
+                {
+                  label: 'Following',
+                  value: stats.following ?? 0,
+                  kind: 'following',
+                  onPress: () => router.push(`/user/${user.user_id}/following` as any),
+                  promptOnPress: () => router.push('/(tabs)/explore' as any),
+                },
+                {
+                  label: 'Views',
+                  value: stats.profile_views ?? 0,
+                  kind: 'views',
+                  promptOnPress: shareProfile,
+                },
+                {
+                  label: 'Saves',
+                  value: stats.total_spot_saves ?? mySpots.reduce((acc: number, sp: any) => acc + (sp.save_count || 0), 0),
+                  kind: 'saves',
+                  promptOnPress: () => router.push('/(tabs)/add' as any),
+                  zeroCopy: 'Upload spots to earn saves',
+                },
+              ]}
+              allZeroTitle="You're just getting started"
+              allZeroSubtitle="Upload a spot and share your profile — your stats appear here as people discover you."
+              allZeroCtaLabel="Share"
+              allZeroCtaOnPress={shareProfile}
             />
           </View>
 
