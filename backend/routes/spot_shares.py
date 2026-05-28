@@ -596,6 +596,10 @@ async def list_share_links(
             "last_accessed_at": r.get("last_accessed_at"),
             "access_count": int(r.get("access_count") or 0),
             "show_exact_location": bool(r.get("show_exact_location", False)),
+            # Jun 2025 — surface the personal note on the owner list
+            # so the "Share Location" sheet can show "what message did
+            # I send" for each active link.
+            "personal_note": r.get("personal_note"),
             "spot_visibility_at_create": r.get("spot_visibility_at_create"),
         })
     return {"items": items, "count": len(items)}
