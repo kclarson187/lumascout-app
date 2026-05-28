@@ -662,3 +662,108 @@ async def list_my_shoot_plans(
     cur = db.shoot_plans.find(q, {"_id": 0}).sort("created_at", -1).limit(max(1, min(200, limit)))
     items = [p async for p in cur]
     return {"items": items, "count": len(items)}
+
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Profile portfolio (Jun 2025)
+# ─────────────────────────────────────────────────────────────────────
+
+@router.get("/me/portfolio-photos")
+async def my_portfolio_photos(
+    user: dict = Depends(get_current_user),
+    limit: int = 120,
+):
+    """Return the signed-in user's combined photo portfolio:
+      • Photos from spots they uploaded (`spots.images`).
+      • Their community uploads (`spot_community_uploads`).
+
+    Dedupes by URL. Returns lightweight thumbnails preferred.
+    Used by the Profile "Portfolio" tab masonry grid (Jun 2025).
+    Two indexed Mongo queries — never N+1.
+    """
+    uid = user.get("user_id")
+    if not uid:
+        return {"items": [], "count": 0}
+
+    seen: set = set()
+    items: List[Dict[str, Any]] = []
+
+    # 1. Photos from spots this user owns. Approved + non-private only.
+    cur_spots = db.spots.find(
+        {
+            "owner_user_id": uid,
+            "visibility_status": "approved",
+            "privacy_mode": {"$in": ["public", "premium"]},
+        },
+        {"_id": 0, "spot_id": 1, "title": 1, "images": 1, "category": 1, "shoot_types": 1},
+    )
+    async for s in cur_spots:
+        category = s.get("category") or ((s.get("shoot_types") or [None])[0])
+        for im in (s.get("images") or []):
+            if not isinstance(im, dict):
+                continue
+            url = im.get("thumb_url") or im.get("thumbnail_url") or im.get("small_url") or im.get("preview_url") or im.get("image_url")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            ar = im.get("aspect_ratio")
+            items.append({
+                "url": url,
+                "spot_id": s.get("spot_id"),
+                "spot_title": s.get("title"),
+                "category": category,
+                "aspect_ratio": float(ar) if isinstance(ar, (int, float)) and ar > 0 else None,
+                "source": "spot",
+            })
+            if len(items) >= limit:
+                break
+        if len(items) >= limit:
+            break
+
+    # 2. Community uploads contributed by this user. Approved + non-private.
+    if len(items) < limit:
+        try:
+            cur_uploads = db.spot_community_uploads.find(
+                {
+                    "user_id": uid,
+                    "$or": [{"moderation_status": "approved"}, {"is_approved": True}],
+                    "is_flagged": {"$ne": True},
+                    "visibility": {"$ne": "private"},
+                },
+                {"_id": 0, "spot_id": 1, "image_url": 1, "thumbnail_url": 1, "thumb_url": 1, "aspect_ratio": 1, "category": 1, "created_at": 1},
+            ).sort("created_at", -1)
+            # Pre-fetch each spot's title + category if missing on the
+            # upload doc itself. Batch via $in for perf.
+            uploads = [u async for u in cur_uploads]
+            spot_ids = list({u.get("spot_id") for u in uploads if u.get("spot_id")})
+            spot_meta: Dict[str, Dict[str, Any]] = {}
+            if spot_ids:
+                async for s in db.spots.find(
+                    {"spot_id": {"$in": spot_ids}},
+                    {"_id": 0, "spot_id": 1, "title": 1, "category": 1, "shoot_types": 1},
+                ):
+                    spot_meta[s["spot_id"]] = s
+            for u in uploads:
+                url = u.get("thumbnail_url") or u.get("thumb_url") or u.get("image_url")
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                meta = spot_meta.get(u.get("spot_id") or "", {})
+                category = u.get("category") or meta.get("category") or ((meta.get("shoot_types") or [None])[0])
+                ar = u.get("aspect_ratio")
+                items.append({
+                    "url": url,
+                    "spot_id": u.get("spot_id"),
+                    "spot_title": meta.get("title"),
+                    "category": category,
+                    "aspect_ratio": float(ar) if isinstance(ar, (int, float)) and ar > 0 else None,
+                    "source": "community",
+                })
+                if len(items) >= limit:
+                    break
+        except Exception:
+            # Community uploads are non-critical — never break the tab.
+            pass
+
+    return {"items": items, "count": len(items)}

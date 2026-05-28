@@ -59,6 +59,10 @@ import UserBadge from '../../src/components/UserBadge';
 import PremiumProfileExtras from '../../src/components/PremiumProfileExtras';
 import { ZeroAwareStatRow } from '../../src/components/ZeroAwareStatRow';
 import { ProfileOnboardingCard } from '../../src/components/ProfileOnboardingCard';
+// Jun 2025 — Profile portfolio redesign
+import PortfolioGrid from '../../src/components/PortfolioGrid';
+import ScoutedMiniMap from '../../src/components/ScoutedMiniMap';
+import AchievementsSection from '../../src/components/AchievementsSection';
 import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
 
 // AsyncStorage key — sticky "user has tapped Share Profile at least
@@ -67,14 +71,16 @@ import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
 const PROFILE_SHARED_FLAG = 'lumascout_profile_shared_v1';
 
 
-type TabKey = 'posts' | 'spots' | 'photos' | 'reviews' | 'collections' | 'about';
+type TabKey = 'overview' | 'portfolio' | 'services' | 'scouted';
+// Jun 2025 — Profile tabs restructured into 4 clear photographer-
+// portfolio sections per redesign CR. Old tab keys (posts, photos,
+// reviews) are folded into Overview so we don't lose the underlying
+// content (it just gets a cleaner home).
 const TABS: { key: TabKey; label: string }[] = [
-  { key: 'posts', label: 'Posts' },
-  { key: 'spots', label: 'Spots' },
-  { key: 'photos', label: 'Photos' },
-  // June 2025 — Reviews removed from top-level tabs per redesign CR.
-  { key: 'collections', label: 'Collections' },
-  { key: 'about', label: 'About' },
+  { key: 'overview',  label: 'Overview' },
+  { key: 'portfolio', label: 'Portfolio' },
+  { key: 'services',  label: 'Services' },
+  { key: 'scouted',   label: 'Scouted Spots' },
 ];
 
 const emptyForm = {
@@ -111,7 +117,12 @@ function ProfileImpl() {
   const [myPosts, setMyPosts] = useState<any[]>([]);
   const [collections, setCollections] = useState<any[]>([]);
   const [reviewsReceived, setReviewsReceived] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<TabKey>('posts');
+  // Jun 2025 — Portfolio tab data. Lazy-loaded when the user first
+  // switches to the Portfolio tab so we don't pay the cost on every
+  // profile open.
+  const [portfolioPhotos, setPortfolioPhotos] = useState<any[]>([]);
+  const [portfolioLoaded, setPortfolioLoaded] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [editMode, setEditMode] = useState(false);
   // PRD: Portfolio empty-state sheet — surfaces when the Portfolio CTA is
   // tapped but the user has no website set. Offers a single action ("Add
@@ -180,6 +191,28 @@ function ProfileImpl() {
         specialties: user.specialties || [] });
     }
   }, [user, editMode]);
+
+  // Jun 2025 — Portfolio tab lazy load. Hits the new
+  // /api/me/portfolio-photos endpoint which combines spot uploads and
+  // community uploads (deduped server-side). We fire it the first
+  // time the user actually opens the Portfolio tab so a profile
+  // open doesn't pay the cost.
+  useEffect(() => {
+    if (activeTab !== 'portfolio' || portfolioLoaded) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.get('/me/portfolio-photos?limit=120');
+        if (cancelled) return;
+        setPortfolioPhotos(Array.isArray(res?.items) ? res.items : []);
+      } catch {
+        if (!cancelled) setPortfolioPhotos([]);
+      } finally {
+        if (!cancelled) setPortfolioLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeTab, portfolioLoaded]);
 
   const photos = useMemo(() => {
     const all: { url: string; spot_id: string }[] = [];
@@ -425,6 +458,16 @@ function ProfileImpl() {
               <View style={styles.bannerFallback} />
             )}
             <View style={styles.bannerOverlay} />
+            {/* Jun 2025 — bottom-anchored legibility gradient. Keeps the
+                top of the cover crisp while ensuring name/handle/
+                member-since text below the banner reads cleanly even on
+                bright covers. */}
+            <LinearGradient
+              colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.0)', 'rgba(20,20,20,0.55)', 'rgba(20,20,20,0.85)']}
+              locations={[0, 0.45, 0.78, 1]}
+              style={StyleSheet.absoluteFillObject as any}
+              pointerEvents="none"
+            />
             <View style={styles.bannerEdit}>
               <Camera size={14} color={colors.textInverse} />
               <Text style={styles.bannerEditTxt}>
@@ -455,17 +498,13 @@ function ProfileImpl() {
             </TouchableOpacity>
           </View>
 
-          {/* Name + handle + primary actions */}
+          {/* Name + handle + primary actions
+              Jun 2025 — verified shield and UserBadge moved OUT of the
+              header into the dedicated Achievements section lower on
+              the page to reduce header clutter. The header now reads
+              as a clean editorial-magazine masthead. */}
           <View style={styles.headerText}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, justifyContent: 'center' }}>
-              <Text style={styles.name} numberOfLines={1}>{user.name}</Text>
-              {user.verification_status === 'verified' && (
-                <View style={styles.verifiedDot} testID="profile-verified">
-                  <ShieldCheck size={14} color={colors.textInverse} />
-                </View>
-              )}
-              <UserBadge user={user} variant="header" />
-            </View>
+            <Text style={styles.name} numberOfLines={1}>{user.name}</Text>
             <Text style={styles.handle}>@{user.username}</Text>
             {(user.city || user.state) && (
               <View style={styles.locRow}>
@@ -478,6 +517,19 @@ function ProfileImpl() {
                 </Text>
               </View>
             )}
+            {/* Jun 2025 — "Member since YYYY". Read from `user.created_at`.
+                Falls back gracefully when the field is missing. */}
+            {(() => {
+              try {
+                const iso = user.created_at || user.joined_at;
+                if (!iso) return null;
+                const yr = new Date(iso).getUTCFullYear();
+                if (!Number.isFinite(yr) || yr < 2000) return null;
+                return (
+                  <Text style={styles.memberSince} testID="profile-member-since">Member since {yr}</Text>
+                );
+              } catch { return null; }
+            })()}
             {!!(user.specialties || []).length && (
               <View style={styles.specs}>
                 {user.specialties.slice(0, 4).map((s: string) => (
@@ -826,6 +878,14 @@ function ProfileImpl() {
             </View>
           )}
 
+          {/* Jun 2025 — "Spots I've scouted" mini-map. Pure read-only
+              consumption of SafeMapView (the existing stability
+              wrapper) — no clustering, no native modifications.
+              Wrapped in a defensive error boundary so any native-map
+              hiccup falls back to a static info card. Pins are
+              pre-filtered to exclude private / location-hidden spots. */}
+          <ScoutedMiniMap spots={mySpots as any} />
+
           {/* Tabs */}
           <View style={styles.tabStrip}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, flexShrink: 0, maxHeight: 44 }} contentContainerStyle={{ gap: 18, paddingHorizontal: space.xl, alignItems: 'center' }}>
@@ -840,7 +900,7 @@ function ProfileImpl() {
 
           {/* Tab content */}
           <View style={{ paddingHorizontal: space.xl, gap: space.md, marginTop: space.md }}>
-            {activeTab === 'posts' && (
+            {activeTab === 'overview' && (
               myPosts.length === 0
                 ? <EmptyState
                     title="Start a conversation"
@@ -858,7 +918,11 @@ function ProfileImpl() {
                   ))
             )}
 
-            {activeTab === 'spots' && (
+            {activeTab === 'portfolio' && (
+              <PortfolioGrid photos={portfolioPhotos} />
+            )}
+
+            {activeTab === 'scouted' && (
               mySpots.length === 0
                 ? <EmptyState
                     title="No spots yet"
@@ -935,7 +999,7 @@ function ProfileImpl() {
                   ))
             )}
 
-            {activeTab === 'collections' && (
+            {activeTab === 'services' && (
               collections.length === 0
                 ? <EmptyState
                     title="Build your first collection"
@@ -975,6 +1039,13 @@ function ProfileImpl() {
               </View>
             )}
           </View>
+
+          {/* Jun 2025 — Achievements section. Lives below the tab
+              content so the header is uncluttered (badges/UserBadge
+              moved out of the name row). Shows Verified, Pro/Elite,
+              Founding Scout, Moderator, contributor tiers. Tasteful
+              empty state when no achievements have been earned yet. */}
+          <AchievementsSection user={user} />
         </ScrollView>
       </KeyboardAvoidingView>
 
@@ -1205,13 +1276,22 @@ const styles = StyleSheet.create({
   loadingTitle: { color: colors.text, fontFamily: font.display, fontSize: 28 },
 
   banner: {
-    height: 160, backgroundColor: colors.surface1, position: 'relative', overflow: 'hidden' },
+    // Jun 2025 — full-bleed editorial cover photo. Bumped 160 → 280
+    // px tall so the cover reads as a magazine masthead rather than
+    // a decorative strip. Avatar overlap math (avatarWrap.marginTop)
+    // is unchanged because the avatar's circle still hangs off the
+    // bottom edge of the cover.
+    height: 280, backgroundColor: colors.surface1, position: 'relative', overflow: 'hidden' },
   bannerFallback: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: colors.surface1 },
   bannerOverlay: {
+    // Replaced flat 25% scrim with a bottom-anchored linear gradient
+    // (transparent → 78% black) so name/handle/member-since stay
+    // readable over any cover photo (bright bluebonnet field, sunset,
+    // urban, snow, etc.) without darkening the whole image.
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.25)' },
+    backgroundColor: 'rgba(0,0,0,0.15)' },
   bannerEdit: {
     // FIX(Commit 7d / 2026-04): 60% black scrim + thin white hairline border
     // for premium frosted-glass look. Previously 55% scrim only — pill got
@@ -1255,6 +1335,15 @@ const styles = StyleSheet.create({
   handle: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13, marginTop: 2 },
   locRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 },
   locTxt: { color: colors.textTertiary, fontFamily: font.bodyMedium, fontSize: 12 },
+  // Jun 2025 — single-line "Member since YYYY" sub-line. Sits between
+  // location and specialties for a quiet trust signal.
+  memberSince: {
+    color: colors.textSecondary,
+    fontFamily: font.bodyMedium,
+    fontSize: 12,
+    marginTop: 6,
+    letterSpacing: 0.1,
+  },
 
   specs: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: space.md, justifyContent: 'center' },
   specPill: {
