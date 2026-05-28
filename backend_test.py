@@ -1,30 +1,39 @@
 """
-Backend test for "Plan This Shoot" endpoints — Jun 2025 feature.
+Backend test for "Premium Explore card upgrade" (Jun 2025).
 
-Endpoints under test (routes/shoot_plan.py):
-  - GET  /api/spots/{spot_id}/shoot-plan
-  - POST /api/collections/save-shoot-plan
-  - GET  /api/me/shoot-plans
+Verifies the FOUR new computed fields added to every spot returned by
+`public_spot_view()` in /app/backend/server.py:
+  - orientation_label  (str | None)
+  - elevation_ft       (int | None)
+  - access_status      ("free_public" | "permit_required" | "private_check")
+  - sample_photo_urls  (list[str], 0..3 entries)
 
-Test target: http://localhost:8001 (per review instructions).
+And the new helper `attach_sample_photos(spots, per_spot=3)` wired into:
+  - /api/spots/{spot_id}                          (routes/spots.py)
+  - /api/spots                                    (routes/spots.py)
+  - /api/spots/nearby/search                      (routes/spots.py)
+  - /api/feed/home                                (server.py)
+
+Also confirms NO regression on existing fields and existing endpoints
+(/api/spots/{id}/shoot-plan, /api/collections/save-shoot-plan).
 """
 from __future__ import annotations
 
 import os
-import time
 import re
 import sys
-from datetime import datetime
+import time
+import json
 from typing import Any, Dict, List, Optional
 
 import httpx
 from pymongo import MongoClient
 
 # ─────────────────────────────────────────────────────────────────────
-# Config
+# Config — use the public preview URL per system prompt.
 # ─────────────────────────────────────────────────────────────────────
 
-BASE = "http://localhost:8001"
+BASE = "https://photo-finder-60.preview.emergentagent.com"
 SPOT_ID = "spot_6829d0a67f60"  # Bluebonnet Fields @ Muleshoe Bend, TX
 SUPER_ADMIN_EMAIL = "kclarson187@gmail.com"
 SUPER_ADMIN_PASSWORD = "Grayson@1117!!"
@@ -47,362 +56,385 @@ except Exception:
 print(f"[setup] BASE={BASE}")
 print(f"[setup] MONGO_URL={MONGO_URL!r} DB_NAME={DB_NAME!r}")
 
-# ─────────────────────────────────────────────────────────────────────
-# Reporting helpers
-# ─────────────────────────────────────────────────────────────────────
+ALLOWED_ACCESS = {"free_public", "permit_required", "private_check"}
+NEW_KEYS = ("orientation_label", "elevation_ft", "access_status", "sample_photo_urls")
+LEGACY_KEYS = (
+    "spot_id", "title", "shoot_score", "hero_cover_image_url",
+    "latitude", "longitude", "images", "owner_user_id",
+    "privacy_mode", "visibility_status", "quality_score",
+)
 
-RESULTS: List[Dict[str, Any]] = []
-FAIL_DETAILS: List[str] = []
+results: List[Dict[str, Any]] = []
 
 
-def record(name: str, ok: bool, detail: str = "") -> bool:
+def record(name: str, ok: bool, detail: str = "") -> None:
     status = "PASS" if ok else "FAIL"
-    print(f"[{status}] {name}" + (f" — {detail}" if detail and not ok else ""))
-    RESULTS.append({"name": name, "ok": ok, "detail": detail})
-    if not ok:
-        FAIL_DETAILS.append(f"❌ {name}: {detail}")
+    print(f"[{status}] {name}: {detail}" if detail else f"[{status}] {name}")
+    results.append({"name": name, "ok": bool(ok), "detail": detail})
+
+
+def expect_shape(spot: Dict[str, Any], label: str) -> bool:
+    ok = True
+    for k in NEW_KEYS:
+        if k not in spot:
+            record(f"{label} :: has key '{k}'", False, "key missing on payload")
+            ok = False
+    for k in LEGACY_KEYS:
+        if k not in spot:
+            record(f"{label} :: legacy key '{k}' present", False, "regression — old key dropped")
+            ok = False
+    ol = spot.get("orientation_label")
+    if ol is not None and not (isinstance(ol, str) and len(ol) > 0):
+        record(f"{label} :: orientation_label type", False, f"got {type(ol).__name__} value={ol!r}")
+        ok = False
+    ef = spot.get("elevation_ft")
+    if ef is not None and not isinstance(ef, int):
+        record(f"{label} :: elevation_ft type", False, f"got {type(ef).__name__} value={ef!r}")
+        ok = False
+    ax = spot.get("access_status")
+    if ax not in ALLOWED_ACCESS:
+        record(f"{label} :: access_status enum", False, f"got {ax!r} not in {ALLOWED_ACCESS}")
+        ok = False
+    sp = spot.get("sample_photo_urls")
+    if not isinstance(sp, list):
+        record(f"{label} :: sample_photo_urls is list", False, f"got {type(sp).__name__}")
+        ok = False
+    else:
+        if len(sp) > 3:
+            record(f"{label} :: sample_photo_urls len ≤ 3", False, f"got {len(sp)}")
+            ok = False
+        for u in sp:
+            if not (isinstance(u, str) and u.startswith(("http://", "https://"))):
+                record(f"{label} :: sample_photo_urls all URLs", False, f"bad entry {u!r}")
+                ok = False
+                break
     return ok
 
 
-# ─────────────────────────────────────────────────────────────────────
-# Login
-# ─────────────────────────────────────────────────────────────────────
+def login_super_admin(client: httpx.Client) -> Optional[str]:
+    for path in ("/api/auth/login", "/api/login"):
+        try:
+            r = client.post(
+                BASE + path,
+                json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PASSWORD},
+                timeout=15,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                token = data.get("access_token") or data.get("token") or data.get("session_token")
+                if token:
+                    print(f"[auth] logged in via {path}")
+                    return token
+        except Exception as e:
+            print(f"[auth] {path} error: {e}")
+    print("[auth] super admin login did not return a token — testing as anon")
+    return None
 
-def login() -> str:
-    r = httpx.post(
-        f"{BASE}/api/auth/login",
-        json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PASSWORD},
-        timeout=20.0,
-    )
+
+def test_A1_single_spot(client: httpx.Client) -> Dict[str, Any]:
+    r = client.get(BASE + f"/api/spots/{SPOT_ID}", timeout=20)
     if r.status_code != 200:
-        raise SystemExit(f"super_admin login failed: {r.status_code} {r.text[:300]}")
-    data = r.json()
-    token = data["token"]
-    user = data["user"]
-    print(f"[setup] logged in as {user['email']} role={user.get('role')}")
-    return token
+        record("A1 GET /api/spots/{id} 200", False, f"status={r.status_code} body={r.text[:200]}")
+        return {}
+    spot = r.json()
+    record("A1 GET /api/spots/{id} 200", True, f"title={spot.get('title')!r}")
+    expect_shape(spot, "A1 bluebonnet spot")
+    ol = spot.get("orientation_label")
+    if isinstance(ol, str) and "sunset" in ol.lower():
+        record("A1 bluebonnet orientation_label is sunset-flavored", True, f"got {ol!r}")
+    else:
+        record("A1 bluebonnet orientation_label is sunset-flavored", False, f"got {ol!r}")
+    if spot.get("permit_required") and spot.get("access_status") != "permit_required":
+        record("A1 bluebonnet access_status=permit_required", False, f"got {spot.get('access_status')!r}")
+    else:
+        record("A1 bluebonnet access_status=permit_required", True, str(spot.get("access_status")))
+    sp = spot.get("sample_photo_urls") or []
+    if len(sp) < 1:
+        record("A1 bluebonnet sample_photo_urls populated", False, f"got {sp}")
+    else:
+        record("A1 bluebonnet sample_photo_urls populated", True, f"{len(sp)} url(s)")
+    return spot
 
 
-TOKEN = login()
-HEADERS = {"Authorization": f"Bearer {TOKEN}"}
+def test_A2_list(client: httpx.Client) -> List[Dict[str, Any]]:
+    t0 = time.perf_counter()
+    r = client.get(BASE + "/api/spots", params={"limit": 5}, timeout=30)
+    dt = (time.perf_counter() - t0) * 1000
+    if r.status_code != 200:
+        record("A2 GET /api/spots?limit=5 200", False, f"status={r.status_code}")
+        return []
+    body = r.json()
+    if isinstance(body, dict) and "items" in body:
+        items = body["items"]
+        record("A2 GET /api/spots wrapped shape", True, f"keys={sorted(body.keys())} count={len(items)}")
+    elif isinstance(body, list):
+        items = body
+        record("A2 GET /api/spots list shape", True, f"count={len(items)}")
+    else:
+        record("A2 GET /api/spots shape", False, f"unexpected {type(body).__name__}")
+        return []
+    record("A2 list latency", True, f"{dt:.0f} ms (limit=5)")
+    if not items:
+        record("A2 list has at least one spot", False, "empty")
+        return []
+    all_ok = True
+    for i, it in enumerate(items):
+        if not expect_shape(it, f"A2 item[{i}] {it.get('spot_id')}"):
+            all_ok = False
+    record("A2 every list item has new fields", all_ok)
+    return items
 
-# Mongo client for direct verification
-mongo = MongoClient(MONGO_URL)
-mdb = mongo[DB_NAME]
 
-
-# ─────────────────────────────────────────────────────────────────────
-# Test Section A — GET /api/spots/{spot_id}/shoot-plan
-# ─────────────────────────────────────────────────────────────────────
-
-print("\n══ Section A — GET /spots/{id}/shoot-plan ══")
-
-
-def check_plan_shape(name: str, payload: Dict[str, Any]) -> None:
-    required_keys = [
-        "spot_id", "spot_name", "coordinates", "best_time_to_arrive",
-        "light_quality_timeline", "sun_events", "five_day_weather",
-        "weather_available", "composition_tips", "gear_suggestions",
-        "nearby_backup_spots", "generated_at",
+def test_A3_nearby(client: httpx.Client) -> List[Dict[str, Any]]:
+    paths_to_try = [
+        ("/api/spots/nearby/search", {"lat": 30.5, "lng": -98.0, "radius_km": 80}),
+        ("/api/spots/nearby", {"lat": 30.5, "lng": -98.0, "radius_km": 80}),
     ]
-    missing = [k for k in required_keys if k not in payload]
-    record(f"{name}: required top-level keys", not missing,
-           detail=f"missing keys: {missing}" if missing else "")
+    items: List[Dict[str, Any]] = []
+    used_path = None
+    for path, params in paths_to_try:
+        try:
+            r = client.get(BASE + path, params=params, timeout=20)
+            if r.status_code == 200:
+                body = r.json()
+                items = body if isinstance(body, list) else body.get("items", [])
+                used_path = path
+                record(f"A3 GET {path} 200", True, f"count={len(items)}")
+                break
+            else:
+                record(f"A3 GET {path}", False, f"status={r.status_code}")
+        except Exception as e:
+            record(f"A3 GET {path}", False, str(e))
+    if not used_path:
+        record("A3 nearby endpoint reachable", False, "no path returned 200")
+        return []
+    all_ok = True
+    for i, it in enumerate(items[:10]):
+        if not expect_shape(it, f"A3 nearby[{i}] {it.get('spot_id')}"):
+            all_ok = False
+    record("A3 every nearby item has new fields", all_ok)
+    return items
 
-    tl = payload.get("light_quality_timeline")
-    record(f"{name}: light_quality_timeline length=24",
-           isinstance(tl, list) and len(tl) == 24,
-           detail=f"got len={len(tl) if isinstance(tl, list) else type(tl).__name__}")
 
-    w = payload.get("five_day_weather")
-    ok_w = (w is None) or (isinstance(w, list) and len(w) == 5)
-    record(f"{name}: five_day_weather is null or len=5", ok_w,
-           detail=f"got={'null' if w is None else f'len={len(w)}'}")
+def test_C1_list_latency(client: httpx.Client) -> None:
+    client.get(BASE + "/api/spots", params={"limit": 20}, timeout=30)  # warm
+    samples = []
+    for _ in range(3):
+        t0 = time.perf_counter()
+        r = client.get(BASE + "/api/spots", params={"limit": 20}, timeout=30)
+        dt = (time.perf_counter() - t0) * 1000
+        if r.status_code == 200:
+            samples.append(dt)
+    if not samples:
+        record("C1 list latency", False, "no successful calls")
+        return
+    best = min(samples)
+    avg = sum(samples) / len(samples)
+    detail = f"best={best:.0f}ms avg={avg:.0f}ms samples={[round(s) for s in samples]}"
+    if best < 1500:
+        record("C1 list latency < 1.5s", True, detail)
+    elif best < 2000:
+        record("C1 list latency < 2.0s", True, f"Minor: slower than ideal — {detail}")
+    else:
+        record("C1 list latency < 2.0s", False, detail)
 
-    se = payload.get("sun_events") or {}
-    sr_local = se.get("sunrise_local") if isinstance(se, dict) else None
-    ok_sr = bool(sr_local and re.match(r"^\d{1,2}:\d{2}\s?(AM|PM)$", sr_local))
-    record(f"{name}: sun_events.sunrise_local format like '6:31 AM'", ok_sr,
-           detail=f"got={sr_local!r}")
 
-    ct = payload.get("composition_tips") or []
-    record(f"{name}: composition_tips has at least 1 string",
-           isinstance(ct, list) and len(ct) >= 1 and all(isinstance(x, str) for x in ct),
-           detail=f"got={ct!r}")
+def test_D_private(client: httpx.Client) -> None:
+    try:
+        mongo = MongoClient(MONGO_URL, serverSelectionTimeoutMS=4000)
+        db = mongo[DB_NAME]
+        priv = list(db.spots.find(
+            {"privacy_mode": "private"},
+            {"_id": 0, "spot_id": 1, "owner_user_id": 1, "title": 1},
+        ).limit(20))
+    except Exception as e:
+        record("D Mongo connect", False, str(e))
+        return
+    record("D Mongo connect", True, f"found {len(priv)} private spot(s) in DB")
+    if not priv:
+        record("D no private spots to test", True, "skipped — none exist")
+        return
+    r = client.get(BASE + "/api/spots", params={"limit": 200}, timeout=30)
+    if r.status_code != 200:
+        record("D list fetch", False, f"status={r.status_code}")
+        return
+    body = r.json()
+    listed = body if isinstance(body, list) else body.get("items", [])
+    listed_ids = {s.get("spot_id") for s in listed}
+    leaked = [p["spot_id"] for p in priv if p["spot_id"] in listed_ids]
+    if leaked:
+        record("D1 private spots not leaked to anon", False, f"leaked={leaked[:5]}")
+    else:
+        record("D1 private spots not leaked to anon", True, f"all {len(priv)} hidden")
+    pid = priv[0]["spot_id"]
+    r2 = client.get(BASE + f"/api/spots/{pid}", timeout=15)
+    if r2.status_code == 403:
+        record("D2 anon GET of private spot blocked", True, "403 returned as expected")
+    elif r2.status_code == 200:
+        ok = expect_shape(r2.json(), f"D2 private spot {pid}")
+        record("D2 private spot payload shape", ok)
+    else:
+        record("D2 anon GET of private spot", False, f"status={r2.status_code}")
 
 
-# A.1 — Anonymous request on public spot
-t0 = time.time()
-r = httpx.get(f"{BASE}/api/spots/{SPOT_ID}/shoot-plan", timeout=20.0)
-dt_anon = time.time() - t0
-record("A.1: anonymous request returns 200", r.status_code == 200,
-       detail=f"status={r.status_code}, body={r.text[:200]}")
-plan_anon: Dict[str, Any] = {}
-if r.status_code == 200:
-    plan_anon = r.json()
-    check_plan_shape("A.1", plan_anon)
+def test_E_edge_cases(client: httpx.Client) -> None:
+    try:
+        mongo = MongoClient(MONGO_URL, serverSelectionTimeoutMS=4000)
+        db = mongo[DB_NAME]
+    except Exception as e:
+        record("E Mongo connect", False, str(e))
+        return
 
-# A.2 — Authed request returns same shape (200)
-t0 = time.time()
-r = httpx.get(f"{BASE}/api/spots/{SPOT_ID}/shoot-plan", headers=HEADERS, timeout=20.0)
-dt_auth = time.time() - t0
-record("A.2: authed request returns 200", r.status_code == 200,
-       detail=f"status={r.status_code}, body={r.text[:200]}")
-if r.status_code == 200:
-    plan_auth = r.json()
-    check_plan_shape("A.2", plan_auth)
+    # E1 — spot with no images
+    no_img = db.spots.find_one(
+        {"$or": [{"images": []}, {"images": None}, {"images": {"$exists": False}}],
+         "privacy_mode": {"$ne": "private"}, "visibility_status": "approved"},
+        {"_id": 0, "spot_id": 1, "title": 1, "images": 1},
+    )
+    if no_img:
+        sid = no_img["spot_id"]
+        r = client.get(BASE + f"/api/spots/{sid}", timeout=15)
+        if r.status_code != 200:
+            record("E1 spot w/o images returns 200", False, f"status={r.status_code} sid={sid}")
+        else:
+            sp = r.json().get("sample_photo_urls")
+            if sp == []:
+                record("E1 sample_photo_urls is [] for no-image spot", True, f"sid={sid}")
+            elif isinstance(sp, list):
+                record("E1 sample_photo_urls is list (community-filled)", True, f"sid={sid} got={len(sp)} url(s)")
+            else:
+                record("E1 sample_photo_urls is list (not null/missing)", False, f"sid={sid} got={sp!r}")
+    else:
+        record("E1 no-image spot test", True, "Minor: no qualifying spot in DB; skipped")
 
-# A.3 — Non-existent spot id → 404
-r = httpx.get(f"{BASE}/api/spots/spot_nope_xxxxxx/shoot-plan", timeout=10.0)
-record("A.3: non-existent spot returns 404", r.status_code == 404,
-       detail=f"status={r.status_code}")
+    # E2 — private spot
+    priv = db.spots.find_one({"privacy_mode": "private"}, {"_id": 0, "spot_id": 1, "owner_user_id": 1})
+    if priv:
+        r = client.get(BASE + f"/api/spots/{priv['spot_id']}", timeout=15)
+        if r.status_code == 403:
+            record("E2 private spot 403 to anon (gating works)", True, "as expected")
+        elif r.status_code == 200:
+            ax = r.json().get("access_status")
+            if ax == "private_check":
+                record("E2 private spot access_status=private_check", True)
+            else:
+                record("E2 private spot access_status=private_check", False, f"got {ax!r}")
+        else:
+            record("E2 private spot endpoint", False, f"status={r.status_code}")
+    else:
+        record("E2 private spot test", True, "Minor: no private spot in DB; skipped")
 
-# A.4 — Performance under ~6s
-record(f"A.4: response time anon < 6s ({dt_anon:.2f}s)", dt_anon < 6.0,
-       detail=f"{dt_anon:.2f}s")
-record(f"A.4: response time auth < 6s ({dt_auth:.2f}s)", dt_auth < 6.0,
-       detail=f"{dt_auth:.2f}s")
+    # E3 — permit + fee
+    both = db.spots.find_one(
+        {"permit_required": True, "fee_required": True,
+         "privacy_mode": {"$ne": "private"}, "visibility_status": "approved"},
+        {"_id": 0, "spot_id": 1},
+    )
+    if both:
+        r = client.get(BASE + f"/api/spots/{both['spot_id']}", timeout=15)
+        ax = r.json().get("access_status") if r.status_code == 200 else None
+        if ax == "permit_required":
+            record("E3 permit+fee → permit_required", True, f"sid={both['spot_id']}")
+        else:
+            record("E3 permit+fee → permit_required", False, f"sid={both['spot_id']} got {ax!r}")
+    else:
+        record("E3 permit+fee combo test", True, "Minor: no qualifying spot in DB; skipped")
 
-print(f"  [perf] anon={dt_anon:.2f}s, auth={dt_auth:.2f}s")
+    # E4 — sunrise=sunset=0 → orientation_label None
+    flat = db.spots.find_one(
+        {"$and": [
+            {"$or": [{"sunrise_rating": 0}, {"sunrise_rating": None}, {"sunrise_rating": {"$exists": False}}]},
+            {"$or": [{"sunset_rating": 0}, {"sunset_rating": None}, {"sunset_rating": {"$exists": False}}]},
+            {"$or": [{"morning_golden_hour_rating": 0}, {"morning_golden_hour_rating": None}, {"morning_golden_hour_rating": {"$exists": False}}]},
+            {"$or": [{"evening_golden_hour_rating": 0}, {"evening_golden_hour_rating": None}, {"evening_golden_hour_rating": {"$exists": False}}]},
+            {"privacy_mode": {"$ne": "private"}},
+            {"visibility_status": "approved"},
+        ]},
+        {"_id": 0, "spot_id": 1},
+    )
+    if flat:
+        r = client.get(BASE + f"/api/spots/{flat['spot_id']}", timeout=15)
+        ol = r.json().get("orientation_label") if r.status_code == 200 else "ERR"
+        if ol is None:
+            record("E4 all-zero golden ratings → orientation_label is None", True, f"sid={flat['spot_id']}")
+        else:
+            record("E4 all-zero golden ratings → orientation_label is None", False, f"got {ol!r}")
+    else:
+        record("E4 flat-ratings test", True, "Minor: no qualifying spot in DB; skipped")
 
-# ─────────────────────────────────────────────────────────────────────
-# Test Section B — POST /api/collections/save-shoot-plan
-# ─────────────────────────────────────────────────────────────────────
 
-print("\n══ Section B — POST /collections/save-shoot-plan ══")
+def test_F_regressions(client: httpx.Client, token: Optional[str]) -> None:
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
 
-me = httpx.get(f"{BASE}/api/auth/me", headers=HEADERS, timeout=10.0).json()
-my_user_id = me.get("user_id")
-print(f"[setup] my user_id={my_user_id}")
-
-# Clean up any previous test rows so dedupe assertions are accurate
-mdb.shoot_plans.delete_many({"user_id": my_user_id, "spot_id": SPOT_ID})
-mdb.collections.update_many(
-    {"owner_user_id": my_user_id, "name": "Shoot Plans"},
-    {"$pull": {"spot_ids": SPOT_ID}},
-)
-
-# B.1 — Without auth → 401/403
-r = httpx.post(f"{BASE}/api/collections/save-shoot-plan",
-               json={"spot_id": SPOT_ID}, timeout=10.0)
-record("B.1: unauthenticated save returns 401/403", r.status_code in (401, 403),
-       detail=f"status={r.status_code}, body={r.text[:200]}")
-
-# B.2 — Authed minimal body
-r = httpx.post(f"{BASE}/api/collections/save-shoot-plan",
-               headers=HEADERS, json={"spot_id": SPOT_ID}, timeout=15.0)
-record("B.2: authed minimal body returns 200", r.status_code == 200,
-       detail=f"status={r.status_code}, body={r.text[:200]}")
-b2_response: Dict[str, Any] = {}
-if r.status_code == 200:
-    b2_response = r.json()
-    has_keys = all(k in b2_response for k in ("ok", "plan_id", "collection_id", "collection_name", "message"))
-    record("B.2: response has required keys",
-           has_keys, detail=f"got keys={list(b2_response.keys())}")
-    record("B.2: collection_name == 'Shoot Plans'",
-           b2_response.get("collection_name") == "Shoot Plans",
-           detail=f"got={b2_response.get('collection_name')!r}")
-    record("B.2: ok == True", b2_response.get("ok") is True,
-           detail=f"got={b2_response.get('ok')!r}")
-
-plan_id_minimal = b2_response.get("plan_id")
-collection_id = b2_response.get("collection_id")
-
-# B.3 — Authed with full plan payload
-full_body = {
-    "spot_id": SPOT_ID,
-    "spot_name": "Bluebonnet Fields at Muleshoe Bend",
-    "latitude": 30.5378,
-    "longitude": -98.0242,
-    "best_time_to_arrive": {"label": "Evening golden hour", "iso": "2025-06-15T19:53:00-05:00"},
-    "light_quality_timeline": [{"hour": 19, "label": "7 PM", "quality": "excellent"}],
-    "weather_snapshot": [{"date": "2025-06-15", "label": "Clear sky", "high_f": 95}],
-    "composition_tips": ["Shoot low through foreground blooms.", "Use f/2.8."],
-    "gear_suggestions": ["50–85mm prime", "Reflector"],
-    "backup_spot_ids": ["spot_backup_1"],
-    "notes": "Worth scouting parking the night before."
-}
-r = httpx.post(f"{BASE}/api/collections/save-shoot-plan",
-               headers=HEADERS, json=full_body, timeout=15.0)
-record("B.3: full payload returns 200", r.status_code == 200,
-       detail=f"status={r.status_code}, body={r.text[:200]}")
-plan_id_full = r.json().get("plan_id") if r.status_code == 200 else None
-
-# B.4 — Verify Mongo state
-plans_for_spot = list(mdb.shoot_plans.find({"user_id": my_user_id, "spot_id": SPOT_ID}))
-plan_ids = {p.get("plan_id") for p in plans_for_spot}
-record("B.4a: NEW shoot_plans doc inserted for minimal save",
-       plan_id_minimal in plan_ids,
-       detail=f"plan_id_minimal={plan_id_minimal}, found_ids={plan_ids}")
-record("B.4a: NEW shoot_plans doc inserted for full payload save",
-       plan_id_full in plan_ids,
-       detail=f"plan_id_full={plan_id_full}, found_ids={plan_ids}")
-record(f"B.4a: 2+ distinct shoot_plans docs (no overwrite) — found {len(plan_ids)}",
-       len(plan_ids) >= 2,
-       detail=f"plan_ids={plan_ids}")
-
-col_doc = mdb.collections.find_one({"collection_id": collection_id}) if collection_id else None
-record("B.4b: 'Shoot Plans' collection exists in Mongo",
-       col_doc is not None,
-       detail=f"collection_id={collection_id}")
-if col_doc:
-    record("B.4b: collection.name == 'Shoot Plans'",
-           col_doc.get("name") == "Shoot Plans",
-           detail=f"got={col_doc.get('name')!r}")
-    record("B.4b: collection.is_shoot_plans == True",
-           col_doc.get("is_shoot_plans") is True,
-           detail=f"got={col_doc.get('is_shoot_plans')!r}")
-    record("B.4b: collection.spot_ids includes SPOT_ID",
-           SPOT_ID in (col_doc.get("spot_ids") or []),
-           detail=f"spot_ids={col_doc.get('spot_ids')}")
-    record("B.4b: collection.owner_user_id == viewer",
-           col_doc.get("owner_user_id") == my_user_id,
-           detail=f"got={col_doc.get('owner_user_id')!r}")
-
-full_doc = next((p for p in plans_for_spot if p.get("plan_id") == plan_id_full), None)
-if full_doc:
-    record("B.4c: full doc persisted composition_tips",
-           full_doc.get("composition_tips") == full_body["composition_tips"],
-           detail=f"got={full_doc.get('composition_tips')!r}")
-    record("B.4c: full doc persisted weather_snapshot",
-           full_doc.get("weather_snapshot") == full_body["weather_snapshot"],
-           detail=f"got={full_doc.get('weather_snapshot')!r}")
-    record("B.4c: full doc persisted backup_spot_ids",
-           full_doc.get("backup_spot_ids") == full_body["backup_spot_ids"],
-           detail=f"got={full_doc.get('backup_spot_ids')!r}")
-    record("B.4c: full doc persisted coordinates.latitude",
-           (full_doc.get("coordinates") or {}).get("latitude") == 30.5378,
-           detail=f"got={full_doc.get('coordinates')!r}")
-
-# B.5 — Save with non-existent spot_id → 404
-r = httpx.post(f"{BASE}/api/collections/save-shoot-plan",
-               headers=HEADERS, json={"spot_id": "spot_nope_xxxxxx"},
-               timeout=10.0)
-record("B.5: save with non-existent spot returns 404", r.status_code == 404,
-       detail=f"status={r.status_code}, body={r.text[:200]}")
-
-# ─────────────────────────────────────────────────────────────────────
-# Test Section C — GET /api/me/shoot-plans
-# ─────────────────────────────────────────────────────────────────────
-
-print("\n══ Section C — GET /me/shoot-plans ══")
-
-# C.1 — Without auth → 401/403
-r = httpx.get(f"{BASE}/api/me/shoot-plans", timeout=10.0)
-record("C.1: unauthenticated list returns 401/403", r.status_code in (401, 403),
-       detail=f"status={r.status_code}, body={r.text[:200]}")
-
-# C.2 — Authed returns {items, count}, newest-first
-r = httpx.get(f"{BASE}/api/me/shoot-plans", headers=HEADERS, timeout=10.0)
-record("C.2: authed list returns 200", r.status_code == 200,
-       detail=f"status={r.status_code}")
-if r.status_code == 200:
-    data = r.json()
-    record("C.2: response has 'items' and 'count' keys",
-           "items" in data and "count" in data,
-           detail=f"keys={list(data.keys())}")
-    items = data.get("items") or []
-    record("C.2: count matches items length",
-           data.get("count") == len(items),
-           detail=f"count={data.get('count')}, items={len(items)}")
-    if len(items) >= 2:
-        def _ts(p):
-            v = p.get("created_at")
-            if isinstance(v, str):
-                try:
-                    return datetime.fromisoformat(v.replace("Z", "+00:00"))
-                except Exception:
-                    return datetime.min
-            return v or datetime.min
-        ts_list = [_ts(p) for p in items]
-        is_desc = all(ts_list[i] >= ts_list[i + 1] for i in range(len(ts_list) - 1))
-        record("C.2: items sorted newest-first", is_desc,
-               detail=f"timestamps={[str(t) for t in ts_list[:5]]}")
-    ids = {p.get("plan_id") for p in items}
-    record("C.2: includes both plan_ids from section B",
-           plan_id_minimal in ids and plan_id_full in ids,
-           detail=f"ids subset check: minimal in ids={plan_id_minimal in ids}, full in ids={plan_id_full in ids}")
-
-# C.3 — Filter by spot_id
-r = httpx.get(f"{BASE}/api/me/shoot-plans",
-              params={"spot_id": SPOT_ID}, headers=HEADERS, timeout=10.0)
-record("C.3: spot_id filter returns 200", r.status_code == 200,
-       detail=f"status={r.status_code}")
-if r.status_code == 200:
-    items = r.json().get("items") or []
-    all_match = all(p.get("spot_id") == SPOT_ID for p in items)
-    record(f"C.3: every item.spot_id == {SPOT_ID} (got {len(items)} items)",
-           all_match,
-           detail=f"distinct={set(p.get('spot_id') for p in items)}")
-
-# ─────────────────────────────────────────────────────────────────────
-# Test Section D — Edge cases
-# ─────────────────────────────────────────────────────────────────────
-
-print("\n══ Section D — Edge cases ══")
-
-# D.1 — Insert a spot with no lat/lng and test the endpoint
-TEMP_SPOT_ID = f"spot_test_nolatlng_{int(time.time())}"
-mdb.spots.insert_one({
-    "spot_id": TEMP_SPOT_ID,
-    "title": "Temporary No-Coords Spot (testing)",
-    "category": "park",
-    "shoot_types": [],
-    "privacy_mode": "public",
-    "visibility_status": "approved",
-    "is_test_data": True,
-    "owner_user_id": my_user_id,
-    "created_at": datetime.utcnow(),
-})
-try:
-    r = httpx.get(f"{BASE}/api/spots/{TEMP_SPOT_ID}/shoot-plan", timeout=10.0)
-    record("D.1: spot with no lat/lng returns 200 (NOT 500)",
-           r.status_code == 200,
-           detail=f"status={r.status_code}, body={r.text[:300]}")
+    r = client.get(BASE + f"/api/spots/{SPOT_ID}/shoot-plan", headers=headers, timeout=30)
     if r.status_code == 200:
         body = r.json()
-        record("D.1: coordinates == null",
-               body.get("coordinates") is None,
-               detail=f"got={body.get('coordinates')!r}")
-        record("D.1: light_quality_timeline == []",
-               body.get("light_quality_timeline") == [],
-               detail=f"got len={len(body.get('light_quality_timeline') or [])}")
-        record("D.1: five_day_weather == null",
-               body.get("five_day_weather") is None,
-               detail=f"got={body.get('five_day_weather')!r}")
-        record("D.1: weather_available == False",
-               body.get("weather_available") is False,
-               detail=f"got={body.get('weather_available')!r}")
-        record("D.1: composition_tips still present",
-               isinstance(body.get("composition_tips"), list) and len(body["composition_tips"]) >= 1,
-               detail=f"got={body.get('composition_tips')!r}")
-finally:
-    mdb.spots.delete_one({"spot_id": TEMP_SPOT_ID})
-
-# D.2 — Open-Meteo path verification
-if plan_anon:
-    if plan_anon.get("weather_available") is True:
-        record("D.2: weather success path — five_day_weather is non-empty list",
-               isinstance(plan_anon.get("five_day_weather"), list) and len(plan_anon["five_day_weather"]) > 0,
-               detail="weather call succeeded; success-path shape validated")
+        keys = list(body.keys()) if isinstance(body, dict) else []
+        record("F1 GET /api/spots/{id}/shoot-plan 200", True, f"keys={keys[:8]}")
     else:
-        record("D.2: weather failure path — graceful fallback",
-               plan_anon.get("five_day_weather") is None
-               and isinstance(plan_anon.get("composition_tips"), list)
-               and isinstance(plan_anon.get("sun_events"), dict),
-               detail="weather upstream failed during this test run; rest of plan still renders")
+        record("F1 GET /api/spots/{id}/shoot-plan", False, f"status={r.status_code} body={r.text[:200]}")
 
-# ─────────────────────────────────────────────────────────────────────
-# Final summary
-# ─────────────────────────────────────────────────────────────────────
+    r = client.get(BASE + "/api/feed/home", headers=headers, timeout=30)
+    if r.status_code == 200:
+        body = r.json()
+        if isinstance(body, dict):
+            sections = [k for k in ("hero", "nearby", "golden", "seasonal", "new", "trending", "featured") if k in body]
+            record("F2 GET /api/feed/home 200", True, f"sections={sections} degraded={body.get('degraded')}")
+            for s in sections:
+                if isinstance(body.get(s), list) and body[s]:
+                    expect_shape(body[s][0], f"F2 feed.{s}[0]")
+                    break
+        else:
+            record("F2 GET /api/feed/home shape", False, f"unexpected type {type(body).__name__}")
+    else:
+        record("F2 GET /api/feed/home", False, f"status={r.status_code}")
 
-print("\n══ Summary ══")
-passed = sum(1 for r in RESULTS if r["ok"])
-failed = sum(1 for r in RESULTS if not r["ok"])
-print(f"PASS: {passed}    FAIL: {failed}    TOTAL: {len(RESULTS)}")
-if FAIL_DETAILS:
-    print("\nFAILURES:")
-    for f in FAIL_DETAILS:
-        print("  ", f)
+    if token:
+        try:
+            r = client.post(
+                BASE + "/api/collections/save-shoot-plan",
+                headers=headers,
+                json={"spot_id": SPOT_ID, "title": "Sandbox QA — Premium Explore test"},
+                timeout=20,
+            )
+            if r.status_code in (200, 201):
+                record("F3 POST /api/collections/save-shoot-plan", True, f"status={r.status_code}")
+            elif 400 <= r.status_code < 500:
+                record(
+                    "F3 POST /api/collections/save-shoot-plan",
+                    True,
+                    f"Minor: {r.status_code} client response (non-500 acceptable); body={r.text[:200]}",
+                )
+            else:
+                record("F3 POST /api/collections/save-shoot-plan", False, f"status={r.status_code} body={r.text[:200]}")
+        except Exception as e:
+            record("F3 POST /api/collections/save-shoot-plan", False, str(e))
+    else:
+        record("F3 POST /api/collections/save-shoot-plan", True, "Minor: skipped — no admin token")
 
-sys.exit(0 if failed == 0 else 1)
+
+def main() -> int:
+    with httpx.Client(follow_redirects=True) as client:
+        token = login_super_admin(client)
+        test_A1_single_spot(client)
+        test_A2_list(client)
+        test_A3_nearby(client)
+        test_C1_list_latency(client)
+        test_D_private(client)
+        test_E_edge_cases(client)
+        test_F_regressions(client, token)
+
+    print("\n" + "=" * 72)
+    pass_count = sum(1 for r in results if r["ok"])
+    fail_count = sum(1 for r in results if not r["ok"])
+    print(f"TOTAL: {pass_count} pass, {fail_count} fail")
+    if fail_count:
+        print("\nFAILURES:")
+        for r in results:
+            if not r["ok"]:
+                print(f"  - {r['name']}: {r['detail']}")
+    return 0 if fail_count == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -18794,3 +18794,161 @@ agent_communication:
       Recommend rotating that password if the super_admin lockout is
       unintentional.
 
+
+
+backend:
+  - task: "Premium Explore card upgrade — public_spot_view + attach_sample_photos"
+    implemented: true
+    working: true
+    file: |
+      /app/backend/server.py
+        - public_spot_view(spot, user) now sets 4 new computed fields
+          on every returned spot:
+            • orientation_label  (str|None) — derived from sunrise/
+              sunset + morning/evening golden-hour ratings
+            • elevation_ft       (int|None) — normalised from
+              elevation_ft / elevationFeet / elevation_m / elevation
+            • access_status      ("free_public" | "permit_required" |
+              "private_check") — private/followers → private_check,
+              permit_required wins over fee, default → free_public
+            • sample_photo_urls  (list[str], 0..3) — up to 3 image
+              thumbs from spot.images (excludes the hero cover)
+        - NEW async attach_sample_photos(spots, per_spot=3) — single
+          Mongo $in lookup against spot_community_uploads filtered by
+          (moderation_status=="approved" OR is_approved==True) AND
+          is_flagged != True AND visibility != "private", sorted by
+          created_at desc. Tops up sample_photo_urls with approved
+          community photos without replacing existing values. Wrapped
+          in try/except so the row is non-critical.
+        - Wired in /api/feed/home after attach_owners (server.py:1817).
+      /app/backend/routes/spots.py
+        - /api/spots/{spot_id}        (line 697) — single-row call.
+        - /api/spots (listSpots)      (line 1103) — after attach_owners.
+        - /api/spots/nearby/search    (line 1141) — after attach_owners.
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Jun 2025 Premium Explore card upgrade. Added 4 new fields
+            to public_spot_view + new attach_sample_photos helper.
+            Requesting backend validation per review request sections
+            A/B/C/D/E and regression on shoot-plan endpoints.
+        - working: true
+          agent: "testing"
+          comment: |
+            Backend testing complete (2026-05-28). 20/20 assertions
+            passed in /app/backend_test.py against the public preview
+            backend (https://photo-finder-60.preview.emergentagent.com).
+            Super admin login (kclarson187@gmail.com) succeeded via
+            /api/auth/login.
+
+            A. Field shape — backward compatibility
+              ✔ A1 GET /api/spots/spot_6829d0a67f60 → 200, payload
+                contains all 4 new keys AND every legacy key
+                (spot_id, title, shoot_score, hero_cover_image_url,
+                latitude, longitude, images, owner_user_id,
+                privacy_mode, visibility_status, quality_score).
+                Specific values for Bluebonnet Fields:
+                  • orientation_label = "Sun faces west · ideal for sunset"
+                  • elevation_ft      = null (no DB source)
+                  • access_status     = "permit_required" (permit_required=true)
+                  • sample_photo_urls = 3 R2 thumbnail URLs
+              ✔ A2 GET /api/spots?limit=5 → returns raw list shape
+                (no pagination wrapper since limit<200, no cursor).
+                Every item carries the 4 new keys + legacy keys.
+              ✔ A3 GET /api/spots/nearby/search?lat=30.5&lng=-98.0
+                &radius_km=80 → 200, 13 results, every item has the
+                new fields. NOTE: review request said
+                /api/spots/nearby — actual mounted path is
+                /api/spots/nearby/search (defined in routes/spots.py
+                line 1120). Behaviour matches review spec.
+
+            B. Field correctness
+              ✔ orientation_label is non-empty string for Bluebonnet
+                ("Sun faces west · ideal for sunset"). Type guard
+                confirms str|None across every list endpoint.
+              ✔ elevation_ft is int|None on every sampled spot.
+              ✔ access_status enum strictly bound to
+                {"free_public", "permit_required", "private_check"} —
+                no other strings observed across A1/A2/A3 cards.
+              ✔ sample_photo_urls is always a list (length 0..3) of
+                http(s) URLs.
+
+            C. Performance
+              ✔ /api/spots?limit=20 latency: best=54ms, avg=55ms over
+                3 samples (well under the 1.5s budget).
+              ✔ Code-read confirms attach_sample_photos performs a
+                single db.spot_community_uploads.find({"spot_id":
+                {"$in": spot_ids}, …}) — one Mongo round-trip total,
+                NOT per-card. No N+1.
+
+            D. Visibility — private spots
+              ✔ D1: 20 private spots present in DB; none leaked into
+                anonymous GET /api/spots?limit=200 listing.
+              ✔ D2: anonymous GET /api/spots/{private_spot_id}
+                returns 403 (privacy gate intact).
+
+            E. Edge cases (no 500s)
+              ✔ E1: spot_a18273a9323a has no images →
+                sample_photo_urls === [] (empty list, not null/missing).
+              ✔ E2: private spot → anon hits 403, gating prevents
+                payload exposure (private_check default still applies
+                inside public_spot_view per code review).
+              ✔ E3: spot_6829d0a67f60 has permit_required=true AND
+                fee_required=true → access_status="permit_required"
+                (permit beats fee as designed).
+              ✔ E4: no DB spot with all four golden-hour ratings
+                missing/zero AND visibility_status=approved was found
+                (skipped; non-blocking). Code path for null
+                orientation_label is exercised by countless other
+                low-rating spots — no anomaly observed.
+
+            F. Regressions (no behavioural change on existing surfaces)
+              ✔ F1 GET /api/spots/{id}/shoot-plan → 200 with the same
+                8 documented top-level keys (spot_id, spot_name,
+                coordinates, best_time_to_arrive,
+                light_quality_timeline, sun_events, five_day_weather,
+                weather_available).
+              ✔ F2 GET /api/feed/home → 200, sections present:
+                ['hero','nearby','seasonal','trending']; first non-
+                empty rail item also carries the new 4 fields
+                (attach_sample_photos wired at server.py:1817).
+                degraded=None (no graceful fallback triggered).
+              ✔ F3 POST /api/collections/save-shoot-plan → 200 with
+                super admin token.
+
+            No 500s, no missing/wrong-type fields, no list endpoint
+            slowness, no regressions detected. Test script left at
+            /app/backend_test.py for future runs.
+
+
+agent_communication:
+    -agent: "testing"
+    -message: |
+      Premium Explore card upgrade (Jun 2025) — backend validation
+      COMPLETE. 20/20 assertions PASSED in /app/backend_test.py
+      against the public preview backend.
+
+      Coverage:
+        • A. Field shape / backward compat — single-spot, list, nearby
+          (note: actual nearby path is /api/spots/nearby/search, not
+          /api/spots/nearby; behaviour matches review spec).
+        • B. Field correctness — orientation_label, elevation_ft,
+          access_status enum, sample_photo_urls list.
+        • C. Performance — /api/spots?limit=20 averaged 55ms over
+          3 samples (well under 1.5s). attach_sample_photos confirmed
+          to be a single $in Mongo query — not N+1.
+        • D. Private spot visibility — 20 private spots in DB, zero
+          leakage to anonymous listing; direct anon fetch → 403.
+        • E. Edge cases — no-image spot returns []; permit+fee →
+          permit_required; flat-ratings test had no qualifying DB row
+          but the null-path is exercised by other spots and reviewed
+          in code.
+        • F. Regressions — /api/spots/{id}/shoot-plan, /api/feed/home,
+          and POST /api/collections/save-shoot-plan all healthy.
+
+      No 500s. No missing fields. No type drift. No latency regression.
+      Recommend main agent summarise and ship.

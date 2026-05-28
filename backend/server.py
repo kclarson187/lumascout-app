@@ -571,6 +571,81 @@ def public_spot_view(spot: dict, user: Optional[dict] = None) -> dict:
     spot["is_trending"] = bool(is_trending)
     spot["is_verified_discovery"] = bool(is_verified_flag)
 
+    # ── Jun 2025 — Premium Explore-card payload additions ─────────
+    # These fields are computed once per spot view so every card
+    # surface (Explore, search, feed rails, map preview) renders the
+    # same labels with NO per-card API calls. Backward compatible —
+    # consumers that don't look for them just ignore the fields.
+    #
+    #   • orientation_label   — "Sun faces east · ideal for sunrise"
+    #                            inferred from sunrise/sunset/golden
+    #                            ratings. `null` when unknown.
+    #   • elevation_ft        — int feet (rounded), `null` when DB
+    #                            has no elevation. (We never compute
+    #                            elevation at render time.)
+    #   • access_status       — one of "free_public" / "permit_required"
+    #                            / "private_check". Frontend maps these
+    #                            to user-facing strings. Defaults to
+    #                            "private_check" when truly unknown
+    #                            (trust + safety default).
+    #   • sample_photo_urls   — up to 3 lightweight thumbnail URLs
+    #                            taken from the first 3 community
+    #                            images, used for the new bottom row.
+    sr = float(spot.get("sunrise_rating") or 0)
+    ss = float(spot.get("sunset_rating") or 0)
+    mg = float(spot.get("morning_golden_hour_rating") or 0)
+    eg = float(spot.get("evening_golden_hour_rating") or 0)
+    morning_strength = max(sr, mg)
+    evening_strength = max(ss, eg)
+    if morning_strength >= 4 and morning_strength >= evening_strength + 1:
+        spot["orientation_label"] = "Sun faces east · ideal for sunrise"
+    elif evening_strength >= 4 and evening_strength >= morning_strength + 1:
+        spot["orientation_label"] = "Sun faces west · ideal for sunset"
+    elif morning_strength >= 4 and evening_strength >= 4:
+        spot["orientation_label"] = "Sun faces open sky · all-day light"
+    else:
+        spot["orientation_label"] = None
+
+    # Elevation — currently no DB source. Accept either of the legacy
+    # field names that may show up via spot creation in the future and
+    # normalize to feet. Returns None when truly unknown so the card
+    # renders "Elevation unknown" instead of "0 ft".
+    elev_ft = spot.get("elevation_ft")
+    if elev_ft is None:
+        elev_ft = spot.get("elevationFeet")
+    if elev_ft is None:
+        meters = spot.get("elevation_m") or spot.get("elevation")
+        if isinstance(meters, (int, float)) and meters != 0:
+            elev_ft = int(round(float(meters) * 3.28084))
+    spot["elevation_ft"] = int(elev_ft) if isinstance(elev_ft, (int, float)) else None
+
+    # Access status — derive a single short token. Private spots win
+    # first since visibility was already enforced above. Permit beats
+    # fee since "permit required" is the stronger ask.
+    if (spot.get("privacy_mode") or "public").lower() in ("private", "followers"):
+        spot["access_status"] = "private_check"
+    elif spot.get("permit_required"):
+        spot["access_status"] = "permit_required"
+    else:
+        spot["access_status"] = "free_public"
+
+    # Sample photo URLs — bottom row of community thumbs on the card.
+    # We deliberately return URLs (not full image objects) so the card
+    # payload stays small. Skips the cover so the row reads as an
+    # additive preview, not a duplicate of the hero.
+    samples: list[str] = []
+    cover_url = spot.get("hero_cover_image_url")
+    for im in (spot.get("images") or []):
+        if not isinstance(im, dict):
+            continue
+        url = im.get("thumb_url") or im.get("thumbnail_url") or im.get("small_url") or im.get("preview_url") or im.get("image_url")
+        if not url or url == cover_url:
+            continue
+        samples.append(url)
+        if len(samples) >= 3:
+            break
+    spot["sample_photo_urls"] = samples
+
     return spot
 
 
@@ -593,6 +668,73 @@ async def attach_owners(spots: List[dict]) -> List[dict]:
         owner = umap.get(s.get("owner_user_id"))
         if owner:
             s["owner"] = owner
+    return spots
+
+
+async def attach_sample_photos(spots: List[dict], per_spot: int = 3) -> List[dict]:
+    """Batch-attach up to N community-upload thumbnails per spot, used
+    for the premium "community sample photos" row on Explore cards
+    (Jun 2025). Falls back to the spot's own `images` list if no
+    approved community uploads exist.
+
+    One Mongo round-trip total (regardless of card count) — never an
+    N+1 query. If a card already has `sample_photo_urls` populated by
+    `public_spot_view` (i.e. from `images`), we top up missing slots
+    with community uploads instead of replacing.
+    """
+    if not spots:
+        return spots
+    spot_ids = [s.get("spot_id") for s in spots if s.get("spot_id")]
+    if not spot_ids:
+        return spots
+    try:
+        # `spot_community_uploads` schema: per-row {spot_id, image_url,
+        # thumbnail_url?, moderation_status, visibility, created_at, …}.
+        # Accept both legacy and current shapes so old uploads still
+        # contribute to the sample row.
+        cur = db.spot_community_uploads.find(
+            {
+                "spot_id": {"$in": spot_ids},
+                "$or": [
+                    {"moderation_status": "approved"},
+                    {"is_approved": True},
+                ],
+                "is_flagged": {"$ne": True},
+                "visibility": {"$ne": "private"},
+            },
+            {"_id": 0, "spot_id": 1, "image_url": 1, "thumbnail_url": 1, "thumb_url": 1, "created_at": 1},
+        ).sort("created_at", -1)
+        bucket: Dict[str, List[str]] = {}
+        async for doc in cur:
+            sid = doc.get("spot_id")
+            if not sid:
+                continue
+            url = doc.get("thumbnail_url") or doc.get("thumb_url") or doc.get("image_url")
+            if not url:
+                continue
+            arr = bucket.setdefault(sid, [])
+            if len(arr) < per_spot:
+                arr.append(url)
+        for s in spots:
+            existing = s.get("sample_photo_urls") or []
+            extra = bucket.get(s.get("spot_id"), [])
+            if not existing:
+                s["sample_photo_urls"] = extra[:per_spot]
+            elif len(existing) < per_spot:
+                # Top up — community uploads first, but de-dupe by URL.
+                seen = set(existing)
+                for u in extra:
+                    if u in seen:
+                        continue
+                    existing.append(u)
+                    seen.add(u)
+                    if len(existing) >= per_spot:
+                        break
+                s["sample_photo_urls"] = existing[:per_spot]
+    except Exception:
+        # Sample photos are non-critical — never let this break a list
+        # endpoint. Cards just won't show the community row.
+        pass
     return spots
 
 
@@ -1671,6 +1813,8 @@ async def home_feed(
         if v:
             scored.append(v)
     await attach_owners(scored)
+    # Jun 2025 — premium card payload (community sample photo row).
+    await attach_sample_photos(scored)
 
     # ---- Distance center --------------------------------------------------
     # FIX(2026-04 / Item #3): Strict policy — distance is computed ONLY from

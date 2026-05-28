@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useMemo, memo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Pressable, Platform, Animated, Easing, Dimensions } from 'react-native';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { Bookmark, Star, Shield, Lock, EyeOff, MapPin, MoreVertical, TrendingUp, Sparkles, ShieldCheck } from 'lucide-react-native';
+import { Bookmark, Star, Shield, Lock, EyeOff, MapPin, MoreVertical, TrendingUp, Sparkles, ShieldCheck, Compass, Mountain, KeyRound, Info, ShieldAlert } from 'lucide-react-native';
 import { formatDistance } from '../utils/distance';
 import { goldenHourBrief, blueHourBrief } from '../utils/sun-windows';
 import { colors, radii, space, font } from '../theme';
@@ -17,12 +17,205 @@ import { goldenHourLabel as _unusedGoldenHourLabel } from '../utils/sun'; // kep
 
 export type Spot = any;
 
-function ScoreBadge({ score }: { score: number }) {
-  const color = score >= 80 ? colors.success : score >= 60 ? colors.primary : colors.secondary;
+// ─────────────────────────────────────────────────────────────────────
+// Jun 2025 — Premium Explore card metadata helpers
+// ─────────────────────────────────────────────────────────────────────
+
+/** Format a number with thousands separators (US locale). */
+function _formatNum(n: number): string {
+  try { return n.toLocaleString('en-US'); } catch { return String(n); }
+}
+
+/** Normalize the spot's orientation into a short label.
+ *  Backend now returns `orientation_label` directly; we fall back to
+ *  legacy field names for older payloads and return `null` when truly
+ *  unknown so the caller can render the "Orientation unknown" pill. */
+function getOrientationLabel(spot: any): string | null {
+  if (!spot || typeof spot !== 'object') return null;
+  const direct = spot.orientation_label || spot.orientation || spot.facing_direction || spot.sun_direction || spot.best_light_direction;
+  if (typeof direct === 'string' && direct.trim().length > 0) return direct;
+  // Last-resort heuristic: sunrise vs sunset rating skew.
+  const sr = Number(spot.sunrise_rating || 0);
+  const ss = Number(spot.sunset_rating || 0);
+  if (sr >= 4 && sr >= ss + 1) return 'Sun faces east · ideal for sunrise';
+  if (ss >= 4 && ss >= sr + 1) return 'Sun faces west · ideal for sunset';
+  return null;
+}
+
+/** Normalize elevation to integer feet. Handles existing feet fields
+ *  AND converts meters → feet when needed. Returns null on missing
+ *  / malformed values so the caller can render "Elevation unknown". */
+function getElevationFt(spot: any): number | null {
+  if (!spot) return null;
+  const ft = spot.elevation_ft ?? spot.elevationFeet;
+  if (typeof ft === 'number' && Number.isFinite(ft)) return Math.round(ft);
+  const meters = spot.elevation_m ?? spot.elevation ?? spot.altitude;
+  if (typeof meters === 'number' && Number.isFinite(meters) && meters !== 0) {
+    return Math.round(meters * 3.28084);
+  }
+  return null;
+}
+
+/** Normalize various server / legacy access fields into one of three
+ *  user-facing labels. Defaults to "Private — Check Access" when the
+ *  value is missing or unrecognized (trust + safety default). */
+function getAccessLabel(spot: any): 'Free Public' | 'Permit Required' | 'Private — Check Access' {
+  if (!spot) return 'Private — Check Access';
+  const raw = String(
+    spot.access_status ?? spot.access ?? spot.access_type ?? spot.accessStatus ?? ''
+  ).toLowerCase().trim();
+  if (raw === 'free_public' || raw === 'free' || raw === 'public' || raw === 'free public') return 'Free Public';
+  if (raw === 'permit_required' || raw === 'permit' || raw === 'requires_permit') return 'Permit Required';
+  if (raw === 'private_check' || raw === 'private' || raw === 'restricted') return 'Private — Check Access';
+  // Boolean field fallbacks.
+  if (spot.permit_required === true) return 'Permit Required';
+  if (spot.is_private === true) return 'Private — Check Access';
+  if (spot.public_access === true) return 'Free Public';
+  if ((spot.privacy_mode || '').toLowerCase() === 'private') return 'Private — Check Access';
+  if ((spot.privacy_mode || '').toLowerCase() === 'public') return 'Free Public';
+  return 'Private — Check Access';
+}
+
+/** Pick up to 3 community sample photo URLs. Order of preference per
+ *  the Jun 2025 spec: backend-attached sample_photo_urls →
+ *  community_photos → sample_photos → spot.images → photos /
+ *  image_urls. Returns `[]` when nothing usable is available. */
+function getSamplePhotos(spot: any): string[] {
+  if (!spot) return [];
+  const pull = (arr: any[]) => {
+    const out: string[] = [];
+    for (const it of arr || []) {
+      if (!it) continue;
+      if (typeof it === 'string') { out.push(it); continue; }
+      const u = it.thumb_url || it.thumbnail_url || it.small_url || it.preview_url || it.image_url || it.url;
+      if (typeof u === 'string' && u) out.push(u);
+    }
+    return out;
+  };
+  if (Array.isArray(spot.sample_photo_urls) && spot.sample_photo_urls.length > 0) {
+    return spot.sample_photo_urls.filter((u: any) => typeof u === 'string').slice(0, 3);
+  }
+  for (const key of ['community_photos', 'sample_photos', 'images', 'photos', 'image_urls', 'uploaded_photos']) {
+    const cand = pull(spot[key]);
+    if (cand.length > 0) return cand.slice(0, 3);
+  }
+  return [];
+}
+
+/** Refreshed Scout-Score badge (Jun 2025) — labeled + tooltip.
+ *  Renders "Scout Score: 94" with a small (i) icon. Tap (on mobile) or
+ *  hover (on web) shows a tooltip. `stopPropagation` keeps the card's
+ *  outer Pressable from intercepting taps on the score itself. */
+function ScoreBadge({ score }: { score: number | null | undefined }) {
+  const [open, setOpen] = useState(false);
+  const valid = typeof score === 'number' && Number.isFinite(score) && score > 0;
+  const display = valid ? Math.round(score as number) : null;
+  // Color: gold on excellent, secondary on good, blue/info on "New"
+  const color = display == null ? colors.info : display >= 80 ? colors.primary : colors.text;
   return (
-    <View style={[styles.scoreBadge, { borderColor: color }]}>
-      <Text style={[styles.scoreText, { color }]}>{score}</Text>
+    <View style={styles.scorePillWrap}>
+      <Pressable
+        style={[styles.scorePill, { borderColor: color }]}
+        // PERF: capture before the card press handler runs so taps on
+        // the score don't open the spot detail.
+        onPress={(e) => { e.stopPropagation?.(); setOpen((v) => !v); }}
+        // Web hover affordance.
+        onHoverIn={Platform.OS === 'web' ? () => setOpen(true) : undefined}
+        onHoverOut={Platform.OS === 'web' ? () => setOpen(false) : undefined}
+        testID="scout-score"
+      >
+        <Text style={styles.scoreLabel}>Scout Score</Text>
+        <Text style={[styles.scoreValueTxt, { color }]}>{display != null ? `: ${display}` : ': New'}</Text>
+        <Info size={9} color={colors.textSecondary} style={{ marginLeft: 3 }} />
+      </Pressable>
+      {open ? (
+        <View style={styles.scoreTooltip} pointerEvents="none">
+          <Text style={styles.scoreTooltipTxt}>
+            Based on light quality, crowd level, and community saves.
+          </Text>
+        </View>
+      ) : null}
     </View>
+  );
+}
+
+/** Compact horizontal row of metadata pills — orientation, elevation,
+ *  access. Renders only when at least one piece of data is meaningful
+ *  to avoid empty visual chrome on stripped-down test data.
+ */
+function ScoutMetaRow({ spot }: { spot: any }) {
+  const orientation = getOrientationLabel(spot);
+  const elev = getElevationFt(spot);
+  const access = getAccessLabel(spot);
+
+  return (
+    <View style={styles.scoutMetaRow}>
+      {/* Orientation pill — always renders. Falls back to "Orientation
+          unknown" when no signal exists. */}
+      <View style={styles.metaPill}>
+        <Compass size={10} color={colors.primary} />
+        <Text style={styles.metaPillTxt} numberOfLines={1}>
+          {orientation || 'Orientation unknown'}
+        </Text>
+      </View>
+      <View style={styles.metaPill}>
+        <Mountain size={10} color={colors.textSecondary} />
+        <Text style={styles.metaPillTxt} numberOfLines={1}>
+          {elev != null ? `${_formatNum(elev)} ft` : 'Elevation unknown'}
+        </Text>
+      </View>
+      <View style={[styles.metaPill, accessPillStyle(access)]}>
+        {access === 'Free Public' ? <Sparkles size={10} color={colors.success} /> :
+         access === 'Permit Required' ? <KeyRound size={10} color={colors.primary} /> :
+         <ShieldAlert size={10} color={colors.textSecondary} />}
+        <Text style={[styles.metaPillTxt, accessTextStyle(access)]} numberOfLines={1}>
+          {access}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function accessPillStyle(label: string) {
+  if (label === 'Free Public')      return { borderColor: 'rgba(16,185,129,0.32)', backgroundColor: 'rgba(16,185,129,0.06)' };
+  if (label === 'Permit Required')  return { borderColor: 'rgba(245,166,35,0.32)', backgroundColor: 'rgba(245,166,35,0.06)' };
+  return {};
+}
+function accessTextStyle(label: string) {
+  if (label === 'Free Public')      return { color: colors.success };
+  if (label === 'Permit Required')  return { color: colors.primary };
+  return {};
+}
+
+/** Bottom-of-card row showing up to 3 community thumbnails. Hides
+ *  entirely when no photos exist. Image errors are silently swallowed
+ *  per-thumb so a single broken URL never breaks the row. */
+function SamplePhotosRow({ urls }: { urls: string[] }) {
+  if (!urls || urls.length === 0) return null;
+  return (
+    <View style={styles.samplePhotoRow}>
+      {urls.slice(0, 3).map((u, i) => (
+        <SampleThumb key={`${i}-${u}`} url={u} />
+      ))}
+    </View>
+  );
+}
+
+function SampleThumb({ url }: { url: string }) {
+  const [err, setErr] = useState(false);
+  if (err) {
+    return <View style={[styles.sampleThumb, { backgroundColor: colors.surface2 }]} />;
+  }
+  return (
+    <Image
+      source={{ uri: url }}
+      style={styles.sampleThumb}
+      onError={() => setErr(true)}
+      cachePolicy="memory-disk"
+      contentFit="cover"
+      transition={120}
+      recyclingKey={url}
+    />
   );
 }
 
@@ -305,7 +498,9 @@ function SpotCardImpl({
                 nothing (we never fake a value). */}
             {/* Score badge — hidden in compact (Explore list) mode per
                 June 2025 CR. Photographers cared more about light +
-                drive-time than an aggregate score on this surface. */}
+                drive-time than an aggregate score on this surface.
+                Jun 2025 update — ScoreBadge is now labeled
+                ("Scout Score: 94") with a tap/hover tooltip. */}
             {!compact && typeof spot.shoot_score === 'number' && spot.shoot_score > 0 && spot.shoot_score < 100 && (
               <ScoreBadge score={spot.shoot_score} />
             )}
@@ -375,6 +570,17 @@ function SpotCardImpl({
             hide when SunCalc cannot resolve events for this lat/lng
             (e.g. polar regions). */}
         {compact ? <PlanningRow spot={spot} /> : null}
+
+        {/* Jun 2025 — Premium Explore-card photographer metadata.
+            Three pills (orientation / elevation / access) + the
+            labeled Scout Score with hover/tap tooltip. Always
+            rendered (one of them has a graceful-fallback string
+            when data is missing). */}
+        <ScoutMetaRow spot={spot} />
+        <View style={{ marginTop: 4 }}>
+          <ScoreBadge score={spot.shoot_score ?? spot.scout_score ?? spot.score ?? spot.quality_score} />
+        </View>
+
         {!compact && (
           <View style={styles.tagRow}>
             {(spot.shoot_types || []).slice(0, 2).map((t: string) => (
@@ -390,6 +596,11 @@ function SpotCardImpl({
             )}
           </View>
         )}
+
+        {/* Jun 2025 — community sample photo row (max 3 thumbs). Hides
+            entirely when there are no images. Broken thumbnails fall
+            back to a solid surface tile so the row never crashes. */}
+        <SamplePhotosRow urls={getSamplePhotos(spot)} />
       </View>
     </Pressable>
     {isAdmin && (
@@ -585,6 +796,99 @@ const styles = StyleSheet.create({
   scoreText: {
     fontSize: 12,
     fontFamily: font.bodyBold,
+  },
+  // ── Jun 2025 — premium Explore card additions ─────────────────────
+  // Labeled Scout-Score pill with tap/hover tooltip. Lives inline in
+  // the card body (not the corner of the hero image) so the kicker
+  // "Scout Score" is always readable.
+  scorePillWrap: {
+    alignSelf: 'flex-start',
+    position: 'relative',
+  },
+  scorePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+  },
+  scoreLabel: {
+    color: colors.kicker,
+    fontSize: 10.5,
+    fontFamily: font.bodySemibold,
+    letterSpacing: 0.2,
+  },
+  scoreValueTxt: {
+    fontSize: 10.5,
+    fontFamily: font.bodyBold,
+    letterSpacing: 0.2,
+  },
+  scoreTooltip: {
+    position: 'absolute',
+    top: -42,
+    left: 0,
+    right: 0,
+    minWidth: 200,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    backgroundColor: '#0F0F12',
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
+    zIndex: 10,
+    // shadow via boxShadow on web; iOS/Android shadows handled below
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 8, shadowOffset: { width: 0, height: 4 } },
+      android: { elevation: 6 },
+      default: {},
+    }),
+  },
+  scoreTooltipTxt: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontFamily: font.body,
+    lineHeight: 14,
+  },
+  // Meta pill row (orientation, elevation, access)
+  scoutMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 4,
+  },
+  metaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radii.pill,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.08)',
+    maxWidth: '100%',
+  },
+  metaPillTxt: {
+    color: colors.textSecondary,
+    fontSize: 10.5,
+    fontFamily: font.bodyMedium,
+    letterSpacing: 0.1,
+    flexShrink: 1,
+  },
+  // Sample photos row
+  samplePhotoRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 8,
+  },
+  sampleThumb: {
+    flex: 1,
+    aspectRatio: 1.4,
+    borderRadius: radii.sm,
+    backgroundColor: colors.surface2,
+    overflow: 'hidden',
   },
   info: {
     padding: space.md,

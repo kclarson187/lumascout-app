@@ -60,6 +60,7 @@ from server import (
     haversine_km,
     limits_for,
     attach_owners,
+    attach_sample_photos,
 )
 
 router = APIRouter(prefix="/api", tags=["spots"])
@@ -691,6 +692,9 @@ async def get_spot(spot_id: str, viewer: Optional[dict] = Depends(get_optional_u
         if not viewer or viewer.get("user_id") != spot["owner_user_id"]:
             raise HTTPException(status_code=403, detail="Private spot")
     view = public_spot_view(spot, viewer)
+    # Jun 2025 — attach community sample photos for the bottom-card row.
+    # Single-row call (per_spot=3) — does one indexed Mongo lookup.
+    await attach_sample_photos([view])
 
     # owner info
     owner = await db.users.find_one({"user_id": spot["owner_user_id"]}, {"_id": 0, "password_hash": 0})
@@ -1094,6 +1098,9 @@ async def list_spots(
             (s.get("distance_km") if s.get("distance_km") is not None else 99999),
         ))
     await attach_owners(out)
+    # Jun 2025 — premium Explore card payload (sample community photos
+    # row). Batched single Mongo lookup; never per-card.
+    await attach_sample_photos(out)
     # ─── Wrapped pagination response (Explore Speed CR — Batch 1) ────
     # When the client passes `paginated=1` OR `cursor>0`, return the
     # wrapped object the new infinite-scroll list expects. Legacy
@@ -1131,6 +1138,7 @@ async def nearby(
     out.sort(key=lambda s: s["distance_km"])
     out = out[:limit]
     await attach_owners(out)
+    await attach_sample_photos(out)
     return out
 
 # --- delete_spot (server.py:1923-1936) ---
