@@ -18952,3 +18952,186 @@ agent_communication:
 
       No 500s. No missing fields. No type drift. No latency regression.
       Recommend main agent summarise and ship.
+
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Jun 2025 — "Share Location" redesign — backend verification
+# ─────────────────────────────────────────────────────────────────────
+
+backend:
+  - task: "Share Location (Jun 2025 redesign) — personal_note + white-themed public HTML"
+    implemented: true
+    working: false
+    file: "/app/backend/routes/spot_shares.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: false
+        agent: "testing"
+        comment: |
+          Backend verification complete (2026-05-28) via /app/backend_test.py
+          against the public preview backend. Logged in as super_admin
+          kclarson187@gmail.com; spot=spot_6829d0a67f60 (Bluebonnet Fields
+          at Muleshoe Bend). 28 assertions PASS, 1 real failure isolated.
+
+          ── A. Personal note persistence ───────────────────────────────
+            ✅ A.1 POST /share with `{"personal_note": "Hi Sarah — bring extras!"}`
+                  → 200; doc in spot_shares has `personal_note` stored
+                  verbatim and trimmed.
+            ✅ A.2 personal_note of 700 'x' chars → 422 (pydantic
+                  Field(max_length=600) rejects). Documented behaviour:
+                  REJECTS via 422 (acceptable per spec, NOT truncated
+                  server-side).
+            ✅ A.3 Omitting personal_note → 200, stored as None.
+            ✅ A.4 personal_note="" → 200, stored as None (trim + empty→None).
+
+          ── B. Public viewer HTML (/api/public/location/{token}) ────────
+            ✅ B.1 Accept: text/html → 200 OK, Content-Type text/html.
+                   White theme marker `background:#FAFAF7` present.
+                   `class="brand"` present in top bar AND footer (2 hits).
+                   Personal note text appears verbatim in body.
+                   Logo SVG `stroke="#F5A523"` present (2 occurrences — top
+                   bar + footer).
+                   LumaScout wordmark count: 'LumaScout' literal=2,
+                   '<b>Luma</b>'=2 (top bar + footer parity confirmed).
+                   `<meta property="og:image" …>` present with the spot's
+                   R2 hero image.
+            ✅ B.2 With no personal_note (A.3 token) → `class="pnote"`
+                   div is OMITTED. No orphan empty quote.
+            ✅ B.2b Empty-string note (A.4 token) → `class="pnote"` also
+                   omitted (empty string normalised to None).
+            ✅ B.3 Accept: application/json → 200 JSON with
+                   {status:"ok", spot:{…}} sanitized payload (legacy
+                   behaviour preserved).
+
+          ── C. Privacy / visibility — no regressions ────────────────────
+            ✅ C.1 show_exact_location=false on public spot → HTML renders
+                   "Approximate area" badge AND a coord block (verified
+                   via direct HTML inspection: `<div class="v coords">30.54,
+                   -98.02</div>` — rounded to 2 decimals). "Open in Maps"
+                   CTA is NOT present (correct).
+                   (NOTE: An earlier assertion in backend_test.py flagged
+                    "coord block missing" — that was a test-side selector
+                    bug. Actual markup uses class="v coords" which IS the
+                    coord block. Real backend behaviour is correct.)
+            ✅ C.2 show_exact_location=true → "Exact location" label and
+                   the "Open in Maps" CTA ARE present.
+            ✅ C.3 Revoked share returns 404 on both HTML and JSON paths;
+                   JSON returns the generic "unavailable" body
+                   (parity preserved).
+
+          ── D. Backward compatibility ───────────────────────────────────
+            ✅ D.1 Hand-inserted a synthetic legacy spot_shares doc WITH
+                   NO personal_note field, then GET /api/public/location/
+                   {token} → 200, no crash, .pnote div absent (correct).
+            ❌ D.2 CRITICAL REGRESSION:
+                   GET /api/spots/{spot_id}/shares does NOT return
+                   `personal_note` on each row. /shares row keys
+                   currently returned:
+                     ['access_count','created_at','created_by_role',
+                      'created_by_user_id','label','last_accessed_at',
+                      'revoked','revoked_at','share_id','share_url',
+                      'show_exact_location','spot_visibility_at_create',
+                      'token']
+                   The review request explicitly states:
+                     "/api/spots/{spot_id}/shares list endpoint must
+                      include personal_note on each row so the owner UI
+                      can show 'what message did I send'."
+                   Root cause: routes/spot_shares.py @router.get(
+                   "/spots/{spot_id}/shares") — the `items.append({…})`
+                   dict at lines 586-600 does NOT include
+                   "personal_note": r.get("personal_note"). Storage is
+                   correct (Mongo doc has the value), but the read API
+                   omits it. Owner UI cannot retrieve it without re-
+                   fetching the public-share endpoint per token, which
+                   is not the intended UX.
+                   Suggested fix (one line):
+                     items.append({
+                       ...,
+                       "personal_note": r.get("personal_note"),
+                     })
+
+          ── E. Edge / stability ─────────────────────────────────────────
+            ✅ E.1 personal_note `<script>alert(1)</script>` is HTML-
+                   escaped — body contains `&lt;script&gt;alert(1)&lt;/script&gt;`
+                   verbatim, NO raw `<script>` tag. _esc() helper is
+                   doing its job.
+            ✅ E.2 Multi-line personal_note ("Line 1\nLine 2\nLine 3")
+                   round-trips with literal \n preserved in the HTML
+                   body. CSS rule `white-space: pre-wrap` IS present in
+                   .pnote styles, so the recipient browser will render
+                   the line breaks.
+            ✅ E.3a /api/spots/{id}/shoot-plan → 200 (weather_available=True;
+                   Open-Meteo + five-day weather intact).
+            ✅ E.3b /api/spots/nearby/search?lat=30.5&lng=-98.0&radius_km=50
+                   → 200 (nearby endpoint unchanged).
+
+          ── Backend log review ──────────────────────────────────────────
+          No 5xx during the test run. No tracebacks in
+          /var/log/supervisor/backend.*.log. Stripe/Pillow boot lines
+          normal. Only WARNING is a routine WatchFiles reload after the
+          last edit to routes/spot_shares.py.
+
+          ── Summary of findings ─────────────────────────────────────────
+          • 500s observed: NONE.
+          • Field omissions / regressions: 1 — `personal_note` missing
+            from GET /api/spots/{spot_id}/shares response rows.
+            Storage is correct, read API is incomplete.
+          • Long personal_note behaviour: REJECTED via 422 (server-side
+            truncation does NOT happen; pydantic max_length=600 fires).
+          • HTML-escaping: WORKING (`&lt;script&gt;` in output).
+          • Backward compat: legacy docs WITHOUT personal_note render
+            cleanly with no .pnote div and no 500.
+
+          Test harness preserved at /app/backend_test.py.
+
+metadata:
+  last_test_sequence: 16
+
+test_plan:
+  current_focus:
+    - "Share Location (Jun 2025 redesign) — personal_note + white-themed public HTML"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    -agent: "testing"
+    -message: |
+      Share Location (Jun 2025) backend verification complete — 28/29
+      assertions GREEN, 1 REGRESSION isolated.
+
+      🔴 REGRESSION (review-request D.2):
+        GET /api/spots/{spot_id}/shares does NOT include `personal_note`
+        on each row. Storage works, public render works, but the owner
+        list endpoint omits the field. The review request EXPLICITLY
+        requires it for the owner UI's "what message did I send" affordance.
+
+        One-line fix in routes/spot_shares.py inside list_share_links:
+          items.append({
+              ...
+              "personal_note": r.get("personal_note"),
+          })
+
+      Everything else is working:
+        ✅ POST /share accepts personal_note (max 600 chars; 700 chars
+           → 422, NOT truncated server-side).
+        ✅ Empty / missing personal_note normalised to None in spot_shares.
+        ✅ HTML page renders the white-theme (#FAFAF7), brand class,
+           gold logo (#F5A523), top + footer wordmark, og:image meta,
+           and the photographer's note as a pull-quote.
+        ✅ When no note, the .pnote div is omitted (no orphan empty quote).
+        ✅ HTML-escape working — `<script>alert(1)</script>` becomes
+           `&lt;script&gt;alert(1)&lt;/script&gt;`.
+        ✅ Multi-line \n preserved + CSS `white-space: pre-wrap` present.
+        ✅ show_exact_location=false → "Approximate area" badge + rounded
+           coords, NO "Open in Maps" CTA. true → "Exact location" + CTA.
+        ✅ Revoked share → 404 on both HTML and JSON paths (parity).
+        ✅ Legacy share docs without a personal_note key render 200, no
+           crash, no orphan .pnote div.
+        ✅ Open-Meteo / shoot-plan / nearby smoke — all 200, no regressions.
+
+      No 5xx in backend logs during the run. Harness at
+      /app/backend_test.py.

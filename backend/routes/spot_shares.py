@@ -220,6 +220,10 @@ class ShareCreateIn(BaseModel):
     # AFTER the link is already forwarded. None → defaults to "True if
     # spot currently public, else False" at create time.
     show_exact_location: Optional[bool] = None
+    # Jun 2025 — "Share Location" CR. Optional photographer-authored
+    # personal note rendered above the spot details in the public,
+    # white-themed client page. Kept short (single screen, no scroll).
+    personal_note: Optional[str] = Field(default=None, max_length=600)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -467,6 +471,10 @@ async def create_share_link(
         "created_by_user_id": user.get("user_id"),
         "created_by_role": user.get("role") or "owner",
         "label": (body.label or "").strip() or None,
+        # Jun 2025 — "Share Location" personal note (white-themed public
+        # page). Sanitized to a max of 600 chars; rendered as-is HTML-
+        # escaped in the public template.
+        "personal_note": (body.personal_note or "").strip()[:600] or None,
         # IMMUTABLE: copy the visibility shape into the share row at
         # create-time so subsequent owner toggles don't silently change
         # what a forwarded link reveals.
@@ -857,10 +865,24 @@ p {{ opacity:.7; line-height:1.5; }}
 
 
 def _render_public_html(ctx: Dict[str, Any], canonical_url: Optional[str] = None) -> str:
+    """Render the public, client-facing share page.
+
+    Jun 2025 — "Share Location" redesign:
+      • Bright WHITE editorial layout (not the dark app theme) because
+        recipients are CLIENTS, not photographers using the app.
+      • Logo + LumaScout wordmark in a sticky top bar AND footer.
+      • Photographer's personal note rendered as a hero-quote block
+        directly under the cover image.
+      • Sample community photos in a clean gallery grid.
+      • Open-in-maps CTA, but only when we're allowed to share exact
+        coords for this share row.
+    """
     payload = _build_public_view(ctx)
     is_public = ctx["is_public_spot"]
     show_exact = ctx["show_exact_location"]
+    share = ctx.get("share") or {}
     spot = payload["spot"]
+    owner = ctx.get("owner") or {}
     og = payload["og"]
     robots = payload["robots"]
     canonical_tag = f'<link rel="canonical" href="{_esc(canonical_url)}" />' if canonical_url else ""
@@ -871,35 +893,67 @@ def _render_public_html(ctx: Dict[str, Any], canonical_url: Optional[str] = None
     lat = spot.get("latitude")
     lng = spot.get("longitude")
     open_in_maps = ""
-    if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
+    if isinstance(lat, (int, float)) and isinstance(lng, (int, float)) and show_exact:
         open_in_maps = f"https://maps.apple.com/?q={lat},{lng}"
+
+    personal_note = (share.get("personal_note") or "").strip()
+
+    # Friendly photographer attribution line: "Shared by Keith Larson"
+    owner_name = (
+        owner.get("display_name") or owner.get("name") or owner.get("username") or ""
+    ).strip()
+    by_line = f"Shared by {_esc(owner_name)}" if owner_name else "Shared by a LumaScout photographer"
 
     badges = []
     if not is_public:
         badges.append("Private location")
-    if not show_exact and not is_public:
+    if not show_exact:
         badges.append("Approximate area only")
 
+    # ── Best time to shoot — clean single value, not the kitchen-sink ──
+    best_time = (spot.get("best_time_of_day") or "").replace("_", " ").strip()
+    best_light = (spot.get("best_light_notes") or "").strip()
+    best_block = ""
+    if best_time or best_light:
+        best_value = (best_time.capitalize() if best_time else "Golden hour")
+        best_block = f"""
+<div class="card">
+  <div class="card-kicker">Best time to shoot</div>
+  <div class="best-time">{_esc(best_value)}</div>
+  {f'<div class="best-sub">{_esc(best_light)}</div>' if best_light else ''}
+</div>
+"""
+
+    # ── Sample community photos (max 6, excluding the hero cover) ──
+    samples_urls = list(spot.get("sample_photo_urls") or [])
+    gallery_html = ""
+    if samples_urls:
+        for u in samples_urls[:6]:
+            gallery_html += f'<div class="gphoto" style="background-image:url(\'{_esc(u)}\')"></div>'
+
+    # ── Notes block (kept light — only show signals clients care about) ──
     notes_pairs = [
-        ("Best light", spot.get("best_light_notes") or spot.get("best_time_of_day")),
         ("Parking", spot.get("parking_notes")),
         ("Walking", spot.get("walking_notes")),
-        ("Safety", spot.get("safety_notes")),
-        ("Permit", spot.get("permit_notes")),
-        ("Fee", spot.get("fee_notes")),
-        ("Access", spot.get("access_notes")),
-        ("Notes", spot.get("notes")),
+        ("Safety",  spot.get("safety_notes")),
+        ("Permit",  spot.get("permit_notes")),
+        ("Fee",     spot.get("fee_notes")),
+        ("Access",  spot.get("access_notes")),
     ]
     notes_html = "".join(
         f'<div class="row"><div class="k">{_esc(k)}</div><div class="v">{_esc(v)}</div></div>'
         for k, v in notes_pairs if v
     )
 
-    images_html = ""
-    for im in (spot.get("images") or [])[:8]:
-        url = im.get("image_url")
-        if url:
-            images_html += f'<img src="{_esc(url)}" alt="" />'
+    # SVG logo — small, inline. Gold dot + LumaScout wordmark. Inline so
+    # the client page renders without any extra request.
+    logo_svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" '
+        'fill="none" stroke="#F5A523" stroke-width="2.2" stroke-linecap="round" '
+        'stroke-linejoin="round" aria-hidden="true">'
+        '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41'
+        'M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>'
+    )
 
     coord_label = "Exact location" if show_exact else "Approximate area"
 
@@ -921,46 +975,169 @@ def _render_public_html(ctx: Dict[str, Any], canonical_url: Optional[str] = None
 <meta name="twitter:description" content="{_esc(og.get('description') or desc[:200])}" />
 <meta name="twitter:image" content="{_esc(og.get('image') or hero)}" />
 <style>
-* {{ box-sizing: border-box; }}
-body {{ margin:0; background:#0a0a0a; color:#fff;
-       font-family:-apple-system,system-ui,sans-serif; padding:0 0 60px; }}
-.hero {{ width:100%; aspect-ratio: 16/9; background:#1a1a1a center/cover no-repeat; }}
-.wrap {{ max-width: 720px; margin: 0 auto; padding: 24px; }}
-h1 {{ font-family:Georgia,"Times New Roman",serif; font-size:32px; margin:0 0 8px; font-weight:600; }}
-.sub {{ opacity:.6; margin:0 0 16px; font-size:14px; }}
-.badges {{ display:flex; gap:8px; flex-wrap:wrap; margin:0 0 16px; }}
-.badge {{ background:#2a2a2a; color:#F5A524; padding:4px 12px; border-radius:999px; font-size:12px; font-weight:600; }}
-.desc {{ line-height:1.6; opacity:.9; margin:0 0 24px; white-space:pre-wrap; }}
-.gallery {{ display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin:0 0 24px; }}
-.gallery img {{ width:100%; aspect-ratio:1/1; object-fit:cover; border-radius:12px; background:#1a1a1a; }}
-.section {{ background:#141414; border-radius:16px; padding:20px; margin:0 0 16px; }}
-.row {{ display:flex; padding:10px 0; border-bottom:1px solid #1f1f1f; gap:16px; }}
+*,*::before,*::after {{ box-sizing: border-box; }}
+html,body {{ margin:0; padding:0; }}
+body {{
+  background:#FAFAF7;
+  color:#1A1A1A;
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  padding:0 0 80px;
+}}
+.topbar {{
+  position:sticky; top:0; z-index:10;
+  display:flex; align-items:center; gap:10px;
+  padding:14px 20px;
+  background:rgba(250,250,247,0.92);
+  backdrop-filter: saturate(140%) blur(10px);
+  -webkit-backdrop-filter: saturate(140%) blur(10px);
+  border-bottom:1px solid #ECECE6;
+}}
+.brand {{ display:flex; align-items:center; gap:8px; font-weight:700; color:#1A1A1A;
+         text-decoration:none; letter-spacing:0.2px; }}
+.brand .name {{ font-size:15px; }}
+.brand .name b {{ color:#1A1A1A; }}
+.brand .name .gold {{ color:#C98B1B; }}
+
+.hero {{
+  width:100%; aspect-ratio: 16/9;
+  background:#E8E6DF center/cover no-repeat;
+  border-bottom:1px solid #ECECE6;
+}}
+.wrap {{ max-width: 760px; margin: 0 auto; padding: 28px 22px 0; }}
+.kicker {{
+  color:#6B6B66; font-size:11px; font-weight:600; letter-spacing:0.6px;
+  text-transform:uppercase; margin:0 0 6px;
+}}
+h1 {{
+  font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  font-size:34px; line-height:1.12; margin:0 0 6px; font-weight:600; letter-spacing:-0.3px;
+  color:#1A1A1A;
+}}
+.byline {{ color:#6B6B66; font-size:14px; margin:0 0 16px; }}
+.badges {{ display:flex; gap:8px; flex-wrap:wrap; margin:0 0 22px; }}
+.badge {{
+  background:#FFF8E7; color:#9C6E0E; padding:4px 12px;
+  border-radius:999px; font-size:11.5px; font-weight:600; letter-spacing:0.2px;
+  border:1px solid #F1DDA1;
+}}
+
+/* Personal note — magazine-style pull quote */
+.pnote {{
+  margin: 6px 0 24px;
+  padding: 18px 22px;
+  background: #FFFFFF;
+  border-left: 4px solid #C98B1B;
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  font-size: 17px; line-height:1.55; color:#2C2C2A;
+  white-space: pre-wrap;
+}}
+.pnote-kicker {{
+  display:block; text-transform:uppercase; letter-spacing:0.8px;
+  color:#C98B1B; font-family:-apple-system, "Inter", sans-serif;
+  font-weight:700; font-size:10.5px; margin-bottom:6px;
+}}
+
+.desc {{ color:#3A3A36; line-height:1.65; margin:0 0 24px; font-size:15.5px; white-space:pre-wrap; }}
+
+/* Generic card */
+.card {{
+  background:#FFFFFF; border:1px solid #ECECE6; border-radius: 14px;
+  padding: 20px; margin: 0 0 14px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+}}
+.card-kicker {{
+  color:#6B6B66; font-size:11px; font-weight:600; letter-spacing:0.5px;
+  text-transform:uppercase; margin:0 0 6px;
+}}
+.best-time {{ font-size:22px; color:#1A1A1A; font-weight:600; letter-spacing:-0.2px;
+              font-family: Georgia, "Iowan Old Style", "Times New Roman", serif; }}
+.best-sub {{ color:#4A4A45; font-size:14px; line-height:1.5; margin-top:4px; }}
+
+.row {{ display:flex; padding:10px 0; border-bottom:1px solid #F0EFE9; gap:16px; }}
 .row:last-child {{ border-bottom:none; }}
-.k {{ width:120px; flex:none; opacity:.6; font-size:13px; }}
-.v {{ flex:1; line-height:1.5; white-space:pre-wrap; }}
-.coords {{ font-family:ui-monospace,monospace; font-size:14px; opacity:.85; }}
-.cta {{ display:inline-block; background:#F5A524; color:#0a0a0a; padding:14px 24px;
-        border-radius:999px; font-weight:700; text-decoration:none; margin-top:8px; }}
-.foot {{ opacity:.5; font-size:12px; margin-top:24px; text-align:center; }}
+.k {{ width:96px; flex:none; color:#6B6B66; font-size:13px; font-weight:600; }}
+.v {{ flex:1; line-height:1.55; white-space:pre-wrap; color:#1A1A1A; font-size:14.5px; }}
+.coords {{ font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:13.5px; color:#3A3A36; }}
+
+/* Gallery */
+.gallery {{ display:grid; grid-template-columns: repeat(3, 1fr); gap:8px; margin:0 0 20px; }}
+.gphoto {{
+  width:100%; aspect-ratio: 1/1; border-radius:10px;
+  background-color:#E8E6DF; background-size:cover; background-position:center;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.03);
+}}
+@media (max-width: 480px) {{
+  .gallery {{ grid-template-columns: repeat(2, 1fr); }}
+  h1 {{ font-size: 26px; }}
+  .pnote {{ font-size: 15.5px; padding: 16px 18px; }}
+  .wrap {{ padding-top: 22px; }}
+}}
+
+.cta {{
+  display:inline-flex; align-items:center; gap:8px;
+  background:#1A1A1A; color:#FFFFFF; padding:13px 22px;
+  border-radius:999px; font-weight:600; text-decoration:none;
+  font-size:14px; letter-spacing:0.2px; margin:8px 0 6px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+}}
+.cta:hover {{ background:#2A2A2A; }}
+
+.footer {{
+  margin-top:38px; padding:18px 22px 0;
+  border-top:1px solid #ECECE6;
+  display:flex; align-items:center; gap:10px;
+  color:#6B6B66; font-size:12px;
+}}
+.footer .brand .name {{ font-size:13px; }}
 </style>
 </head>
 <body>
-<div class="hero" style="background-image:url('{_esc(hero)}')"></div>
-<div class="wrap">
-<h1>{_esc(title)}</h1>
-<p class="sub">Shared by a LumaScout photographer</p>
-<div class="badges">
-{''.join(f'<span class="badge">{_esc(b)}</span>' for b in badges)}
-</div>
-{f'<p class="desc">{_esc(desc)}</p>' if desc else ''}
-{f'<div class="gallery">{images_html}</div>' if images_html else ''}
-<div class="section">
-<div class="row"><div class="k">{_esc(coord_label)}</div>
-<div class="v coords">{_esc(lat)}, {_esc(lng)}</div></div>
-{notes_html}
-{f'<a class="cta" href="{_esc(open_in_maps)}" target="_blank" rel="noopener">Open in Maps</a>' if open_in_maps else ''}
-</div>
-<p class="foot">LumaScout — premium photo locations for photographers.</p>
-</div>
+  <header class="topbar">
+    <a class="brand" href="https://lumascout.app" target="_blank" rel="noopener">
+      {logo_svg}
+      <span class="name"><b>Luma</b><span class="gold">Scout</span></span>
+    </a>
+  </header>
+
+  <div class="hero" style="background-image:url('{_esc(hero)}')"></div>
+
+  <div class="wrap">
+    <p class="kicker">A LumaScout location</p>
+    <h1>{_esc(title)}</h1>
+    <p class="byline">{by_line}</p>
+
+    {('<div class="badges">' + ''.join(f'<span class="badge">{_esc(b)}</span>' for b in badges) + '</div>') if badges else ''}
+
+    {f'<div class="pnote"><span class="pnote-kicker">Photographer&rsquo;s note</span>{_esc(personal_note)}</div>' if personal_note else ''}
+
+    {f'<p class="desc">{_esc(desc)}</p>' if desc else ''}
+
+    {best_block}
+
+    {f'<div class="card"><div class="card-kicker">Sample photos from this location</div><div class="gallery">{gallery_html}</div></div>' if gallery_html else ''}
+
+    <div class="card">
+      <div class="card-kicker">Location</div>
+      <div class="row">
+        <div class="k">{_esc(coord_label)}</div>
+        <div class="v coords">{_esc(lat)}, {_esc(lng)}</div>
+      </div>
+      {notes_html}
+      {f'<a class="cta" href="{_esc(open_in_maps)}" target="_blank" rel="noopener">Open in Maps</a>' if open_in_maps else ''}
+    </div>
+
+    <footer class="footer">
+      <a class="brand" href="https://lumascout.app" target="_blank" rel="noopener">
+        {logo_svg}
+        <span class="name"><b>Luma</b><span class="gold">Scout</span></span>
+      </a>
+      <span>·</span>
+      <span>Premium photo locations for photographers</span>
+    </footer>
+  </div>
 </body>
 </html>"""

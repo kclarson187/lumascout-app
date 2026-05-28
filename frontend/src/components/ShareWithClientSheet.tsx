@@ -84,6 +84,10 @@ export default function ShareWithClientSheet({
   const [acknowledgedPrivacy, setAcknowledgedPrivacy] = useState(false);
   const [showExactLocation, setShowExactLocation] = useState(false);
   const [recentlyMintedToken, setRecentlyMintedToken] = useState<string | null>(null);
+  // Jun 2025 — "Share Location" CR. Optional photographer-authored
+  // personal note rendered above the spot details on the public,
+  // white-themed client page. 600-char cap matches the backend.
+  const [personalNote, setPersonalNote] = useState('');
 
   // Copy feedback — token of the link copied last, and a transient toast.
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
@@ -144,8 +148,12 @@ export default function ShareWithClientSheet({
     setBusy(true); setErr(null);
     try {
       const r = await api.post(`/spots/${spotId}/share`, {
-        show_exact_location: showExactLocation });
+        show_exact_location: showExactLocation,
+        personal_note: personalNote.trim() || undefined });
       setRecentlyMintedToken(r.token);
+      // Reset note so the next mint doesn't accidentally inherit the
+      // previous client's message.
+      setPersonalNote('');
       await refresh();
     } catch (e) {
       setErr(formatApiError(e));
@@ -281,7 +289,7 @@ export default function ShareWithClientSheet({
           <View style={styles.handle} />
           <View style={styles.header}>
             <View style={styles.headerText}>
-              <Text style={styles.title}>Share with client</Text>
+              <Text style={styles.title}>Share Location</Text>
               <Text style={styles.sub} numberOfLines={1}>{spotTitle}</Text>
             </View>
             <TouchableOpacity onPress={onClose} hitSlop={12} testID="share-sheet-close" style={styles.closeBtn}>
@@ -354,6 +362,25 @@ export default function ShareWithClientSheet({
                   </View>
                 ) : null}
 
+                {/* Jun 2025 — Personal note for the client. Rendered as a
+                    magazine-style pull quote above the spot details on
+                    the public, white-themed page recipients see. 600 char
+                    cap mirrors the backend validation. */}
+                <View style={styles.noteBlock}>
+                  <Text style={styles.noteLabel}>Add a personal note (optional)</Text>
+                  <TextInput
+                    value={personalNote}
+                    onChangeText={(t) => setPersonalNote(t.slice(0, 600))}
+                    style={styles.noteInput}
+                    placeholder="e.g. Hi Sarah — this location peaks in late April. Bring a change of outfits and water for the dogs."
+                    placeholderTextColor={colors.textTertiary}
+                    multiline
+                    maxLength={600}
+                    testID="share-personal-note"
+                  />
+                  <Text style={styles.noteCounter}>{personalNote.length}/600</Text>
+                </View>
+
                 {/* Generate button */}
                 <TouchableOpacity
                   style={[styles.primaryBtn, busy ? styles.btnBusy : null]}
@@ -366,7 +393,7 @@ export default function ShareWithClientSheet({
                   ) : (
                     <View style={styles.btnInner}>
                       <Plus size={18} color={colors.textInverse} />
-                      <Text style={styles.primaryBtnText}>Generate share link</Text>
+                      <Text style={styles.primaryBtnText}>Share via link</Text>
                     </View>
                   )}
                 </TouchableOpacity>
@@ -610,6 +637,39 @@ const styles = StyleSheet.create({
   btnBusy: { opacity: 0.6 },
   btnInner: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   primaryBtnText: { color: colors.textInverse, fontSize: 14, fontWeight: '700' },
+  // Jun 2025 — Personal note input (rendered above Generate button)
+  noteBlock: {
+    marginTop: space.md,
+    marginBottom: space.md,
+  },
+  noteLabel: {
+    color: colors.text,
+    fontSize: 12.5,
+    fontFamily: font.bodySemibold,
+    marginBottom: 8,
+  },
+  noteInput: {
+    minHeight: 96,
+    maxHeight: 180,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: colors.surface1,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.10)',
+    borderRadius: radii.md,
+    color: colors.text,
+    fontFamily: font.body,
+    fontSize: 14,
+    lineHeight: 19,
+    textAlignVertical: 'top',
+  },
+  noteCounter: {
+    color: colors.textTertiary,
+    fontFamily: font.body,
+    fontSize: 11,
+    marginTop: 4,
+    textAlign: 'right',
+  },
 
   section: { marginTop: space.lg },
   sectionLabel: {

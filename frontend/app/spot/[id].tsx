@@ -945,7 +945,7 @@ function SpotDetailImpl() {
                   testID="spot-share-client"
                 >
                   <Link2 size={16} color={colors.primary} />
-                  <Text style={ownerStyles.btnText}>Share with client</Text>
+                  <Text style={ownerStyles.btnText}>Share Location</Text>
                 </Pressable>
                 <Pressable
                   style={ownerStyles.btn}

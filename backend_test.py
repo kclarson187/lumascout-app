@@ -1,440 +1,535 @@
+#!/usr/bin/env python3
 """
-Backend test for "Premium Explore card upgrade" (Jun 2025).
+backend_test.py — Validate the Jun 2025 "Share Location" backend redesign.
 
-Verifies the FOUR new computed fields added to every spot returned by
-`public_spot_view()` in /app/backend/server.py:
-  - orientation_label  (str | None)
-  - elevation_ft       (int | None)
-  - access_status      ("free_public" | "permit_required" | "private_check")
-  - sample_photo_urls  (list[str], 0..3 entries)
+Covers ONLY the review request:
+  A. Personal note persistence (POST /api/spots/{id}/share)
+  B. Public viewer HTML (/api/public/location/{token})
+  C. Privacy / visibility — no regressions
+  D. Backward compatibility (legacy share docs + /shares list)
+  E. Edge / stability (HTML escape, multi-line, regression on weather/shoot-plan)
 
-And the new helper `attach_sample_photos(spots, per_spot=3)` wired into:
-  - /api/spots/{spot_id}                          (routes/spots.py)
-  - /api/spots                                    (routes/spots.py)
-  - /api/spots/nearby/search                      (routes/spots.py)
-  - /api/feed/home                                (server.py)
-
-Also confirms NO regression on existing fields and existing endpoints
-(/api/spots/{id}/shoot-plan, /api/collections/save-shoot-plan).
+Backend URL: REACT_APP_BACKEND_URL from frontend/.env, with /api prefix.
 """
 from __future__ import annotations
-
 import os
 import re
 import sys
-import time
 import json
-from typing import Any, Dict, List, Optional
+import traceback
+from typing import Any, Dict, List, Optional, Tuple
 
-import httpx
+import requests
 from pymongo import MongoClient
 
-# ─────────────────────────────────────────────────────────────────────
-# Config — use the public preview URL per system prompt.
-# ─────────────────────────────────────────────────────────────────────
+BASE = os.environ.get("REACT_APP_BACKEND_URL", "https://photo-finder-60.preview.emergentagent.com").rstrip("/")
+API = f"{BASE}/api"
+MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+DB_NAME = os.environ.get("DB_NAME", "photoscout_database")
 
-BASE = "https://photo-finder-60.preview.emergentagent.com"
-SPOT_ID = "spot_6829d0a67f60"  # Bluebonnet Fields @ Muleshoe Bend, TX
-SUPER_ADMIN_EMAIL = "kclarson187@gmail.com"
-SUPER_ADMIN_PASSWORD = "Grayson@1117!!"
+EMAIL = "kclarson187@gmail.com"
+PASSWORD = "Grayson@1117!!"
+SPOT_ID = "spot_6829d0a67f60"
 
-# Read MONGO_URL + DB_NAME from backend/.env for direct DB inspection.
-MONGO_URL = "mongodb://localhost:27017"
-DB_NAME = "test_database"
-try:
-    with open("/app/backend/.env", "r") as f:
-        env_lines = f.read()
-    m = re.search(r"^MONGO_URL=(.+)$", env_lines, re.MULTILINE)
-    if m:
-        MONGO_URL = m.group(1).strip().strip('"').strip("'")
-    m = re.search(r"^DB_NAME=(.+)$", env_lines, re.MULTILINE)
-    if m:
-        DB_NAME = m.group(1).strip().strip('"').strip("'")
-except Exception:
-    pass
+session = requests.Session()
+session.headers.update({"Accept": "application/json"})
 
-print(f"[setup] BASE={BASE}")
-print(f"[setup] MONGO_URL={MONGO_URL!r} DB_NAME={DB_NAME!r}")
-
-ALLOWED_ACCESS = {"free_public", "permit_required", "private_check"}
-NEW_KEYS = ("orientation_label", "elevation_ft", "access_status", "sample_photo_urls")
-LEGACY_KEYS = (
-    "spot_id", "title", "shoot_score", "hero_cover_image_url",
-    "latitude", "longitude", "images", "owner_user_id",
-    "privacy_mode", "visibility_status", "quality_score",
-)
-
-results: List[Dict[str, Any]] = []
+PASS: List[str] = []
+FAIL: List[str] = []
+NOTES: List[str] = []
 
 
-def record(name: str, ok: bool, detail: str = "") -> None:
-    status = "PASS" if ok else "FAIL"
-    print(f"[{status}] {name}: {detail}" if detail else f"[{status}] {name}")
-    results.append({"name": name, "ok": bool(ok), "detail": detail})
+def ok(label: str):
+    PASS.append(label)
+    print(f"  ✅ {label}")
 
 
-def expect_shape(spot: Dict[str, Any], label: str) -> bool:
-    ok = True
-    for k in NEW_KEYS:
-        if k not in spot:
-            record(f"{label} :: has key '{k}'", False, "key missing on payload")
-            ok = False
-    for k in LEGACY_KEYS:
-        if k not in spot:
-            record(f"{label} :: legacy key '{k}' present", False, "regression — old key dropped")
-            ok = False
-    ol = spot.get("orientation_label")
-    if ol is not None and not (isinstance(ol, str) and len(ol) > 0):
-        record(f"{label} :: orientation_label type", False, f"got {type(ol).__name__} value={ol!r}")
-        ok = False
-    ef = spot.get("elevation_ft")
-    if ef is not None and not isinstance(ef, int):
-        record(f"{label} :: elevation_ft type", False, f"got {type(ef).__name__} value={ef!r}")
-        ok = False
-    ax = spot.get("access_status")
-    if ax not in ALLOWED_ACCESS:
-        record(f"{label} :: access_status enum", False, f"got {ax!r} not in {ALLOWED_ACCESS}")
-        ok = False
-    sp = spot.get("sample_photo_urls")
-    if not isinstance(sp, list):
-        record(f"{label} :: sample_photo_urls is list", False, f"got {type(sp).__name__}")
-        ok = False
-    else:
-        if len(sp) > 3:
-            record(f"{label} :: sample_photo_urls len ≤ 3", False, f"got {len(sp)}")
-            ok = False
-        for u in sp:
-            if not (isinstance(u, str) and u.startswith(("http://", "https://"))):
-                record(f"{label} :: sample_photo_urls all URLs", False, f"bad entry {u!r}")
-                ok = False
-                break
-    return ok
+def bad(label: str, detail: str = ""):
+    FAIL.append(f"{label} — {detail}")
+    print(f"  ❌ {label}\n      {detail}")
 
 
-def login_super_admin(client: httpx.Client) -> Optional[str]:
-    for path in ("/api/auth/login", "/api/login"):
-        try:
-            r = client.post(
-                BASE + path,
-                json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PASSWORD},
-                timeout=15,
-            )
-            if r.status_code == 200:
-                data = r.json()
-                token = data.get("access_token") or data.get("token") or data.get("session_token")
-                if token:
-                    print(f"[auth] logged in via {path}")
-                    return token
-        except Exception as e:
-            print(f"[auth] {path} error: {e}")
-    print("[auth] super admin login did not return a token — testing as anon")
-    return None
+def note(s: str):
+    NOTES.append(s)
+    print(f"  ℹ️  {s}")
 
 
-def test_A1_single_spot(client: httpx.Client) -> Dict[str, Any]:
-    r = client.get(BASE + f"/api/spots/{SPOT_ID}", timeout=20)
+def login() -> str:
+    r = session.post(f"{API}/auth/login", json={"email": EMAIL, "password": PASSWORD}, timeout=20)
     if r.status_code != 200:
-        record("A1 GET /api/spots/{id} 200", False, f"status={r.status_code} body={r.text[:200]}")
-        return {}
-    spot = r.json()
-    record("A1 GET /api/spots/{id} 200", True, f"title={spot.get('title')!r}")
-    expect_shape(spot, "A1 bluebonnet spot")
-    ol = spot.get("orientation_label")
-    if isinstance(ol, str) and "sunset" in ol.lower():
-        record("A1 bluebonnet orientation_label is sunset-flavored", True, f"got {ol!r}")
-    else:
-        record("A1 bluebonnet orientation_label is sunset-flavored", False, f"got {ol!r}")
-    if spot.get("permit_required") and spot.get("access_status") != "permit_required":
-        record("A1 bluebonnet access_status=permit_required", False, f"got {spot.get('access_status')!r}")
-    else:
-        record("A1 bluebonnet access_status=permit_required", True, str(spot.get("access_status")))
-    sp = spot.get("sample_photo_urls") or []
-    if len(sp) < 1:
-        record("A1 bluebonnet sample_photo_urls populated", False, f"got {sp}")
-    else:
-        record("A1 bluebonnet sample_photo_urls populated", True, f"{len(sp)} url(s)")
-    return spot
+        raise SystemExit(f"login failed: {r.status_code} {r.text[:300]}")
+    return r.json()["token"]
 
 
-def test_A2_list(client: httpx.Client) -> List[Dict[str, Any]]:
-    t0 = time.perf_counter()
-    r = client.get(BASE + "/api/spots", params={"limit": 5}, timeout=30)
-    dt = (time.perf_counter() - t0) * 1000
-    if r.status_code != 200:
-        record("A2 GET /api/spots?limit=5 200", False, f"status={r.status_code}")
-        return []
-    body = r.json()
-    if isinstance(body, dict) and "items" in body:
-        items = body["items"]
-        record("A2 GET /api/spots wrapped shape", True, f"keys={sorted(body.keys())} count={len(items)}")
-    elif isinstance(body, list):
-        items = body
-        record("A2 GET /api/spots list shape", True, f"count={len(items)}")
-    else:
-        record("A2 GET /api/spots shape", False, f"unexpected {type(body).__name__}")
-        return []
-    record("A2 list latency", True, f"{dt:.0f} ms (limit=5)")
-    if not items:
-        record("A2 list has at least one spot", False, "empty")
-        return []
-    all_ok = True
-    for i, it in enumerate(items):
-        if not expect_shape(it, f"A2 item[{i}] {it.get('spot_id')}"):
-            all_ok = False
-    record("A2 every list item has new fields", all_ok)
-    return items
+def auth_headers(token: str) -> Dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
 
 
-def test_A3_nearby(client: httpx.Client) -> List[Dict[str, Any]]:
-    paths_to_try = [
-        ("/api/spots/nearby/search", {"lat": 30.5, "lng": -98.0, "radius_km": 80}),
-        ("/api/spots/nearby", {"lat": 30.5, "lng": -98.0, "radius_km": 80}),
-    ]
-    items: List[Dict[str, Any]] = []
-    used_path = None
-    for path, params in paths_to_try:
-        try:
-            r = client.get(BASE + path, params=params, timeout=20)
-            if r.status_code == 200:
-                body = r.json()
-                items = body if isinstance(body, list) else body.get("items", [])
-                used_path = path
-                record(f"A3 GET {path} 200", True, f"count={len(items)}")
-                break
-            else:
-                record(f"A3 GET {path}", False, f"status={r.status_code}")
-        except Exception as e:
-            record(f"A3 GET {path}", False, str(e))
-    if not used_path:
-        record("A3 nearby endpoint reachable", False, "no path returned 200")
-        return []
-    all_ok = True
-    for i, it in enumerate(items[:10]):
-        if not expect_shape(it, f"A3 nearby[{i}] {it.get('spot_id')}"):
-            all_ok = False
-    record("A3 every nearby item has new fields", all_ok)
-    return items
-
-
-def test_C1_list_latency(client: httpx.Client) -> None:
-    client.get(BASE + "/api/spots", params={"limit": 20}, timeout=30)  # warm
-    samples = []
-    for _ in range(3):
-        t0 = time.perf_counter()
-        r = client.get(BASE + "/api/spots", params={"limit": 20}, timeout=30)
-        dt = (time.perf_counter() - t0) * 1000
-        if r.status_code == 200:
-            samples.append(dt)
-    if not samples:
-        record("C1 list latency", False, "no successful calls")
-        return
-    best = min(samples)
-    avg = sum(samples) / len(samples)
-    detail = f"best={best:.0f}ms avg={avg:.0f}ms samples={[round(s) for s in samples]}"
-    if best < 1500:
-        record("C1 list latency < 1.5s", True, detail)
-    elif best < 2000:
-        record("C1 list latency < 2.0s", True, f"Minor: slower than ideal — {detail}")
-    else:
-        record("C1 list latency < 2.0s", False, detail)
-
-
-def test_D_private(client: httpx.Client) -> None:
-    try:
-        mongo = MongoClient(MONGO_URL, serverSelectionTimeoutMS=4000)
-        db = mongo[DB_NAME]
-        priv = list(db.spots.find(
-            {"privacy_mode": "private"},
-            {"_id": 0, "spot_id": 1, "owner_user_id": 1, "title": 1},
-        ).limit(20))
-    except Exception as e:
-        record("D Mongo connect", False, str(e))
-        return
-    record("D Mongo connect", True, f"found {len(priv)} private spot(s) in DB")
-    if not priv:
-        record("D no private spots to test", True, "skipped — none exist")
-        return
-    r = client.get(BASE + "/api/spots", params={"limit": 200}, timeout=30)
-    if r.status_code != 200:
-        record("D list fetch", False, f"status={r.status_code}")
-        return
-    body = r.json()
-    listed = body if isinstance(body, list) else body.get("items", [])
-    listed_ids = {s.get("spot_id") for s in listed}
-    leaked = [p["spot_id"] for p in priv if p["spot_id"] in listed_ids]
-    if leaked:
-        record("D1 private spots not leaked to anon", False, f"leaked={leaked[:5]}")
-    else:
-        record("D1 private spots not leaked to anon", True, f"all {len(priv)} hidden")
-    pid = priv[0]["spot_id"]
-    r2 = client.get(BASE + f"/api/spots/{pid}", timeout=15)
-    if r2.status_code == 403:
-        record("D2 anon GET of private spot blocked", True, "403 returned as expected")
-    elif r2.status_code == 200:
-        ok = expect_shape(r2.json(), f"D2 private spot {pid}")
-        record("D2 private spot payload shape", ok)
-    else:
-        record("D2 anon GET of private spot", False, f"status={r2.status_code}")
-
-
-def test_E_edge_cases(client: httpx.Client) -> None:
-    try:
-        mongo = MongoClient(MONGO_URL, serverSelectionTimeoutMS=4000)
-        db = mongo[DB_NAME]
-    except Exception as e:
-        record("E Mongo connect", False, str(e))
-        return
-
-    # E1 — spot with no images
-    no_img = db.spots.find_one(
-        {"$or": [{"images": []}, {"images": None}, {"images": {"$exists": False}}],
-         "privacy_mode": {"$ne": "private"}, "visibility_status": "approved"},
-        {"_id": 0, "spot_id": 1, "title": 1, "images": 1},
+def create_share(token: str, spot_id: str, body: Dict[str, Any]) -> requests.Response:
+    return session.post(
+        f"{API}/spots/{spot_id}/share",
+        json=body,
+        headers=auth_headers(token),
+        timeout=20,
     )
-    if no_img:
-        sid = no_img["spot_id"]
-        r = client.get(BASE + f"/api/spots/{sid}", timeout=15)
+
+
+def revoke_share(token: str, spot_id: str, share_token: str) -> requests.Response:
+    return session.delete(
+        f"{API}/spots/{spot_id}/share/{share_token}",
+        headers=auth_headers(token),
+        timeout=20,
+    )
+
+
+def list_shares(token: str, spot_id: str) -> requests.Response:
+    return session.get(
+        f"{API}/spots/{spot_id}/shares",
+        headers=auth_headers(token),
+        timeout=20,
+    )
+
+
+def get_public_html(share_token: str) -> requests.Response:
+    return session.get(
+        f"{API}/public/location/{share_token}",
+        headers={"Accept": "text/html"},
+        timeout=20,
+    )
+
+
+def get_public_json(share_token: str) -> requests.Response:
+    return session.get(
+        f"{API}/public/location/{share_token}",
+        headers={"Accept": "application/json"},
+        timeout=20,
+    )
+
+
+def get_visibility(token: str, spot_id: str) -> Tuple[str, str]:
+    r = session.get(f"{API}/spots/{spot_id}", headers=auth_headers(token), timeout=20)
+    if r.status_code != 200:
+        return ("", "")
+    d = r.json()
+    return (d.get("privacy_mode") or "", d.get("location_display_mode") or "")
+
+
+def set_visibility(token: str, spot_id: str, visibility: str, show_exact: Optional[bool] = None):
+    body: Dict[str, Any] = {"visibility": visibility}
+    if show_exact is not None:
+        body["show_exact_location"] = show_exact
+    return session.patch(
+        f"{API}/spots/{spot_id}/visibility",
+        json=body,
+        headers=auth_headers(token),
+        timeout=20,
+    )
+
+
+def section_A_personal_note_persistence(token: str) -> Dict[str, str]:
+    print("\n=== A. Personal note persistence ===")
+    out: Dict[str, str] = {}
+
+    pmode, _ldisp = get_visibility(token, SPOT_ID)
+    if pmode != "public":
+        r = set_visibility(token, SPOT_ID, "public")
         if r.status_code != 200:
-            record("E1 spot w/o images returns 200", False, f"status={r.status_code} sid={sid}")
+            note(f"Could not set spot public: {r.status_code} {r.text[:200]}")
+
+    # A.1
+    note_text = "Hi Sarah — bring extras!"
+    r = create_share(token, SPOT_ID, {"label": "Sarah session", "personal_note": note_text})
+    if r.status_code != 200:
+        bad("A.1 POST /share with personal_note", f"status={r.status_code} body={r.text[:300]}")
+    else:
+        data = r.json()
+        if not data.get("token"):
+            bad("A.1 token missing in response", json.dumps(data)[:200])
         else:
-            sp = r.json().get("sample_photo_urls")
-            if sp == []:
-                record("E1 sample_photo_urls is [] for no-image spot", True, f"sid={sid}")
-            elif isinstance(sp, list):
-                record("E1 sample_photo_urls is list (community-filled)", True, f"sid={sid} got={len(sp)} url(s)")
+            out["A1"] = data["token"]
+            ok(f"A.1 POST /share returned token (len={len(data['token'])})")
+            lr = list_shares(token, SPOT_ID)
+            if lr.status_code == 200:
+                row = next((x for x in lr.json().get("items", []) if x.get("token") == data["token"]), None)
+                if not row:
+                    bad("A.1 share row not found in /shares list", "")
+                else:
+                    if row.get("personal_note") == note_text:
+                        ok("A.1 personal_note persisted exactly (via /shares list)")
+                    else:
+                        bad("A.1 personal_note not on /shares row OR mismatched",
+                            f"row.personal_note={row.get('personal_note')!r}")
             else:
-                record("E1 sample_photo_urls is list (not null/missing)", False, f"sid={sid} got={sp!r}")
-    else:
-        record("E1 no-image spot test", True, "Minor: no qualifying spot in DB; skipped")
+                bad("A.1 GET /shares failed", f"{lr.status_code}")
+            try:
+                cli = MongoClient(MONGO_URL, serverSelectionTimeoutMS=2000)
+                doc = cli[DB_NAME].spot_shares.find_one({"token": data["token"]})
+                if doc and doc.get("personal_note") == note_text:
+                    ok("A.1 personal_note stored verbatim in spot_shares doc")
+                elif doc:
+                    bad("A.1 spot_shares doc personal_note mismatch",
+                        f"stored={doc.get('personal_note')!r}")
+                else:
+                    bad("A.1 spot_shares doc not found by token", "")
+            except Exception as e:
+                note(f"A.1 mongo cross-check skipped: {e}")
 
-    # E2 — private spot
-    priv = db.spots.find_one({"privacy_mode": "private"}, {"_id": 0, "spot_id": 1, "owner_user_id": 1})
-    if priv:
-        r = client.get(BASE + f"/api/spots/{priv['spot_id']}", timeout=15)
-        if r.status_code == 403:
-            record("E2 private spot 403 to anon (gating works)", True, "as expected")
-        elif r.status_code == 200:
-            ax = r.json().get("access_status")
-            if ax == "private_check":
-                record("E2 private spot access_status=private_check", True)
+    # A.2 — 700 chars
+    long_note = "x" * 700
+    r = create_share(token, SPOT_ID, {"personal_note": long_note})
+    if r.status_code == 422:
+        ok("A.2 long personal_note REJECTED via 422 (acceptable)")
+        note("A.2 behavior: server rejects >600 chars with 422.")
+    elif r.status_code == 200:
+        data = r.json()
+        out["A2"] = data["token"]
+        lr = list_shares(token, SPOT_ID)
+        row = next((x for x in lr.json().get("items", []) if x.get("token") == data["token"]), None)
+        stored = (row or {}).get("personal_note") or ""
+        if len(stored) == 600 and stored == "x" * 600:
+            ok(f"A.2 long personal_note ACCEPTED and truncated to {len(stored)} chars")
+            note(f"A.2 behavior: server truncates to {len(stored)} chars (max 600).")
+        elif 0 < len(stored) <= 600:
+            ok(f"A.2 long personal_note ACCEPTED, stored len={len(stored)} (≤600)")
+        else:
+            bad("A.2 long personal_note neither truncated nor rejected", f"len={len(stored)}")
+    else:
+        bad("A.2 long personal_note unexpected status", f"{r.status_code} {r.text[:200]}")
+
+    # A.3 — no field
+    r = create_share(token, SPOT_ID, {"label": "no-note"})
+    if r.status_code != 200:
+        bad("A.3 POST /share with no personal_note", f"{r.status_code} {r.text[:200]}")
+    else:
+        data = r.json()
+        out["A3"] = data["token"]
+        lr = list_shares(token, SPOT_ID)
+        row = next((x for x in lr.json().get("items", []) if x.get("token") == data["token"]), None)
+        pn = (row or {}).get("personal_note")
+        if pn in (None, ""):
+            ok(f"A.3 personal_note absent → stored as {pn!r}")
+        else:
+            bad("A.3 expected null/None personal_note", f"stored={pn!r}")
+
+    # A.4 — empty string
+    r = create_share(token, SPOT_ID, {"personal_note": ""})
+    if r.status_code != 200:
+        bad("A.4 POST /share with empty personal_note", f"{r.status_code} {r.text[:200]}")
+    else:
+        data = r.json()
+        out["A4"] = data["token"]
+        lr = list_shares(token, SPOT_ID)
+        row = next((x for x in lr.json().get("items", []) if x.get("token") == data["token"]), None)
+        pn = (row or {}).get("personal_note")
+        if pn in (None, ""):
+            ok(f"A.4 empty personal_note → stored as {pn!r}")
+        else:
+            bad("A.4 expected null/empty personal_note", f"stored={pn!r}")
+
+    return out
+
+
+def section_B_public_html(token: str, share_tokens: Dict[str, str]):
+    print("\n=== B. Public viewer HTML ===")
+    note_text = "Hi Sarah — bring extras!"
+
+    tok = share_tokens.get("A1")
+    if not tok:
+        bad("B.1 prerequisite missing A1 token", "")
+        return
+    r = get_public_html(tok)
+    if r.status_code != 200:
+        bad("B.1 GET /public/location HTML status", f"{r.status_code} body={r.text[:200]}")
+    else:
+        body = r.text
+        checks = [
+            ("white theme bg #FAFAF7", "background:#FAFAF7" in body),
+            ('class="brand" present', 'class="brand"' in body),
+            (f"personal_note '{note_text}' verbatim in body",
+                ("Hi Sarah — bring extras!" in body)),
+            ("logo SVG stroke=#F5A523", 'stroke="#F5A523"' in body),
+            ("LumaScout wordmark appears 2+ times (top + footer)",
+                body.count("<b>Luma</b>") >= 2 or body.count("LumaScout") >= 2),
+            ("og:image meta present",
+                bool(re.search(r'<meta[^>]+property="og:image"', body))),
+            ("Content-Type text/html",
+                "text/html" in (r.headers.get("Content-Type", "").lower())),
+        ]
+        for label, cond in checks:
+            ok("B.1 " + label) if cond else bad("B.1 " + label, "")
+        note(f"B.1 wordmark hint: 'LumaScout' lit={body.count('LumaScout')}, '<b>Luma</b>'={body.count('<b>Luma</b>')}")
+
+    tok3 = share_tokens.get("A3")
+    if not tok3:
+        bad("B.2 prerequisite missing A3 token", "")
+    else:
+        r = get_public_html(tok3)
+        if r.status_code != 200:
+            bad("B.2 HTML status (no-note)", f"{r.status_code}")
+        else:
+            body = r.text
+            if 'class="pnote"' in body or 'class="pnote-kicker"' in body:
+                bad("B.2 .pnote div present when personal_note missing", "")
             else:
-                record("E2 private spot access_status=private_check", False, f"got {ax!r}")
-        else:
-            record("E2 private spot endpoint", False, f"status={r.status_code}")
+                ok("B.2 .pnote div hidden when personal_note absent")
+            tok4 = share_tokens.get("A4")
+            if tok4:
+                r2 = get_public_html(tok4)
+                if r2.status_code == 200 and ('class="pnote"' not in r2.text):
+                    ok("B.2b .pnote div hidden when personal_note=''")
+                elif r2.status_code == 200:
+                    bad("B.2b .pnote div present when personal_note=''", "")
+
+    tok = share_tokens.get("A1")
+    r = get_public_json(tok)
+    if r.status_code != 200:
+        bad("B.3 GET /public/location JSON status", f"{r.status_code}")
     else:
-        record("E2 private spot test", True, "Minor: no private spot in DB; skipped")
-
-    # E3 — permit + fee
-    both = db.spots.find_one(
-        {"permit_required": True, "fee_required": True,
-         "privacy_mode": {"$ne": "private"}, "visibility_status": "approved"},
-        {"_id": 0, "spot_id": 1},
-    )
-    if both:
-        r = client.get(BASE + f"/api/spots/{both['spot_id']}", timeout=15)
-        ax = r.json().get("access_status") if r.status_code == 200 else None
-        if ax == "permit_required":
-            record("E3 permit+fee → permit_required", True, f"sid={both['spot_id']}")
-        else:
-            record("E3 permit+fee → permit_required", False, f"sid={both['spot_id']} got {ax!r}")
-    else:
-        record("E3 permit+fee combo test", True, "Minor: no qualifying spot in DB; skipped")
-
-    # E4 — sunrise=sunset=0 → orientation_label None
-    flat = db.spots.find_one(
-        {"$and": [
-            {"$or": [{"sunrise_rating": 0}, {"sunrise_rating": None}, {"sunrise_rating": {"$exists": False}}]},
-            {"$or": [{"sunset_rating": 0}, {"sunset_rating": None}, {"sunset_rating": {"$exists": False}}]},
-            {"$or": [{"morning_golden_hour_rating": 0}, {"morning_golden_hour_rating": None}, {"morning_golden_hour_rating": {"$exists": False}}]},
-            {"$or": [{"evening_golden_hour_rating": 0}, {"evening_golden_hour_rating": None}, {"evening_golden_hour_rating": {"$exists": False}}]},
-            {"privacy_mode": {"$ne": "private"}},
-            {"visibility_status": "approved"},
-        ]},
-        {"_id": 0, "spot_id": 1},
-    )
-    if flat:
-        r = client.get(BASE + f"/api/spots/{flat['spot_id']}", timeout=15)
-        ol = r.json().get("orientation_label") if r.status_code == 200 else "ERR"
-        if ol is None:
-            record("E4 all-zero golden ratings → orientation_label is None", True, f"sid={flat['spot_id']}")
-        else:
-            record("E4 all-zero golden ratings → orientation_label is None", False, f"got {ol!r}")
-    else:
-        record("E4 flat-ratings test", True, "Minor: no qualifying spot in DB; skipped")
-
-
-def test_F_regressions(client: httpx.Client, token: Optional[str]) -> None:
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
-
-    r = client.get(BASE + f"/api/spots/{SPOT_ID}/shoot-plan", headers=headers, timeout=30)
-    if r.status_code == 200:
-        body = r.json()
-        keys = list(body.keys()) if isinstance(body, dict) else []
-        record("F1 GET /api/spots/{id}/shoot-plan 200", True, f"keys={keys[:8]}")
-    else:
-        record("F1 GET /api/spots/{id}/shoot-plan", False, f"status={r.status_code} body={r.text[:200]}")
-
-    r = client.get(BASE + "/api/feed/home", headers=headers, timeout=30)
-    if r.status_code == 200:
-        body = r.json()
-        if isinstance(body, dict):
-            sections = [k for k in ("hero", "nearby", "golden", "seasonal", "new", "trending", "featured") if k in body]
-            record("F2 GET /api/feed/home 200", True, f"sections={sections} degraded={body.get('degraded')}")
-            for s in sections:
-                if isinstance(body.get(s), list) and body[s]:
-                    expect_shape(body[s][0], f"F2 feed.{s}[0]")
-                    break
-        else:
-            record("F2 GET /api/feed/home shape", False, f"unexpected type {type(body).__name__}")
-    else:
-        record("F2 GET /api/feed/home", False, f"status={r.status_code}")
-
-    if token:
         try:
-            r = client.post(
-                BASE + "/api/collections/save-shoot-plan",
-                headers=headers,
-                json={"spot_id": SPOT_ID, "title": "Sandbox QA — Premium Explore test"},
-                timeout=20,
-            )
-            if r.status_code in (200, 201):
-                record("F3 POST /api/collections/save-shoot-plan", True, f"status={r.status_code}")
-            elif 400 <= r.status_code < 500:
-                record(
-                    "F3 POST /api/collections/save-shoot-plan",
-                    True,
-                    f"Minor: {r.status_code} client response (non-500 acceptable); body={r.text[:200]}",
-                )
+            data = r.json()
+            if data.get("status") == "ok" and isinstance(data.get("spot"), dict):
+                ok("B.3 JSON path returns sanitized spot payload")
             else:
-                record("F3 POST /api/collections/save-shoot-plan", False, f"status={r.status_code} body={r.text[:200]}")
+                bad("B.3 JSON shape unexpected", json.dumps(data)[:200])
         except Exception as e:
-            record("F3 POST /api/collections/save-shoot-plan", False, str(e))
+            bad("B.3 JSON parse failed", str(e))
+
+
+def section_C_privacy_visibility(token: str):
+    print("\n=== C. Privacy / visibility ===")
+    set_visibility(token, SPOT_ID, "public")
+
+    # C.1 approximate
+    r = create_share(token, SPOT_ID, {"personal_note": "C1 test", "show_exact_location": False})
+    if r.status_code != 200:
+        bad("C.1 create approximate share", f"{r.status_code} {r.text[:200]}")
+        return
+    tok_c1 = r.json()["token"]
+    h = get_public_html(tok_c1)
+    body = h.text
+    if "Approximate area" in body:
+        ok("C.1 'Approximate area' badge rendered")
     else:
-        record("F3 POST /api/collections/save-shoot-plan", True, "Minor: skipped — no admin token")
+        bad("C.1 'Approximate area' badge missing", "")
+    if "Open in Maps" not in body:
+        ok("C.1 'Open in Maps' CTA absent for approximate share")
+    else:
+        bad("C.1 'Open in Maps' CTA present when it shouldn't be", "")
+    if 'class="coords"' in body:
+        ok("C.1 coord block present")
+    else:
+        bad("C.1 coord block missing", "")
+
+    # C.2 exact
+    r = create_share(token, SPOT_ID, {"personal_note": "C2 test", "show_exact_location": True})
+    if r.status_code != 200:
+        bad("C.2 create exact share", f"{r.status_code} {r.text[:200]}")
+        return
+    tok_c2 = r.json()["token"]
+    h = get_public_html(tok_c2)
+    body = h.text
+    if "Exact location" in body:
+        ok("C.2 'Exact location' label rendered")
+    else:
+        bad("C.2 'Exact location' label missing", "")
+    if "Open in Maps" in body:
+        ok("C.2 'Open in Maps' CTA present for exact share")
+    else:
+        bad("C.2 'Open in Maps' CTA missing", "")
+
+    # C.3 revoked → 404
+    rv = revoke_share(token, SPOT_ID, tok_c1)
+    if rv.status_code != 200:
+        bad("C.3 revoke status", f"{rv.status_code}")
+    h = get_public_html(tok_c1)
+    if h.status_code == 404:
+        ok("C.3 revoked share HTML → 404")
+    else:
+        bad("C.3 revoked share HTML status", f"{h.status_code}")
+    j = get_public_json(tok_c1)
+    if j.status_code == 404:
+        try:
+            jdata = j.json()
+            if jdata.get("status") == "unavailable":
+                ok("C.3 revoked share JSON → 404 + unavailable parity")
+            else:
+                bad("C.3 unavailable parity mismatch", json.dumps(jdata)[:200])
+        except Exception:
+            bad("C.3 revoked JSON parse fail", j.text[:200])
+    else:
+        bad("C.3 revoked share JSON status", f"{j.status_code}")
 
 
-def main() -> int:
-    with httpx.Client(follow_redirects=True) as client:
-        token = login_super_admin(client)
-        test_A1_single_spot(client)
-        test_A2_list(client)
-        test_A3_nearby(client)
-        test_C1_list_latency(client)
-        test_D_private(client)
-        test_E_edge_cases(client)
-        test_F_regressions(client, token)
+def section_D_backcompat(token: str):
+    print("\n=== D. Backward compatibility ===")
+    legacy_token = None
+    try:
+        from secrets import token_urlsafe
+        from datetime import datetime, timezone
+        cli = MongoClient(MONGO_URL, serverSelectionTimeoutMS=2000)
+        coll = cli[DB_NAME].spot_shares
+        legacy_token = token_urlsafe(24)
+        legacy_doc = {
+            "share_id": f"shr_legacy_{legacy_token[:8]}",
+            "token": legacy_token,
+            "spot_id": SPOT_ID,
+            "owner_user_id": "legacy",
+            "created_by_user_id": "legacy",
+            "created_by_role": "owner",
+            "label": "legacy",
+            # NO personal_note key at all
+            "spot_visibility_at_create": "public",
+            "show_exact_location": True,
+            "revoked": False,
+            "revoked_at": None,
+            "revoked_by_user_id": None,
+            "created_at": datetime.now(timezone.utc),
+            "last_accessed_at": None,
+            "access_count": 0,
+        }
+        coll.insert_one(dict(legacy_doc))
+        r = get_public_html(legacy_token)
+        if r.status_code == 200 and 'class="pnote"' not in r.text:
+            ok("D.1 legacy share without personal_note renders 200 with no .pnote")
+        elif r.status_code >= 500:
+            bad("D.1 legacy share render 5xx", f"{r.status_code} {r.text[:300]}")
+        elif 'class="pnote"' in r.text:
+            bad("D.1 legacy share renders an orphan .pnote", "")
+        else:
+            bad("D.1 legacy share unexpected status", f"{r.status_code}")
+        coll.delete_one({"token": legacy_token})
+    except Exception as e:
+        bad("D.1 legacy doc test crashed", f"{e}")
+        traceback.print_exc()
 
-    print("\n" + "=" * 72)
-    pass_count = sum(1 for r in results if r["ok"])
-    fail_count = sum(1 for r in results if not r["ok"])
-    print(f"TOTAL: {pass_count} pass, {fail_count} fail")
-    if fail_count:
-        print("\nFAILURES:")
-        for r in results:
-            if not r["ok"]:
-                print(f"  - {r['name']}: {r['detail']}")
-    return 0 if fail_count == 0 else 1
+    lr = list_shares(token, SPOT_ID)
+    if lr.status_code != 200:
+        bad("D.2 /shares list status", f"{lr.status_code}")
+    else:
+        items = lr.json().get("items", [])
+        if not items:
+            note("D.2 no items on /shares list, skipping per-row check")
+        else:
+            # We need 'personal_note' key on every row.
+            sample_row = items[0]
+            print("    sample /shares row keys:", sorted(sample_row.keys()))
+            missing = [i.get("token") for i in items if "personal_note" not in i]
+            if missing:
+                bad("D.2 personal_note KEY missing from some /shares rows",
+                    f"missing_for_{len(missing)}/{len(items)} rows")
+            else:
+                ok("D.2 /shares list rows all include 'personal_note' key")
+
+
+def section_E_edge(token: str):
+    print("\n=== E. Edge / stability ===")
+    # E.1 XSS
+    xss = '<script>alert(1)</script>'
+    r = create_share(token, SPOT_ID, {"personal_note": xss})
+    if r.status_code != 200:
+        bad("E.1 create XSS share", f"{r.status_code} {r.text[:200]}")
+    else:
+        tok = r.json()["token"]
+        h = get_public_html(tok)
+        body = h.text
+        if "<script>alert(1)</script>" in body:
+            bad("E.1 raw <script> appears in HTML — NOT escaped", "")
+        elif "&lt;script&gt;alert(1)&lt;/script&gt;" in body:
+            ok("E.1 personal_note HTML-escaped (literal &lt;script&gt;…)")
+        elif "&lt;script" in body:
+            ok("E.1 personal_note appears escaped (&lt;script… found)")
+        else:
+            bad("E.1 could not verify escape of personal_note", "")
+
+    # E.2 multi-line
+    multiline = "Line 1\nLine 2\nLine 3"
+    r = create_share(token, SPOT_ID, {"personal_note": multiline})
+    if r.status_code != 200:
+        bad("E.2 create multi-line share", f"{r.status_code} {r.text[:200]}")
+    else:
+        tok = r.json()["token"]
+        h = get_public_html(tok)
+        body = h.text
+        if "Line 1\nLine 2\nLine 3" in body:
+            ok("E.2 multi-line \\n preserved verbatim (white-space:pre-wrap will render)")
+        elif "Line 1" in body and "Line 2" in body and "Line 3" in body:
+            ok("E.2 multi-line content all present")
+        else:
+            bad("E.2 multi-line content missing", "")
+        if "white-space: pre-wrap" in body or "white-space:pre-wrap" in body:
+            ok("E.2 CSS white-space: pre-wrap present in styles")
+        else:
+            note("E.2 white-space:pre-wrap CSS rule not detected (visual rendering may differ)")
+
+    # E.3 regressions
+    r = session.get(f"{API}/spots/{SPOT_ID}/shoot-plan", timeout=20)
+    if r.status_code == 200 and isinstance(r.json(), dict):
+        ok("E.3a /spots/{id}/shoot-plan → 200")
+        wa = r.json().get("weather_available")
+        if wa is not None:
+            ok(f"E.3a shoot-plan weather_available={wa}")
+    else:
+        bad("E.3a /spots/{id}/shoot-plan", f"{r.status_code}")
+
+    r = session.get(f"{API}/spots/nearby/search", params={"lat": 30.5, "lng": -98.0, "radius_km": 50}, timeout=20)
+    if r.status_code == 200:
+        ok("E.3b /spots/nearby/search → 200")
+    else:
+        bad("E.3b /spots/nearby/search", f"{r.status_code} {r.text[:200]}")
+
+
+def cleanup(token: str):
+    print("\n=== Cleanup ===")
+    lr = list_shares(token, SPOT_ID)
+    if lr.status_code != 200:
+        note("cleanup: could not list shares")
+        return
+    n = 0
+    for r in lr.json().get("items", []):
+        if not r.get("revoked"):
+            try:
+                revoke_share(token, SPOT_ID, r["token"])
+                n += 1
+            except Exception:
+                pass
+    note(f"cleanup: revoked {n} active shares we created")
+
+
+def main():
+    print(f"\nBackend: {API}")
+    print("Logging in as super_admin …")
+    tok = login()
+    print(f"  ✅ login OK")
+
+    share_tokens: Dict[str, str] = {}
+    try:
+        share_tokens = section_A_personal_note_persistence(tok)
+        section_B_public_html(tok, share_tokens)
+        section_C_privacy_visibility(tok)
+        section_D_backcompat(tok)
+        section_E_edge(tok)
+    except Exception:
+        print("Unhandled error in test run:")
+        traceback.print_exc()
+    finally:
+        try:
+            cleanup(tok)
+        except Exception:
+            pass
+
+    print("\n──────────────────────────────")
+    print(f" PASS: {len(PASS)}    FAIL: {len(FAIL)}")
+    if FAIL:
+        print("\nFailures:")
+        for f in FAIL:
+            print("  •", f)
+    if NOTES:
+        print("\nNotes:")
+        for n in NOTES:
+            print("  •", n)
+
+    sys.exit(0 if not FAIL else 1)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
