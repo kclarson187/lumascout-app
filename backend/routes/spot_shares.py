@@ -817,6 +817,39 @@ async def public_location_view(share_slug: str, request: Request):
     if wants_json:
         return _build_public_view(ctx)
 
+    # Jun 2025 — public share page must include the same images a
+    # logged-in user sees on the in-app Location Detail page hero
+    # carousel. The in-app hero carousel = cover + spot.images[] +
+    # approved community uploads (from `spot_community_uploads`).
+    # We already have the first two via the sanitized payload; fetch
+    # the third here and attach to ctx so the renderer can merge them
+    # into one clean grid. Followers-only items are dropped because
+    # the share viewer is an anonymous client, not a follower.
+    try:
+        spot_id_for_uploads = (ctx.get("spot") or {}).get("spot_id")
+        if spot_id_for_uploads:
+            cu_rows = await db.spot_community_uploads.find(
+                {
+                    "spot_id": spot_id_for_uploads,
+                    "moderation_status": "approved",
+                },
+                {"_id": 0, "image_url": 1, "visibility": 1},
+            ).sort("created_at", -1).limit(60).to_list(60)
+            ctx["community_image_urls"] = [
+                (r or {}).get("image_url")
+                for r in cu_rows
+                if r
+                and isinstance(r.get("image_url"), str)
+                and r.get("image_url").strip()
+                and (r.get("visibility") or "public") != "followers"
+            ]
+        else:
+            ctx["community_image_urls"] = []
+    except Exception:
+        # Community uploads are a non-critical enrichment. Never block
+        # the share page render if the lookup fails for any reason.
+        ctx["community_image_urls"] = []
+
     return HTMLResponse(content=_render_public_html(ctx, canonical_url=canonical_url))
 
 
@@ -928,31 +961,50 @@ def _render_public_html(ctx: Dict[str, Any], canonical_url: Optional[str] = None
 </div>
 """
 
-    # ── All uploaded images for this location ─────────────────────
-    # Jun 2025 — was previously limited to (unused) `sample_photo_urls`
-    # capped at 6. We now render the FULL `images` list from the
-    # sanitized public payload so clients see every uploaded photo
-    # for the location in a responsive grid (mobile 2-col, tablet
-    # 3-col, desktop 4-col). The hero/cover image is excluded so it
-    # doesn't repeat the top banner.
+    # ── All location photos for the grid ──────────────────────────
+    # Jun 2025 — the public share page must show every image visible
+    # on the in-app Location Detail Page. In-app, that's the
+    # `orderedImages` memo = cover + spot.images[] + approved
+    # community uploads (see useSpotDetail.ts). We mirror that here
+    # using:
+    #   1. the resolved hero/cover URL (`hero`)
+    #   2. the sanitized owner gallery (`payload.spot.images`)
+    #   3. approved, public community uploads (`ctx.community_image_urls`,
+    #      populated by the public_location_view route handler).
+    # Each URL is deduped (preserving order) and any falsy / non-string
+    # value is filtered out so the grid never shows a broken tile.
     all_image_urls: list[str] = []
     seen_urls: set[str] = set()
-    payload_images = payload.get("spot", {}).get("images") or []
-    for im in payload_images:
-        u = (im or {}).get("image_url") if isinstance(im, dict) else None
-        if not u or not isinstance(u, str):
-            continue
-        if u == hero:
-            continue
-        if u in seen_urls:
-            continue
-        seen_urls.add(u)
-        all_image_urls.append(u)
+
+    def _push(u: Any) -> None:
+        if not isinstance(u, str):
+            return
+        s = u.strip()
+        if not s or s in seen_urls:
+            return
+        # Filter the generic OG fallback so we never put a stock
+        # placeholder into the per-spot grid.
+        if s == GENERIC_OG_IMAGE:
+            return
+        seen_urls.add(s)
+        all_image_urls.append(s)
+
+    # 1. Hero / cover (first slide of the in-app carousel).
+    _push(hero)
+    # 2. Owner-uploaded gallery (sanitized).
+    for im in (payload.get("spot", {}).get("images") or []):
+        if isinstance(im, dict):
+            _push(im.get("image_url"))
+    # 3. Approved community uploads (same pool the in-app /uploads
+    #    endpoint surfaces for anonymous viewers).
+    for u in (ctx.get("community_image_urls") or []):
+        _push(u)
+
     gallery_html = ""
     if all_image_urls:
-        # `loading="lazy"` lets browsers defer offscreen photo loads.
-        # `onerror` hides any broken URL so the grid never shows a
-        # jagged failed-image tile.
+        # `loading="lazy"` + `decoding="async"` let browsers defer
+        # offscreen loads. `onerror` hides any broken tile so the
+        # grid never shows a jagged failed-image gap.
         tiles = "".join(
             f'<div class="gphoto"><img loading="lazy" decoding="async" '
             f'src="{_esc(u)}" alt="" '
