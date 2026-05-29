@@ -11,6 +11,7 @@
     "lint": "expo lint"
   },
   "dependencies": {
+    "@babel/core": "^7.25.2",
     "@babel/runtime": "^7.20.6",
     "@expo-google-fonts/inter": "^0.4.2",
     "@expo-google-fonts/manrope": "^0.4.2",
@@ -27,6 +28,7 @@
     "@types/suncalc": "^1.9.2",
     "axios": "^1.15.0",
     "babel-plugin-transform-remove-console": "^6.9.4",
+    "babel-preset-expo": "~54.0.10",
     "expo": "~54.0.35",
     "expo-application": "~7.0.8",
     "expo-blur": "~15.0.8",
@@ -68,9 +70,7 @@
     "tz-lookup": "^6.1.25"
   },
   "devDependencies": {
-    "@babel/core": "^7.25.2",
     "@types/react": "~19.1.0",
-    "babel-preset-expo": "~54.0.10",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
     "typescript": "~5.9.3"
