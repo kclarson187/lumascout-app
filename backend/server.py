@@ -821,9 +821,6 @@ class UserUpdateIn(BaseModel):
 
 
 
-
-
-
 class ReviewIn(BaseModel):
     overall_rating: int
     light_rating: Optional[int] = None

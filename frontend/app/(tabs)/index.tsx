@@ -471,7 +471,16 @@ export default function HomeMinimal() {
               {firstName ? `${greeting}, ${firstName}` : greeting}
             </Text>
             <Text style={s.headline}>Scout. Plan. Shoot.</Text>
-            <GoldenHourLine coords={effectiveCoords as any} />
+            {/* Jun 2025 cleanup — replaced the duplicate Golden Hour
+                countdown that lived here with the hero spot's name.
+                Countdowns are still rendered inside the hero pill
+                bar / LightCountdownBadge so we haven't lost any sun
+                signal — just the duplicate timer noise. Falls back
+                to a tasteful "Featured location" string when the
+                hero hasn't loaded yet. */}
+            <Text style={s.heroNameLine} numberOfLines={1} testID="home-hero-name-line">
+              {hero?.title || 'Featured location'}
+            </Text>
           </View>
           <View style={s.headerRight}>
             <TouchableOpacity
@@ -553,10 +562,14 @@ export default function HomeMinimal() {
               {/* Top-right glowing countdown */}
               <LightCountdownBadge window={lightWindow} />
 
-              {/* Bottom-left content — name + italic recommendation
-                  caption. NO badge. */}
+              {/* Bottom-left content — caption + city row only.
+                  Jun 2025 cleanup: the hero spot's TITLE moved out
+                  of the image overlay (it now reads above the hero
+                  card next to "Scout. Plan. Shoot."). Keeping the
+                  italic recommendation caption + the city pin row
+                  here so the cover still has context and location
+                  signal without duplicating the title. */}
               <View style={[s.heroContent, { bottom: isNarrowPillBar ? 130 : 84 }]} pointerEvents="none">
-                <Text style={s.heroTitle} numberOfLines={2}>{hero.title}</Text>
                 <Text style={s.heroCaption} numberOfLines={1}>
                   Recommended based on your location.
                 </Text>
@@ -653,7 +666,7 @@ export default function HomeMinimal() {
         {/* ─── Best Locations Right Now Near You ──────────────────── */}
         {nearbySpots.length > 0 ? (
           <View style={s.nearbyWrap}>
-            <Text style={s.nearbyHeading}>Best locations right now near you</Text>
+            <Text style={s.nearbyHeading}>Locations near you</Text>
             {isWide ? (
               <View style={s.nearbyRowGrid}>
                 {nearbySpots.map(sp => (
@@ -922,6 +935,18 @@ const s = StyleSheet.create({
   headerLeft: { flex: 1, paddingRight: space.md },
   greeting: { color: colors.textSecondary, fontFamily: font.body, fontSize: 14, marginBottom: 2 },
   headline: { color: colors.text, fontFamily: font.displayBold, fontSize: 26, letterSpacing: -0.5, lineHeight: 30 },
+  // Jun 2025 — Hero spot name line that replaced the duplicate
+  // Golden-hour countdown beneath "Scout. Plan. Shoot.". Small kicker
+  // style so it reads as a sub-line of the headline rather than its
+  // own card. Gold accent on the name itself signals "current pick"
+  // without resorting to a heavy badge.
+  heroNameLine: {
+    color: colors.primary,
+    fontFamily: font.bodySemibold,
+    fontSize: 13,
+    letterSpacing: 0.2,
+    marginTop: 6,
+  },
   subRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
   subText: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13 },
   // Was gold (#F5A623) in v1; demoted to white-on-weight per May 2026
