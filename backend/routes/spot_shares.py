@@ -49,7 +49,7 @@ import secrets
 import uuid
 import urllib.parse
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -2096,15 +2096,63 @@ def _render_elite_planning_block(ctx: Dict[str, Any], include_pdf_cta: bool = Tr
         )
 
     # ── PDF download CTA ───────────────────────────────────────
+    # Jun 2025 condensed-PDF spec — copy is now "Download Client PDF"
+    # with a "Preparing PDF…" loading state and a graceful failure
+    # toast. We use a tiny inline IIFE so this works without any
+    # client-side framework on the static HTML share page.
     if token and include_pdf_cta:
+        # Filename guessed from the share row's title (the server
+        # picks the canonical name when the PDF is actually served).
+        pdf_url = f"/api/public/location/{_esc(token)}/itinerary.pdf"
         parts.append(
             '<div class="card"><div class="card-kicker">Client itinerary</div>'
-            '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">'
-            '<div style="font-size:13.5px;color:#3D3833;">Download a polished PDF with the location details, weather, golden hour times, and the photographer\u2019s notes.</div>'
-            f'<a class="cta" href="/api/public/location/{_esc(token)}/itinerary.pdf" '
-            'target="_blank" rel="noopener" '
-            'style="background:#1A1A1A;color:#FAFAF7;padding:10px 18px;border-radius:8px;font-weight:600;text-decoration:none;font-size:13px;">'
-            'Download PDF</a></div></div>'
+            '<div class="cipdf-row" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">'
+            '<div style="font-size:13.5px;color:#3D3833;flex:1 1 auto;min-width:200px;">'
+            'A polished 2-page client itinerary with the location card, '
+            'shoot-planning notes, weather, and supporting photos.'
+            '</div>'
+            '<button id="lscoutDlPdf" type="button" '
+            f'data-pdf-url="{pdf_url}" '
+            'style="background:#1A1A1A;color:#FAFAF7;padding:10px 18px;border-radius:8px;'
+            'font-weight:600;font-size:13px;border:none;cursor:pointer;letter-spacing:0.2px;'
+            'min-height:40px;">'
+            'Download Client PDF'
+            '</button>'
+            '</div>'
+            '<div id="lscoutDlPdfToast" role="status" '
+            'style="display:none;margin-top:10px;padding:8px 12px;border-radius:8px;'
+            'font-size:12.5px;background:#FFF0F0;color:#7A2222;border:1px solid #F2C2C2;"></div>'
+            '</div>'
+            '<script>(function(){'
+            'var btn=document.getElementById("lscoutDlPdf");'
+            'if(!btn||btn._wired)return;btn._wired=true;'
+            'var toast=document.getElementById("lscoutDlPdfToast");'
+            'function showErr(m){if(!toast)return;toast.textContent=m;toast.style.display="block";}'
+            'function clearErr(){if(toast)toast.style.display="none";}'
+            'btn.addEventListener("click",function(){'
+            'clearErr();'
+            'var url=btn.getAttribute("data-pdf-url");'
+            'var label=btn.textContent;btn.textContent="Preparing PDF\u2026";'
+            'btn.disabled=true;btn.style.opacity="0.7";btn.style.cursor="wait";'
+            'fetch(url,{credentials:"omit"}).then(function(r){'
+            'if(!r.ok)throw new Error("HTTP "+r.status);'
+            'var cd=r.headers.get("content-disposition")||"";'
+            'var m=cd.match(/filename="?([^";]+)"?/i);'
+            'var fn=(m&&m[1])||"LumaScout-Client-Itinerary.pdf";'
+            'return r.blob().then(function(b){return{b:b,fn:fn};});'
+            '}).then(function(o){'
+            'var u=URL.createObjectURL(o.b);'
+            'var a=document.createElement("a");a.href=u;a.download=o.fn;'
+            'document.body.appendChild(a);a.click();a.remove();'
+            'setTimeout(function(){URL.revokeObjectURL(u);},2000);'
+            '}).catch(function(){'
+            'showErr("Couldn\u2019t generate this PDF. Please try again.");'
+            '}).then(function(){'
+            'btn.textContent=label;btn.disabled=false;'
+            'btn.style.opacity="";btn.style.cursor="pointer";'
+            '});'
+            '});'
+            '})();</script>'
         )
 
     if not parts:
@@ -2133,30 +2181,652 @@ def _render_elite_planning_block(ctx: Dict[str, Any], include_pdf_cta: bool = Tr
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Jun 2025 — Condensed 2-page PDF itinerary
+# ─────────────────────────────────────────────────────────────────────
+# Rewrite of the previous "render the whole public page to PDF"
+# approach. The downloaded PDF is now an opinionated, premium 2-page
+# client itinerary — purpose-built for shoot planning, not a literal
+# screenshot of the share page. Hard-capped at 2 pages via pypdf
+# slicing after WeasyPrint render (belt + suspenders against an
+# overflowing forecast / image grid).
+
+import re as _re
+
+_SENTENCE_SPLIT_RE = _re.compile(r"(?<=[.!?])\s+(?=[A-Z(])")
+
+
+def _slugify_for_filename(s: str) -> str:
+    """Convert a location name to a clean filename slug.
+
+    `Eisenhower Park Overlook` → `Eisenhower-Park-Overlook`
+    """
+    s = (s or "").strip()
+    # Replace non-alphanumeric runs with single hyphens.
+    s = _re.sub(r"[^A-Za-z0-9]+", "-", s).strip("-")
+    return s[:60] or "Location"
+
+
+def _truncate_sentences(text: Any, max_sentences: int = 3, max_chars: int = 360) -> str:
+    """Limit `text` to at most `max_sentences` complete sentences AND
+    `max_chars` characters total. Appends an ellipsis only if we
+    actually truncated. Empty / non-string input → empty string.
+    """
+    if not isinstance(text, str):
+        return ""
+    s = text.strip()
+    if not s:
+        return ""
+    parts = _SENTENCE_SPLIT_RE.split(s)
+    keep = " ".join(parts[:max_sentences]).strip()
+    truncated = len(parts) > max_sentences
+    if len(keep) > max_chars:
+        keep = keep[: max_chars - 1].rstrip()
+        # Try not to cut mid-word.
+        if " " in keep:
+            keep = keep.rsplit(" ", 1)[0]
+        truncated = True
+    if truncated and not keep.endswith(("…", ".", "!", "?")):
+        keep = keep + "…"
+    elif truncated:
+        keep = keep + "…"
+    return keep
+
+
+def _bullets_from_text(text: Any, max_bullets: int = 3, max_chars_per: int = 110) -> List[str]:
+    """Convert a free-form notes block into up to N short bullets.
+
+    Splits on newlines first (photographers often paste lists), then
+    falls back to sentence splits when there's no line structure.
+    Empty / non-string input → empty list.
+    """
+    if not isinstance(text, str):
+        return []
+    s = text.strip()
+    if not s:
+        return []
+    # Prefer explicit line breaks if the user wrote a list.
+    lines = [ln.strip(" \t-•*").strip() for ln in s.splitlines()]
+    lines = [ln for ln in lines if ln]
+    if len(lines) <= 1:
+        # Treat as prose and split on sentence boundaries.
+        lines = [p.strip() for p in _SENTENCE_SPLIT_RE.split(s) if p.strip()]
+    out: List[str] = []
+    for ln in lines[:max_bullets]:
+        if len(ln) > max_chars_per:
+            ln = ln[: max_chars_per - 1].rstrip()
+            if " " in ln:
+                ln = ln.rsplit(" ", 1)[0]
+            ln = ln + "…"
+        out.append(ln)
+    return out
+
+
+def _compute_pdf_badges(spot: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Derive at-a-glance badges for the client itinerary header.
+
+    Returns a small list of {label, tone} dicts so the renderer can
+    style them. Tones: `neutral` (sand), `warn` (gold) — kept minimal
+    so the document stays calm.
+    """
+    badges: List[Dict[str, str]] = []
+    # Access badge — derived from land_access OR permit/fee booleans.
+    la = (spot.get("land_access") or "").strip().lower()
+    permit_required = bool(spot.get("permit_required"))
+    fee_required = bool(spot.get("fee_required"))
+    if la == "public" and not (permit_required or fee_required):
+        badges.append({"label": "Free Public", "tone": "neutral"})
+    elif permit_required:
+        badges.append({"label": "Permit Required", "tone": "warn"})
+    elif la in ("private", "private_paid", "private_event"):
+        badges.append({"label": "Private — Check Access", "tone": "warn"})
+    elif fee_required:
+        badges.append({"label": "Fee Required", "tone": "warn"})
+    elif la:
+        badges.append({"label": la.replace("_", " ").title(), "tone": "neutral"})
+
+    # Parking — surface the heuristic we have: notes present == "info available".
+    if (spot.get("parking_notes") or "").strip():
+        badges.append({"label": "Parking notes", "tone": "neutral"})
+    # Walking / accessibility cues.
+    if spot.get("accessible") is True:
+        badges.append({"label": "Wheelchair friendly", "tone": "neutral"})
+    elif (spot.get("walking_notes") or "").strip() or (spot.get("accessibility_notes") or "").strip():
+        badges.append({"label": "Walking notes", "tone": "neutral"})
+    # Friendliness flags — only show when explicitly True.
+    if spot.get("dog_friendly") is True:
+        badges.append({"label": "Dog friendly", "tone": "neutral"})
+    if spot.get("kid_friendly") is True:
+        badges.append({"label": "Kid friendly", "tone": "neutral"})
+    if spot.get("indoor") is True:
+        badges.append({"label": "Indoor", "tone": "neutral"})
+
+    return badges[:6]  # never let the badge row wrap beyond two lines
+
+
+def _select_pdf_images(payload_spot: Dict[str, Any], community_urls: List[str]) -> Tuple[str, List[str]]:
+    """Pick the hero image + up to 6 supporting images for the PDF.
+
+    Returns (hero_url, [supporting_url, ...]). Dedupes across the
+    sanitized owner gallery, the cover override, and the approved
+    community uploads. Owner gallery wins ordering.
+    """
+    hero = payload_spot.get("hero_image_url") or ""
+    seen: set[str] = set()
+    if hero:
+        seen.add(hero)
+    supporting: List[str] = []
+    # 1. Owner-uploaded gallery first (excluding hero).
+    for im in (payload_spot.get("images") or []):
+        if not isinstance(im, dict):
+            continue
+        u = im.get("image_url")
+        if not isinstance(u, str) or not u.strip() or u in seen:
+            continue
+        seen.add(u)
+        supporting.append(u)
+        if len(supporting) >= 6:
+            break
+    # 2. Community uploads to fill remaining slots.
+    if len(supporting) < 6:
+        for u in (community_urls or []):
+            if not isinstance(u, str) or not u.strip() or u in seen:
+                continue
+            seen.add(u)
+            supporting.append(u)
+            if len(supporting) >= 6:
+                break
+    return hero, supporting
+
+
+def _format_today_sunline(light_days: List[Any]) -> str:
+    """Compact single-line sunrise / sunset / golden hour summary for
+    today (page 1). Falls back to an empty string when light data
+    isn't available.
+    """
+    if not light_days:
+        return ""
+    today = light_days[0] if light_days else None
+    if not today:
+        return ""
+    events = (today.get("sun_events") or {}) if isinstance(today, dict) else {}
+    sr = events.get("sunrise_local") or "—"
+    ss = events.get("sunset_local") or "—"
+    gm = events.get("golden_morning") or []
+    ge = events.get("golden_evening") or []
+
+    def _from_iso(s: Any) -> Any:
+        if not isinstance(s, str):
+            return None
+        try:
+            return datetime.fromisoformat(s)
+        except Exception:
+            return None
+    gm_s = _from_iso(gm[0]) if len(gm) >= 1 else None
+    gm_e = _from_iso(gm[1]) if len(gm) >= 2 else None
+    ge_s = _from_iso(ge[0]) if len(ge) >= 1 else None
+    ge_e = _from_iso(ge[1]) if len(ge) >= 2 else None
+    parts = [
+        f"Sunrise {sr}",
+        f"Sunset {ss}",
+    ]
+    if gm_s and gm_e:
+        parts.append(f"Golden AM {_fmt_time(gm_s)}–{_fmt_time(gm_e)}")
+    if ge_s and ge_e:
+        parts.append(f"Golden PM {_fmt_time(ge_s)}–{_fmt_time(ge_e)}")
+    return " · ".join(parts)
+
+
+def _format_weather_snapshot(forecast: List[Any]) -> List[Dict[str, Any]]:
+    """Trim the 5-day forecast down to today + tomorrow (max 2 entries)
+    for the compact page-2 weather card.
+    """
+    if not forecast:
+        return []
+    return [f for f in forecast[:2] if isinstance(f, dict)]
+
+
+def _render_pdf_itinerary_html(ctx: Dict[str, Any]) -> str:
+    """Build the dedicated 2-page client itinerary HTML.
+
+    Page 1 — Location Overview (premium client card):
+      logo, hero, title, byline, address, short description,
+      quick-look badges, coords + Open-in-Maps line, today's
+      sunrise/sunset/golden hours.
+
+    Page 2 — Shoot Planning Details:
+      personal note (Elite), photographer's tips (≤3 bullets),
+      safety notes (≤2 bullets), permit notes (≤2 bullets),
+      parking notes (≤1 paragraph), compact 2-day weather snapshot,
+      supporting photo grid (≤6 images), footer with generated date.
+
+    Aggressive truncation runs server-side so the layout fits inside
+    2 Letter pages. We still hard-cap with pypdf in the route handler
+    as a belt-and-suspenders guarantee.
+    """
+    payload = _build_public_view(ctx)
+    share = ctx.get("share") or {}
+    owner = ctx.get("owner") or {}
+    spot = payload["spot"]
+    show_exact = ctx["show_exact_location"]
+
+    # Title — Elite custom share title overrides the on-spot title.
+    title = (share.get("share_title") or spot.get("title") or "Photo location").strip()
+    custom_title = (share.get("share_title") or "").strip()
+    if custom_title:
+        title = custom_title
+
+    # Byline ("Shared by …")
+    owner_name = (
+        owner.get("display_name") or owner.get("name") or owner.get("username") or ""
+    ).strip()
+    by_line = f"Shared by {_esc(owner_name)}" if owner_name else "Shared by a LumaScout photographer"
+
+    # Address line
+    locline = ", ".join([x for x in [spot.get("city"), spot.get("state")] if x]) or ""
+
+    # Aggressively truncate description (2-4 sentences, ≤360 chars).
+    short_desc = _truncate_sentences(spot.get("description"), max_sentences=3, max_chars=320)
+
+    # Hero + supporting images
+    hero, supporting = _select_pdf_images(spot, ctx.get("community_image_urls") or [])
+
+    # Coords + map URL (only when share allows exact coords)
+    lat = spot.get("latitude")
+    lng = spot.get("longitude")
+    map_url = ""
+    if isinstance(lat, (int, float)) and isinstance(lng, (int, float)) and show_exact:
+        map_url = f"https://maps.apple.com/?q={lat},{lng}"
+    coord_label = "Exact location" if show_exact else "Approximate area"
+    coords_str = f"{lat}, {lng}" if (lat is not None and lng is not None) else ""
+
+    # Page-1 sun summary (today only).
+    sun_line = _format_today_sunline(ctx.get("light_days_5") or [])
+
+    # Badges (≤6).
+    badges = _compute_pdf_badges(spot)
+
+    # Page-2 content (with hide_scout_notes already honored by
+    # `_build_public_view` — parking_notes / creator_tips /
+    # best_time_of_day get stripped before we get here).
+    personal_note = (share.get("personal_note") or "").strip()
+    creator_tips_field = spot.get("creator_tips") or spot.get("notes") or ""
+    tips_bullets = _bullets_from_text(creator_tips_field, max_bullets=3, max_chars_per=120)
+    safety_bullets = _bullets_from_text(spot.get("safety_notes") or "", max_bullets=2, max_chars_per=110)
+    permit_bullets = _bullets_from_text(spot.get("permit_notes") or "", max_bullets=2, max_chars_per=110)
+    parking_blurb = _truncate_sentences(spot.get("parking_notes"), max_sentences=2, max_chars=180)
+
+    # Compact weather snapshot — today + tomorrow.
+    weather_today_tomorrow = _format_weather_snapshot(ctx.get("forecast_5day") or [])
+
+    LOGO_URL = "https://customer-assets.emergentagent.com/job_photo-finder-60/artifacts/nzwx34gx_app-logo.jpg"
+
+    # Date stamp for the footer.
+    gen_stamp = datetime.utcnow().strftime("%b %d, %Y")
+    token = share.get("token") or ""
+    share_url = f"{WEB_BASE}/api/public/location/{token}" if token else ""
+
+    # ── Helpers for inline section assembly ──
+    def _ul(items: List[str]) -> str:
+        if not items:
+            return ""
+        lis = "".join(f"<li>{_esc(x)}</li>" for x in items)
+        return f'<ul class="ul">{lis}</ul>'
+
+    def _img(url: str, klass: str = "") -> str:
+        # `onerror` hides a broken tile so the grid never shows a
+        # jagged gap. Plain <img> + object-fit:cover via CSS.
+        return (
+            f'<img class="{klass}" src="{_esc(url)}" alt="" '
+            f'onerror="this.style.display=\'none\'" />'
+        )
+
+    badges_html = ""
+    if badges:
+        chips = "".join(
+            f'<span class="badge badge-{b.get("tone","neutral")}">{_esc(b.get("label",""))}</span>'
+            for b in badges
+        )
+        badges_html = f'<div class="badges">{chips}</div>'
+
+    weather_html = ""
+    if weather_today_tomorrow:
+        cells = []
+        for f in weather_today_tomorrow:
+            wd = _esc(f.get("weekday") or "")
+            label = _esc(f.get("label") or "—")
+            hi = f.get("high_f")
+            lo = f.get("low_f")
+            rain = f.get("rain_chance_pct")
+            cells.append(
+                '<div class="wcell">'
+                f'<div class="wcell-day">{wd}</div>'
+                f'<div class="wcell-temp">{hi if hi is not None else "—"}° / {lo if lo is not None else "—"}°</div>'
+                f'<div class="wcell-label">{label}</div>'
+                + (f'<div class="wcell-rain">{int(rain)}% rain</div>' if rain is not None else '')
+                + '</div>'
+            )
+        weather_html = (
+            '<div class="block">'
+            '<div class="block-kicker">Weather snapshot</div>'
+            f'<div class="wrow">{"".join(cells)}</div>'
+            '</div>'
+        )
+
+    grid_html = ""
+    if supporting:
+        tiles = "".join(f'<div class="ptile">{_img(u, "ptile-img")}</div>' for u in supporting[:6])
+        grid_html = (
+            '<div class="block">'
+            '<div class="block-kicker">Supporting photos</div>'
+            f'<div class="pgrid">{tiles}</div>'
+            '</div>'
+        )
+
+    pnote_html = (
+        f'<div class="pnote"><div class="pnote-kicker">A note from your photographer</div>'
+        f'<div class="pnote-body">{_esc(personal_note)}</div></div>'
+        if personal_note else ""
+    )
+
+    tips_html = (
+        f'<div class="block"><div class="block-kicker">Photographer\u2019s tips</div>{_ul(tips_bullets)}</div>'
+        if tips_bullets else ""
+    )
+    safety_html = (
+        f'<div class="block"><div class="block-kicker">Safety</div>{_ul(safety_bullets)}</div>'
+        if safety_bullets else ""
+    )
+    permit_html = (
+        f'<div class="block"><div class="block-kicker">Permits &amp; access</div>{_ul(permit_bullets)}</div>'
+        if permit_bullets else ""
+    )
+    parking_html = (
+        f'<div class="block"><div class="block-kicker">Parking</div><p class="p">{_esc(parking_blurb)}</p></div>'
+        if parking_blurb else ""
+    )
+
+    sun_html = (
+        f'<div class="sunline">{_esc(sun_line)}</div>' if sun_line else ""
+    )
+
+    coords_block = ""
+    if coords_str:
+        if map_url:
+            coords_block = (
+                '<div class="coordcard">'
+                f'<div class="coord-label">{_esc(coord_label)}</div>'
+                f'<div class="coord-val">{_esc(coords_str)}</div>'
+                f'<div class="coord-link">Open in Maps · {_esc(map_url)}</div>'
+                '</div>'
+            )
+        else:
+            coords_block = (
+                '<div class="coordcard">'
+                f'<div class="coord-label">{_esc(coord_label)}</div>'
+                f'<div class="coord-val">{_esc(coords_str)}</div>'
+                '</div>'
+            )
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>{_esc(title)} · LumaScout client itinerary</title>
+<style>
+@page {{
+  size: Letter;
+  margin: 0.45in 0.5in;
+}}
+* {{ box-sizing: border-box; }}
+html, body {{
+  margin: 0; padding: 0;
+  color: #1A1A1A;
+  background: #FFFFFF;
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}}
+
+/* Topbar — small, always at the very top of page 1. */
+.brandbar {{
+  display: flex; align-items: center; gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #ECECE6;
+  margin-bottom: 14px;
+}}
+.brandbar img {{ width: 22px; height: 22px; border-radius: 5px;
+                  background: #0E0E10; object-fit: cover; }}
+.brandbar .wm {{ font-weight: 700; font-size: 13px; letter-spacing: 0.2px; }}
+.brandbar .wm .gold {{ color: #C98B1B; }}
+
+/* Page-1 hero block. */
+.hero {{
+  width: 100%; height: 3.05in;
+  background: #E8E6DF center/cover no-repeat;
+  border-radius: 10px;
+  margin-bottom: 14px;
+}}
+.kicker {{
+  text-transform: uppercase; letter-spacing: 0.6px;
+  color: #7A6B5C; font-size: 10px; font-weight: 600;
+  margin: 0 0 4px;
+}}
+h1 {{
+  font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  font-size: 26px; line-height: 1.12;
+  margin: 0 0 4px; font-weight: 600; letter-spacing: -0.3px;
+}}
+.byline {{ color: #6B6B66; font-size: 12px; margin: 0 0 6px; }}
+.addr {{ color: #3A3A36; font-size: 12px; margin: 0 0 10px; }}
+.desc {{
+  color: #2C2C2A; font-size: 12.5px; line-height: 1.55;
+  margin: 0 0 12px; white-space: pre-wrap;
+}}
+
+/* Badges. */
+.badges {{ display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }}
+.badge {{
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.2px;
+  padding: 3px 9px; border-radius: 999px;
+  border: 1px solid #ECECE6; background: #FAFAF7; color: #1A1A1A;
+}}
+.badge-warn {{ background: #FFF8E7; border-color: #F1DDA1; color: #9C6E0E; }}
+
+/* Page-1 details strip — sun summary + coords. */
+.detailstack {{ margin: 0 0 0; }}
+.sunline {{
+  font-size: 11.5px; color: #3A3A36;
+  background: #FAF7EE;
+  border: 1px solid #F0E7CE;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 0 0 10px;
+}}
+.coordcard {{
+  border: 1px solid #ECECE6;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0 0 0;
+}}
+.coord-label {{
+  text-transform: uppercase; letter-spacing: 0.5px;
+  color: #7A6B5C; font-size: 10px; font-weight: 600; margin-bottom: 4px;
+}}
+.coord-val {{
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px; color: #1A1A1A; margin-bottom: 2px;
+}}
+.coord-link {{ font-size: 10.5px; color: #6B6B66; word-break: break-all; }}
+
+/* Page break between page 1 and page 2. */
+.pagebreak {{ page-break-before: always; break-before: page; }}
+
+/* Page-2 layout. */
+.page2-header {{
+  border-bottom: 1px solid #ECECE6;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}}
+.page2-title {{
+  font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  font-size: 20px; font-weight: 600; margin: 0 0 2px;
+}}
+.page2-sub {{ color: #6B6B66; font-size: 11.5px; margin: 0; }}
+
+.pnote {{
+  background: #FFFFFF;
+  border-left: 3px solid #C98B1B;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 0 0 12px;
+}}
+.pnote-kicker {{
+  text-transform: uppercase; letter-spacing: 0.6px;
+  color: #C98B1B; font-size: 10px; font-weight: 700; margin-bottom: 4px;
+}}
+.pnote-body {{
+  font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  font-size: 12.5px; line-height: 1.55; color: #2C2C2A;
+  white-space: pre-wrap;
+}}
+
+/* Generic content blocks (tips / safety / permit / parking / weather). */
+.block {{
+  border: 1px solid #ECECE6;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0 0 10px;
+}}
+.block-kicker {{
+  text-transform: uppercase; letter-spacing: 0.5px;
+  color: #7A6B5C; font-size: 10px; font-weight: 600; margin-bottom: 6px;
+}}
+.ul {{
+  margin: 0; padding-left: 16px;
+  font-size: 12px; line-height: 1.5; color: #1A1A1A;
+}}
+.ul li {{ margin-bottom: 3px; }}
+.ul li:last-child {{ margin-bottom: 0; }}
+.p {{
+  font-size: 12px; line-height: 1.5; color: #1A1A1A;
+  margin: 0; white-space: pre-wrap;
+}}
+
+/* Two-column layout for safety + permit on page 2 (compact). */
+.twocol {{ display: flex; gap: 10px; }}
+.twocol > * {{ flex: 1 1 0; min-width: 0; }}
+
+/* Compact 2-day weather row. */
+.wrow {{ display: flex; gap: 8px; }}
+.wcell {{
+  flex: 1 1 0;
+  background: #F4F1EA;
+  border-radius: 8px;
+  padding: 8px;
+  text-align: center;
+  font-size: 11px; color: #3D3833;
+}}
+.wcell-day {{ font-weight: 600; color: #1A1A1A; font-size: 11.5px; }}
+.wcell-temp {{ font-size: 13px; color: #1A1A1A; margin-top: 2px; }}
+.wcell-label {{ margin-top: 2px; }}
+.wcell-rain {{ margin-top: 2px; color: #5A6A7A; }}
+
+/* Supporting-image grid — 3 per row. */
+.pgrid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }}
+.ptile {{
+  width: 100%; height: 1.35in;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #E8E6DF;
+}}
+.ptile-img {{ width: 100%; height: 100%; object-fit: cover; }}
+
+/* Footer at the very bottom of page 2. */
+.footer {{
+  margin-top: 18px;
+  padding-top: 10px;
+  border-top: 1px solid #ECECE6;
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 10px; color: #7A6B5C; gap: 12px;
+}}
+.footer .right {{ text-align: right; word-break: break-all; max-width: 60%; }}
+</style>
+</head>
+<body>
+
+<!-- ───────── PAGE 1 — LOCATION OVERVIEW ───────── -->
+<header class="brandbar">
+  <img src="{_esc(LOGO_URL)}" alt="LumaScout" />
+  <div class="wm">Luma<span class="gold">Scout</span></div>
+</header>
+
+<div class="hero" style="background-image:url('{_esc(hero)}');"></div>
+
+<p class="kicker">A LumaScout location · client itinerary</p>
+<h1>{_esc(title)}</h1>
+<p class="byline">{by_line}</p>
+{f'<p class="addr">{_esc(locline)}</p>' if locline else ''}
+{f'<p class="desc">{_esc(short_desc)}</p>' if short_desc else ''}
+
+{badges_html}
+
+<div class="detailstack">
+  {sun_html}
+  {coords_block}
+</div>
+
+<!-- ───────── PAGE 2 — SHOOT PLANNING ───────── -->
+<div class="pagebreak"></div>
+
+<div class="page2-header">
+  <div class="page2-title">Shoot planning</div>
+  <div class="page2-sub">{_esc(title)} · {_esc(locline) if locline else 'Client itinerary'}</div>
+</div>
+
+{pnote_html}
+{tips_html}
+
+{('<div class="twocol">' + safety_html + permit_html + '</div>') if (safety_html and permit_html) else (safety_html + permit_html)}
+
+{parking_html}
+{weather_html}
+{grid_html}
+
+<div class="footer">
+  <div>Shared with LumaScout · Generated {gen_stamp}</div>
+  <div class="right">{_esc(share_url)}</div>
+</div>
+
+</body>
+</html>"""
+
+
+# ─────────────────────────────────────────────────────────────────────
 # PDF itinerary — public, served from a stable URL on the share page
 # ─────────────────────────────────────────────────────────────────────
 @router.get("/public/location/{token}/itinerary.pdf")
 async def public_itinerary_pdf(token: str):
-    """Render the public Share Location page to PDF.
+    """Render the public Share Location into a polished 2-page client
+    itinerary PDF.
 
-    Jun 2025 spec — the downloaded itinerary PDF must be a visual and
-    content replica of the public Share Location page, not a stripped
-    "client itinerary" report. Both surfaces share:
-      • the same share resolver (`_resolve_share_or_unavailable`)
-      • the same data adapter (`_build_public_view` + `_enrich_ctx_for_full_render`)
-      • the same renderer (`_render_public_html`)
+    Jun 2025 spec — the PDF is now an opinionated, premium 2-page
+    document (NOT a literal screenshot of the public share page). It
+    is purpose-built for shoot planning:
+      • Page 1 — Location card (hero, title, byline, address, short
+        description, quick-look badges, today's sunrise/sunset/golden
+        hour, exact coordinates + Open in Maps).
+      • Page 2 — Shoot planning (personal note, photographer's tips ≤3,
+        safety ≤2, permits ≤2, parking, 2-day weather snapshot,
+        supporting photo grid ≤6, footer with generated date).
 
-    The only differences in the PDF render are:
-      • Sticky top bar becomes static so it doesn't tile per page.
-      • The in-page "Download PDF" CTA is hidden (the PDF shouldn't
-        reference itself).
-      • @page rules + break-inside hints prevent ugly mid-card splits.
+    Server-side truncation keeps content from overflowing, and the
+    rendered PDF is then HARD-CAPPED to 2 pages with pypdf as a
+    belt-and-suspenders guarantee.
 
     Access rules are identical to the public link:
-      revoked / expired / hard-deleted → 404 with "Share unavailable".
-      Pro / Free shares 404 since the PDF is gated to Elite-minted
-      links (`created_by_was_elite` snapshot at mint time, so a Pro
-      downgrade later doesn't strip PDFs from already-delivered links).
+      • revoked / expired / hard-deleted → 404 "Share unavailable"
+      • Pro / Free (created_by_was_elite=False) → 404 "Premium content"
+      • hide_scout_notes=True → parking_notes / creator_tips /
+        best_time_of_day already stripped by _build_public_view
     """
     ctx = await _resolve_share_or_unavailable(token)
     if not ctx:
@@ -2166,48 +2836,65 @@ async def public_itinerary_pdf(token: str):
         # Pro/Free downgrade — premium artifact stays gated.
         raise HTTPException(status_code=404, detail="Premium content not available")
 
-    # Enrich with the SAME data the public HTML route uses so the PDF
-    # is a true replica (community uploads, weather, sun/golden hour).
+    # Same data adapter as the public HTML page — community uploads,
+    # 5-day weather, sun/golden hour. The 2-page renderer aggressively
+    # trims this down (today+tomorrow weather only, ≤6 images).
     await _enrich_ctx_for_full_render(ctx)
 
-    # Render the public page in print mode and rasterize via WeasyPrint.
     canonical_url = f"{WEB_BASE}/api/public/location/{token}"
-    html_str = _render_public_html(ctx, canonical_url=canonical_url, for_pdf=True)
+    html_str = _render_pdf_itinerary_html(ctx)
 
-    # WeasyPrint is heavy on import (cairo + pango) — keep it lazy
-    # so backend startup isn't penalized for a feature most workers
-    # never serve. Off-thread the actual PDF build with `to_thread`
-    # so we don't block the FastAPI event loop on weather images.
+    # WeasyPrint is heavy on import (cairo + pango). Lazy import + run
+    # the actual render off the event loop so weather/image fetches
+    # don't block FastAPI workers.
     import asyncio
     from io import BytesIO
     from weasyprint import HTML  # type: ignore
 
     def _render_pdf_bytes() -> bytes:
         buf = BytesIO()
-        # `base_url` lets relative URLs (none in our template, but a
-        # belt-and-suspenders for future inline assets) resolve against
-        # the canonical share URL. Remote images (R2 CDN, customer
-        # assets bucket) are fetched at render time. WeasyPrint logs
-        # but does NOT raise on a single broken image — the rest of
-        # the PDF still renders cleanly.
         HTML(string=html_str, base_url=canonical_url).write_pdf(buf)
         return buf.getvalue()
 
     try:
         pdf_bytes = await asyncio.to_thread(_render_pdf_bytes)
     except Exception as e:
-        # Never expose a 500 to anonymous clients — fall back to a
-        # 503 with a polite body so the public link's "Download PDF"
-        # button can show a graceful error.
-        logging.getLogger("lumascout.shares").exception("PDF render failed for token=%s: %s", token, e)
+        # Never expose a 500 to anonymous clients.
+        logging.getLogger("lumascout.shares").exception(
+            "PDF render failed for token=%s: %s", token, e
+        )
         raise HTTPException(status_code=503, detail="PDF temporarily unavailable")
 
+    # Hard-cap to first 2 pages. The HTML template already targets a
+    # 2-page layout via aggressive truncation, but a long city / state
+    # name + a wide badge row could theoretically push the page-2
+    # weather card onto a third page. pypdf slice guarantees the
+    # download is at most 2 pages — clipping in the renderer would
+    # be too aggressive (might cut a section in half visually); this
+    # is purely a safety net.
+    try:
+        from pypdf import PdfReader, PdfWriter
+        reader = PdfReader(BytesIO(pdf_bytes))
+        if len(reader.pages) > 2:
+            writer = PdfWriter()
+            for p in reader.pages[:2]:
+                writer.add_page(p)
+            out = BytesIO()
+            writer.write(out)
+            pdf_bytes = out.getvalue()
+    except Exception as e:  # noqa: BLE001 — best-effort safety net
+        logging.getLogger("lumascout.shares").warning(
+            "pypdf 2-page cap skipped for token=%s: %s", token, e
+        )
+
     # Polite filename for the Save-As dialog.
+    # Format: LumaScout-{Slugified-Location-Name}-Client-Itinerary.pdf
     spot = ctx.get("spot") or {}
-    title = (share.get("share_title") or spot.get("title") or "Photo location").strip()
-    safe_name = "".join(c if c.isalnum() or c in " -_" else "_" for c in title)[:60].strip() or "itinerary"
+    title_for_file = (share.get("share_title") or spot.get("title") or "Location").strip()
+    slug = _slugify_for_filename(title_for_file)
+    filename = f"LumaScout-{slug}-Client-Itinerary.pdf"
     headers = {
-        "Content-Disposition": f'inline; filename="LumaScout-{safe_name}.pdf"',
+        "Content-Disposition": f'inline; filename="{filename}"',
         "Cache-Control": "private, max-age=0, must-revalidate",
     }
     from fastapi.responses import Response as _R

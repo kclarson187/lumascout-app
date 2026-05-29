@@ -19319,3 +19319,273 @@ agent_communication:
       above. Focus on: (a) the existing Elite token still serves a
       200 application/pdf with all 13 sections, (b) non-Elite token
       still 404s, (c) public HTML and JSON paths are unchanged.
+
+  - task: "Share Location PDF — condensed 2-page client itinerary (Jun 2025)"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/backend/routes/spot_shares.py
+        ▸ Rewrite of the PDF endpoint. Previous version rendered the
+          full public share page (3+ pages with rich content) — new
+          version produces an opinionated, premium 2-page client
+          itinerary. NOT a literal screenshot of the share page.
+
+        ▸ NEW dedicated template `_render_pdf_itinerary_html(ctx)`
+          purpose-built for the 2-page layout. Sections, in order:
+
+          ── PAGE 1 — Location Overview ──
+            • LumaScout brandbar (logo + wordmark)
+            • Hero image (full-width, 3.05in tall, object-fit: cover)
+            • "A LumaScout location · client itinerary" kicker
+            • H1 title (Elite custom share_title respected)
+            • "Shared by {creator}" byline (or generic fallback)
+            • City, State address
+            • Short description (≤3 sentences, ≤320 chars)
+            • Quick-look badge row (≤6) — derived from
+              land_access / permit_required / fee_required / parking
+              notes presence / accessible / dog_friendly /
+              kid_friendly / indoor
+            • Today's sunline (single line):
+              "Sunrise X · Sunset Y · Golden AM A–B · Golden PM C–D"
+            • Coords card: "Exact location" or "Approximate area" +
+              coordinates + "Open in Maps · {url}" (only when the
+              share row allows exact coords)
+
+          ── PAGE 2 — Shoot Planning Details ──
+            • "Shoot planning" header + sub-title (location + city)
+            • Photographer's personal note (Elite) pull-quote
+            • Photographer's tips — bulleted list (≤3 bullets, ≤120
+              chars each), derived from `creator_tips` or `notes`
+            • Two-column row: Safety notes (≤2 bullets) + Permits &
+              access (≤2 bullets) when both exist; otherwise each
+              renders solo
+            • Parking notes (≤2 sentences, ≤180 chars)
+            • Compact weather snapshot (today + tomorrow ONLY, NOT
+              the full 5-day forecast — 2 chips in a row)
+            • Supporting photos grid (3 per row, ≤6 total)
+              - Picks owner gallery first, then community uploads
+              - Deduped against the hero
+              - object-fit: cover, broken-image hidden via onerror
+            • Footer (subtle): "Shared with LumaScout · Generated
+              {date}" + share URL on the right
+
+        ▸ Server-side truncation helpers:
+            - `_truncate_sentences(text, max_sentences, max_chars)`
+            - `_bullets_from_text(text, max_bullets, max_chars_per)`
+            - `_compute_pdf_badges(spot)` — caps at 6 badges, smart
+              tone (gold "warn" for permit/private/fee, sand
+              "neutral" otherwise)
+            - `_select_pdf_images(spot, community_urls)` — picks
+              hero + ≤6 supporting, deduped, owner-first ordering
+            - `_format_today_sunline(light_days)` — page-1 single-
+              line summary
+            - `_format_weather_snapshot(forecast)` — page-2 2-day
+              chip row
+
+        ▸ HARD 2-page cap via pypdf:
+            After WeasyPrint render, pypdf.PdfReader slices the output
+            to the first 2 pages if the layout ever overflows (long
+            city name + 6 long badges + verbose tips). Belt-and-
+            suspenders against a third page ever shipping.
+
+        ▸ Filename format: `LumaScout-{Slugified-Name}-Client-Itinerary.pdf`
+            via new `_slugify_for_filename()`. Example:
+              "Bullis County Park" → LumaScout-Bullis-County-Park-Client-Itinerary.pdf
+
+        ▸ Public HTML page CTA upgrade:
+            `_render_elite_planning_block` Client itinerary CTA now:
+              - Copy: "Download Client PDF" (was "Download PDF")
+              - Sub-copy: "A polished 2-page client itinerary with the
+                location card, shoot-planning notes, weather, and
+                supporting photos."
+              - Loading state: "Preparing PDF…" (button + disabled state)
+              - Success: triggers a real `<a download>` blob URL with
+                the server-supplied filename (parsed from
+                Content-Disposition)
+              - Failure toast: "Couldn't generate this PDF. Please
+                try again." (inline `#lscoutDlPdfToast` div)
+              - Implemented as a tiny inline IIFE so the static
+                public share page (no framework) gets a proper UX.
+
+        ▸ Reused unchanged:
+            - `_resolve_share_or_unavailable(token)` — revoked /
+              expired / hard-deleted still 404 with "Share unavailable"
+            - `created_by_was_elite` gate — Pro/Free still 404 with
+              "Premium content not available"
+            - `_enrich_ctx_for_full_render(ctx)` — community + weather
+              + sun (the PDF picks today+tomorrow weather and today
+              sunline from the same data the public page uses)
+            - `_build_public_view(ctx)` — already strips
+              `parking_notes` / `creator_tips` / `best_time_of_day`
+              when `hide_scout_notes=True`, so the PDF inherits this
+              filter automatically (no parking_html, tips_html,
+              best-time line when the toggle is on)
+
+      /app/backend/requirements.txt
+        ▸ Added pypdf==6.12.2 for the 2-page hard-cap slice.
+        ▸ weasyprint==68.1 stays — primary renderer.
+        ▸ reportlab==4.2.5 stays in requirements but is no longer
+          imported by spot_shares.py (left in tree in case another
+          route depends on it).
+
+      ── Manual verification during build ──
+        • token=VX4jsJqfUk4GQFC5zgi4Au3gN7Yi0ZU2 (Bullis County Park):
+            - Exactly 2 pages (was 3 in previous render)
+            - Content-Disposition:
+              `inline; filename="LumaScout-Bullis-County-Park-Client-Itinerary.pdf"`
+            - Size ~1.45 MB, 5 supporting images embedded
+            - Page 1 — logo, hero image, kicker, title, byline, address,
+              description, "Free Public" + "Kid friendly" badges,
+              sunline (Sunrise / Sunset / Golden AM / Golden PM),
+              EXACT LOCATION coords + Open in Maps URL
+            - Page 2 — Shoot planning header, weather snapshot (Fri+Sat
+              chips), supporting photos grid (5 tiles), footer with
+              "Shared with LumaScout · Generated May 29, 2026" + share URL
+        • Invalid token → HTTP 404 (parity)
+        • Public HTML page renders the new "Download Client PDF" CTA
+          with the loading copy + failure toast wired up.
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Regression test PASSED 9/9 cases (Jun 2025 round 2 — condensed
+          2-page PDF). Harness: /app/backend_test_pdf_2page.py against
+          https://photo-finder-60.preview.emergentagent.com/api using
+          seeded super_admin admin@lumascout.app.
+
+            1. Elite happy path — 200 application/pdf, %PDF- magic,
+               size=1,454,577 B, Content-Disposition exactly
+               `inline; filename="LumaScout-Bullis-County-Park-Client-Itinerary.pdf"`
+               (matches regex `inline; filename="LumaScout-[A-Za-z0-9\-]+-Client-Itinerary\.pdf"`).
+            2. PDF exactly 2 pages (pypdf len(reader.pages)==2). ✓
+            3. Invalid token `THIS_TOKEN_DOES_NOT_EXIST_ABCDEF` → HTTP
+               404 + detail "Share unavailable". ✓
+            4. Mint Elite share → DELETE /api/admin/share-links/{token}
+               → GET .../itinerary.pdf → HTTP 404. ✓
+            5. Existing non-Elite share (created_by_was_elite=false)
+               → HTTP 404 + detail "Premium content not available". ✓
+            6. GET /api/public/location/{token} (Accept text/html)
+               contains all three new copy strings literally:
+                 - "Download Client PDF"
+                 - "Preparing PDF…"  (real U+2026 ellipsis)
+                 - "Couldn't generate this PDF. Please try again."
+                   (real U+2019 apostrophe)
+               And the legacy literal button text `>Download PDF<`
+               is NOT present. ✓
+            7. JSON path (Accept application/json) still returns
+               status="ok" with spot/og/robots keys
+               (robots="index,follow"). ✓
+            8. Fresh Elite share minted with hide_scout_notes=true —
+               JSON `spot` payload contains no parking_notes /
+               creator_tips / best_time_of_day; itinerary.pdf still
+               returns 200 (size 1,454,357 B, %PDF- magic OK). ✓
+            9. Stretch — patched the underlying spot's parking_notes,
+               creator_tips, safety_notes, permit_notes each to a
+               3000-char string via Mongo (motor), minted a fresh
+               Elite share, fetched the PDF: STILL exactly 2 pages
+               (1,455,723 B). pypdf hard-cap + server-side truncation
+               working as designed. Patch reverted via $set/$unset.
+
+          Backend log line for the happy-path request (case 1):
+            INFO - GET /api/public/location/VX4jsJqfUk4GQFC5zgi4Au3gN7Yi0ZU2/itinerary.pdf 200 2506ms
+
+          No errors observed during the 9-case run.  Cleanup: every
+          minted test share (cases 4, 8, 9) was deleted via
+          /api/admin/share-links/{token} before exit.
+
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Replaced the "render whole public page to PDF" approach with
+          a purpose-built 2-page condensed client itinerary. Hard cap
+          enforced both by server-side truncation AND pypdf page slice
+          (belt + suspenders).
+
+          Please regression-test:
+            1. Happy path Elite token returns 200 application/pdf,
+               EXACTLY 2 pages, Content-Disposition filename matches
+               `LumaScout-{Slug-Name}-Client-Itinerary.pdf`.
+            2. PDF body magic begins with %PDF-.
+            3. Invalid / revoked / hard-deleted token → 404
+               "Share unavailable".
+            4. Pro/Free share (created_by_was_elite=false) → 404
+               "Premium content not available".
+            5. Public HTML page on `GET /api/public/location/{token}`
+               still works AND now contains the new copy strings:
+               "Download Client PDF", "Preparing PDF…", and the
+               failure message "Couldn't generate this PDF. Please
+               try again." (the inline JS lives in the response body
+               so a string grep verifies it).
+            6. JSON path (Accept: application/json) unchanged.
+            7. `hide_scout_notes=True` share — parking_notes,
+               creator_tips, best_time_of_day still stripped from
+               `_build_public_view`, and (transitively) absent from
+               the PDF.
+            8. Long-content guarantee: even if the underlying spot
+               has VERY long parking_notes / creator_tips / safety
+               notes (≥3000 chars each), the resulting PDF MUST still
+               be 2 pages exactly thanks to truncation + pypdf cap.
+               (Tester can either find a content-heavy Elite share
+               or manually patch a doc to verify.)
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Share Location PDF redesign Jun 2025 (round 2) — replaced the
+      full-page replica PDF with an opinionated, premium 2-page client
+      itinerary. The new version is deliberately concise:
+        • Page 1 is a polished location card.
+        • Page 2 is shoot-planning details + supporting photos.
+      Server-side truncation enforces the section limits (3-bullet
+      tips, 2-bullet safety/permit, 2-sentence parking, 2-day weather,
+      ≤6 supporting images). A pypdf slice after WeasyPrint render
+      guarantees the output never exceeds 2 pages.
+
+      Public HTML page CTA: copy is now "Download Client PDF",
+      loading state is "Preparing PDF…", failure toast reads
+      "Couldn't generate this PDF. Please try again." The CTA is
+      still gated to Elite-minted shares (`created_by_was_elite`).
+
+      Please run the 8-step regression list under status_history.
+      The most important checks: (a) exactly 2 pages, (b) filename
+      matches `LumaScout-{slug}-Client-Itinerary.pdf`, (c) access
+      rules (revoked / non-Elite) still 404, (d) public HTML now
+      includes the three new copy strings.
+
+    -agent: "testing"
+    -message: |
+      Condensed 2-page PDF regression — 9/9 PASS against
+      https://photo-finder-60.preview.emergentagent.com/api using
+      seeded super_admin admin@lumascout.app. Harness:
+      /app/backend_test_pdf_2page.py. Highlights:
+
+        • Case 1 — 200 application/pdf, %PDF- magic, 1,454,577 B,
+          Content-Disposition matches the new pattern
+          `inline; filename="LumaScout-Bullis-County-Park-Client-Itinerary.pdf"`.
+        • Case 2 — pypdf reports exactly 2 pages.
+        • Case 3 — invalid token → 404 "Share unavailable".
+        • Case 4 — mint + hard-delete via /api/admin/share-links/{tok}
+          → PDF endpoint returns 404.
+        • Case 5 — existing non-Elite share (created_by_was_elite=false)
+          → 404 "Premium content not available".
+        • Case 6 — public HTML literally contains "Download Client
+          PDF", "Preparing PDF…" (real U+2026), and "Couldn't generate
+          this PDF. Please try again." (real U+2019). Legacy literal
+          button text `>Download PDF<` is GONE.
+        • Case 7 — JSON path unchanged (status="ok", spot/og/robots
+          present; robots="index,follow").
+        • Case 8 — Elite share minted with hide_scout_notes=true:
+          parking_notes / creator_tips / best_time_of_day all absent
+          from the JSON spot payload; itinerary.pdf still returns 200.
+        • Case 9 (stretch) — patched Mongo `spots` doc with four
+          ~3000-char text fields, minted a fresh Elite share, fetched
+          PDF — still exactly 2 pages. Truncation + pypdf hard-cap
+          working together. Patched fields restored cleanly.
+
+      All test artifacts (minted shares) deleted via admin endpoint
+      on the way out. No backend errors observed. No code changes
+      were made during testing.
+
