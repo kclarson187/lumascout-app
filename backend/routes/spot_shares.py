@@ -928,12 +928,38 @@ def _render_public_html(ctx: Dict[str, Any], canonical_url: Optional[str] = None
 </div>
 """
 
-    # ── Sample community photos (max 6, excluding the hero cover) ──
-    samples_urls = list(spot.get("sample_photo_urls") or [])
+    # ── All uploaded images for this location ─────────────────────
+    # Jun 2025 — was previously limited to (unused) `sample_photo_urls`
+    # capped at 6. We now render the FULL `images` list from the
+    # sanitized public payload so clients see every uploaded photo
+    # for the location in a responsive grid (mobile 2-col, tablet
+    # 3-col, desktop 4-col). The hero/cover image is excluded so it
+    # doesn't repeat the top banner.
+    all_image_urls: list[str] = []
+    seen_urls: set[str] = set()
+    payload_images = payload.get("spot", {}).get("images") or []
+    for im in payload_images:
+        u = (im or {}).get("image_url") if isinstance(im, dict) else None
+        if not u or not isinstance(u, str):
+            continue
+        if u == hero:
+            continue
+        if u in seen_urls:
+            continue
+        seen_urls.add(u)
+        all_image_urls.append(u)
     gallery_html = ""
-    if samples_urls:
-        for u in samples_urls[:6]:
-            gallery_html += f'<div class="gphoto" style="background-image:url(\'{_esc(u)}\')"></div>'
+    if all_image_urls:
+        # `loading="lazy"` lets browsers defer offscreen photo loads.
+        # `onerror` hides any broken URL so the grid never shows a
+        # jagged failed-image tile.
+        tiles = "".join(
+            f'<div class="gphoto"><img loading="lazy" decoding="async" '
+            f'src="{_esc(u)}" alt="" '
+            f'onerror="this.parentNode.style.display=\'none\'" /></div>'
+            for u in all_image_urls
+        )
+        gallery_html = tiles
 
     # ── Notes block (kept light — only show signals clients care about) ──
     notes_pairs = [
@@ -949,14 +975,15 @@ def _render_public_html(ctx: Dict[str, Any], canonical_url: Optional[str] = None
         for k, v in notes_pairs if v
     )
 
-    # SVG logo — small, inline. Gold dot + LumaScout wordmark. Inline so
-    # the client page renders without any extra request.
+    # Logo — the uploaded LumaScout brand image (gold compass mark).
+    # Hosted on the public customer-assets CDN so it works in any
+    # email client / browser. Wrapped in a small rounded container
+    # so it looks polished and never overpowers the page.
+    LOGO_URL = "https://customer-assets.emergentagent.com/job_photo-finder-60/artifacts/nzwx34gx_app-logo.jpg"
     logo_svg = (
-        '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" '
-        'fill="none" stroke="#F5A523" stroke-width="2.2" stroke-linecap="round" '
-        'stroke-linejoin="round" aria-hidden="true">'
-        '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41'
-        'M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>'
+        f'<img src="{LOGO_URL}" alt="LumaScout" width="22" height="22" '
+        f'style="display:block;width:22px;height:22px;border-radius:6px;'
+        f'object-fit:cover;background:#0E0E10;" />'
     )
 
     coord_label = "Exact location" if show_exact else "Approximate area"
@@ -1067,18 +1094,28 @@ h1 {{
 .v {{ flex:1; line-height:1.55; white-space:pre-wrap; color:#1A1A1A; font-size:14.5px; }}
 .coords {{ font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:13.5px; color:#3A3A36; }}
 
-/* Gallery */
+/* Gallery — all uploaded photos for this location.
+   Jun 2025: switched from background-image divs to <img> tiles so
+   we get lazy loading + graceful failure (onerror hides the tile),
+   and made the grid responsive across phone/tablet/desktop. */
 .gallery {{ display:grid; grid-template-columns: repeat(3, 1fr); gap:8px; margin:0 0 20px; }}
 .gphoto {{
   width:100%; aspect-ratio: 1/1; border-radius:10px;
-  background-color:#E8E6DF; background-size:cover; background-position:center;
+  overflow:hidden;
+  background-color:#E8E6DF;
   box-shadow: inset 0 0 0 1px rgba(0,0,0,0.03);
 }}
-@media (max-width: 480px) {{
+.gphoto img {{
+  width:100%; height:100%; object-fit:cover; display:block;
+}}
+@media (max-width: 540px) {{
   .gallery {{ grid-template-columns: repeat(2, 1fr); }}
   h1 {{ font-size: 26px; }}
   .pnote {{ font-size: 15.5px; padding: 16px 18px; }}
   .wrap {{ padding-top: 22px; }}
+}}
+@media (min-width: 900px) {{
+  .gallery {{ grid-template-columns: repeat(4, 1fr); }}
 }}
 
 .cta {{
@@ -1122,7 +1159,7 @@ h1 {{
 
     {best_block}
 
-    {f'<div class="card"><div class="card-kicker">Sample photos from this location</div><div class="gallery">{gallery_html}</div></div>' if gallery_html else ''}
+    {f'<div class="card"><div class="card-kicker">Photos from this spot</div><div class="gallery">{gallery_html}</div></div>' if gallery_html else ''}
 
     <div class="card">
       <div class="card-kicker">Location</div>

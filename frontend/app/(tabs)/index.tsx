@@ -562,27 +562,15 @@ export default function HomeMinimal() {
               {/* Top-right glowing countdown */}
               <LightCountdownBadge window={lightWindow} />
 
-              {/* Bottom-left content — caption + city row only.
-                  Jun 2025 cleanup: the hero spot's TITLE moved out
-                  of the image overlay (it now reads above the hero
-                  card next to "Scout. Plan. Shoot."). Keeping the
-                  italic recommendation caption + the city pin row
-                  here so the cover still has context and location
-                  signal without duplicating the title. */}
-              <View style={[s.heroContent, { bottom: isNarrowPillBar ? 130 : 84 }]} pointerEvents="none">
-                <Text style={s.heroCaption} numberOfLines={1}>
-                  Recommended based on your location.
-                </Text>
-                <View style={s.heroLocRow}>
-                  <View style={s.heroLocPin}>
-                    <MapPin size={11} color={colors.text} />
-                  </View>
-                  <Text style={s.heroLoc} numberOfLines={1}>
-                    {[hero?.city, hero?.state].filter(Boolean).join(', ')}
-                    {heroDistanceMi != null ? ` \u2022 ${heroDistanceMi.toFixed(0)} mi away` : ''}
-                  </Text>
-                </View>
-              </View>
+              {/* Jun 2025 hero cleanup pass — the bottom-left overlay
+                  (italic "Recommended based on your location" caption +
+                  the city/state + miles-away pin row) was removed so
+                  the hero image stays cinematic and uncluttered.
+                  The hero spot's TITLE already reads above the hero
+                  card next to "Scout. Plan. Shoot.", the LightCountdown
+                  pill stays top-right, and the frosted pill bar with
+                  stats stays at the bottom. No location label sits on
+                  the image itself anymore. */}
 
               {/* Frosted-glass pill bar at bottom of image — replaces
                   the old below-image stats row. BlurView falls back to
