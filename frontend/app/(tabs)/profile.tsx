@@ -430,19 +430,16 @@ function ProfileImpl() {
             </TouchableOpacity>
           </View>
 
-          {/* Jun 2025 redesign — replaces the character-count progress
-              nudge (ProfileCompletionCard) with a clean 4-step
-              illustrated onboarding card. Auto-hides when all 4 steps
-              are complete so the profile returns to clean content. */}
+          {/* Jun 2025 refresh — 3-step creator profile setup card.
+              Auto-hides once profile image, cover image and bio are
+              all set so the profile returns to clean content. */}
           <ProfileOnboardingCard
-            hasAvatar={!!(user.avatar_image_url || user.avatar_url)}
+            hasProfileImage={!!(user.avatar_image_url || user.avatar_url)}
+            hasCoverImage={!!user.banner_image_url}
             hasBio={(user.bio || '').trim().length >= 12}
-            hasSpot={mySpots.length > 0}
-            hasShared={hasSharedProfile}
-            onAddPhoto={() => pickAndUpload('avatar')}
+            onAddProfileImage={() => pickAndUpload('avatar')}
+            onAddCoverImage={() => pickAndUpload('banner')}
             onWriteBio={() => setEditMode(true)}
-            onUploadSpot={() => router.push('/(tabs)/add' as any)}
-            onShareProfile={shareProfile}
           />
 
           {/* Banner */}

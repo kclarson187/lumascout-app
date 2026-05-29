@@ -1,32 +1,34 @@
 /**
- * ProfileOnboardingCard — Jun 2025 redesign.
+ * ProfileOnboardingCard — Jun 2025 refresh.
  *
- * Replaces the older character-count "Complete your profile" progress
- * card on the Profile tab. Four clear, single-purpose steps a creator
- * can actually finish in the first session:
+ * Lightweight, low-dominance "Set up your creator profile" card shown
+ * on the Profile tab. Three single-purpose steps:
  *
- *   1. Add Photo      — avatar / banner image
- *   2. Write Bio      — short blurb (>= 12 chars)
- *   3. Upload a Spot  — first contribution
- *   4. Share Profile  — first share tap (local AsyncStorage flag)
+ *   1. Profile image   — avatar upload
+ *   2. Cover image     — banner upload
+ *   3. Bio             — short blurb (>= 12 chars)
  *
  * Behaviour:
- *   • Each step row shows a lucide icon inside a subtle gold-tinted
- *     circle. Completed steps swap the icon for a Check and dim the
- *     row's typography for a "done" feel.
- *   • Tapping an incomplete step calls the matching `on*` callback
- *     so the host screen can route to upload / bio / share flow.
- *   • Once all 4 steps are complete, the component renders `null` so
- *     the screen returns to clean profile content (no celebration
- *     state per design ask).
+ *   • Each step row shows a small lucide icon inside a subtle gold
+ *     tinted circle. Completed steps swap the icon for a Check and
+ *     dim the row's typography.
+ *   • Tapping an incomplete step calls the matching `on*` callback so
+ *     the host screen can route to the right edit flow.
+ *   • Once `hasProfileImage && hasCoverImage && hasBio` is true the
+ *     component renders `null` (auto-hide) so the profile returns to
+ *     clean content. No celebration state by design.
+ *
+ * Visual notes vs. previous version:
+ *   • Removed the "Upload a spot" and "Share Profile" steps.
+ *   • Smaller title, tighter padding, shorter icon circles, lighter
+ *     border so the card no longer dominates the profile screen.
  */
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import {
   Camera,
+  ImagePlus,
   PenLine,
-  MapPinPlus,
-  Share2,
   Check,
   ChevronRight,
 } from 'lucide-react-native';
@@ -34,19 +36,17 @@ import { colors, font, space, radii } from '../theme';
 
 export interface ProfileOnboardingProps {
   /** Per-step completion flags (computed by the host screen). */
-  hasAvatar: boolean;
+  hasProfileImage: boolean;
+  hasCoverImage: boolean;
   hasBio: boolean;
-  hasSpot: boolean;
-  hasShared: boolean;
   /** Step callbacks. Only called when the step is incomplete. */
-  onAddPhoto?: () => void;
+  onAddProfileImage?: () => void;
+  onAddCoverImage?: () => void;
   onWriteBio?: () => void;
-  onUploadSpot?: () => void;
-  onShareProfile?: () => void;
 }
 
 type StepDef = {
-  key: 'photo' | 'bio' | 'spot' | 'share';
+  key: 'profile' | 'cover' | 'bio';
   title: string;
   sub: string;
   Icon: any;
@@ -55,27 +55,24 @@ type StepDef = {
 };
 
 export function ProfileOnboardingCard({
-  hasAvatar,
+  hasProfileImage,
+  hasCoverImage,
   hasBio,
-  hasSpot,
-  hasShared,
-  onAddPhoto,
+  onAddProfileImage,
+  onAddCoverImage,
   onWriteBio,
-  onUploadSpot,
-  onShareProfile,
 }: ProfileOnboardingProps) {
   const steps: StepDef[] = [
-    { key: 'photo', title: 'Add photo',      sub: 'Upload a profile picture',     Icon: Camera,     done: hasAvatar, onPress: onAddPhoto },
-    { key: 'bio',   title: 'Write bio',      sub: 'A short line about your work', Icon: PenLine,    done: hasBio,    onPress: onWriteBio },
-    { key: 'spot',  title: 'Upload a spot',  sub: 'Share your first location',    Icon: MapPinPlus, done: hasSpot,   onPress: onUploadSpot },
-    { key: 'share', title: 'Share profile',  sub: 'Invite people to discover you',Icon: Share2,     done: hasShared, onPress: onShareProfile },
+    { key: 'profile', title: 'Profile image', sub: 'Upload a profile picture',    Icon: Camera,     done: hasProfileImage, onPress: onAddProfileImage },
+    { key: 'cover',   title: 'Cover image',   sub: 'Add a banner for your page',  Icon: ImagePlus,  done: hasCoverImage,   onPress: onAddCoverImage },
+    { key: 'bio',     title: 'Short bio',     sub: 'A line about your work',      Icon: PenLine,    done: hasBio,          onPress: onWriteBio },
   ];
 
-  // Hide entirely when complete — per design, do not show a celebration
-  // state; let the profile return to its normal content.
-  const completed = steps.filter(s => s.done).length;
-  if (completed === steps.length) return null;
+  // Auto-hide entirely when the 3 required steps are complete.
+  const isComplete = hasProfileImage && hasCoverImage && hasBio;
+  if (isComplete) return null;
 
+  const completed = steps.filter(s => s.done).length;
   const pct = Math.round((completed / steps.length) * 100);
 
   return (
@@ -94,7 +91,7 @@ export function ProfileOnboardingCard({
         <View style={[styles.progressFill, { width: `${pct}%` }]} />
       </View>
 
-      <View style={{ gap: 8, marginTop: 14 }}>
+      <View style={styles.stepsList}>
         {steps.map((s) => (
           <StepRow key={s.key} step={s} />
         ))}
@@ -116,15 +113,15 @@ function StepRow({ step }: { step: StepDef }) {
     >
       <View style={[styles.stepIconCircle, done && styles.stepIconCircleDone]}>
         {done
-          ? <Check size={14} color={colors.primary} />
-          : <Icon size={14} color={colors.primary} />}
+          ? <Check size={12} color={colors.primary} />
+          : <Icon size={12} color={colors.primary} />}
       </View>
       <View style={{ flex: 1 }}>
         <Text style={[styles.stepTitle, done && styles.stepTitleDone]} numberOfLines={1}>{title}</Text>
         <Text style={[styles.stepSub, done && styles.stepSubDone]} numberOfLines={1}>{sub}</Text>
       </View>
       {!done && onPress ? (
-        <ChevronRight size={16} color={colors.textTertiary} />
+        <ChevronRight size={14} color={colors.textTertiary} />
       ) : null}
     </C>
   );
@@ -133,11 +130,13 @@ function StepRow({ step }: { step: StepDef }) {
 const styles = StyleSheet.create({
   card: {
     marginHorizontal: space.xl,
-    marginTop: space.lg,
-    padding: space.lg,
+    marginTop: space.md,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 12,
     backgroundColor: colors.surface1,
     borderWidth: 1,
-    borderColor: 'rgba(245,166,35,0.22)',
+    borderColor: 'rgba(245,166,35,0.16)',
     borderRadius: radii.lg,
   },
   headerRow: {
@@ -148,70 +147,74 @@ const styles = StyleSheet.create({
   kicker: {
     color: colors.kicker,
     fontFamily: font.bodySemibold,
-    fontSize: 10,
+    fontSize: 9,
     letterSpacing: 0.4,
   },
   title: {
     color: colors.text,
-    fontFamily: font.display,
-    fontSize: 20,
-    letterSpacing: -0.3,
-    marginTop: 2,
+    fontFamily: font.bodySemibold,
+    fontSize: 14,
+    letterSpacing: -0.1,
+    marginTop: 1,
   },
   progressBadge: {
-    paddingHorizontal: 10, paddingVertical: 5,
+    paddingHorizontal: 8, paddingVertical: 3,
     borderRadius: radii.pill,
-    backgroundColor: 'rgba(245,166,35,0.12)',
-    borderWidth: 1, borderColor: 'rgba(245,166,35,0.32)',
+    backgroundColor: 'rgba(245,166,35,0.10)',
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.26)',
   },
   progressTxt: {
     color: colors.primary,
     fontFamily: font.bodySemibold,
-    fontSize: 11,
+    fontSize: 10,
     letterSpacing: 0.3,
   },
   progressTrack: {
-    marginTop: 12,
-    height: 3,
+    marginTop: 10,
+    height: 2,
     borderRadius: 2,
     backgroundColor: 'rgba(255,255,255,0.06)',
     overflow: 'hidden',
   },
   progressFill: {
-    height: 3,
+    height: 2,
     backgroundColor: colors.primary,
     borderRadius: 2,
+  },
+  stepsList: {
+    gap: 6,
+    marginTop: 10,
   },
 
   stepRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    backgroundColor: 'rgba(255,255,255,0.03)',
+    gap: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    backgroundColor: 'rgba(255,255,255,0.025)',
     borderRadius: radii.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.06)',
+    borderColor: 'rgba(255,255,255,0.05)',
   },
   stepRowDone: {
-    backgroundColor: 'rgba(255,255,255,0.015)',
-    borderColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: 'rgba(255,255,255,0.012)',
+    borderColor: 'rgba(255,255,255,0.035)',
   },
   stepIconCircle: {
-    width: 30, height: 30, borderRadius: 15,
+    width: 24, height: 24, borderRadius: 12,
     alignItems: 'center', justifyContent: 'center',
-    backgroundColor: 'rgba(245,166,35,0.14)',
-    borderWidth: 1, borderColor: 'rgba(245,166,35,0.32)',
+    backgroundColor: 'rgba(245,166,35,0.12)',
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.28)',
   },
   stepIconCircleDone: {
-    backgroundColor: 'rgba(245,166,35,0.08)',
-    borderColor: 'rgba(245,166,35,0.22)',
+    backgroundColor: 'rgba(245,166,35,0.06)',
+    borderColor: 'rgba(245,166,35,0.18)',
   },
   stepTitle: {
     color: colors.text,
     fontFamily: font.bodySemibold,
-    fontSize: 13.5,
+    fontSize: 12.5,
   },
   stepTitleDone: {
     color: colors.textSecondary,
@@ -221,8 +224,8 @@ const styles = StyleSheet.create({
   stepSub: {
     color: colors.textTertiary,
     fontFamily: font.body,
-    fontSize: 11.5,
-    marginTop: 1,
+    fontSize: 10.5,
+    marginTop: 0,
   },
   stepSubDone: {
     color: colors.textTertiary,
