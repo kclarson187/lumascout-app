@@ -384,6 +384,21 @@ export default function Explore() {
     return parts.join('|');
   }, [filters, gpsState, userCoords]);
 
+  // Jun 2025 — cold-start cache for the main `spots` pool that feeds
+  // the markers count, the trust strip, and every downstream selector.
+  // The list-mode cache above already covers `listSpots`; this is the
+  // mirror for the /spots load() at line 487. Key swaps the prefix so
+  // the two payloads never collide on AsyncStorage but reuse the same
+  // filter+GPS bucket so they invalidate together.
+  const spotsPoolCacheKey = useMemo(
+    () => listCacheKey.replace('explore.list:v1', 'explore.pool:v1'),
+    [listCacheKey],
+  );
+  // Soft TTL — we still show cached data if older, but log it so we
+  // know how often this code path is hit. 24h is generous; the live
+  // request always supersedes cache within seconds on a healthy net.
+  const SPOTS_POOL_TTL_MS = 24 * 60 * 60 * 1000;
+
   const buildListParams = useCallback((cursor: number, pageSize: number) => {
     const params: any = {
       paginated: 1,
@@ -418,6 +433,47 @@ export default function Explore() {
     })();
     return () => { alive = false; };
   }, [listCacheKey]);
+
+  // Jun 2025 — cold-start hydrate for the main /spots pool. Mirrors
+  // the listSpots hydrate above so the trust strip, header count,
+  // and any downstream consumers see PREVIOUSLY-CACHED spots while
+  // the live request is still in flight. Critical for cold-start
+  // UX during transient backend outages (Cloudflare 520 hiccups,
+  // failed deploys, slow TestFlight networks) — the screen no longer
+  // appears empty for the first 5-10s. The live `load()` always
+  // supersedes this cache within seconds. Cache write happens after
+  // each successful load() in the try-block below.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const cached = await readCache<{ items: any[]; ts: number }>(spotsPoolCacheKey);
+        if (!alive || !cached?.items?.length) return;
+        // Only hydrate if we have NOTHING yet — never overwrite a
+        // live response that came in faster than the AsyncStorage read.
+        // The age check is soft: even if stale, showing yesterday's
+        // spots is far better than an empty "Couldn't load" banner.
+        const ageMs = Date.now() - (cached.ts || 0);
+        if (spots.length === 0) {
+          setSpots(cached.items);
+          exploreLog('info', 'spots_pool_hydrated_from_cache', {
+            count: cached.items.length,
+            ageMs,
+            stale: ageMs > SPOTS_POOL_TTL_MS,
+          });
+          // Flip loading off so the skeleton doesn't keep spinning.
+          // The live request still resolves in the background and
+          // overwrites this when it lands.
+          setLoading(false);
+        }
+      } catch { /* best-effort cache read */ }
+    })();
+    return () => { alive = false; };
+    // We intentionally don't depend on `spots` here — this effect
+    // must run only when the cache KEY changes (filters / GPS) so we
+    // hydrate exactly once per filter combo, not every state update.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spotsPoolCacheKey]);
 
   // Initial fetch — called when filters or GPS bucket changes.
   const loadListInitial = useCallback(async () => {
@@ -520,6 +576,16 @@ export default function Explore() {
         return;
       }
       setSpots(data);
+      // Cold-start cache write — persist the successful pool so the
+      // next launch hydrates instantly via the effect above. We cap
+      // the cached array at 200 (matches the live `limit=200` query)
+      // so AsyncStorage never balloons. Best-effort; failures ignored.
+      if (Array.isArray(data) && data.length > 0) {
+        writeCache(spotsPoolCacheKey, {
+          items: data.slice(0, 200),
+          ts: Date.now(),
+        }).catch(() => {});
+      }
       exploreLog('info', 'load_ok', {
         count: Array.isArray(data) ? data.length : 0,
         filterKeys: Object.keys(params).filter((k) => k !== 'limit' && k !== 'sort'),
@@ -531,6 +597,24 @@ export default function Explore() {
       }
       // Do NOT clear `spots` — keep last-known good data visible while
       // showing a retry pill. Only reset on success.
+      // Jun 2025 — if we genuinely have nothing on screen (cold-start
+      // failure with no prior in-memory state) try one last AsyncStorage
+      // read so the user sees CACHED spots from a previous session
+      // instead of an empty error banner. The hydrate-on-mount effect
+      // usually wins this race, but on very fast network failures it
+      // can lose, so this is the belt-and-suspenders backup.
+      if (spots.length === 0) {
+        try {
+          const cached = await readCache<{ items: any[]; ts: number }>(spotsPoolCacheKey);
+          if (cached?.items?.length) {
+            setSpots(cached.items);
+            exploreLog('info', 'spots_pool_error_fallback_to_cache', {
+              count: cached.items.length,
+              ageMs: Date.now() - (cached.ts || 0),
+            });
+          }
+        } catch { /* best-effort */ }
+      }
       setLoadError(e?.message || 'Couldn\'t load spots. Check your connection.');
       exploreLog('warn', 'load_error', { message: e?.message });
     } finally {
