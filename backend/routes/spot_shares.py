@@ -2597,7 +2597,10 @@ def _render_pdf_itinerary_html(ctx: Dict[str, Any]) -> str:
     gen_stamp = datetime.utcnow().strftime("%B %d, %Y")
     token = share.get("token") or ""
     share_url = f"{WEB_BASE}/api/public/location/{token}" if token else ""
-    qr_svg = _generate_share_qr_svg(share_url) if share_url else ""
+    # Note: QR code intentionally removed (Jun 2025 final spec). The
+    # live share URL is now rendered subtly in the page-2 footer
+    # next to the generated date instead of a dedicated card.
+    qr_svg = ""  # noqa: F841 (kept symbol so other branches stay tidy)
 
     # ── Inline assembly helpers ──
     def _ul(items: List[str]) -> str:
@@ -2621,6 +2624,9 @@ def _render_pdf_itinerary_html(ctx: Dict[str, Any]) -> str:
         badges_html = f'<div class="badges">{chips}</div>'
 
     # ── Page-1 meta strip (best time + address) ──
+    # Open Directions button is appended as the final meta row when
+    # we have usable destination data, keeping it close to the
+    # coords / address it acts on instead of a separate bulky card.
     meta_rows = []
     if best_time_line:
         meta_rows.append(f'<div class="meta-row"><div class="meta-k">Best time to shoot</div><div class="meta-v">{_esc(best_time_line)}</div></div>')
@@ -2631,44 +2637,14 @@ def _render_pdf_itinerary_html(ctx: Dict[str, Any]) -> str:
         meta_rows.append(f'<div class="meta-row"><div class="meta-k">{_esc(coord_label)}</div><div class="meta-v coords">{v}</div></div>')
     if locline:
         meta_rows.append(f'<div class="meta-row"><div class="meta-k">Region</div><div class="meta-v">{_esc(locline)}</div></div>')
-    meta_html = ('<div class="meta">' + "".join(meta_rows) + '</div>') if meta_rows else ''
-
-    # ── Page-1 QR / share-link footer (the "live share" anchor) ──
-    qr_html = ""
-    if share_url:
-        right_block = (
-            f'<div class="qr-svg">{qr_svg}</div>' if qr_svg else
-            f'<div class="qr-fallback">{_esc(share_url)}</div>'
-        )
-        # Open Directions CTA — clickable Google Maps deep link.
-        # Hidden cleanly when we have neither coords nor address.
-        directions_btn = ""
-        if directions_url:
-            directions_btn = (
-                f'<a class="dir-btn" href="{_esc(directions_url)}" '
-                'target="_blank" rel="noopener">'
-                '<span class="dir-pin">&#9678;</span> Open Directions'
-                '</a>'
-            )
-        qr_html = (
-            '<div class="qr-card">'
-            '<div class="qr-text">'
-            '<div class="qr-kicker">Live Share Location</div>'
-            '<div class="qr-body">Scan to open the up-to-date Share Location page in your browser. '
-            'It always reflects the latest weather, golden hour, and any updates the photographer makes.</div>'
-            f'<div class="qr-url">{_esc(share_url)}</div>'
-            f'{directions_btn}'
-            '</div>'
-            f'{right_block}'
-            '</div>'
-        )
-    elif directions_url:
-        # No share URL (shouldn't happen for Elite-minted shares) but
-        # still render the Open Directions button so the client can
-        # at least navigate.
-        qr_html = (
-            '<div class="qr-card">'
-            '<div class="qr-text">'
+    if directions_url:
+        # Compact pill placed inside the meta strip — premium dark
+        # background with a small gold pin glyph and tight padding.
+        # Clickable link annotation in the rendered PDF.
+        meta_rows.append(
+            '<div class="meta-row meta-row-cta">'
+            '<div class="meta-k">Directions</div>'
+            '<div class="meta-v">'
             f'<a class="dir-btn" href="{_esc(directions_url)}" '
             'target="_blank" rel="noopener">'
             '<span class="dir-pin">&#9678;</span> Open Directions'
@@ -2676,6 +2652,11 @@ def _render_pdf_itinerary_html(ctx: Dict[str, Any]) -> str:
             '</div>'
             '</div>'
         )
+    meta_html = ('<div class="meta">' + "".join(meta_rows) + '</div>') if meta_rows else ''
+
+    # No more QR card / dedicated CTA card — Page 1 ends cleanly with
+    # the meta strip + (later) the badge row + breathing room.
+    qr_html = ""
 
     # ── Page-2 blocks ──
     arrival_html = (
@@ -2871,23 +2852,34 @@ h1 {{
   background: #FFFFFF;
 }}
 
-/* ── Open Directions CTA (clickable Google Maps deep link) ── */
+/* ── Open Directions CTA (compact pill inside the meta strip) ── */
+/* Placed in the final `.meta-row` so it sits flush with the address /
+   coordinates rows above. Refined sizing per Jun 2025 final spec:
+   medium width, ~36px tall, premium dark/gold, not a full-width
+   banner. */
 .dir-btn {{
-  display: inline-flex; align-items: center; gap: 6px;
-  margin-top: 8px;
-  padding: 8px 14px;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 14px;
   background: #1A1A1A;
   color: #FAFAF7 !important;
   border-radius: 999px;
-  font-size: 11.5px; font-weight: 700; letter-spacing: 0.2px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.3px;
+  text-transform: uppercase;
   text-decoration: none;
   border: 1px solid #1A1A1A;
+  line-height: 1;
 }}
 .dir-btn .dir-pin {{
   color: #C98B1B;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
-  margin-right: 1px;
+}}
+.meta-row-cta {{
+  padding-top: 8px;
+  padding-bottom: 8px;
+}}
+.meta-row-cta .meta-v {{
+  display: flex; align-items: center;
 }}
 
 /* ── Page break ── */
@@ -3054,7 +3046,7 @@ h1 {{
 
 <div class="footer">
   <div>Shared with LumaScout</div>
-  <div class="center">Generated {gen_stamp}</div>
+  <div class="center">Generated {gen_stamp}{(' &middot; ' + _esc(share_url)) if share_url else ''}</div>
   <div class="right">&copy; LumaScout</div>
 </div>
 
