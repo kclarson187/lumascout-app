@@ -19589,3 +19589,246 @@ agent_communication:
       on the way out. No backend errors observed. No code changes
       were made during testing.
 
+
+  - task: "Share Location PDF — Client Shoot Itinerary redesign (Jun 2025 round 3)"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/backend/routes/spot_shares.py
+        ▸ `_render_pdf_itinerary_html(ctx)` — completely redesigned
+          into the premium "Client Shoot Itinerary" 2-page layout.
+          NOT a copy of the public share page.
+
+        ── PAGE 1 — Premium Location Cover ─────────────────────
+          • Brandbar: LumaScout logo + wordmark on the left,
+            "Generated {Month Day, Year}" stamp on the right.
+          • Gold "CLIENT SHOOT ITINERARY" cover label (10.5px,
+            letter-spacing 1.6px, brand gold #C98B1B).
+          • Large cinematic hero (3.1in, object-fit cover).
+          • H1 title (Georgia 28px, -0.4px tracking).
+          • One-sentence cover summary (≤160 chars, sourced
+            from seasonal_notes → description → best_light_notes,
+            first non-empty wins).
+          • Compact badge row (≤5, derived from land_access /
+            permit_required / fee_required / parking presence /
+            dog/kid friendly / accessible / indoor).
+          • Meta strip with bordered rows:
+              - Best time to shoot
+              - Exact location / Approximate area + coords + Open in Maps URL
+              - Region (City, ST)
+          • LIVE SHARE LOCATION card at the bottom:
+              - Gold "LIVE SHARE LOCATION" kicker
+              - Body copy: "Scan to open the up-to-date Share
+                Location page in your browser. It always reflects
+                the latest weather, golden hour, and any updates
+                the photographer makes."
+              - Share URL (small, word-broken)
+              - 1in SVG QR code (via the new `qrcode==8.2`
+                dependency + SvgPathImage). Gracefully falls back
+                to a plain framed URL if qrcode lib is unavailable.
+
+        ── PAGE 2 — Client Shoot Plan ──────────────────────────
+          • Header: "Shoot Plan" (Georgia 22px) + sub-title
+            "{Title} · {City, ST}" + right-aligned generated stamp.
+          • Arrival Instructions (≤3 bullets):
+              - Synthesized from walking_notes + access_notes +
+                first parking sentence (priority order).
+              - Last-resort fallback line so the section is never
+                empty on an Elite share: "Arrive 20 min before
+                {best-time} to settle in and scout angles."
+              - Bullets de-duped + ≤110 chars each.
+          • Photographer Note (Elite personal_note, ≤300 chars,
+            rendered as a gold-left-bar pull-quote in Georgia).
+          • Access & Safety — merged block:
+              - "Safety" sub-kicker (≤2 bullets, ≤110 chars each)
+              - "Permits & access" sub-kicker (≤2 bullets)
+              - Block is omitted entirely when neither has data.
+          • Light & Weather:
+              - Today's sunline (single line: Sunrise / Sunset /
+                Golden AM / Golden PM) shown ABOVE the chips on a
+                soft gold sand background.
+              - 5 compact day chips (≤5, weekday / high–low /
+                condition / rain%). Cell padding tuned to fit
+                5 columns × 1 row without wrapping.
+          • Preview Images (≤4, 2-per-row grid, 1.6in tall tiles,
+            object-fit: cover, broken-image hidden via onerror).
+          • Footer (subtle 3-column):
+              left  → "Shared with LumaScout"
+              center → "Generated {Month Day, Year}"
+              right → "© LumaScout"
+
+        ▸ NEW helper `_generate_share_qr_svg(url)` — uses the
+          `qrcode` lib's SvgPathImage to inline a 1in SVG QR for
+          the live share URL on page 1. Falls back to empty string
+          on import error so the PDF still renders without QR.
+
+        ▸ NEW helper `_arrival_instructions_bullets(spot, share)` —
+          synthesizes the Page-2 Arrival Instructions list with the
+          priority order documented above. Always returns at least
+          one fallback bullet for Elite shares.
+
+        ▸ Updated `_select_pdf_images` — cap reduced from 6 to 4
+          to match the new "≤4 preview images" spec. Owner gallery
+          still wins ordering over community uploads, deduped
+          against the hero.
+
+        ▸ Updated `_format_weather_snapshot` — returns up to 5 days
+          (was 2 days in the prior intermediate spec). Today's
+          sunline shown separately above the chips so the row stays
+          tight on Letter width.
+
+        ▸ Hard 2-page cap via pypdf slice retained in the route.
+          Belt-and-suspenders against any future overflow.
+
+        ▸ Filename format unchanged:
+          `LumaScout-{Slugified-Name}-Client-Itinerary.pdf`
+
+        ▸ `_render_public_html` `for_pdf` flag is now dead code
+          (the PDF endpoint uses the dedicated itinerary template
+          instead) but left in place for safety — no callers pass
+          for_pdf=True today.
+
+      /app/backend/requirements.txt
+        ▸ Added `qrcode==8.2` for the page-1 SVG QR code.
+        ▸ Existing deps unchanged: weasyprint==68.1, pypdf==6.12.2.
+
+      ── Manual verification during build ──
+        • token=jR2Hid-ihfpk5n91IP7voyYr47DB6tRo (Bullis County Park,
+          Elite-minted)
+            - HTTP 200, exactly 2 pages, ~1.11 MB
+            - Content-Disposition:
+              `inline; filename="LumaScout-Bullis-County-Park-Client-Itinerary.pdf"`
+            - Page 1 — brandbar + GENERATED MAY 29, 2026 stamp,
+              gold CLIENT SHOOT ITINERARY label, cinematic hero
+              image, title, one-sentence summary, "Free Public" +
+              "Kid friendly" badges, Best time + Exact location +
+              Region rows, LIVE SHARE LOCATION card with body copy +
+              QR code + share URL.
+            - Page 2 — "Shoot Plan" header, ARRIVAL INSTRUCTIONS
+              with fallback line, LIGHT & WEATHER with sunline +
+              5-day chips (Fri–Tue), PREVIEW IMAGES 2×2 grid (4
+              photos), footer (Shared with LumaScout · Generated
+              May 29, 2026 · © LumaScout).
+        • Invalid token → HTTP 404 (parity).
+        • Public HTML page still returns 200 with the "Download
+          Client PDF" button, "Preparing PDF…" + failure toast copy.
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Third pass on the PDF — replaced the round-2 "compressed
+          location detail" output with a true client deliverable:
+          magazine-style cover on page 1 (incl. SVG QR code for the
+          live share page), client shoot plan checklist on page 2.
+      - working: true
+        agent: "testing"
+        comment: |
+          Round-3 regression PASSED ALL 12 CASES via
+          /app/backend_test_pdf_round3.py (reuses helpers from
+          /app/backend_test_pdf_2page.py). Backend:
+          https://photo-finder-60.preview.emergentagent.com
+
+          Token used: jR2Hid-ihfpk5n91IP7voyYr47DB6tRo (Bullis County
+          Park, Elite share — still active in DB).
+
+          [PASS] 1. Elite happy path → HTTP 200, ct=application/pdf,
+                 body starts %PDF-, size=1,112,409B, Content-Disposition
+                 `inline; filename="LumaScout-Bullis-County-Park-Client-Itinerary.pdf"`
+          [PASS] 2. PDF is exactly 2 pages (pypdf len(pages)=2)
+          [PASS] 3. Invalid token → 404 "Share unavailable"
+          [PASS] 4. Hard-deleted token (minted + DELETEd) → 404
+          [PASS] 5. Non-Elite share → 404 "Premium content not available"
+                 (used existing non-Elite token from grouped list)
+          [PASS] 6. Public HTML contains "Download Client PDF",
+                 "Preparing PDF…", and "Couldn't generate this PDF.
+                 Please try again." (curly apostrophe form). Legacy
+                 `>Download PDF<` literal text is gone.
+          [PASS] 7. JSON path with Accept: application/json returns
+                 status="ok" + spot/og/robots keys (robots=index,follow)
+          [PASS] 8. hide_scout_notes=True parity — parking_notes /
+                 creator_tips / best_time_of_day stripped from JSON
+                 spot payload; PDF still returns 200 (1,112,306B).
+          [PASS] 9. NEW — Page 1 LIVE SHARE LOCATION card copy:
+                 page1 text contains "Live Share Location", the body
+                 fragment "Scan to open the up-to-date Share Location
+                 page", and the share URL substring
+                 "/api/public/location/jR2Hid-ihfpk5n91IP7voyYr47DB6tRo".
+          [PASS] 10. NEW — Page 2 footer 3-column copy: "Shared with
+                 LumaScout", "© LumaScout", and "Generated May 29, 2026"
+                 all present in extracted page-2 text (current month +
+                 year stamp).
+          [PASS] 11. NEW — Weather chips 5-day: extracted page-2 text
+                 contained 5 distinct weekday abbreviations
+                 (Fri, Mon, Sat, Sun, Tue) — well above the ≥4
+                 minimum, confirming the chip row renders ~5 days
+                 from Open-Meteo for Bullis (lat 29.71, lon -98.52).
+          [PASS] 12. (stretch) Long-content 2-page guarantee — patched
+                 the Bullis spot in Mongo so parking_notes /
+                 creator_tips / safety_notes / permit_notes were each
+                 ≥3000 chars, minted a fresh Elite share, regenerated
+                 the PDF: still EXACTLY 2 pages (1,113,452B). Values
+                 restored after the test.
+
+          All 12/12 PASS. No critical or minor issues observed. The
+          PDF endpoint, public HTML CTA copy, JSON path, and the new
+          QR card / footer / 5-day weather block are all rendering
+          per spec.
+
+          Please regression-test:
+            1. Elite token returns HTTP 200, application/pdf,
+               EXACTLY 2 pages, Content-Disposition filename matches
+               `LumaScout-{Slug-Name}-Client-Itinerary.pdf`.
+            2. PDF body magic begins with %PDF-.
+            3. Invalid / revoked / hard-deleted token → 404.
+            4. Pro/Free share (created_by_was_elite=false) → 404
+               "Premium content not available".
+            5. Public HTML page on `GET /api/public/location/{token}`
+               still works AND still contains:
+               "Download Client PDF", "Preparing PDF…", and
+               "Couldn't generate this PDF. Please try again."
+            6. JSON path (Accept: application/json) unchanged.
+            7. `hide_scout_notes=True` parity — parking_notes /
+               creator_tips / best_time_of_day stripped from the
+               public payload, so they are also absent from the
+               PDF (arrival fallback line is still rendered for
+               Elite shares).
+            8. Long-content guarantee — even with VERY long
+               parking_notes / safety_notes / permit_notes
+               (≥3000 chars each), PDF is still 2 pages thanks
+               to truncation + pypdf cap.
+            9. NEW: page-1 must contain the QR card title "Live
+               Share Location" and the body copy "Scan to open the
+               up-to-date Share Location page in your browser."
+               (text-extract the PDF and grep).
+           10. NEW: page-2 footer must contain "Shared with LumaScout"
+               AND "© LumaScout" AND a "Generated {date}" stamp.
+           11. NEW: weather chips should show 5 days when forecast
+               data is present (was 2 in the prior round).
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Share Location PDF "Client Shoot Itinerary" redesign (round 3).
+      The PDF now feels like a premium client deliverable — magazine-
+      style cover on page 1 with a gold "Client Shoot Itinerary"
+      label, large hero, badges, meta strip, and a LIVE SHARE
+      LOCATION card with a real SVG QR code for the up-to-date share
+      page. Page 2 is a clean shoot plan checklist with Arrival
+      Instructions, Photographer Note, Access & Safety, Light &
+      Weather (5-day chips + today's sunline), and ≤4 preview images.
+      Footer is the subtle 3-column "Shared with LumaScout ·
+      Generated DATE · © LumaScout" specified in the brief.
+
+      Hard 2-page cap is enforced by both server-side truncation AND
+      pypdf slice. Hide-scout-notes parity preserved via the existing
+      `_build_public_view` filter — those fields never enter the
+      template. Public HTML page still serves the same "Download
+      Client PDF" CTA with loading state and failure toast.
+
+      Please run the 11-step regression list. The new items vs
+      round 2: (#9) page-1 QR card copy presence, (#10) updated
+      3-column footer copy, (#11) 5-day weather chip restoration.
+

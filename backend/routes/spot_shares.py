@@ -2304,11 +2304,15 @@ def _compute_pdf_badges(spot: Dict[str, Any]) -> List[Dict[str, str]]:
 
 
 def _select_pdf_images(payload_spot: Dict[str, Any], community_urls: List[str]) -> Tuple[str, List[str]]:
-    """Pick the hero image + up to 6 supporting images for the PDF.
+    """Pick the hero image + up to 4 supporting images for the PDF.
 
     Returns (hero_url, [supporting_url, ...]). Dedupes across the
     sanitized owner gallery, the cover override, and the approved
     community uploads. Owner gallery wins ordering.
+
+    Jun 2025 Client Shoot Itinerary spec — capped at 4 supporting
+    photos (was 6 in the previous build) so the page-2 preview grid
+    stays clean.
     """
     hero = payload_spot.get("hero_image_url") or ""
     seen: set[str] = set()
@@ -2324,16 +2328,16 @@ def _select_pdf_images(payload_spot: Dict[str, Any], community_urls: List[str]) 
             continue
         seen.add(u)
         supporting.append(u)
-        if len(supporting) >= 6:
+        if len(supporting) >= 4:
             break
     # 2. Community uploads to fill remaining slots.
-    if len(supporting) < 6:
+    if len(supporting) < 4:
         for u in (community_urls or []):
             if not isinstance(u, str) or not u.strip() or u in seen:
                 continue
             seen.add(u)
             supporting.append(u)
-            if len(supporting) >= 6:
+            if len(supporting) >= 4:
                 break
     return hero, supporting
 
@@ -2377,60 +2381,181 @@ def _format_today_sunline(light_days: List[Any]) -> str:
 
 
 def _format_weather_snapshot(forecast: List[Any]) -> List[Dict[str, Any]]:
-    """Trim the 5-day forecast down to today + tomorrow (max 2 entries)
-    for the compact page-2 weather card.
+    """Return the compact 5-day forecast for the Client Shoot Itinerary
+    page-2 light & weather card. Returns at most 5 dict entries —
+    truncated harmlessly if upstream Open-Meteo returned fewer days.
     """
     if not forecast:
         return []
-    return [f for f in forecast[:2] if isinstance(f, dict)]
+    return [f for f in forecast[:5] if isinstance(f, dict)]
+
+
+def _generate_share_qr_svg(url: str) -> str:
+    """Render a compact SVG QR code for the public share URL.
+
+    Used at the bottom of page 1 so the client can pull up the live
+    Share Location page on their phone. Returns an `<svg>` string
+    (no XML prolog so WeasyPrint can inline it directly). Falls back
+    to empty string if `qrcode` isn't installed or fails.
+    """
+    if not isinstance(url, str) or not url.strip():
+        return ""
+    try:
+        import qrcode  # type: ignore
+        import qrcode.image.svg  # type: ignore
+        from io import BytesIO
+        img = qrcode.make(
+            url,
+            image_factory=qrcode.image.svg.SvgPathImage,
+            box_size=4,
+            border=1,
+        )
+        buf = BytesIO()
+        img.save(buf)
+        svg = buf.getvalue().decode("utf-8", errors="replace")
+        # Strip the XML prolog so the SVG can be embedded inline in
+        # the HTML body. WeasyPrint accepts both, but inline is cleaner.
+        if svg.startswith("<?xml"):
+            svg = svg.split("?>", 1)[1].lstrip()
+        # Force a fixed CSS box so the QR doesn't blow out the column.
+        svg = svg.replace(
+            "<svg ",
+            '<svg style="width:1in;height:1in;display:block;" ',
+            1,
+        )
+        return svg
+    except Exception:
+        return ""
+
+
+def _arrival_instructions_bullets(spot: Dict[str, Any], share: Dict[str, Any]) -> List[str]:
+    """Synthesize 1–3 actionable arrival instructions for the client.
+
+    Priority sources (in order):
+      1. Owner-authored arrival/walking/accessibility notes — these
+         are the most specific so they get the first slot.
+      2. Parking notes (just the first sentence — full parking gets
+         its own block).
+      3. A best-time-of-day fallback — "Arrive 20 min before {window}"
+         when no other notes are present, so the section is never
+         empty for an Elite share.
+
+    Bullets are short (≤110 chars each) and capped at 3 total. We
+    DO NOT use share.personal_note here — that gets its own
+    "Photographer Note" block on page 2.
+    """
+    bullets: List[str] = []
+
+    # 1. Walking / accessibility notes (most specific arrival info).
+    walking = (spot.get("walking_notes") or "").strip()
+    if walking:
+        bullets.extend(_bullets_from_text(walking, max_bullets=2, max_chars_per=110))
+
+    # 2. Access notes (e.g. "Park at lot B, walk south-east trail 5 min").
+    access = (spot.get("access_notes") or "").strip()
+    if access and len(bullets) < 3:
+        bullets.extend(_bullets_from_text(access, max_bullets=2, max_chars_per=110))
+
+    # 3. Parking lead sentence as the final arrival hint.
+    parking = (spot.get("parking_notes") or "").strip()
+    if parking and len(bullets) < 3:
+        first = _truncate_sentences(parking, max_sentences=1, max_chars=110)
+        if first:
+            bullets.append(first)
+
+    # 4. Last-resort fallback so the section is never empty for Elite.
+    if not bullets:
+        bt = (spot.get("best_time_of_day") or "").strip().replace("_", " ")
+        if bt:
+            bullets.append(f"Arrive 20 minutes before {bt.lower()} to settle in and scout angles.")
+        else:
+            bullets.append("Arrive 20 minutes early to settle in and scout angles before the shoot.")
+
+    # Dedupe (some spots double up walking + access content).
+    seen: set[str] = set()
+    out: List[str] = []
+    for b in bullets:
+        key = b.strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(b)
+        if len(out) >= 3:
+            break
+    return out
 
 
 def _render_pdf_itinerary_html(ctx: Dict[str, Any]) -> str:
-    """Build the dedicated 2-page client itinerary HTML.
+    """Build the dedicated 2-page "Client Shoot Itinerary" HTML.
 
-    Page 1 — Location Overview (premium client card):
-      logo, hero, title, byline, address, short description,
-      quick-look badges, coords + Open-in-Maps line, today's
-      sunrise/sunset/golden hours.
+    Jun 2025 premium spec — a polished client deliverable, NOT a copy
+    of the Share Location page.
 
-    Page 2 — Shoot Planning Details:
-      personal note (Elite), photographer's tips (≤3 bullets),
-      safety notes (≤2 bullets), permit notes (≤2 bullets),
-      parking notes (≤1 paragraph), compact 2-day weather snapshot,
-      supporting photo grid (≤6 images), footer with generated date.
+    ── Page 1 — Premium Location Cover ────────────────────────────
+      • LumaScout brandbar (logo + wordmark)
+      • "Client Shoot Itinerary" label (large)
+      • Large hero image (cinematic, 3.1in tall)
+      • Location name (H1) + one-sentence summary
+      • Address / general location
+      • "Best time to shoot" line
+      • 3-5 compact badges (access type, parking, walking)
+      • Generated date + QR code + live share URL at the bottom
 
-    Aggressive truncation runs server-side so the layout fits inside
-    2 Letter pages. We still hard-cap with pypdf in the route handler
-    as a belt-and-suspenders guarantee.
+    ── Page 2 — Client Shoot Plan ─────────────────────────────────
+      • "Shoot Plan" header
+      • Arrival Instructions (≤3 bullets)
+      • Photographer Note (≤300 chars / 3 bullets)
+      • Access & Safety (merged permit + safety, ≤2 bullets each)
+      • Light & Weather (compact 5-day forecast)
+      • Preview Images (≤4)
+      • Footer: "Shared with LumaScout · Generated {date} · © LumaScout"
+
+    Hide-sensitive-scout-notes is honored upstream via
+    `_build_public_view` (parking_notes / creator_tips /
+    best_time_of_day get stripped before we ever see them).
+
+    pypdf clamps to 2 pages in the route as a belt-and-suspenders
+    safety net.
     """
     payload = _build_public_view(ctx)
     share = ctx.get("share") or {}
-    owner = ctx.get("owner") or {}
     spot = payload["spot"]
     show_exact = ctx["show_exact_location"]
 
-    # Title — Elite custom share title overrides the on-spot title.
+    # ── Title (Elite custom share_title wins) ──
     title = (share.get("share_title") or spot.get("title") or "Photo location").strip()
-    custom_title = (share.get("share_title") or "").strip()
-    if custom_title:
-        title = custom_title
 
-    # Byline ("Shared by …")
-    owner_name = (
-        owner.get("display_name") or owner.get("name") or owner.get("username") or ""
-    ).strip()
-    by_line = f"Shared by {_esc(owner_name)}" if owner_name else "Shared by a LumaScout photographer"
+    # ── One-sentence cover summary (NOT a long description) ──
+    # Elite seasonal_notes lead (most context-rich), then description,
+    # then a generic fallback so the cover never feels empty.
+    cover_summary = ""
+    for candidate in (share.get("seasonal_notes"), spot.get("description"), spot.get("best_light_notes")):
+        if isinstance(candidate, str) and candidate.strip():
+            cover_summary = _truncate_sentences(candidate, max_sentences=1, max_chars=160)
+            if cover_summary:
+                break
 
-    # Address line
+    # ── Address line (City, ST) ──
     locline = ", ".join([x for x in [spot.get("city"), spot.get("state")] if x]) or ""
 
-    # Aggressively truncate description (2-4 sentences, ≤360 chars).
-    short_desc = _truncate_sentences(spot.get("description"), max_sentences=3, max_chars=320)
+    # ── Best-time-to-shoot single line ──
+    best_time_raw = (spot.get("best_time_of_day") or "").strip().replace("_", " ")
+    best_light = (spot.get("best_light_notes") or "").strip()
+    best_time_line = ""
+    if best_time_raw:
+        best_time_line = best_time_raw.capitalize()
+        if best_light:
+            # Keep it short — one-liner only.
+            light_short = _truncate_sentences(best_light, max_sentences=1, max_chars=90)
+            if light_short:
+                best_time_line = f"{best_time_line} · {light_short}"
+    elif best_light:
+        best_time_line = _truncate_sentences(best_light, max_sentences=1, max_chars=120)
 
-    # Hero + supporting images
+    # ── Hero + supporting images ──
     hero, supporting = _select_pdf_images(spot, ctx.get("community_image_urls") or [])
 
-    # Coords + map URL (only when share allows exact coords)
+    # ── Coords + map URL (only when share allows exact coords) ──
     lat = spot.get("latitude")
     lng = spot.get("longitude")
     map_url = ""
@@ -2439,33 +2564,25 @@ def _render_pdf_itinerary_html(ctx: Dict[str, Any]) -> str:
     coord_label = "Exact location" if show_exact else "Approximate area"
     coords_str = f"{lat}, {lng}" if (lat is not None and lng is not None) else ""
 
-    # Page-1 sun summary (today only).
-    sun_line = _format_today_sunline(ctx.get("light_days_5") or [])
+    # ── Badges (3-5 compact only) ──
+    badges = _compute_pdf_badges(spot)[:5]
 
-    # Badges (≤6).
-    badges = _compute_pdf_badges(spot)
-
-    # Page-2 content (with hide_scout_notes already honored by
-    # `_build_public_view` — parking_notes / creator_tips /
-    # best_time_of_day get stripped before we get here).
-    personal_note = (share.get("personal_note") or "").strip()
-    creator_tips_field = spot.get("creator_tips") or spot.get("notes") or ""
-    tips_bullets = _bullets_from_text(creator_tips_field, max_bullets=3, max_chars_per=120)
+    # ── Page-2 content ──
+    personal_note = _truncate_sentences(share.get("personal_note"), max_sentences=4, max_chars=300)
+    arrival_bullets = _arrival_instructions_bullets(spot, share)
     safety_bullets = _bullets_from_text(spot.get("safety_notes") or "", max_bullets=2, max_chars_per=110)
     permit_bullets = _bullets_from_text(spot.get("permit_notes") or "", max_bullets=2, max_chars_per=110)
-    parking_blurb = _truncate_sentences(spot.get("parking_notes"), max_sentences=2, max_chars=180)
 
-    # Compact weather snapshot — today + tomorrow.
-    weather_today_tomorrow = _format_weather_snapshot(ctx.get("forecast_5day") or [])
+    # ── 5-day weather snapshot ──
+    weather_5day = _format_weather_snapshot(ctx.get("forecast_5day") or [])
 
     LOGO_URL = "https://customer-assets.emergentagent.com/job_photo-finder-60/artifacts/nzwx34gx_app-logo.jpg"
-
-    # Date stamp for the footer.
-    gen_stamp = datetime.utcnow().strftime("%b %d, %Y")
+    gen_stamp = datetime.utcnow().strftime("%B %d, %Y")
     token = share.get("token") or ""
     share_url = f"{WEB_BASE}/api/public/location/{token}" if token else ""
+    qr_svg = _generate_share_qr_svg(share_url) if share_url else ""
 
-    # ── Helpers for inline section assembly ──
+    # ── Inline assembly helpers ──
     def _ul(items: List[str]) -> str:
         if not items:
             return ""
@@ -2473,8 +2590,6 @@ def _render_pdf_itinerary_html(ctx: Dict[str, Any]) -> str:
         return f'<ul class="ul">{lis}</ul>'
 
     def _img(url: str, klass: str = "") -> str:
-        # `onerror` hides a broken tile so the grid never shows a
-        # jagged gap. Plain <img> + object-fit:cover via CSS.
         return (
             f'<img class="{klass}" src="{_esc(url)}" alt="" '
             f'onerror="this.style.display=\'none\'" />'
@@ -2488,10 +2603,71 @@ def _render_pdf_itinerary_html(ctx: Dict[str, Any]) -> str:
         )
         badges_html = f'<div class="badges">{chips}</div>'
 
+    # ── Page-1 meta strip (best time + address) ──
+    meta_rows = []
+    if best_time_line:
+        meta_rows.append(f'<div class="meta-row"><div class="meta-k">Best time to shoot</div><div class="meta-v">{_esc(best_time_line)}</div></div>')
+    if coords_str:
+        v = _esc(coords_str)
+        if map_url:
+            v = f'{v} <span class="meta-link">· {_esc(map_url)}</span>'
+        meta_rows.append(f'<div class="meta-row"><div class="meta-k">{_esc(coord_label)}</div><div class="meta-v coords">{v}</div></div>')
+    if locline:
+        meta_rows.append(f'<div class="meta-row"><div class="meta-k">Region</div><div class="meta-v">{_esc(locline)}</div></div>')
+    meta_html = ('<div class="meta">' + "".join(meta_rows) + '</div>') if meta_rows else ''
+
+    # ── Page-1 QR / share-link footer (the "live share" anchor) ──
+    qr_html = ""
+    if share_url:
+        right_block = (
+            f'<div class="qr-svg">{qr_svg}</div>' if qr_svg else
+            f'<div class="qr-fallback">{_esc(share_url)}</div>'
+        )
+        qr_html = (
+            '<div class="qr-card">'
+            '<div class="qr-text">'
+            '<div class="qr-kicker">Live Share Location</div>'
+            '<div class="qr-body">Scan to open the up-to-date Share Location page in your browser. '
+            'It always reflects the latest weather, golden hour, and any updates the photographer makes.</div>'
+            f'<div class="qr-url">{_esc(share_url)}</div>'
+            '</div>'
+            f'{right_block}'
+            '</div>'
+        )
+
+    # ── Page-2 blocks ──
+    arrival_html = (
+        f'<div class="block"><div class="block-kicker">Arrival Instructions</div>{_ul(arrival_bullets)}</div>'
+        if arrival_bullets else ""
+    )
+    pnote_html = (
+        '<div class="pnote">'
+        '<div class="pnote-kicker">Photographer Note</div>'
+        f'<div class="pnote-body">{_esc(personal_note)}</div>'
+        '</div>'
+        if personal_note else ""
+    )
+
+    # Merge safety + permit into a single "Access & Safety" block.
+    access_safety_html = ""
+    if safety_bullets or permit_bullets:
+        sub_parts = []
+        if safety_bullets:
+            sub_parts.append(f'<div class="sub-kicker">Safety</div>{_ul(safety_bullets)}')
+        if permit_bullets:
+            sub_parts.append(f'<div class="sub-kicker">Permits &amp; access</div>{_ul(permit_bullets)}')
+        access_safety_html = (
+            '<div class="block">'
+            '<div class="block-kicker">Access &amp; Safety</div>'
+            + "".join(sub_parts)
+            + '</div>'
+        )
+
+    # Light & weather — 5-day compact row (only if data available).
     weather_html = ""
-    if weather_today_tomorrow:
+    if weather_5day:
         cells = []
-        for f in weather_today_tomorrow:
+        for f in weather_5day:
             wd = _esc(f.get("weekday") or "")
             label = _esc(f.get("label") or "—")
             hi = f.get("high_f")
@@ -2505,77 +2681,37 @@ def _render_pdf_itinerary_html(ctx: Dict[str, Any]) -> str:
                 + (f'<div class="wcell-rain">{int(rain)}% rain</div>' if rain is not None else '')
                 + '</div>'
             )
+        # Add today's sunline as a one-liner above the chips.
+        sun_line = _format_today_sunline(ctx.get("light_days_5") or [])
+        sun_block = f'<div class="sunline">{_esc(sun_line)}</div>' if sun_line else ""
         weather_html = (
             '<div class="block">'
-            '<div class="block-kicker">Weather snapshot</div>'
+            '<div class="block-kicker">Light &amp; Weather</div>'
+            f'{sun_block}'
             f'<div class="wrow">{"".join(cells)}</div>'
             '</div>'
         )
 
+    # Preview images — ≤4, 2-column grid.
     grid_html = ""
     if supporting:
-        tiles = "".join(f'<div class="ptile">{_img(u, "ptile-img")}</div>' for u in supporting[:6])
+        tiles = "".join(f'<div class="ptile">{_img(u, "ptile-img")}</div>' for u in supporting[:4])
         grid_html = (
             '<div class="block">'
-            '<div class="block-kicker">Supporting photos</div>'
+            '<div class="block-kicker">Preview Images</div>'
             f'<div class="pgrid">{tiles}</div>'
             '</div>'
         )
-
-    pnote_html = (
-        f'<div class="pnote"><div class="pnote-kicker">A note from your photographer</div>'
-        f'<div class="pnote-body">{_esc(personal_note)}</div></div>'
-        if personal_note else ""
-    )
-
-    tips_html = (
-        f'<div class="block"><div class="block-kicker">Photographer\u2019s tips</div>{_ul(tips_bullets)}</div>'
-        if tips_bullets else ""
-    )
-    safety_html = (
-        f'<div class="block"><div class="block-kicker">Safety</div>{_ul(safety_bullets)}</div>'
-        if safety_bullets else ""
-    )
-    permit_html = (
-        f'<div class="block"><div class="block-kicker">Permits &amp; access</div>{_ul(permit_bullets)}</div>'
-        if permit_bullets else ""
-    )
-    parking_html = (
-        f'<div class="block"><div class="block-kicker">Parking</div><p class="p">{_esc(parking_blurb)}</p></div>'
-        if parking_blurb else ""
-    )
-
-    sun_html = (
-        f'<div class="sunline">{_esc(sun_line)}</div>' if sun_line else ""
-    )
-
-    coords_block = ""
-    if coords_str:
-        if map_url:
-            coords_block = (
-                '<div class="coordcard">'
-                f'<div class="coord-label">{_esc(coord_label)}</div>'
-                f'<div class="coord-val">{_esc(coords_str)}</div>'
-                f'<div class="coord-link">Open in Maps · {_esc(map_url)}</div>'
-                '</div>'
-            )
-        else:
-            coords_block = (
-                '<div class="coordcard">'
-                f'<div class="coord-label">{_esc(coord_label)}</div>'
-                f'<div class="coord-val">{_esc(coords_str)}</div>'
-                '</div>'
-            )
 
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>{_esc(title)} · LumaScout client itinerary</title>
+<title>Client Shoot Itinerary · {_esc(title)} · LumaScout</title>
 <style>
 @page {{
   size: Letter;
-  margin: 0.45in 0.5in;
+  margin: 0.45in 0.5in 0.4in;
 }}
 * {{ box-sizing: border-box; }}
 html, body {{
@@ -2586,98 +2722,132 @@ html, body {{
   -webkit-font-smoothing: antialiased;
 }}
 
-/* Topbar — small, always at the very top of page 1. */
+/* ── Brand bar (top of page 1) ── */
 .brandbar {{
-  display: flex; align-items: center; gap: 8px;
-  padding-bottom: 10px;
+  display: flex; align-items: center; justify-content: space-between;
+  padding-bottom: 8px;
+  margin-bottom: 10px;
   border-bottom: 1px solid #ECECE6;
-  margin-bottom: 14px;
 }}
+.brandbar .left {{ display: flex; align-items: center; gap: 8px; }}
 .brandbar img {{ width: 22px; height: 22px; border-radius: 5px;
                   background: #0E0E10; object-fit: cover; }}
 .brandbar .wm {{ font-weight: 700; font-size: 13px; letter-spacing: 0.2px; }}
 .brandbar .wm .gold {{ color: #C98B1B; }}
+.brandbar .right {{
+  font-size: 10px; letter-spacing: 0.7px; text-transform: uppercase;
+  color: #7A6B5C; font-weight: 700;
+}}
 
-/* Page-1 hero block. */
+/* ── Cover label ── */
+.coverlabel {{
+  text-transform: uppercase; letter-spacing: 1.6px;
+  color: #C98B1B; font-size: 10.5px; font-weight: 700;
+  margin: 6px 0 8px;
+}}
+
+/* ── Hero ── */
 .hero {{
-  width: 100%; height: 3.05in;
+  width: 100%; height: 3.1in;
   background: #E8E6DF center/cover no-repeat;
   border-radius: 10px;
-  margin-bottom: 14px;
-}}
-.kicker {{
-  text-transform: uppercase; letter-spacing: 0.6px;
-  color: #7A6B5C; font-size: 10px; font-weight: 600;
-  margin: 0 0 4px;
-}}
-h1 {{
-  font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
-  font-size: 26px; line-height: 1.12;
-  margin: 0 0 4px; font-weight: 600; letter-spacing: -0.3px;
-}}
-.byline {{ color: #6B6B66; font-size: 12px; margin: 0 0 6px; }}
-.addr {{ color: #3A3A36; font-size: 12px; margin: 0 0 10px; }}
-.desc {{
-  color: #2C2C2A; font-size: 12.5px; line-height: 1.55;
-  margin: 0 0 12px; white-space: pre-wrap;
+  margin: 0 0 14px;
 }}
 
-/* Badges. */
+/* ── Cover title block ── */
+h1 {{
+  font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  font-size: 28px; line-height: 1.1;
+  margin: 0 0 6px; font-weight: 600; letter-spacing: -0.4px;
+}}
+.cover-summary {{
+  color: #2C2C2A; font-size: 13px; line-height: 1.55;
+  margin: 0 0 12px;
+}}
+
+/* ── Badges ── */
 .badges {{ display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }}
 .badge {{
   font-size: 10.5px; font-weight: 600; letter-spacing: 0.2px;
-  padding: 3px 9px; border-radius: 999px;
+  padding: 3px 10px; border-radius: 999px;
   border: 1px solid #ECECE6; background: #FAFAF7; color: #1A1A1A;
 }}
 .badge-warn {{ background: #FFF8E7; border-color: #F1DDA1; color: #9C6E0E; }}
 
-/* Page-1 details strip — sun summary + coords. */
-.detailstack {{ margin: 0 0 0; }}
-.sunline {{
-  font-size: 11.5px; color: #3A3A36;
-  background: #FAF7EE;
-  border: 1px solid #F0E7CE;
-  border-radius: 8px;
-  padding: 8px 12px;
-  margin: 0 0 10px;
-}}
-.coordcard {{
+/* ── Meta rows (best-time / coords / region) ── */
+.meta {{
   border: 1px solid #ECECE6;
-  border-radius: 8px;
-  padding: 10px 12px;
-  margin: 0 0 0;
+  border-radius: 10px;
+  padding: 6px 0;
+  margin: 0 0 12px;
 }}
-.coord-label {{
-  text-transform: uppercase; letter-spacing: 0.5px;
-  color: #7A6B5C; font-size: 10px; font-weight: 600; margin-bottom: 4px;
+.meta-row {{
+  display: flex; gap: 14px;
+  padding: 7px 14px;
+  border-bottom: 1px solid #F2F0EA;
+  font-size: 12px; color: #1A1A1A;
 }}
-.coord-val {{
+.meta-row:last-child {{ border-bottom: none; }}
+.meta-k {{ width: 1.4in; color: #7A6B5C; font-weight: 600;
+           text-transform: uppercase; font-size: 10.5px; letter-spacing: 0.5px; }}
+.meta-v {{ flex: 1 1 0; min-width: 0; line-height: 1.45; }}
+.meta-v.coords {{
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 12px; color: #1A1A1A; margin-bottom: 2px;
+  font-size: 11.5px;
 }}
-.coord-link {{ font-size: 10.5px; color: #6B6B66; word-break: break-all; }}
+.meta-link {{ color: #6B6B66; word-break: break-all; }}
 
-/* Page break between page 1 and page 2. */
+/* ── QR / share-link card on page 1 ── */
+.qr-card {{
+  display: flex; gap: 14px;
+  border: 1px solid #ECECE6;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 0 0 0;
+  align-items: center;
+  background: #FCFBF7;
+}}
+.qr-card .qr-text {{ flex: 1 1 0; min-width: 0; }}
+.qr-card .qr-svg {{ flex: 0 0 1in; }}
+.qr-kicker {{
+  text-transform: uppercase; letter-spacing: 0.5px;
+  color: #C98B1B; font-size: 10px; font-weight: 700; margin: 0 0 4px;
+}}
+.qr-body {{ font-size: 11.5px; line-height: 1.5; color: #3A3A36; margin: 0 0 4px; }}
+.qr-url {{ font-size: 10.5px; color: #6B6B66; word-break: break-all; }}
+.qr-fallback {{
+  font-size: 10px; color: #6B6B66; word-break: break-all;
+  border: 1px dashed #ECECE6; padding: 6px 8px; border-radius: 6px;
+  background: #FFFFFF;
+}}
+
+/* ── Page break ── */
 .pagebreak {{ page-break-before: always; break-before: page; }}
 
-/* Page-2 layout. */
+/* ── Page-2 header ── */
 .page2-header {{
   border-bottom: 1px solid #ECECE6;
   padding-bottom: 8px;
   margin-bottom: 12px;
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 10px;
 }}
 .page2-title {{
   font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
-  font-size: 20px; font-weight: 600; margin: 0 0 2px;
+  font-size: 22px; font-weight: 600; margin: 0 0 2px; letter-spacing: -0.2px;
 }}
 .page2-sub {{ color: #6B6B66; font-size: 11.5px; margin: 0; }}
+.page2-stamp {{
+  color: #7A6B5C; font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.6px;
+}}
 
+/* ── Photographer Note (pull-quote) ── */
 .pnote {{
   background: #FFFFFF;
   border-left: 3px solid #C98B1B;
   border-radius: 6px;
   padding: 10px 12px;
-  margin: 0 0 12px;
+  margin: 0 0 10px;
 }}
 .pnote-kicker {{
   text-transform: uppercase; letter-spacing: 0.6px;
@@ -2689,7 +2859,7 @@ h1 {{
   white-space: pre-wrap;
 }}
 
-/* Generic content blocks (tips / safety / permit / parking / weather). */
+/* ── Page-2 blocks ── */
 .block {{
   border: 1px solid #ECECE6;
   border-radius: 8px;
@@ -2700,100 +2870,107 @@ h1 {{
   text-transform: uppercase; letter-spacing: 0.5px;
   color: #7A6B5C; font-size: 10px; font-weight: 600; margin-bottom: 6px;
 }}
-.ul {{
-  margin: 0; padding-left: 16px;
-  font-size: 12px; line-height: 1.5; color: #1A1A1A;
+.sub-kicker {{
+  text-transform: uppercase; letter-spacing: 0.4px;
+  color: #1A1A1A; font-size: 10.5px; font-weight: 700;
+  margin: 6px 0 4px;
 }}
+.ul {{ margin: 0; padding-left: 16px; font-size: 12px; line-height: 1.5; color: #1A1A1A; }}
 .ul li {{ margin-bottom: 3px; }}
 .ul li:last-child {{ margin-bottom: 0; }}
-.p {{
-  font-size: 12px; line-height: 1.5; color: #1A1A1A;
-  margin: 0; white-space: pre-wrap;
+
+/* ── Sunline above the 5-day chips ── */
+.sunline {{
+  font-size: 11px; color: #3A3A36;
+  background: #FAF7EE;
+  border: 1px solid #F0E7CE;
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin: 0 0 8px;
 }}
 
-/* Two-column layout for safety + permit on page 2 (compact). */
-.twocol {{ display: flex; gap: 10px; }}
-.twocol > * {{ flex: 1 1 0; min-width: 0; }}
-
-/* Compact 2-day weather row. */
-.wrow {{ display: flex; gap: 8px; }}
+/* ── 5-day weather row ── */
+.wrow {{ display: flex; gap: 6px; }}
 .wcell {{
   flex: 1 1 0;
   background: #F4F1EA;
-  border-radius: 8px;
-  padding: 8px;
+  border-radius: 7px;
+  padding: 7px 5px;
   text-align: center;
-  font-size: 11px; color: #3D3833;
+  font-size: 10.5px; color: #3D3833;
 }}
-.wcell-day {{ font-weight: 600; color: #1A1A1A; font-size: 11.5px; }}
-.wcell-temp {{ font-size: 13px; color: #1A1A1A; margin-top: 2px; }}
-.wcell-label {{ margin-top: 2px; }}
-.wcell-rain {{ margin-top: 2px; color: #5A6A7A; }}
+.wcell-day {{ font-weight: 600; color: #1A1A1A; font-size: 11px; }}
+.wcell-temp {{ font-size: 12px; color: #1A1A1A; margin-top: 2px; }}
+.wcell-label {{ margin-top: 1px; font-size: 10px; }}
+.wcell-rain {{ margin-top: 1px; color: #5A6A7A; font-size: 10px; }}
 
-/* Supporting-image grid — 3 per row. */
-.pgrid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }}
+/* ── Preview-image grid (≤4, 2 per row) ── */
+.pgrid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }}
 .ptile {{
-  width: 100%; height: 1.35in;
+  width: 100%; height: 1.6in;
   border-radius: 6px;
   overflow: hidden;
   background: #E8E6DF;
 }}
 .ptile-img {{ width: 100%; height: 100%; object-fit: cover; }}
 
-/* Footer at the very bottom of page 2. */
+/* ── Footer ── */
 .footer {{
-  margin-top: 18px;
-  padding-top: 10px;
+  margin-top: 14px;
+  padding-top: 8px;
   border-top: 1px solid #ECECE6;
   display: flex; align-items: center; justify-content: space-between;
-  font-size: 10px; color: #7A6B5C; gap: 12px;
+  font-size: 9.5px; color: #7A6B5C; gap: 12px;
 }}
-.footer .right {{ text-align: right; word-break: break-all; max-width: 60%; }}
+.footer .center {{ flex: 1; text-align: center; }}
+.footer .right {{ text-align: right; }}
 </style>
 </head>
 <body>
 
-<!-- ───────── PAGE 1 — LOCATION OVERVIEW ───────── -->
+<!-- ───────── PAGE 1 — PREMIUM LOCATION COVER ───────── -->
 <header class="brandbar">
-  <img src="{_esc(LOGO_URL)}" alt="LumaScout" />
-  <div class="wm">Luma<span class="gold">Scout</span></div>
+  <div class="left">
+    <img src="{_esc(LOGO_URL)}" alt="LumaScout" />
+    <div class="wm">Luma<span class="gold">Scout</span></div>
+  </div>
+  <div class="right">Generated {gen_stamp}</div>
 </header>
+
+<div class="coverlabel">Client Shoot Itinerary</div>
 
 <div class="hero" style="background-image:url('{_esc(hero)}');"></div>
 
-<p class="kicker">A LumaScout location · client itinerary</p>
 <h1>{_esc(title)}</h1>
-<p class="byline">{by_line}</p>
-{f'<p class="addr">{_esc(locline)}</p>' if locline else ''}
-{f'<p class="desc">{_esc(short_desc)}</p>' if short_desc else ''}
+{f'<p class="cover-summary">{_esc(cover_summary)}</p>' if cover_summary else ''}
 
 {badges_html}
 
-<div class="detailstack">
-  {sun_html}
-  {coords_block}
-</div>
+{meta_html}
 
-<!-- ───────── PAGE 2 — SHOOT PLANNING ───────── -->
+{qr_html}
+
+<!-- ───────── PAGE 2 — CLIENT SHOOT PLAN ───────── -->
 <div class="pagebreak"></div>
 
 <div class="page2-header">
-  <div class="page2-title">Shoot planning</div>
-  <div class="page2-sub">{_esc(title)} · {_esc(locline) if locline else 'Client itinerary'}</div>
+  <div>
+    <div class="page2-title">Shoot Plan</div>
+    <div class="page2-sub">{_esc(title)}{(' · ' + _esc(locline)) if locline else ''}</div>
+  </div>
+  <div class="page2-stamp">{gen_stamp}</div>
 </div>
 
+{arrival_html}
 {pnote_html}
-{tips_html}
-
-{('<div class="twocol">' + safety_html + permit_html + '</div>') if (safety_html and permit_html) else (safety_html + permit_html)}
-
-{parking_html}
+{access_safety_html}
 {weather_html}
 {grid_html}
 
 <div class="footer">
-  <div>Shared with LumaScout · Generated {gen_stamp}</div>
-  <div class="right">{_esc(share_url)}</div>
+  <div>Shared with LumaScout</div>
+  <div class="center">Generated {gen_stamp}</div>
+  <div class="right">&copy; LumaScout</div>
 </div>
 
 </body>
