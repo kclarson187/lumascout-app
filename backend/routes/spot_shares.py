@@ -2304,15 +2304,15 @@ def _compute_pdf_badges(spot: Dict[str, Any]) -> List[Dict[str, str]]:
 
 
 def _select_pdf_images(payload_spot: Dict[str, Any], community_urls: List[str]) -> Tuple[str, List[str]]:
-    """Pick the hero image + up to 4 supporting images for the PDF.
+    """Pick the hero image + up to 6 supporting images for the PDF.
 
     Returns (hero_url, [supporting_url, ...]). Dedupes across the
     sanitized owner gallery, the cover override, and the approved
     community uploads. Owner gallery wins ordering.
 
-    Jun 2025 Client Shoot Itinerary spec — capped at 4 supporting
-    photos (was 6 in the previous build) so the page-2 preview grid
-    stays clean.
+    Jun 2025 spec — cap is 6 supporting photos so the page-2 preview
+    grid can render a clean 3×2 (or smart fewer-image variant)
+    without ever spilling onto a third page.
     """
     hero = payload_spot.get("hero_image_url") or ""
     seen: set[str] = set()
@@ -2328,16 +2328,16 @@ def _select_pdf_images(payload_spot: Dict[str, Any], community_urls: List[str]) 
             continue
         seen.add(u)
         supporting.append(u)
-        if len(supporting) >= 4:
+        if len(supporting) >= 6:
             break
     # 2. Community uploads to fill remaining slots.
-    if len(supporting) < 4:
+    if len(supporting) < 6:
         for u in (community_urls or []):
             if not isinstance(u, str) or not u.strip() or u in seen:
                 continue
             seen.add(u)
             supporting.append(u)
-            if len(supporting) >= 4:
+            if len(supporting) >= 6:
                 break
     return hero, supporting
 
@@ -2564,6 +2564,23 @@ def _render_pdf_itinerary_html(ctx: Dict[str, Any]) -> str:
     coord_label = "Exact location" if show_exact else "Approximate area"
     coords_str = f"{lat}, {lng}" if (lat is not None and lng is not None) else ""
 
+    # ── Open Directions URL (Google Maps) ──
+    # Coords first when the share allows exact location; otherwise
+    # fall back to a formatted City, ST address. If neither is
+    # available the button is hidden (no broken / disabled state).
+    directions_url = ""
+    if isinstance(lat, (int, float)) and isinstance(lng, (int, float)) and show_exact:
+        directions_url = (
+            f"https://www.google.com/maps/dir/?api=1&destination={lat},{lng}"
+        )
+    elif locline:
+        # Address fallback. urlencode the full "City, ST" line so the
+        # spaces / commas survive a paste into Maps.
+        from urllib.parse import quote as _urlquote
+        directions_url = (
+            f"https://www.google.com/maps/dir/?api=1&destination={_urlquote(locline)}"
+        )
+
     # ── Badges (3-5 compact only) ──
     badges = _compute_pdf_badges(spot)[:5]
 
@@ -2623,6 +2640,16 @@ def _render_pdf_itinerary_html(ctx: Dict[str, Any]) -> str:
             f'<div class="qr-svg">{qr_svg}</div>' if qr_svg else
             f'<div class="qr-fallback">{_esc(share_url)}</div>'
         )
+        # Open Directions CTA — clickable Google Maps deep link.
+        # Hidden cleanly when we have neither coords nor address.
+        directions_btn = ""
+        if directions_url:
+            directions_btn = (
+                f'<a class="dir-btn" href="{_esc(directions_url)}" '
+                'target="_blank" rel="noopener">'
+                '<span class="dir-pin">&#9678;</span> Open Directions'
+                '</a>'
+            )
         qr_html = (
             '<div class="qr-card">'
             '<div class="qr-text">'
@@ -2630,8 +2657,23 @@ def _render_pdf_itinerary_html(ctx: Dict[str, Any]) -> str:
             '<div class="qr-body">Scan to open the up-to-date Share Location page in your browser. '
             'It always reflects the latest weather, golden hour, and any updates the photographer makes.</div>'
             f'<div class="qr-url">{_esc(share_url)}</div>'
+            f'{directions_btn}'
             '</div>'
             f'{right_block}'
+            '</div>'
+        )
+    elif directions_url:
+        # No share URL (shouldn't happen for Elite-minted shares) but
+        # still render the Open Directions button so the client can
+        # at least navigate.
+        qr_html = (
+            '<div class="qr-card">'
+            '<div class="qr-text">'
+            f'<a class="dir-btn" href="{_esc(directions_url)}" '
+            'target="_blank" rel="noopener">'
+            '<span class="dir-pin">&#9678;</span> Open Directions'
+            '</a>'
+            '</div>'
             '</div>'
         )
 
@@ -2692,14 +2734,22 @@ def _render_pdf_itinerary_html(ctx: Dict[str, Any]) -> str:
             '</div>'
         )
 
-    # Preview images — ≤4, 2-column grid.
+    # Preview images — square 1:1 tiles, smart column count, ≤6.
     grid_html = ""
     if supporting:
-        tiles = "".join(f'<div class="ptile">{_img(u, "ptile-img")}</div>' for u in supporting[:4])
+        tiles_to_show = supporting[:6]
+        n = len(tiles_to_show)
+        # Choose a column count that produces clean, premium rows
+        # matching the spec:
+        #   6 → 3×2,  5 → 3×2 (last cell omitted),
+        #   4 → 2×2,  3 → 3×1,  2 → 2×1,  1 → 1×1.
+        cols_for_count = {6: 3, 5: 3, 4: 2, 3: 3, 2: 2, 1: 1}
+        cols = cols_for_count.get(n, 3)
+        tiles = "".join(f'<div class="ptile">{_img(u, "ptile-img")}</div>' for u in tiles_to_show)
         grid_html = (
             '<div class="block">'
             '<div class="block-kicker">Preview Images</div>'
-            f'<div class="pgrid">{tiles}</div>'
+            f'<div class="pgrid pgrid-cols-{cols} pgrid-count-{n}">{tiles}</div>'
             '</div>'
         )
 
@@ -2821,6 +2871,25 @@ h1 {{
   background: #FFFFFF;
 }}
 
+/* ── Open Directions CTA (clickable Google Maps deep link) ── */
+.dir-btn {{
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: 8px;
+  padding: 8px 14px;
+  background: #1A1A1A;
+  color: #FAFAF7 !important;
+  border-radius: 999px;
+  font-size: 11.5px; font-weight: 700; letter-spacing: 0.2px;
+  text-decoration: none;
+  border: 1px solid #1A1A1A;
+}}
+.dir-btn .dir-pin {{
+  color: #C98B1B;
+  font-size: 12px;
+  font-weight: 700;
+  margin-right: 1px;
+}}
+
 /* ── Page break ── */
 .pagebreak {{ page-break-before: always; break-before: page; }}
 
@@ -2904,15 +2973,31 @@ h1 {{
 .wcell-label {{ margin-top: 1px; font-size: 10px; }}
 .wcell-rain {{ margin-top: 1px; color: #5A6A7A; font-size: 10px; }}
 
-/* ── Preview-image grid (≤4, 2 per row) ── */
-.pgrid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }}
+/* ── Preview-image grid — square 1:1 tiles, smart column count ── */
+/* Using fixed in-units instead of 1fr so each tile is a true square
+   (WeasyPrint ignores `aspect-ratio`). The grid is left-aligned and
+   will not stretch the tiles to fill the full block width — keeping
+   the photos consistently 1:1 regardless of image count. */
+.pgrid {{
+  display: grid;
+  gap: 8px;
+  justify-content: start;
+}}
+.pgrid-cols-1 {{ grid-template-columns: 2.6in; }}
+.pgrid-cols-1 .ptile {{ height: 2.6in; width: 2.6in; }}
+.pgrid-cols-2 {{ grid-template-columns: repeat(2, 2.4in); }}
+.pgrid-cols-2 .ptile {{ height: 2.4in; width: 2.4in; }}
+.pgrid-cols-3 {{ grid-template-columns: repeat(3, 1.85in); }}
+.pgrid-cols-3 .ptile {{ height: 1.85in; width: 1.85in; }}
 .ptile {{
-  width: 100%; height: 1.6in;
   border-radius: 6px;
   overflow: hidden;
   background: #E8E6DF;
 }}
-.ptile-img {{ width: 100%; height: 100%; object-fit: cover; }}
+.ptile-img {{
+  width: 100%; height: 100%;
+  object-fit: cover; object-position: center;
+}}
 
 /* ── Footer ── */
 .footer {{

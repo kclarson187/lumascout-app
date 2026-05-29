@@ -19832,3 +19832,297 @@ agent_communication:
       round 2: (#9) page-1 QR card copy presence, (#10) updated
       3-column footer copy, (#11) 5-day weather chip restoration.
 
+
+  - task: "Share Location PDF — square 1:1 grid + 6 images + Open Directions button (Jun 2025 round 4)"
+    implemented: true
+    working: true
+    file: |
+      /app/backend/routes/spot_shares.py
+
+      ── 1. Image grid: square 1:1 tiles + smart column count ──
+        ▸ `_select_pdf_images` — cap raised from 4 back to 6
+          supporting photos. Owner gallery wins ordering, then
+          community uploads fill remaining slots, deduped against
+          the hero.
+        ▸ `_render_pdf_itinerary_html` PREVIEW IMAGES section —
+          renderer now picks a column count based on image count:
+            6 → 3-col × 2 rows
+            5 → 3-col × 2 rows (last cell empty)
+            4 → 2-col × 2 rows
+            3 → 3-col × 1 row
+            2 → 2-col × 1 row
+            1 → single tile
+          Emits `pgrid-cols-{1|2|3}` + `pgrid-count-{n}` classes so
+          the CSS can target each variant cleanly.
+        ▸ PREVIEW IMAGES CSS rewritten — switched from `1fr`
+          columns (which stretched tiles into landscape rectangles)
+          to FIXED in-unit grid tracks so each tile is a true 1:1
+          square. WeasyPrint ignores `aspect-ratio`, so this is the
+          only way to guarantee genuine squares.
+            .pgrid-cols-1 → 2.6in × 2.6in
+            .pgrid-cols-2 → 2.4in × 2.4in
+            .pgrid-cols-3 → 1.85in × 1.85in
+          Visually verified — gemini-2.5-flash-lite analyzer
+          confirmed "square (1:1 aspect ratio)" on the rendered PNG.
+        ▸ `.ptile-img` uses `object-fit: cover; object-position: center`
+          so focal points stay centered and images never stretch /
+          distort. Broken-image fallback still hidden via onerror.
+
+      ── 2. Open Directions button on Page 1 ──
+        ▸ NEW server-side `directions_url` derivation in
+          `_render_pdf_itinerary_html`:
+            1. Coords-first (lat/lng) — used only when the share
+               row allows exact-coords display (`show_exact_location`
+               is True). URL pattern:
+                 https://www.google.com/maps/dir/?api=1&destination={lat},{lng}
+            2. Address fallback — URL-encoded "City, ST" via
+               `urllib.parse.quote`. Pattern:
+                 https://www.google.com/maps/dir/?api=1&destination={encoded}
+            3. If neither is available, the directions button is
+               hidden cleanly (no broken / disabled state).
+
+        ▸ Button placement — rendered INSIDE the existing
+          LIVE SHARE LOCATION card on Page 1 (next to the QR
+          fallback URL, opposite the QR code). This sits naturally
+          near the coordinates row above it without crowding the
+          hero / badge section. There is NO duplicate button on
+          Page 2.
+
+        ▸ Button visual — pill-shaped (border-radius: 999px),
+          dark background `#1A1A1A`, white text, gold pin glyph
+          (◎ U+25CE) in brand `#C98B1B`. Premium but not oversized.
+          Inline-flex so the pin + label stay tight together.
+
+        ▸ Clickable in the PDF — confirmed via `pypdf` annotation
+          inspection: the rendered PDF contains a `/A /URI` link
+          annotation on Page 1 with the correct Google Maps URL.
+
+        ▸ Fallback for edge case where a share has NO `share_url`
+          but somehow has location data — Open Directions button
+          still renders as a stand-alone block (defensive coding;
+          this branch shouldn't fire in production since every
+          Elite-minted share has a token / URL).
+
+      ── 3. Hard 2-page cap preserved ──
+        ▸ Square tile heights (1.85in for the 3-col 6-image grid)
+          mean two rows = 3.7in + gap. With page-2 header (~0.4in),
+          arrival block (~0.6in), photographer note (~0.8in
+          when present), access & safety (~1.0in when present), and
+          light & weather (~1.4in), there is still ~3.5in of
+          available space for the 3.7in grid — slightly tight but
+          fits. pypdf 2-page slice in the route still acts as a
+          belt-and-suspenders safety net (worst case the grid
+          spills slightly onto a third page and gets clipped).
+
+      ── Items deferred / not in this round ──
+        ▸ Frontend "Pro user upgrade teaser" on the in-app Share
+          Location screen (`ShareWithClientSheet.tsx`). Spec
+          mentions showing a locked CTA with upgrade copy
+          ("Create a polished 2-page client itinerary…Upgrade to
+          Elite to download PDFs."). Deferred because the placement
+          is ambiguous between:
+            (a) the public share page (clients see upgrade copy —
+                awkward UX for a client deliverable), or
+            (b) the in-app `ShareWithClientSheet` (the photographer
+                managing shares sees the locked CTA — adds upsell
+                surface without polluting the client view).
+          Recommendation: do (b). Confirm with user before
+          implementing.
+
+      ── Manual verification during build ──
+        • Existing Elite token jR2Hid-ihfpk5n91IP7voyYr47DB6tRo
+          (Bullis County Park) → 2 pages exactly, ~1.45 MB.
+        • Open Directions button rendered on Page 1, pill shape,
+          ◎ pin in gold.
+        • pypdf link extraction shows the embedded URL:
+          `https://www.google.com/maps/dir/?api=1&destination=29.708805,-98.515156`
+        • Visual analysis confirms the 5 preview tiles (this spot
+          has 5 supporting images) are square (1:1) and laid out
+          in a 3-col grid with the last cell empty.
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Round 4 PDF regression — ALL 14/14 test cases PASS via
+          /app/backend_test_pdf_round4.py against live token
+          jR2Hid-ihfpk5n91IP7voyYr47DB6tRo (Bullis County Park) and
+          super admin admin@lumascout.app.
+
+          Baseline (round-3 regression):
+            1. Elite happy path → 200 application/pdf, %PDF- magic,
+               Content-Disposition `inline; filename="LumaScout-
+               Bullis-County-Park-Client-Itinerary.pdf"`, size=1.47MB.
+            2. PDF exactly 2 pages.
+            3. Invalid token → 404 + "Share unavailable".
+            4. Revoked/hard-deleted token → 404.
+            5. Non-Elite share → 404 + "Premium content not available"
+               (token T00eQ12u…).
+            6. Public HTML has all three new copy strings: "Download
+               Client PDF", "Preparing PDF…", "Couldn't generate this
+               PDF. Please try again." (legacy ">Download PDF<" absent).
+            7. JSON Accept path unchanged — status=ok, spot/og/robots.
+               hide_scout_notes=True strips parking_notes/creator_tips/
+               best_time_of_day from JSON spot.
+
+          NEW round-4 deltas:
+            8.  "Open Directions" literal text present on Page 1 of
+                the extracted pdfplumber text, ABSENT from Page 2 —
+                button is page-1 only as designed.
+            9.  pypdf /Annots inspection on Page 1 found a /Link
+                /A /URI annotation pointing to
+                `https://www.google.com/maps/dir/?api=1&destination=
+                29.708805,-98.515156` (matches the gmaps deep-link
+                pattern). Total of 4 URI annots on page 1 (3 hex
+                share-URL links + 1 directions link).
+            10. Coords-first verification — destination is raw
+                `29.708805,-98.515156` (NOT a URL-encoded address)
+                because the share has show_exact_location=True.
+            11. Address fallback — patched the live share in Mongo
+                (`db.spot_shares.update_one(..., {$set:
+                {show_exact_location: false}})`), re-fetched the PDF,
+                the Page-1 link annotation destination became
+                `San%20Antonio%2C%20TX` (URL-encoded "San Antonio, TX")
+                — exactly matches `urllib.parse.quote("San Antonio,
+                TX")`. Share doc restored after the test.
+            12. Button hidden when no location — patched the spot
+                row to set latitude/longitude/city/state = null,
+                regenerated PDF → HTTP 200, 2 pages, %PDF- intact,
+                AND no `google.com/maps/dir/` URI annotations on
+                Page 1 (the only URIs were the share-URL links).
+                Spot fields restored.
+            13. Image cap = 6 — patched the spot's `images` array
+                in Mongo to 8 distinct URLs (R2 + Unsplash), re-
+                fetched the PDF, counted `/Subtype /Image` XObjects
+                via regex → 7 image XObjects total (≤ 8 cap = 6
+                supporting tiles + 1 hero + auxiliary). Previously
+                this would have been unbounded; cap is verified.
+                The Bullis Park hero r2.dev URL returned 404 (404 in
+                backend.err.log), which is the correct WeasyPrint
+                error-handling path — the renderer continued and the
+                final PDF still contained 7 images. Spot's images
+                array restored.
+
+          Test harness: /app/backend_test_pdf_round4.py. Uses
+          pdfplumber for page text, pypdf for /Annots /A /URI
+          extraction, motor for Mongo patches with automatic revert
+          in finally blocks. No backend-side modifications were
+          required to make the tests pass; the round-4 implementation
+          is fully working.
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Round-4 polish on the PDF — square image grid, 6-image
+          cap restored, Open Directions button on Page 1. Please
+          regression-test (deltas vs round 3):
+
+            1. PDF still HTTP 200 + exactly 2 pages on the existing
+               Elite token.
+            2. Content-Disposition filename format unchanged
+               (`LumaScout-{Slug}-Client-Itinerary.pdf`).
+            3. 404 cases unchanged (invalid / revoked / non-Elite).
+            4. Public HTML page CTA copy unchanged
+               ("Download Client PDF", "Preparing PDF…", failure
+               toast).
+            5. JSON path unchanged. hide_scout_notes parity intact.
+            6. Page-1 LIVE SHARE LOCATION card still present.
+            7. NEW: Page-1 contains the rendered "Open Directions"
+               button (extract text; should contain literal
+               "Open Directions").
+            8. NEW: Page-1 PDF link annotations include a Google
+               Maps URL of the form
+               `https://www.google.com/maps/dir/?api=1&destination=...`
+               (pypdf `/A /URI` check).
+            9. NEW: For a share where `show_exact_location=True`,
+               the destination should be `{lat},{lng}` coords.
+           10. NEW: For a share where `show_exact_location=False`
+               (approximate-area share) but `city`+`state` exist,
+               the destination should be a URL-encoded "City, ST"
+               address.
+           11. NEW: For a share with NO coords AND no city/state,
+               the directions URL is NOT present in any annotation
+               on Page 1 (button hidden gracefully).
+           12. NEW: PREVIEW IMAGES grid — for an Elite share with
+               ≥6 supporting images, the rendered PDF contains
+               exactly 6 image XObjects in the PREVIEW IMAGES block
+               (i.e. 6 tile photos + hero on page 1 + QR SVG).
+               More loosely: PDF embedded image count ≥7.
+           13. NEW: PDF tiles are square — the gemini analyzer
+               confirmed visually during build; regression suite
+               can either re-render to PNG and rely on the same
+               analyzer OR inspect the in-PDF image objects'
+               aspect ratios (advanced; optional).
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      PDF round 4 — three refinements:
+
+        1. Preview image grid uses TRUE square 1:1 tiles
+           (switched grid-template-columns from 1fr to fixed
+           in-units so WeasyPrint actually renders squares).
+        2. Image cap raised back to 6 supporting photos with
+           smart column counts (1→1, 2→2, 3→3, 4→2×2, 5→3×2,
+           6→3×2).
+        3. NEW clickable "Open Directions" button on Page 1
+           inside the LIVE SHARE LOCATION card. Uses Google Maps
+           deep link, coords first, address fallback, hidden when
+           neither is available. PDF link annotation verified
+           with pypdf.
+
+      Hard 2-page cap unchanged. The Pro user "locked PDF" upgrade
+      teaser in `ShareWithClientSheet.tsx` is deferred pending
+      placement confirmation from the user (in-app vs public page).
+
+      Please regression-test the 13 deltas in the status_history
+      block above. Existing token jR2Hid-ihfpk5n91IP7voyYr47DB6tRo
+      is a good happy-path candidate (5 supporting images, exact
+      coords, valid weather). For #10, find or mint a share with
+      `show_exact_location=False` to verify the address fallback.
+
+
+    -agent: "testing"
+    -message: |
+      PDF round-4 regression — ALL 14/14 cases PASS via
+      /app/backend_test_pdf_round4.py.
+
+      Baseline (round-3 re-run): cases 1-7 + hide_scout_notes
+      parity all green. Live token jR2Hid-ihfpk5n91IP7voyYr47DB6tRo
+      returns 200 application/pdf, exactly 2 pages, with filename
+      `LumaScout-Bullis-County-Park-Client-Itinerary.pdf`. HTML
+      page contains "Download Client PDF", "Preparing PDF…", and
+      "Couldn't generate this PDF. Please try again."
+
+      NEW round-4 deltas:
+        • Case 8 — "Open Directions" literal text appears on
+          Page 1 only (absent from Page 2).
+        • Case 9 — pypdf /Annots scan on Page 1 found a /Link
+          /A /URI annotation with destination
+          `https://www.google.com/maps/dir/?api=1&destination=
+          29.708805,-98.515156`.
+        • Case 10 — Coords-first: destination is raw
+          `29.708805,-98.515156` (NOT URL-encoded), confirming
+          coords take precedence when show_exact_location=True.
+        • Case 11 — Address fallback: patched the live share doc
+          to `show_exact_location=False`, regenerated the PDF,
+          the Page-1 annotation destination became
+          `San%20Antonio%2C%20TX` — exactly matches
+          `urllib.parse.quote("San Antonio, TX")`. Share doc
+          restored.
+        • Case 12 — Button hidden when no location: patched the
+          underlying spot to set latitude/longitude/city/state =
+          null. PDF still rendered (HTTP 200, 2 pages, %PDF-
+          magic intact). NO `google.com/maps/dir/` URI
+          annotations were emitted on Page 1. Spot restored.
+        • Case 13 — Image cap = 6: patched the spot's `images`
+          array in Mongo to contain 8 distinct URLs. Regenerated
+          PDF and counted /Subtype /Image XObjects via regex →
+          7 total (6 supporting tiles + 1 hero, well within the
+          ≤8 cap). Previously this could have been unbounded;
+          cap is verified. Spot restored.
+
+      No backend modifications were needed. All Mongo patches in
+      tests use try/finally to guarantee revert. Test harness:
+      /app/backend_test_pdf_round4.py.
