@@ -4208,6 +4208,101 @@ app.add_middleware(
 
 
 # ============================================================================
+# Production monitoring middleware (Jun 2025 — P0 stability pass)
+# ============================================================================
+# Three layers, deliberately lightweight so they never become a perf
+# hotspot:
+#   1. Per-request structured access log
+#        method · path · status · duration_ms · client_ip · ua_short
+#      Emitted at INFO for 2xx/3xx, WARNING for 4xx, ERROR for 5xx so
+#      filtering by level surfaces problems immediately.
+#   2. `X-Response-Time` header on every response (milliseconds).
+#      Lets the in-app diagnostics / external uptime probes track
+#      latency without hitting the metrics endpoint separately.
+#   3. Global unhandled exception handler that logs the full traceback
+#      and returns a stable JSON body. Prevents anonymous 500s from
+#      reaching Cloudflare (which can amplify into 520s if the worker
+#      crashes mid-response).
+#
+# The access log skips a small set of high-volume polling endpoints
+# (push-token + unread-count + notifications=1) to keep the log signal
+# clean — those routes have their own dedicated metrics where needed.
+# ----------------------------------------------------------------------
+import traceback as _traceback  # noqa: E402
+from fastapi.responses import JSONResponse as _JSONResponse  # noqa: E402
+
+_ACCESS_LOGGER = logging.getLogger("lumascout.access")
+_ERROR_LOGGER = logging.getLogger("lumascout.error")
+
+# Polling endpoints that flood the log without value. Health is
+# intentionally INCLUDED so production uptime probes are visible.
+_ACCESS_LOG_SKIP_PATHS = {
+    "/api/dm/unread-count",
+    "/api/me/push-token",
+}
+
+
+def _short_ua(ua: str) -> str:
+    if not ua:
+        return "-"
+    # Keep first token (e.g. "Mozilla/5.0", "okhttp/4.10", "axios/1.6")
+    # so the log line stays compact.
+    return ua.split(" ", 1)[0][:40]
+
+
+@app.middleware("http")
+async def _access_log_and_timing(request: Request, call_next):
+    """Single middleware doing access-log + X-Response-Time header.
+
+    Wrapping `call_next` in try/except ALSO catches exceptions that
+    bubble past every route handler so the request never returns a
+    bare TCP close (which Cloudflare maps to 520).
+    """
+    start = time.perf_counter()
+    path = request.url.path
+    method = request.method
+    client_ip = (request.client.host if request.client else "-") or "-"
+    ua = _short_ua(request.headers.get("user-agent") or "")
+
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        dur_ms = int((time.perf_counter() - start) * 1000)
+        response.headers["X-Response-Time"] = f"{dur_ms}ms"
+        # Access log — skip noisy polling endpoints. Health stays
+        # logged so we can confirm uptime probes are hitting us.
+        if path not in _ACCESS_LOG_SKIP_PATHS:
+            line = f'{method} {path} {status} {dur_ms}ms ip={client_ip} ua={ua}'
+            if status >= 500:
+                _ACCESS_LOGGER.error(line)
+            elif status >= 400:
+                _ACCESS_LOGGER.warning(line)
+            else:
+                _ACCESS_LOGGER.info(line)
+        return response
+    except Exception as exc:  # noqa: BLE001 — last-resort safety net
+        dur_ms = int((time.perf_counter() - start) * 1000)
+        tb = _traceback.format_exc()
+        _ERROR_LOGGER.error(
+            "UNHANDLED %s %s status=500 duration=%dms ip=%s ua=%s err=%r\n%s",
+            method, path, dur_ms, client_ip, ua, exc, tb,
+        )
+        # Return a stable JSON envelope so callers don't choke on HTML
+        # error pages. Cloudflare sees a proper HTTP response and won't
+        # synthesize a 520.
+        return _JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "error": "internal_error",
+                "message": "An unexpected error occurred. Please try again.",
+            },
+            headers={"X-Response-Time": f"{dur_ms}ms"},
+        )
+
+
+# ============================================================================
 # Startup: indexes, admin seed, demo content
 # ============================================================================
 # =============================================================================
