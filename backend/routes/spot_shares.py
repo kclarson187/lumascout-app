@@ -265,13 +265,17 @@ class ShareCreateIn(BaseModel):
     personal_note: Optional[str] = Field(default=None, max_length=600)
 
     # ── Jun 2025 Phase 2 — Elite-only premium fields ───────────────
-    # All three are silently dropped (with a log line) for non-Elite
+    # All four are silently dropped (with a log line) for non-Elite
     # callers in `create_share_link`. The frontend hides the inputs
     # entirely so a polite-curl-user is the only way these reach the
     # server from a non-Elite account.
     share_title: Optional[str] = Field(default=None, max_length=SHARE_TITLE_MAX_LEN)
     hide_scout_notes: Optional[bool] = None
     expires_in_days: Optional[int] = Field(default=None, ge=1, le=SHARE_EXPIRY_MAX_DAYS)
+    # Phase 3 — photographer-authored seasonal blurb (Elite). Rendered
+    # as a magazine pull-quote on the share page under "Best season"
+    # and reproduced verbatim in the PDF itinerary.
+    seasonal_notes: Optional[str] = Field(default=None, max_length=600)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -597,7 +601,15 @@ async def create_share_link(
     elite_share_title: Optional[str] = None
     elite_hide_scout_notes = False
     elite_expires_at: Optional[datetime] = None
+    elite_seasonal_notes: Optional[str] = None
+    # `created_by_was_elite` snapshots the minter's entitlement at
+    # create-time so a future downgrade (Elite → Pro) doesn't strip
+    # already-shared premium content from links the photographer
+    # already sent to clients. The Phase 3 weather / sun / PDF render
+    # path keys off THIS flag, not the user's live plan.
+    created_by_was_elite = False
     if _user_is_elite(user):
+        created_by_was_elite = True
         if body.share_title:
             elite_share_title = body.share_title.strip()[:SHARE_TITLE_MAX_LEN] or None
         elite_hide_scout_notes = bool(body.hide_scout_notes)
@@ -609,12 +621,15 @@ async def create_share_link(
                 )
             except Exception:
                 elite_expires_at = None
+        if body.seasonal_notes:
+            elite_seasonal_notes = body.seasonal_notes.strip()[:600] or None
     else:
-        if body.share_title or body.hide_scout_notes is not None or body.expires_in_days:
+        if body.share_title or body.hide_scout_notes is not None or body.expires_in_days or body.seasonal_notes:
             logging.getLogger("lumascout.shares").info(
-                "elite_fields_dropped user_id=%s plan=%s role=%s share_title_set=%s hide_notes_set=%s expires_set=%s",
+                "elite_fields_dropped user_id=%s plan=%s role=%s share_title_set=%s hide_notes_set=%s expires_set=%s seasonal_set=%s",
                 user.get("user_id"), plan_of(user), user.get("role"),
                 bool(body.share_title), body.hide_scout_notes is not None, bool(body.expires_in_days),
+                bool(body.seasonal_notes),
             )
 
     share_doc = {
@@ -638,6 +653,11 @@ async def create_share_link(
         "share_title": elite_share_title,
         "hide_scout_notes": elite_hide_scout_notes,
         "expires_at": elite_expires_at,
+        # Phase 3 — seasonal blurb + Elite-at-mint snapshot. The flag
+        # is what the public renderer + the PDF endpoint key off so
+        # premium content survives a Pro downgrade.
+        "seasonal_notes": elite_seasonal_notes,
+        "created_by_was_elite": created_by_was_elite,
         "revoked": False,
         "revoked_at": None,
         "revoked_by_user_id": None,
@@ -1092,6 +1112,46 @@ async def public_location_view(share_slug: str, request: Request):
         # the share page render if the lookup fails for any reason.
         ctx["community_image_urls"] = []
 
+    # ── Jun 2025 Phase 3 — Elite premium content ─────────────────
+    # Only fetch the heavy 5-day forecast + multi-day sun events for
+    # Elite-minted links. The `created_by_was_elite` flag was
+    # snapshotted at mint time so a Pro downgrade later doesn't strip
+    # premium content from links the photographer already delivered.
+    # Both helpers are imported from the existing `shoot_plan` module
+    # to avoid duplicating weather/sun logic.
+    share_row = ctx.get("share") or {}
+    spot_doc = ctx.get("spot") or {}
+    if share_row.get("created_by_was_elite") and spot_doc.get("latitude") and spot_doc.get("longitude"):
+        try:
+            from routes.shoot_plan import _fetch_weather as _sp_fetch_weather
+            ctx["forecast_5day"] = await _sp_fetch_weather(
+                float(spot_doc["latitude"]), float(spot_doc["longitude"])
+            )
+        except Exception:
+            ctx["forecast_5day"] = None
+        try:
+            from routes.shoot_plan import _compute_light_plan as _sp_light_plan
+            from datetime import date as _date, timedelta as _td2
+            today = _date.today()
+            light_days = []
+            for i in range(5):
+                try:
+                    light_days.append(
+                        _sp_light_plan(
+                            float(spot_doc["latitude"]),
+                            float(spot_doc["longitude"]),
+                            when=today + _td2(days=i),
+                        )
+                    )
+                except Exception:
+                    light_days.append(None)
+            ctx["light_days_5"] = light_days
+        except Exception:
+            ctx["light_days_5"] = None
+    else:
+        ctx["forecast_5day"] = None
+        ctx["light_days_5"] = None
+
     return HTMLResponse(content=_render_public_html(ctx, canonical_url=canonical_url))
 
 
@@ -1288,6 +1348,16 @@ def _render_public_html(ctx: Dict[str, Any], canonical_url: Optional[str] = None
         f'object-fit:cover;background:#0E0E10;" />'
     )
 
+    # ── Jun 2025 Phase 3 — Elite premium planning block ──────────
+    # Renders only when the share was Elite-minted (snapshot at create
+    # time). Contains: 5-day weather grid, 5-day sun/golden-hour table,
+    # seasonal blurb, and the PDF itinerary download link. Each card
+    # short-circuits if its data source isn't available so a Pro
+    # downgrade or an Open-Meteo blip never breaks the whole page.
+    elite_planning_html = ""
+    if share.get("created_by_was_elite"):
+        elite_planning_html = _render_elite_planning_block(ctx)
+
     coord_label = "Exact location" if show_exact else "Approximate area"
 
     return f"""<!doctype html>
@@ -1462,6 +1532,8 @@ h1 {{
     {best_block}
 
     {f'<div class="card"><div class="card-kicker">Photos from this spot</div><div class="gallery">{gallery_html}</div></div>' if gallery_html else ''}
+
+    {elite_planning_html}
 
     <div class="card">
       <div class="card-kicker">Location</div>
@@ -1673,3 +1745,367 @@ async def admin_share_link_audit(
         "count": len(rows),
         "next_cursor": (skip + page_size) if has_more else None,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Jun 2025 Phase 3 — Elite premium content
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _fmt_time(dt_val: Any) -> str:
+    """Render a datetime as `H:MM AM/PM` in its own tzinfo, or '—' if
+    the value isn't a usable datetime. Used by both the HTML render
+    and the PDF builder so the wall-clock format is identical.
+    """
+    if not isinstance(dt_val, datetime):
+        return "—"
+    try:
+        s = dt_val.strftime("%-I:%M %p")
+    except ValueError:
+        # Windows / non-glibc fallback
+        s = dt_val.strftime("%I:%M %p").lstrip("0")
+    return s
+
+
+def _render_elite_planning_block(ctx: Dict[str, Any]) -> str:
+    """Phase 3 — premium planning card stack for Elite-minted shares.
+
+    Three cards stacked top-down:
+      1. 5-day weather (Open-Meteo daily forecast — chip per day).
+      2. Sun & golden hour — sunrise / sunset / golden hour AM&PM for
+         the next 5 days in the spot's local timezone.
+      3. Photographer's seasonal notes (optional pull-quote).
+
+    Each card short-circuits independently if its data isn't
+    available so a flaky upstream never blanks the whole section.
+    A PDF download CTA always renders because the PDF endpoint can
+    build itself from the share row even if both Open-Meteo and the
+    sun library are down.
+    """
+    spot = ctx.get("spot") or {}  # noqa: F841 — kept for future use (e.g. seasonal heuristic based on lat)
+    share = ctx.get("share") or {}
+    forecast = ctx.get("forecast_5day") or []
+    light_days = ctx.get("light_days_5") or []
+    seasonal = (share.get("seasonal_notes") or "").strip()
+    token = share.get("token")
+
+    parts: list[str] = []
+
+    # ── Weather ────────────────────────────────────────────────
+    if forecast:
+        chips = []
+        for f in forecast[:5]:
+            label = _esc((f or {}).get("label") or "—")
+            wd = _esc((f or {}).get("weekday") or "")
+            hi = (f or {}).get("high_f")
+            lo = (f or {}).get("low_f")
+            rain = (f or {}).get("rain_chance_pct")
+            chips.append(
+                f'<div class="wchip">'
+                f'<div class="wchip-day">{wd}</div>'
+                f'<div class="wchip-temp">{hi if hi is not None else "—"}° / {lo if lo is not None else "—"}°</div>'
+                f'<div class="wchip-label">{label}</div>'
+                f'<div class="wchip-rain">{int(rain)}% rain</div>'
+                f'</div>'
+                if rain is not None
+                else f'<div class="wchip">'
+                f'<div class="wchip-day">{wd}</div>'
+                f'<div class="wchip-temp">{hi if hi is not None else "—"}° / {lo if lo is not None else "—"}°</div>'
+                f'<div class="wchip-label">{label}</div>'
+                f'</div>'
+            )
+        parts.append(
+            '<div class="card"><div class="card-kicker">5-day forecast</div>'
+            f'<div class="wgrid">{"".join(chips)}</div>'
+            '</div>'
+        )
+
+    # ── Sun / golden hour ──────────────────────────────────────
+    if light_days:
+        rows = []
+        from datetime import date as _date, timedelta as _td
+        today = _date.today()
+        for i, day in enumerate(light_days[:5]):
+            if not day:
+                continue
+            events = (day.get("sun_events") or {})
+            # `_compute_light_plan` returns formatted local strings for
+            # sunrise/sunset and ISO pairs for golden_morning /
+            # golden_evening. Parse the ISO pairs back to datetimes
+            # for `_fmt_time` so the wall-clock format matches the
+            # rest of the page exactly.
+            def _from_iso(s: Any) -> Any:
+                if not isinstance(s, str):
+                    return None
+                try:
+                    return datetime.fromisoformat(s)
+                except Exception:
+                    return None
+            sr_local = events.get("sunrise_local") or "—"
+            ss_local = events.get("sunset_local") or "—"
+            gm = events.get("golden_morning") or []
+            ge = events.get("golden_evening") or []
+            gm_s = _from_iso(gm[0]) if len(gm) >= 1 else None
+            gm_e = _from_iso(gm[1]) if len(gm) >= 2 else None
+            ge_s = _from_iso(ge[0]) if len(ge) >= 1 else None
+            ge_e = _from_iso(ge[1]) if len(ge) >= 2 else None
+            d_label = (today + _td(days=i)).strftime("%a")
+            rows.append(
+                '<tr>'
+                f'<td class="sun-day">{_esc(d_label)}</td>'
+                f'<td>{_esc(sr_local)}</td>'
+                f'<td>{_esc(ss_local)}</td>'
+                f'<td>{_fmt_time(gm_s)} – {_fmt_time(gm_e)}</td>'
+                f'<td>{_fmt_time(ge_s)} – {_fmt_time(ge_e)}</td>'
+                '</tr>'
+            )
+        if rows:
+            parts.append(
+                '<div class="card"><div class="card-kicker">Sun & golden hour</div>'
+                '<table class="suntable"><thead><tr>'
+                '<th></th><th>Sunrise</th><th>Sunset</th><th>Golden AM</th><th>Golden PM</th>'
+                '</tr></thead><tbody>'
+                + "".join(rows)
+                + '</tbody></table>'
+                + '<div class="suntable-hint">Times are in the spot\'s local time zone.</div>'
+                + '</div>'
+            )
+
+    # ── Seasonal notes ─────────────────────────────────────────
+    if seasonal:
+        parts.append(
+            '<div class="card"><div class="card-kicker">Photographer\u2019s seasonal notes</div>'
+            f'<div class="pnote" style="margin:0">{_esc(seasonal)}</div>'
+            '</div>'
+        )
+
+    # ── PDF download CTA ───────────────────────────────────────
+    if token:
+        parts.append(
+            '<div class="card"><div class="card-kicker">Client itinerary</div>'
+            '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">'
+            '<div style="font-size:13.5px;color:#3D3833;">Download a polished PDF with the location details, weather, golden hour times, and the photographer\u2019s notes.</div>'
+            f'<a class="cta" href="/api/public/location/{_esc(token)}/itinerary.pdf" '
+            'target="_blank" rel="noopener" '
+            'style="background:#1A1A1A;color:#FAFAF7;padding:10px 18px;border-radius:8px;font-weight:600;text-decoration:none;font-size:13px;">'
+            'Download PDF</a></div></div>'
+        )
+
+    if not parts:
+        return ""
+
+    # Inline styles for the new blocks so we don't have to touch the
+    # global stylesheet block above (which lives inside the big f-string
+    # template).
+    style_block = (
+        '<style>'
+        '.wgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}'
+        '.wchip{background:#F4F1EA;border-radius:10px;padding:10px;text-align:center;font-size:11.5px;color:#3D3833}'
+        '.wchip-day{font-weight:600;color:#1A1A1A;font-size:12px}'
+        '.wchip-temp{font-size:14px;color:#1A1A1A;margin-top:2px}'
+        '.wchip-label{margin-top:2px}'
+        '.wchip-rain{margin-top:2px;color:#5A6A7A}'
+        '.suntable{width:100%;border-collapse:collapse;font-size:12.5px;color:#1A1A1A;margin:0}'
+        '.suntable th,.suntable td{padding:7px 6px;text-align:left;border-bottom:1px solid #E8E6DF}'
+        '.suntable th{font-size:10.5px;text-transform:uppercase;letter-spacing:0.5px;color:#7A6B5C}'
+        '.sun-day{font-weight:600}'
+        '.suntable-hint{font-size:11px;color:#7A6B5C;margin-top:8px;font-style:italic}'
+        '@media (max-width:540px){.wgrid{grid-template-columns:repeat(2,1fr)}}'
+        '</style>'
+    )
+    return style_block + "".join(parts)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# PDF itinerary — public, served from a stable URL on the share page
+# ─────────────────────────────────────────────────────────────────────
+@router.get("/public/location/{token}/itinerary.pdf")
+async def public_itinerary_pdf(token: str):
+    """Render a one-page premium PDF itinerary for an Elite-minted
+    share. Anonymous endpoint — no auth, no rate limit. Mirrors the
+    public share resolver so revoked / expired / hard-deleted tokens
+    return 404 here too.
+
+    Gated on `created_by_was_elite` — Pro / Free shares 404 since the
+    PDF is a paid feature. Returns `application/pdf` with a polite
+    filename so the browser's "Save as" sheet pre-fills nicely.
+    """
+    ctx = await _resolve_share_or_unavailable(token)
+    if not ctx:
+        raise HTTPException(status_code=404, detail="Share unavailable")
+    share = ctx.get("share") or {}
+    if not share.get("created_by_was_elite"):
+        # Pro/Free downgrade — premium artifact stays gated.
+        raise HTTPException(status_code=404, detail="Premium content not available")
+
+    spot = ctx.get("spot") or {}
+    title = (share.get("share_title") or spot.get("title") or "Photo location").strip()
+
+    # Refresh weather + sun on each PDF render. Open-Meteo + astral
+    # are fast enough; we'd rather always deliver accurate planning
+    # data than serve a stale cache.
+    try:
+        from routes.shoot_plan import _fetch_weather as _sp_fetch_weather
+        forecast = await _sp_fetch_weather(float(spot["latitude"]), float(spot["longitude"])) or []
+    except Exception:
+        forecast = []
+    try:
+        from routes.shoot_plan import _compute_light_plan as _sp_light_plan
+        from datetime import date as _date2, timedelta as _td3
+        today = _date2.today()
+        light_days = [
+            _sp_light_plan(float(spot["latitude"]), float(spot["longitude"]), when=today + _td3(days=i))
+            for i in range(5)
+        ]
+    except Exception:
+        light_days = []
+
+    # Build the PDF in-memory with reportlab. Single A4 page with
+    # cover title, location, weather table, sun & golden hour table,
+    # parking / creator tips / seasonal notes, footer with branding.
+    from io import BytesIO
+    from reportlab.lib.pagesizes import LETTER
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.lib import colors as _rc
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    )
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=LETTER,
+        leftMargin=0.6 * inch, rightMargin=0.6 * inch,
+        topMargin=0.6 * inch, bottomMargin=0.6 * inch,
+        title=f"{title} — LumaScout itinerary",
+        author="LumaScout",
+    )
+    styles = getSampleStyleSheet()
+    h_title = ParagraphStyle(
+        "title", parent=styles["Heading1"], fontName="Times-Bold",
+        fontSize=22, leading=26, textColor=_rc.HexColor("#1A1A1A"),
+    )
+    h_kicker = ParagraphStyle(
+        "kicker", parent=styles["Heading2"], fontName="Helvetica-Bold",
+        fontSize=9, leading=12, textColor=_rc.HexColor("#B07C20"),
+        spaceBefore=10, spaceAfter=4,
+    )
+    p_body = ParagraphStyle(
+        "body", parent=styles["BodyText"], fontName="Helvetica",
+        fontSize=10.5, leading=14, textColor=_rc.HexColor("#1A1A1A"),
+    )
+    p_muted = ParagraphStyle(
+        "muted", parent=p_body, textColor=_rc.HexColor("#5C5147"), fontSize=9.5, leading=12,
+    )
+
+    story = []
+    story.append(Paragraph("LUMASCOUT &middot; CLIENT ITINERARY", h_kicker))
+    story.append(Paragraph(_esc(title), h_title))
+    locline = ", ".join([x for x in [spot.get("city"), spot.get("state")] if x]) or ""
+    if locline:
+        story.append(Paragraph(_esc(locline), p_muted))
+    story.append(Spacer(1, 10))
+
+    if (spot.get("description") or "").strip():
+        story.append(Paragraph(_esc(spot["description"].strip()), p_body))
+        story.append(Spacer(1, 6))
+
+    # 5-day forecast table
+    if forecast:
+        story.append(Paragraph("5-DAY FORECAST", h_kicker))
+        data = [["Day", "High / Low", "Conditions", "Rain"]]
+        for f in forecast[:5]:
+            data.append([
+                f.get("weekday") or "—",
+                f"{f.get('high_f', '—')}° / {f.get('low_f', '—')}°",
+                f.get("label") or "—",
+                f"{f.get('rain_chance_pct', 0)}%" if f.get("rain_chance_pct") is not None else "—",
+            ])
+        t = Table(data, colWidths=[0.8 * inch, 1.4 * inch, 2.6 * inch, 0.9 * inch], hAlign="LEFT")
+        t.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 9.5),
+            ("TEXTCOLOR", (0, 0), (-1, 0), _rc.HexColor("#7A6B5C")),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.4, _rc.HexColor("#E8E6DF")),
+            ("LINEBELOW", (0, 1), (-1, -2), 0.25, _rc.HexColor("#F0EEE8")),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ]))
+        story.append(t)
+
+    # Sun & golden hour table
+    if light_days:
+        story.append(Paragraph("SUN &amp; GOLDEN HOUR", h_kicker))
+        sun_data = [["Day", "Sunrise", "Sunset", "Golden AM", "Golden PM"]]
+        from datetime import date as _date3, timedelta as _td4
+        today = _date3.today()
+        def _from_iso(s: Any) -> Any:
+            if not isinstance(s, str):
+                return None
+            try:
+                return datetime.fromisoformat(s)
+            except Exception:
+                return None
+        for i, day in enumerate(light_days[:5]):
+            if not day:
+                continue
+            e = (day.get("sun_events") or {})
+            gm = e.get("golden_morning") or []
+            ge = e.get("golden_evening") or []
+            gm_s = _from_iso(gm[0]) if len(gm) >= 1 else None
+            gm_e = _from_iso(gm[1]) if len(gm) >= 2 else None
+            ge_s = _from_iso(ge[0]) if len(ge) >= 1 else None
+            ge_e = _from_iso(ge[1]) if len(ge) >= 2 else None
+            sun_data.append([
+                (today + _td4(days=i)).strftime("%a"),
+                e.get("sunrise_local") or "—",
+                e.get("sunset_local") or "—",
+                f"{_fmt_time(gm_s)} – {_fmt_time(gm_e)}",
+                f"{_fmt_time(ge_s)} – {_fmt_time(ge_e)}",
+            ])
+        st = Table(sun_data, colWidths=[0.6 * inch, 0.9 * inch, 0.9 * inch, 1.6 * inch, 1.6 * inch], hAlign="LEFT")
+        st.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 9.5),
+            ("TEXTCOLOR", (0, 0), (-1, 0), _rc.HexColor("#7A6B5C")),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.4, _rc.HexColor("#E8E6DF")),
+            ("LINEBELOW", (0, 1), (-1, -2), 0.25, _rc.HexColor("#F0EEE8")),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        story.append(st)
+
+    # Parking / creator tips (honors hide_scout_notes)
+    if not share.get("hide_scout_notes"):
+        if (spot.get("parking_notes") or "").strip():
+            story.append(Paragraph("PARKING &amp; ACCESS", h_kicker))
+            story.append(Paragraph(_esc(spot["parking_notes"].strip()), p_body))
+        if (spot.get("creator_tips") or "").strip():
+            story.append(Paragraph("PHOTOGRAPHER\u2019S TIPS", h_kicker))
+            story.append(Paragraph(_esc(spot["creator_tips"].strip()), p_body))
+
+    if (share.get("seasonal_notes") or "").strip():
+        story.append(Paragraph("BEST SEASON", h_kicker))
+        story.append(Paragraph(_esc(share["seasonal_notes"].strip()), p_body))
+
+    if (share.get("personal_note") or "").strip():
+        story.append(Paragraph("FROM YOUR PHOTOGRAPHER", h_kicker))
+        story.append(Paragraph(_esc(share["personal_note"].strip()), p_body))
+
+    story.append(Spacer(1, 18))
+    story.append(Paragraph(
+        "Prepared with LumaScout &middot; lumascout.app",
+        ParagraphStyle("foot", parent=p_muted, fontSize=8.5, alignment=1),
+    ))
+
+    doc.build(story)
+    buf.seek(0)
+
+    # Polite filename for the Save-As dialog.
+    safe_name = "".join(c if c.isalnum() or c in " -_" else "_" for c in title)[:60].strip() or "itinerary"
+    headers = {
+        "Content-Disposition": f'inline; filename="LumaScout-{safe_name}.pdf"',
+        "Cache-Control": "private, max-age=0, must-revalidate",
+    }
+    from fastapi.responses import Response as _R
+    return _R(content=buf.read(), media_type="application/pdf", headers=headers)

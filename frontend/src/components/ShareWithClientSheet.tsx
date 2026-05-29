@@ -104,6 +104,9 @@ export default function ShareWithClientSheet({
   const [shareTitle, setShareTitle] = useState('');
   const [hideScoutNotes, setHideScoutNotes] = useState(false);
   const [expiresInDays, setExpiresInDays] = useState<number | null>(null);
+  // Phase 3 Elite-only seasonal notes blurb. 600 char cap mirrors
+  // the backend Pydantic validation.
+  const [seasonalNotes, setSeasonalNotes] = useState('');
 
   // Copy feedback — token of the link copied last, and a transient toast.
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
@@ -175,6 +178,7 @@ export default function ShareWithClientSheet({
         if (shareTitle.trim()) payload.share_title = shareTitle.trim();
         if (hideScoutNotes) payload.hide_scout_notes = true;
         if (expiresInDays) payload.expires_in_days = expiresInDays;
+        if (seasonalNotes.trim()) payload.seasonal_notes = seasonalNotes.trim();
       }
       const r = await api.post(`/spots/${spotId}/share`, payload);
       setRecentlyMintedToken(r.token);
@@ -184,6 +188,7 @@ export default function ShareWithClientSheet({
       setShareTitle('');
       setHideScoutNotes(false);
       setExpiresInDays(null);
+      setSeasonalNotes('');
       await refresh();
     } catch (e) {
       setErr(formatApiError(e));
@@ -468,6 +473,24 @@ export default function ShareWithClientSheet({
                         );
                       })}
                     </View>
+
+                    {/* Phase 3 — Seasonal notes blurb. Multi-line input
+                        rendered on the public page as a pull-quote and
+                        reproduced verbatim in the PDF itinerary. */}
+                    <Text style={[styles.eliteLabel, { marginTop: 12 }]}>
+                      Photographer&apos;s seasonal notes (optional)
+                    </Text>
+                    <TextInput
+                      value={seasonalNotes}
+                      onChangeText={(t) => setSeasonalNotes(t.slice(0, 600))}
+                      style={[styles.eliteInput, { minHeight: 70, textAlignVertical: 'top' }]}
+                      placeholder="e.g. Best late March–April for bluebonnets; afternoons get crowded after 4pm."
+                      placeholderTextColor={colors.textTertiary}
+                      multiline
+                      maxLength={600}
+                      testID="share-elite-seasonal-notes"
+                    />
+                    <Text style={styles.eliteHint}>Renders on the public page and the PDF itinerary.</Text>
                   </View>
                 ) : null}
 
