@@ -44,6 +44,7 @@ expiry in v1.
 from __future__ import annotations
 
 import os
+import logging
 import secrets
 import uuid
 import urllib.parse
@@ -61,6 +62,8 @@ from server import (
     audit_log,
     require_role,
     raise_paywall,
+    plan_of,
+    _effective_plan,
 )
 
 FREE_SHARE_LINKS_LIMIT = 1
@@ -68,6 +71,12 @@ FREE_SHARE_LINKS_UPGRADE_COPY = (
     "You've used your free Share Location link. Upgrade to Pro to "
     "create unlimited share links for clients, shoots, and saved locations."
 )
+
+# Jun 2025 Phase 2 — Elite-only premium fields on a Share Location link.
+# Max expiry of 365 days bounds the audit window; a "never" expiry is
+# expressed by omitting `expires_in_days` from the request.
+SHARE_TITLE_MAX_LEN = 80
+SHARE_EXPIRY_MAX_DAYS = 365
 
 
 def _user_is_free(user: Dict[str, Any]) -> bool:
@@ -78,6 +87,18 @@ def _user_is_free(user: Dict[str, Any]) -> bool:
     """
     plan = (user.get("plan") or "free").lower()
     return plan in ("", "free")
+
+
+def _user_is_elite(user: Dict[str, Any]) -> bool:
+    """Elite (paid or comped). Mirrors the `_effective_plan` helper
+    so trial_elite / comp_elite / comped staff roles all count.
+    Staff (admin / super_admin / moderator / support) are also treated
+    as Elite for premium-field validation — they routinely test the
+    feature on behalf of users and should never be gated by tier.
+    """
+    if (user.get("role") or "") in ("admin", "super_admin", "moderator", "support"):
+        return True
+    return _effective_plan(plan_of(user)) == "elite"
 
 router = APIRouter(prefix="/api", tags=["spot-shares"])
 
@@ -243,6 +264,15 @@ class ShareCreateIn(BaseModel):
     # white-themed client page. Kept short (single screen, no scroll).
     personal_note: Optional[str] = Field(default=None, max_length=600)
 
+    # ── Jun 2025 Phase 2 — Elite-only premium fields ───────────────
+    # All three are silently dropped (with a log line) for non-Elite
+    # callers in `create_share_link`. The frontend hides the inputs
+    # entirely so a polite-curl-user is the only way these reach the
+    # server from a non-Elite account.
+    share_title: Optional[str] = Field(default=None, max_length=SHARE_TITLE_MAX_LEN)
+    hide_scout_notes: Optional[bool] = None
+    expires_in_days: Optional[int] = Field(default=None, ge=1, le=SHARE_EXPIRY_MAX_DAYS)
+
 
 # ─────────────────────────────────────────────────────────────────────
 # Helpers
@@ -312,6 +342,32 @@ async def _resolve_share_or_unavailable(token: str) -> Optional[Dict[str, Any]]:
         return None
     if share.get("revoked"):
         return None
+
+    # Jun 2025 Phase 2 — Elite-only expiring links. Treat any past
+    # `expires_at` exactly the same way as a hard-deleted token: the
+    # public endpoint must show the standard "no longer available"
+    # screen and the JSON API must return 404. A background sweeper
+    # is intentionally not added here — we don't want the link to keep
+    # consuming Mongo storage forever, but the cleanup belongs in a
+    # separate maintenance job rather than a hot-path delete.
+    expires_at = share.get("expires_at")
+    if expires_at:
+        try:
+            from datetime import timezone as _tz
+            # Mongo round-trips datetimes as **naive UTC** but our
+            # `utcnow()` helper returns a tz-aware datetime. Naive
+            # vs tz-aware compare raises TypeError — normalise both
+            # sides to tz-aware UTC before the comparison.
+            if isinstance(expires_at, datetime):
+                exp = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=_tz.utc)
+                now_dt = utcnow() if callable(utcnow) else datetime.now(_tz.utc)
+                if not now_dt.tzinfo:
+                    now_dt = now_dt.replace(tzinfo=_tz.utc)
+                if exp <= now_dt:
+                    return None
+        except Exception:
+            # Defensive — never block render on a clock-comparison hiccup.
+            pass
 
     spot = await db.spots.find_one({"spot_id": share["spot_id"]}, {"_id": 0})
     if not spot:
@@ -415,6 +471,16 @@ def _build_public_view(ctx: Dict[str, Any]) -> Dict[str, Any]:
     for f in PUBLIC_DISPLAY_FIELDS:
         if spot.get(f) is not None:
             display[f] = spot.get(f)
+
+    # Jun 2025 Phase 2 — Elite "hide sensitive scout notes" toggle.
+    # When the link's owner is on Elite and they ticked the hide-notes
+    # switch at create time, strip the fields a working photographer
+    # considers proprietary scout data so the client sees the location
+    # without the photographer's competitive notes.
+    share_row = ctx.get("share") or {}
+    if share_row.get("hide_scout_notes"):
+        for f in ("parking_notes", "creator_tips", "best_time_of_day"):
+            display.pop(f, None)
 
     return {
         "status": "ok",
@@ -521,6 +587,36 @@ async def create_share_link(
     else:
         show_exact = bool(body.show_exact_location)
 
+    # ── Jun 2025 Phase 2 — Elite-only premium fields ─────────────
+    # Custom title, hide-scout-notes toggle, and link expiry are all
+    # Elite-tier features. Non-Elite callers that somehow include
+    # them in the body (curl, sniffer, stale client) get their fields
+    # silently dropped + a structured log entry. This is intentional
+    # graceful degradation — we never 402 a paying Pro user mid-mint
+    # because the UI is going to hide the inputs from them anyway.
+    elite_share_title: Optional[str] = None
+    elite_hide_scout_notes = False
+    elite_expires_at: Optional[datetime] = None
+    if _user_is_elite(user):
+        if body.share_title:
+            elite_share_title = body.share_title.strip()[:SHARE_TITLE_MAX_LEN] or None
+        elite_hide_scout_notes = bool(body.hide_scout_notes)
+        if body.expires_in_days:
+            try:
+                from datetime import timedelta as _td
+                elite_expires_at = (now if isinstance(now, datetime) else datetime.utcnow()) + _td(
+                    days=int(body.expires_in_days)
+                )
+            except Exception:
+                elite_expires_at = None
+    else:
+        if body.share_title or body.hide_scout_notes is not None or body.expires_in_days:
+            logging.getLogger("lumascout.shares").info(
+                "elite_fields_dropped user_id=%s plan=%s role=%s share_title_set=%s hide_notes_set=%s expires_set=%s",
+                user.get("user_id"), plan_of(user), user.get("role"),
+                bool(body.share_title), body.hide_scout_notes is not None, bool(body.expires_in_days),
+            )
+
     share_doc = {
         "share_id": f"shr_{uuid.uuid4().hex[:12]}",
         "token": token,
@@ -538,6 +634,10 @@ async def create_share_link(
         # what a forwarded link reveals.
         "spot_visibility_at_create": "public" if spot_is_public else "private",
         "show_exact_location": show_exact,
+        # Phase 2 Elite-only fields (None / False for non-Elite minters).
+        "share_title": elite_share_title,
+        "hide_scout_notes": elite_hide_scout_notes,
+        "expires_at": elite_expires_at,
         "revoked": False,
         "revoked_at": None,
         "revoked_by_user_id": None,
@@ -737,6 +837,12 @@ async def list_share_links(
             # I send" for each active link.
             "personal_note": r.get("personal_note"),
             "spot_visibility_at_create": r.get("spot_visibility_at_create"),
+            # Jun 2025 Phase 2 — Elite-only fields. None / False for
+            # links minted by non-Elite owners. Surfaced unconditionally
+            # so the owner UI can render the right badges/copy.
+            "share_title": r.get("share_title"),
+            "hide_scout_notes": bool(r.get("hide_scout_notes")),
+            "expires_at": r.get("expires_at"),
         })
     return {"items": items, "count": len(items)}
 
@@ -1060,7 +1166,15 @@ def _render_public_html(ctx: Dict[str, Any], canonical_url: Optional[str] = None
     robots = payload["robots"]
     canonical_tag = f'<link rel="canonical" href="{_esc(canonical_url)}" />' if canonical_url else ""
 
+    # Jun 2025 Phase 2 — Elite "Custom share title" overrides the
+    # rendered H1. We deliberately do NOT change `og.title` (Open
+    # Graph) — that one stays based on the underlying spot so search
+    # engine and rich-link previews still reflect the location's real
+    # name. The override is purely the on-page H1 the client sees.
     title = spot.get("title") or GENERIC_OG_TITLE
+    custom_title = (share.get("share_title") or "").strip()
+    if custom_title:
+        title = custom_title
     desc = (spot.get("description") or "").strip()
     hero = spot.get("hero_image_url") or GENERIC_OG_IMAGE
     lat = spot.get("latitude")

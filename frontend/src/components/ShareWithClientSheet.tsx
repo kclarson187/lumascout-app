@@ -33,9 +33,11 @@ import {
   View, Text, StyleSheet, Modal, TouchableOpacity, ScrollView,
   ActivityIndicator, Share, Platform, Pressable, TextInput } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { X, Copy, Share2, Trash2, AlertTriangle, Eye, EyeOff, Plus, Check } from 'lucide-react-native';
+import { X, Copy, Share2, Trash2, AlertTriangle, Eye, EyeOff, Plus, Check, Crown, Clock, EyeOff as HideIcon } from 'lucide-react-native';
 import { colors, font, space, radii } from '../theme';
 import { api, formatApiError } from '../api';
+import { useAuth } from '../auth';
+import { isElite } from '../utils/entitlements';
 
 export type ShareLink = {
   share_id: string;
@@ -75,6 +77,14 @@ const SHARE_AVAILABLE = (() => {
 
 export default function ShareWithClientSheet({
   visible, onClose, spotId, spotTitle, spotIsPublic }: Props) {
+  const { user } = useAuth();
+  // Jun 2025 Phase 2 — Elite-tier premium inputs (custom title,
+  // hide-scout-notes toggle, expiring links). Hidden for free/Pro;
+  // the backend additionally drops them silently as a safety net.
+  // Staff roles see the inputs too (entitlements.isElite returns
+  // true for paid Elite — staff are handled by a role check below).
+  const elite = !!user && (isElite(user) || ['admin', 'super_admin', 'moderator', 'support'].includes((user as any)?.role || ''));
+
   const [links, setLinks] = useState<ShareLink[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -88,6 +98,12 @@ export default function ShareWithClientSheet({
   // personal note rendered above the spot details on the public,
   // white-themed client page. 600-char cap matches the backend.
   const [personalNote, setPersonalNote] = useState('');
+
+  // Phase 2 Elite-only inputs. Stored on the sheet, sent on mint,
+  // reset after success same as `personalNote`.
+  const [shareTitle, setShareTitle] = useState('');
+  const [hideScoutNotes, setHideScoutNotes] = useState(false);
+  const [expiresInDays, setExpiresInDays] = useState<number | null>(null);
 
   // Copy feedback — token of the link copied last, and a transient toast.
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
@@ -147,13 +163,27 @@ export default function ShareWithClientSheet({
     if (!acknowledgedPrivacy) return;
     setBusy(true); setErr(null);
     try {
-      const r = await api.post(`/spots/${spotId}/share`, {
+      // Phase 2 — only send Elite fields if the user actually has the
+      // entitlement. Sending them as a non-Elite user is harmless
+      // (backend silently drops + logs) but the cleaner pattern is to
+      // omit them entirely so the request body stays minimal.
+      const payload: Record<string, any> = {
         show_exact_location: showExactLocation,
-        personal_note: personalNote.trim() || undefined });
+        personal_note: personalNote.trim() || undefined,
+      };
+      if (elite) {
+        if (shareTitle.trim()) payload.share_title = shareTitle.trim();
+        if (hideScoutNotes) payload.hide_scout_notes = true;
+        if (expiresInDays) payload.expires_in_days = expiresInDays;
+      }
+      const r = await api.post(`/spots/${spotId}/share`, payload);
       setRecentlyMintedToken(r.token);
-      // Reset note so the next mint doesn't accidentally inherit the
-      // previous client's message.
+      // Reset all inputs so the next mint doesn't accidentally inherit
+      // the previous client's settings.
       setPersonalNote('');
+      setShareTitle('');
+      setHideScoutNotes(false);
+      setExpiresInDays(null);
       await refresh();
     } catch (e) {
       setErr(formatApiError(e));
@@ -364,6 +394,80 @@ export default function ShareWithClientSheet({
                       This setting is locked once the link is generated. To change it,
                       revoke the link and create a new one.
                     </Text>
+                  </View>
+                ) : null}
+
+                {/* Jun 2025 Phase 2 — Elite-only premium controls.
+                    Hidden entirely for free/Pro users (no UI clutter,
+                    no nudge fatigue). Backend silently drops these
+                    fields for non-Elite callers as a safety net so
+                    anyone curl-ing the API can't bypass the gate. */}
+                {elite ? (
+                  <View style={styles.eliteBlock}>
+                    <View style={styles.eliteHeaderRow}>
+                      <Crown size={13} color={colors.primary} />
+                      <Text style={styles.eliteHeader}>Elite client controls</Text>
+                    </View>
+
+                    {/* Custom share title */}
+                    <Text style={styles.eliteLabel}>Custom share title (optional)</Text>
+                    <TextInput
+                      value={shareTitle}
+                      onChangeText={(t) => setShareTitle(t.slice(0, 80))}
+                      style={styles.eliteInput}
+                      placeholder="e.g. Sunset Bridal Session — Joelle & Ryan"
+                      placeholderTextColor={colors.textTertiary}
+                      maxLength={80}
+                      testID="share-elite-title"
+                    />
+                    <Text style={styles.eliteHint}>Overrides the location name on the client page only.</Text>
+
+                    {/* Hide scout notes toggle */}
+                    <TouchableOpacity
+                      style={styles.eliteToggleRow}
+                      onPress={() => setHideScoutNotes((v) => !v)}
+                      testID="share-elite-hide-notes"
+                      activeOpacity={0.85}
+                    >
+                      <View style={[styles.checkboxBox, hideScoutNotes && styles.checkboxBoxOn]}>
+                        {hideScoutNotes ? <Check size={11} color={colors.bg} /> : null}
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <View style={styles.eliteToggleLabelRow}>
+                          <HideIcon size={11} color={colors.textSecondary} />
+                          <Text style={styles.eliteToggleLabel}>Hide sensitive scout notes</Text>
+                        </View>
+                        <Text style={styles.eliteHint}>
+                          Strips parking, best-time, and creator tips from the client page.
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+
+                    {/* Expiring link picker */}
+                    <View style={styles.eliteToggleLabelRow}>
+                      <Clock size={11} color={colors.textSecondary} />
+                      <Text style={styles.eliteToggleLabel}>Link expiration</Text>
+                    </View>
+                    <View style={styles.expiryRow}>
+                      {[
+                        { label: 'Never', days: null },
+                        { label: '24h', days: 1 },
+                        { label: '7 days', days: 7 },
+                        { label: '30 days', days: 30 },
+                      ].map((opt) => {
+                        const selected = expiresInDays === opt.days;
+                        return (
+                          <TouchableOpacity
+                            key={opt.label}
+                            style={[styles.expiryChip, selected && styles.expiryChipOn]}
+                            onPress={() => setExpiresInDays(opt.days)}
+                            testID={`share-elite-expiry-${opt.label.toLowerCase().replace(/[^a-z0-9]/g,'')}`}
+                          >
+                            <Text style={[styles.expiryChipText, selected && styles.expiryChipTextOn]}>{opt.label}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
                   </View>
                 ) : null}
 
@@ -655,6 +759,96 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     fontFamily: font.bodySemibold,
     marginBottom: 8,
+  },
+
+  // Jun 2025 Phase 2 — Elite client-controls block.
+  eliteBlock: {
+    marginBottom: space.md,
+    padding: 12,
+    borderRadius: radii.md,
+    backgroundColor: 'rgba(245,166,35,0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(245,166,35,0.22)',
+    gap: 8,
+  },
+  eliteHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
+  eliteHeader: {
+    color: colors.primary,
+    fontFamily: font.bodySemibold,
+    fontSize: 11.5,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  eliteLabel: {
+    color: colors.text,
+    fontFamily: font.bodySemibold,
+    fontSize: 12.5,
+    marginTop: 6,
+  },
+  eliteInput: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: colors.surface1,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.10)',
+    borderRadius: radii.md,
+    color: colors.text,
+    fontFamily: font.body,
+    fontSize: 13.5,
+  },
+  eliteHint: {
+    color: colors.textTertiary,
+    fontFamily: font.body,
+    fontSize: 11,
+    marginTop: 1,
+  },
+  eliteToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginTop: 8,
+  },
+  eliteToggleLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
+  eliteToggleLabel: {
+    color: colors.textSecondary,
+    fontFamily: font.bodySemibold,
+    fontSize: 12,
+  },
+  checkboxBox: {
+    width: 18, height: 18, borderRadius: 4,
+    borderWidth: 1.5, borderColor: 'rgba(245,166,35,0.45)',
+    alignItems: 'center', justifyContent: 'center',
+    marginTop: 1,
+  },
+  checkboxBoxOn: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  expiryRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 4,
+    flexWrap: 'wrap',
+  },
+  expiryChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    backgroundColor: colors.surface1,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: colors.divider,
+  },
+  expiryChipOn: {
+    backgroundColor: 'rgba(245,166,35,0.18)',
+    borderColor: 'rgba(245,166,35,0.45)',
+  },
+  expiryChipText: {
+    color: colors.textSecondary,
+    fontFamily: font.bodySemibold,
+    fontSize: 11.5,
+  },
+  expiryChipTextOn: {
+    color: colors.primary,
   },
   noteInput: {
     minHeight: 96,
