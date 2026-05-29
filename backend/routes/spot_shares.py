@@ -1714,6 +1714,207 @@ async def admin_hard_delete_share_link(
     return {"ok": True, "token": token, "deleted": True}
 
 
+@router.get("/admin/share-links/grouped")
+async def admin_grouped_share_links(
+    multiple_only: bool = False,
+    q: Optional[str] = None,
+    sort: str = "newest",
+    user: dict = Depends(require_role("admin")),
+):
+    """Grouped Active Share Links dashboard payload — admin/super_admin only.
+
+    Returns:
+      • items     — list of LocationGroup, one per spot with at least
+                    one active link, sorted by `sort` parameter
+                    (`newest` · `most_viewed` · `duplicate_count`).
+      • summary   — {total_links, total_locations, multi_locations,
+                     total_views}.
+
+    Filters:
+      • multiple_only=true — restrict to locations whose
+        `active_link_count > 1` (the "Multiple Links Only" tab).
+      • q=… — case-insensitive substring match against location name
+        OR share-link creator's display_name.
+
+    Each link inside a group is enriched with the creator's
+    `display_name` and `creator_membership_tier` (effective plan)
+    from a single batched users lookup. Revoked or expired tokens
+    are excluded by the same logic as the per-spot list endpoint.
+
+    Audit-feed access (separate endpoint) is also admin-only — this
+    page is intentionally a peer of `/admin/audit`, not of the
+    moderator-grade content tools.
+    """
+    # 1. Fetch every active share row in one shot. The active set
+    #    grows linearly with paid users, so a single find() with a
+    #    sensible ceiling is more than enough until traffic 10×s.
+    rows = await db.spot_shares.find(
+        {"$or": [{"revoked": {"$exists": False}}, {"revoked": False}]},
+        {"_id": 0},
+    ).sort("created_at", -1).limit(2000).to_list(2000)
+
+    # Defensive expiry filter — `expires_at` on Elite-minted links is
+    # checked in `_resolve_share_or_unavailable` for the public path
+    # but a raw collection scan still surfaces them. Drop expired here
+    # so admin counts don't double-count effectively-dead links.
+    now_dt = utcnow()
+    if now_dt.tzinfo is None:
+        now_dt = now_dt.replace(tzinfo=timezone.utc)
+    def _is_live(r: Dict[str, Any]) -> bool:
+        exp = r.get("expires_at")
+        if not isinstance(exp, datetime):
+            return True
+        exp_tz = exp if exp.tzinfo else exp.replace(tzinfo=timezone.utc)
+        return exp_tz > now_dt
+    rows = [r for r in rows if _is_live(r)]
+
+    if not rows:
+        return {
+            "items": [],
+            "summary": {
+                "total_links": 0,
+                "total_locations": 0,
+                "multi_locations": 0,
+                "total_views": 0,
+            },
+        }
+
+    # 2. Batched user + spot lookups so we don't N+1 the DB.
+    spot_ids = list({r.get("spot_id") for r in rows if r.get("spot_id")})
+    user_ids = list({
+        r.get("created_by_user_id") for r in rows
+        if r.get("created_by_user_id")
+    })
+    # Also pull owner ids for the location-owner column.
+    owner_user_ids: list[str] = []
+
+    spots_by_id: Dict[str, Dict[str, Any]] = {}
+    async for sp in db.spots.find(
+        {"spot_id": {"$in": spot_ids}},
+        {"_id": 0, "spot_id": 1, "title": 1, "owner_user_id": 1},
+    ):
+        spots_by_id[sp["spot_id"]] = sp
+        if sp.get("owner_user_id"):
+            owner_user_ids.append(sp["owner_user_id"])
+
+    users_by_id: Dict[str, Dict[str, Any]] = {}
+    all_user_ids = list(set(user_ids + owner_user_ids))
+    if all_user_ids:
+        async for u in db.users.find(
+            {"user_id": {"$in": all_user_ids}},
+            {"_id": 0, "user_id": 1, "display_name": 1, "email": 1, "plan": 1, "role": 1},
+        ):
+            users_by_id[u["user_id"]] = u
+
+    def _user_label(uid: Optional[str]) -> Optional[str]:
+        u = users_by_id.get(uid or "") if uid else None
+        if not u:
+            return None
+        return u.get("display_name") or (u.get("email") or "").split("@", 1)[0] or None
+
+    def _user_tier(uid: Optional[str]) -> Optional[str]:
+        u = users_by_id.get(uid or "") if uid else None
+        if not u:
+            return None
+        try:
+            return _effective_plan(plan_of(u))
+        except Exception:
+            return u.get("plan") or "free"
+
+    # 3. Group rows by spot_id.
+    groups: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        sid = r.get("spot_id") or "unknown"
+        spot_doc = spots_by_id.get(sid, {})
+        if sid not in groups:
+            owner_id = spot_doc.get("owner_user_id")
+            groups[sid] = {
+                "location_id": sid,
+                "location_name": spot_doc.get("title") or "Unknown location",
+                "location_owner_id": owner_id,
+                "location_owner_name": _user_label(owner_id),
+                "links": [],
+            }
+        token = r.get("token")
+        groups[sid]["links"].append({
+            "share_link_id": r.get("share_id"),
+            "token": token,
+            "share_token_short": (token or "")[:8] + "…" if token else None,
+            "share_url": f"{WEB_BASE}/api/public/location/{token}" if token else None,
+            "share_link_creator_id": r.get("created_by_user_id"),
+            "share_link_creator_name": _user_label(r.get("created_by_user_id")),
+            "creator_membership_tier": _user_tier(r.get("created_by_user_id")),
+            "created_at": r.get("created_at"),
+            "view_count": int(r.get("access_count") or 0),
+            "last_viewed_at": r.get("last_accessed_at"),
+            "status": "active",
+            "label": r.get("label"),
+            "personal_note": r.get("personal_note"),
+            "show_exact_location": bool(r.get("show_exact_location")),
+            # Phase 2/3 surface — useful at-a-glance for admins.
+            "share_title": r.get("share_title"),
+            "hide_scout_notes": bool(r.get("hide_scout_notes")),
+            "expires_at": r.get("expires_at"),
+            "created_by_was_elite": bool(r.get("created_by_was_elite")),
+        })
+
+    # 4. Per-group derived stats.
+    for g in groups.values():
+        g["active_link_count"] = len(g["links"])
+        g["is_multiple"] = g["active_link_count"] > 1
+        g["total_views"] = sum(int(l["view_count"]) for l in g["links"])
+        # Newest first within the group so the most recent client
+        # share is always at the top of the card.
+        g["links"].sort(
+            key=lambda l: (l.get("created_at") or datetime.min),
+            reverse=True,
+        )
+        # Pick the most recent created_at across the group's links
+        # so the outer sort can compare apples-to-apples.
+        g["most_recent_link_at"] = g["links"][0].get("created_at") if g["links"] else None
+
+    items = list(groups.values())
+
+    # 5. Filters (server-side, before the outer sort so the result is
+    #    deterministic regardless of the in-memory pipeline).
+    if multiple_only:
+        items = [g for g in items if g["is_multiple"]]
+    if q:
+        needle = q.strip().lower()
+        if needle:
+            def _match(g: Dict[str, Any]) -> bool:
+                if needle in (g.get("location_name") or "").lower():
+                    return True
+                if needle in (g.get("location_owner_name") or "").lower():
+                    return True
+                for l in g["links"]:
+                    if needle in (l.get("share_link_creator_name") or "").lower():
+                        return True
+                return False
+            items = [g for g in items if _match(g)]
+
+    # 6. Outer sort.
+    if sort == "most_viewed":
+        items.sort(key=lambda g: g["total_views"], reverse=True)
+    elif sort == "duplicate_count":
+        items.sort(key=lambda g: g["active_link_count"], reverse=True)
+    else:  # newest (default)
+        items.sort(
+            key=lambda g: (g.get("most_recent_link_at") or datetime.min),
+            reverse=True,
+        )
+
+    # 7. Summary cards for the dashboard header.
+    summary = {
+        "total_links": sum(g["active_link_count"] for g in groups.values()),
+        "total_locations": len(groups),
+        "multi_locations": sum(1 for g in groups.values() if g["is_multiple"]),
+        "total_views": sum(g["total_views"] for g in groups.values()),
+    }
+
+    return {"items": items, "summary": summary}
+
+
 @router.get("/admin/share-links/audit")
 async def admin_share_link_audit(
     limit: int = 50,
