@@ -257,7 +257,7 @@ PAYWALL_REASON_CODES = {
     "saves", "collections", "filters", "private",
     "ai_planner", "messaging", "analytics",
     "uploads", "routes", "viewers",
-    "spot_packs", "referrals", "generic",
+    "spot_packs", "referrals", "share_links", "generic",
 }
 
 

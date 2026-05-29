@@ -40,6 +40,7 @@ export type GateReason =
   | 'viewers'
   | 'spot_packs'
   | 'referrals'
+  | 'share_links'
   | 'generic';
 
 type ReasonConfig = {
@@ -167,6 +168,16 @@ const REASONS: Record<GateReason, ReasonConfig> = {
       'Unlimited referral applications',
       'Direct DM with the poster',
       'Priority visibility in the applicant list',
+    ],
+    targetPlan: 'pro',
+  },
+  share_links: {
+    title: 'You\'ve used your free Share Location link',
+    body: 'Upgrade to Pro to create unlimited share links for clients, shoots, and saved locations. Each link is revocable, view-tracked, and delivers a polished client-ready page.',
+    perks: [
+      'Unlimited active share links',
+      'Polished client-facing location page',
+      'Revoke or hard-delete any link instantly',
     ],
     targetPlan: 'pro',
   },

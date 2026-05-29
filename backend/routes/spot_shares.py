@@ -60,7 +60,24 @@ from server import (
     utcnow,
     audit_log,
     require_role,
+    raise_paywall,
 )
+
+FREE_SHARE_LINKS_LIMIT = 1
+FREE_SHARE_LINKS_UPGRADE_COPY = (
+    "You've used your free Share Location link. Upgrade to Pro to "
+    "create unlimited share links for clients, shoots, and saved locations."
+)
+
+
+def _user_is_free(user: Dict[str, Any]) -> bool:
+    """Free = no paid plan. Comp_* plans are treated as paid (mirrors
+    the convention used elsewhere in `server.py`). The `plan` field is
+    set on the user record at subscription-creation time. Missing /
+    null / "free" all count as free.
+    """
+    plan = (user.get("plan") or "free").lower()
+    return plan in ("", "free")
 
 router = APIRouter(prefix="/api", tags=["spot-shares"])
 
@@ -459,6 +476,27 @@ async def create_share_link(
         raise HTTPException(status_code=404, detail="Spot not found")
     if not _owner_or_admin(user, spot):
         raise HTTPException(status_code=403, detail="Forbidden")
+
+    # Phase 1 gating — Free accounts get exactly ONE active share link
+    # in total across their whole account. Pro / Elite / staff are
+    # unlimited. Admins / mods / support creating a share on behalf of
+    # another user (via `_owner_or_admin` admin branch) are NOT
+    # rate-limited here. Once hard-delete shipped, every row in
+    # spot_shares is by definition "active" so a simple count_documents
+    # is enough; the legacy `revoked: True` filter is left in as a
+    # belt-and-suspenders guard against stale data from before cutover.
+    is_owner_creating = (user.get("user_id") == spot.get("owner_user_id"))
+    if is_owner_creating and _user_is_free(user):
+        active_count = await db.spot_shares.count_documents({
+            "created_by_user_id": user.get("user_id"),
+            "$or": [{"revoked": {"$exists": False}}, {"revoked": False}],
+        })
+        if active_count >= FREE_SHARE_LINKS_LIMIT:
+            raise_paywall(
+                "share_links",
+                FREE_SHARE_LINKS_UPGRADE_COPY,
+                target_plan="pro",
+            )
 
     # Generate a token with a collision-safety retry (cheap, almost
     # never triggers — 32 url-safe chars = 192 bits of entropy).

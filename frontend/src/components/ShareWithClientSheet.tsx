@@ -489,11 +489,14 @@ function LinkRow({
             {link.show_exact_location ? 'Exact' : 'Approximate'}
           </Text>
         </View>
-        {link.access_count > 0 ? (
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>{link.access_count} views</Text>
-          </View>
-        ) : null}
+        {/* Jun 2025 — always show the view-count badge (Phase 1 spec
+            calls for the basic view count to be visible at a glance,
+            not hidden until the first view). Pluralizes correctly. */}
+        <View style={styles.badge}>
+          <Text style={styles.badgeText}>
+            {link.access_count} view{link.access_count === 1 ? '' : 's'}
+          </Text>
+        </View>
       </View>
 
       {/* Selectable, read-only URL input. Wraps to 2 lines on narrow
