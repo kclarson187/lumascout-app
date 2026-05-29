@@ -19135,3 +19135,187 @@ agent_communication:
 
       No 5xx in backend logs during the run. Harness at
       /app/backend_test.py.
+
+
+  - task: "Share Location PDF — visual + content replica of public share page (Jun 2025)"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/backend/routes/spot_shares.py
+        ▸ NEW helper _enrich_ctx_for_full_render(ctx) — shared data
+          adapter used by BOTH the public HTML route and the PDF
+          endpoint. Populates ctx with:
+            - community_image_urls (approved public uploads)
+            - forecast_5day (Open-Meteo 5-day daily forecast)
+            - light_days_5 (5-day sun + golden hour table)
+          Each enrichment is best-effort; flaky upstream never blocks
+          render. Previously this logic was inlined in
+          public_location_view.
+        ▸ _render_public_html(ctx, canonical_url, for_pdf=False) —
+          new `for_pdf` flag emits a print-friendly variant of the
+          SAME template:
+            - Sticky top bar becomes static, backdrop-filter removed
+            - @page Letter / 0.45in margins
+            - break-inside: avoid on .card / .gphoto / .wgrid / .suntable / .pnote
+            - Explicit hero height (3.2in) since WeasyPrint ignores
+              `aspect-ratio` — fallback keeps the cover image crisp
+            - Explicit gallery grid (3-col) and weather chip grid
+              (5-col) so the layout is deterministic in print
+            - Margin tweaks for footer / wrap when paginated
+            - "Download PDF" CTA stripped via include_pdf_cta=False
+              (the PDF should never reference itself)
+        ▸ _render_elite_planning_block(ctx, include_pdf_cta=True) —
+          accepts new include_pdf_cta param. PDF passes False so the
+          weather + sun cards render but the Download PDF CTA does not.
+        ▸ GET /api/public/location/{token}/itinerary.pdf
+          - Completely rewritten. Replaces the reportlab "client
+            itinerary" doc with a WeasyPrint render of the public
+            page template (for_pdf=True). Result: PDF is a near-replica
+            of the public share page in BOTH content AND visual styling.
+          - Pipeline:
+              1. _resolve_share_or_unavailable(token)        (404 if not OK)
+              2. created_by_was_elite gate                   (404 if Pro/Free)
+              3. _enrich_ctx_for_full_render(ctx)            (community + weather + sun)
+              4. _render_public_html(ctx, for_pdf=True)      (same HTML template)
+              5. WeasyPrint HTML(...).write_pdf(buf) via asyncio.to_thread
+              6. 503 fallback on any unexpected render failure
+          - WeasyPrint resolves remote image URLs at render time so
+            R2 CDN photos + the uploaded LumaScout logo embed cleanly
+            (verified: 7 images, ~1.4MB output, A4/Letter, 3 pages).
+          - Polite Content-Disposition filename preserved.
+        ▸ public_location_view refactor — now calls
+          _enrich_ctx_for_full_render(ctx) instead of inlining the
+          community uploads + weather/sun fetches.
+      /app/backend/requirements.txt
+        ▸ Added weasyprint==68.1 (cairo + pango system libs already
+          installed in the container — verified at install time).
+        ▸ reportlab kept in requirements.txt for now; it's still in
+          tree but no longer imported by spot_shares.py. Can be
+          removed later once no other route depends on it.
+
+      ── What the PDF now contains (same order as the public page) ──
+        1. LumaScout topbar (logo + wordmark, static in PDF)
+        2. Hero / cover image (3.2in tall, object-fit: cover)
+        3. "A LUMASCOUT LOCATION" kicker
+        4. Location title (H1, Elite custom share_title respected)
+        5. "Shared by {creator}" byline (or generic fallback)
+        6. Private / approximate-area badges (when applicable)
+        7. Photographer's personal note pull-quote (Elite)
+        8. Description paragraph
+        9. "Best time to shoot" card (Golden hour + light notes)
+       10. "Photos from this spot" responsive grid
+           (cover + owner uploads + approved community uploads)
+       11. Elite planning block:
+            a. 5-day forecast chips (Open-Meteo)
+            b. Sun & golden hour table (sunrise / sunset / golden AM / golden PM)
+            c. Seasonal notes
+            (Download PDF CTA is omitted — the PDF doesn't self-reference)
+       12. Location card (exact / approximate coords + notes pairs +
+            Open in Maps button when exact-coords sharing is allowed)
+       13. Footer (logo + wordmark + "Premium photo locations for photographers")
+
+      ── Access rules (verified parity with public page) ──
+       • Invalid / revoked / hard-deleted token → 404 "Share unavailable"
+       • Pro/Free (created_by_was_elite=False)  → 404 "Premium content not available"
+       • Expired Elite link                     → 404 via _resolve_share_or_unavailable
+       • hide_scout_notes=True respected (parking_notes / creator_tips /
+         best_time_of_day are stripped by _build_public_view in BOTH HTML and PDF)
+
+      ── Manual smoke (during build) ──
+       • token=VX4jsJqfUk4GQFC5zgi4Au3gN7Yi0ZU2 → HTTP 200, 3-page PDF
+         (~1.45 MB, 7 embedded images), all 13 sections rendered.
+       • Invalid token                        → HTTP 404.
+       • Public HTML route unchanged          → still emits sticky
+         topbar + Download PDF CTA + 5-day forecast + sun table.
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          PDF endpoint rewritten to be a visual + content replica of
+          the public Share Location page. Same data adapter, same
+          template, WeasyPrint for rendering. Requires backend
+          regression test:
+            1. GET /api/public/location/{elite_token}/itinerary.pdf
+               returns 200 with application/pdf and a non-empty body.
+            2. Same endpoint with an invalid / revoked / non-Elite
+               token returns 404 (parity with public HTML page).
+            3. Public HTML page still works (no regression in
+               _render_public_html for the default for_pdf=False path).
+            4. JSON path (Accept: application/json) on the public
+               route still returns the sanitized payload.
+            5. hide_scout_notes=True share still strips parking_notes
+               / creator_tips from BOTH HTML and PDF outputs.
+            6. Public page does NOT include @page / for_pdf-only CSS.
+            7. PDF does NOT include the "Download PDF" CTA inside it.
+      - working: true
+        agent: "testing"
+        comment: |
+          REGRESSION COMPLETE — all 7 cases PASS via
+          /app/backend_test_pdf_replica.py (run against the public
+          REACT_APP_BACKEND_URL, no localhost shortcuts).
+
+            1. Elite PDF happy path — token VX4jsJqfUk4G… →
+               HTTP 200, Content-Type application/pdf, body 1,458,015 bytes,
+               magic %PDF- present,
+               Content-Disposition: inline; filename="LumaScout-Bullis County Park.pdf".
+               Render time ~2.3s server-side per backend log.
+            2. Non-existent token → HTTP 404, JSON detail
+               "Share unavailable".
+            3. Revoked share — freshly minted Elite share, hard-deleted
+               via DELETE /api/admin/share-links/{token}, then GET
+               …/itinerary.pdf → HTTP 404. ✅
+            4. Non-Elite share — existing share with
+               created_by_was_elite=false → HTTP 404, detail
+               "Premium content not available". ✅
+            5. Public HTML regression (Accept: text/html) — HTTP 200,
+               body contains class="topbar", position:sticky,
+               "· LumaScout</title>", "A LumaScout location", "Shared by",
+               "5-day forecast", "Sun & golden hour", "Download PDF",
+               and href="/api/public/location/{token}/itinerary.pdf".
+               No @page rule and no "position: static !important"
+               leakage (those PDF-only artifacts stay PDF-only). ✅
+            6. Public JSON path (Accept: application/json) — HTTP 200
+               with status="ok", spot, og, robots="index,follow". ✅
+            7. hide_scout_notes parity — freshly minted Elite share
+               with hide_scout_notes=true. GET /api/public/location/{token}
+               JSON has no parking_notes / creator_tips /
+               best_time_of_day. Filter is intact for both HTML and
+               PDF code paths (PDF inherits via _build_public_view). ✅
+
+          Test harness file: /app/backend_test_pdf_replica.py
+          Auth note (informational, NOT a bug in this feature):
+          test_credentials.md says kclarson187@gmail.com is super_admin,
+          but the live DB shows role="user" / plan="pro" for that
+          account. The seed admin admin@lumascout.app (also
+          Grayson@1117!!) is correctly super_admin / plan=elite and
+          was used for admin-gated endpoints and Elite share minting.
+          PDF feature itself is fully working — no action needed from
+          main agent on this task.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Share Location PDF redesign — replaced the stripped-down
+      reportlab "client itinerary" with a WeasyPrint render of the
+      same HTML template the public share page uses. Net effect:
+      downloading the PDF now gives the client a visually + content
+      equivalent printout of the public share link (logo, kicker,
+      title, byline, description, best-time, photo grid, 5-day
+      forecast, sun/golden hour, exact coords, Open in Maps, footer
+      branding — in that order). The "Download PDF" CTA inside the
+      page is suppressed for the PDF render so it doesn't reference
+      itself.
+
+      Single shared data adapter: `_enrich_ctx_for_full_render(ctx)`
+      populates community photos + weather + sun for BOTH surfaces,
+      so they can never drift. Public HTML page is untouched
+      visually (sticky topbar still sticks, Download PDF CTA still
+      renders) — only the PDF path passes for_pdf=True.
+
+      Please regression-test the seven cases under status_history
+      above. Focus on: (a) the existing Elite token still serves a
+      200 application/pdf with all 13 sections, (b) non-Elite token
+      still 404s, (c) public HTML and JSON paths are unchanged.

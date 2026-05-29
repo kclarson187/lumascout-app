@@ -1051,6 +1051,77 @@ async def get_shared_spot_json(token: str):
     return payload
 
 
+async def _enrich_ctx_for_full_render(ctx: Dict[str, Any]) -> None:
+    """Populate the share `ctx` with the extra fields the full
+    public-share renderer needs:
+      • `community_image_urls` — approved public community uploads
+      • `forecast_5day`        — Open-Meteo 5-day daily forecast
+      • `light_days_5`         — 5-day sun + golden hour table
+
+    Shared between the public HTML route and the PDF export so both
+    surfaces use the SAME data adapter (per Jun 2025 PDF-replica spec).
+    Each enrichment is independently best-effort — a flaky upstream
+    must never block the render.
+    """
+    # ── Community uploads ────────────────────────────────────────
+    try:
+        spot_id_for_uploads = (ctx.get("spot") or {}).get("spot_id")
+        if spot_id_for_uploads:
+            cu_rows = await db.spot_community_uploads.find(
+                {
+                    "spot_id": spot_id_for_uploads,
+                    "moderation_status": "approved",
+                },
+                {"_id": 0, "image_url": 1, "visibility": 1},
+            ).sort("created_at", -1).limit(60).to_list(60)
+            ctx["community_image_urls"] = [
+                (r or {}).get("image_url")
+                for r in cu_rows
+                if r
+                and isinstance(r.get("image_url"), str)
+                and r.get("image_url").strip()
+                and (r.get("visibility") or "public") != "followers"
+            ]
+        else:
+            ctx["community_image_urls"] = []
+    except Exception:
+        ctx["community_image_urls"] = []
+
+    # ── Elite-only 5-day weather + sun ──────────────────────────
+    share_row = ctx.get("share") or {}
+    spot_doc = ctx.get("spot") or {}
+    if share_row.get("created_by_was_elite") and spot_doc.get("latitude") and spot_doc.get("longitude"):
+        try:
+            from routes.shoot_plan import _fetch_weather as _sp_fetch_weather
+            ctx["forecast_5day"] = await _sp_fetch_weather(
+                float(spot_doc["latitude"]), float(spot_doc["longitude"])
+            )
+        except Exception:
+            ctx["forecast_5day"] = None
+        try:
+            from routes.shoot_plan import _compute_light_plan as _sp_light_plan
+            from datetime import date as _date_e, timedelta as _td_e
+            today = _date_e.today()
+            light_days = []
+            for i in range(5):
+                try:
+                    light_days.append(
+                        _sp_light_plan(
+                            float(spot_doc["latitude"]),
+                            float(spot_doc["longitude"]),
+                            when=today + _td_e(days=i),
+                        )
+                    )
+                except Exception:
+                    light_days.append(None)
+            ctx["light_days_5"] = light_days
+        except Exception:
+            ctx["light_days_5"] = None
+    else:
+        ctx["forecast_5day"] = None
+        ctx["light_days_5"] = None
+
+
 @router.get("/public/location/{share_slug}")
 async def public_location_view(share_slug: str, request: Request):
     """Public web view of a shared location.
@@ -1079,78 +1150,9 @@ async def public_location_view(share_slug: str, request: Request):
     if wants_json:
         return _build_public_view(ctx)
 
-    # Jun 2025 — public share page must include the same images a
-    # logged-in user sees on the in-app Location Detail page hero
-    # carousel. The in-app hero carousel = cover + spot.images[] +
-    # approved community uploads (from `spot_community_uploads`).
-    # We already have the first two via the sanitized payload; fetch
-    # the third here and attach to ctx so the renderer can merge them
-    # into one clean grid. Followers-only items are dropped because
-    # the share viewer is an anonymous client, not a follower.
-    try:
-        spot_id_for_uploads = (ctx.get("spot") or {}).get("spot_id")
-        if spot_id_for_uploads:
-            cu_rows = await db.spot_community_uploads.find(
-                {
-                    "spot_id": spot_id_for_uploads,
-                    "moderation_status": "approved",
-                },
-                {"_id": 0, "image_url": 1, "visibility": 1},
-            ).sort("created_at", -1).limit(60).to_list(60)
-            ctx["community_image_urls"] = [
-                (r or {}).get("image_url")
-                for r in cu_rows
-                if r
-                and isinstance(r.get("image_url"), str)
-                and r.get("image_url").strip()
-                and (r.get("visibility") or "public") != "followers"
-            ]
-        else:
-            ctx["community_image_urls"] = []
-    except Exception:
-        # Community uploads are a non-critical enrichment. Never block
-        # the share page render if the lookup fails for any reason.
-        ctx["community_image_urls"] = []
-
-    # ── Jun 2025 Phase 3 — Elite premium content ─────────────────
-    # Only fetch the heavy 5-day forecast + multi-day sun events for
-    # Elite-minted links. The `created_by_was_elite` flag was
-    # snapshotted at mint time so a Pro downgrade later doesn't strip
-    # premium content from links the photographer already delivered.
-    # Both helpers are imported from the existing `shoot_plan` module
-    # to avoid duplicating weather/sun logic.
-    share_row = ctx.get("share") or {}
-    spot_doc = ctx.get("spot") or {}
-    if share_row.get("created_by_was_elite") and spot_doc.get("latitude") and spot_doc.get("longitude"):
-        try:
-            from routes.shoot_plan import _fetch_weather as _sp_fetch_weather
-            ctx["forecast_5day"] = await _sp_fetch_weather(
-                float(spot_doc["latitude"]), float(spot_doc["longitude"])
-            )
-        except Exception:
-            ctx["forecast_5day"] = None
-        try:
-            from routes.shoot_plan import _compute_light_plan as _sp_light_plan
-            from datetime import date as _date, timedelta as _td2
-            today = _date.today()
-            light_days = []
-            for i in range(5):
-                try:
-                    light_days.append(
-                        _sp_light_plan(
-                            float(spot_doc["latitude"]),
-                            float(spot_doc["longitude"]),
-                            when=today + _td2(days=i),
-                        )
-                    )
-                except Exception:
-                    light_days.append(None)
-            ctx["light_days_5"] = light_days
-        except Exception:
-            ctx["light_days_5"] = None
-    else:
-        ctx["forecast_5day"] = None
-        ctx["light_days_5"] = None
+    # Enrich ctx with community uploads + 5-day weather/sun. Shared
+    # adapter so the PDF endpoint produces an identical payload.
+    await _enrich_ctx_for_full_render(ctx)
 
     return HTMLResponse(content=_render_public_html(ctx, canonical_url=canonical_url))
 
@@ -1203,18 +1205,15 @@ p {{ opacity:.7; line-height:1.5; }}
 </html>"""
 
 
-def _render_public_html(ctx: Dict[str, Any], canonical_url: Optional[str] = None) -> str:
+def _render_public_html(ctx: Dict[str, Any], canonical_url: Optional[str] = None, for_pdf: bool = False) -> str:
     """Render the public, client-facing share page.
 
-    Jun 2025 — "Share Location" redesign:
-      • Bright WHITE editorial layout (not the dark app theme) because
-        recipients are CLIENTS, not photographers using the app.
-      • Logo + LumaScout wordmark in a sticky top bar AND footer.
-      • Photographer's personal note rendered as a hero-quote block
-        directly under the cover image.
-      • Sample community photos in a clean gallery grid.
-      • Open-in-maps CTA, but only when we're allowed to share exact
-        coords for this share row.
+    When `for_pdf=True`, emits a print-friendly variant used by the
+    PDF endpoint: drops the sticky top bar, removes the "Download PDF"
+    CTA (the PDF shouldn't reference itself), adds @page rules and
+    `break-inside: avoid` hints so cards don't split mid-page. The
+    content is otherwise identical to what clients see at
+    `/api/public/location/{token}` — same data adapter, same order.
     """
     payload = _build_public_view(ctx)
     is_public = ctx["is_public_spot"]
@@ -1356,7 +1355,7 @@ def _render_public_html(ctx: Dict[str, Any], canonical_url: Optional[str] = None
     # downgrade or an Open-Meteo blip never breaks the whole page.
     elite_planning_html = ""
     if share.get("created_by_was_elite"):
-        elite_planning_html = _render_elite_planning_block(ctx)
+        elite_planning_html = _render_elite_planning_block(ctx, include_pdf_cta=not for_pdf)
 
     coord_label = "Exact location" if show_exact else "Approximate area"
 
@@ -1506,6 +1505,22 @@ h1 {{
   color:#6B6B66; font-size:12px;
 }}
 .footer .brand .name {{ font-size:13px; }}
+{('@page { size: Letter; margin: 0.45in; }'
+  '.topbar { position: static !important; background:#FFFFFF !important; backdrop-filter:none !important; -webkit-backdrop-filter:none !important; border-bottom:1px solid #ECECE6; }'
+  '.hero { aspect-ratio: 16/9; height: 3.2in; background-size: cover; background-position: center; }'
+  '.wrap { max-width: 100%; padding: 22px 0 0; }'
+  'body { padding: 0; }'
+  '.card { break-inside: avoid; page-break-inside: avoid; }'
+  '.gallery { display:grid !important; grid-template-columns: repeat(3, 1fr) !important; gap:6px; }'
+  '.gphoto { aspect-ratio: 1/1; break-inside: avoid; page-break-inside: avoid; }'
+  '.gphoto img { width:100%; height:100%; object-fit: cover; }'
+  '.wgrid { display:grid !important; grid-template-columns: repeat(5, 1fr) !important; break-inside: avoid; }'
+  '.wchip { break-inside: avoid; }'
+  '.suntable { break-inside: avoid; }'
+  '.pnote { break-inside: avoid; }'
+  'h1 { break-after: avoid; page-break-after: avoid; }'
+  '.cta { box-shadow:none !important; }'
+  '.footer { margin-top: 26px; }') if for_pdf else ''}
 </style>
 </head>
 <body>
@@ -1968,7 +1983,7 @@ def _fmt_time(dt_val: Any) -> str:
     return s
 
 
-def _render_elite_planning_block(ctx: Dict[str, Any]) -> str:
+def _render_elite_planning_block(ctx: Dict[str, Any], include_pdf_cta: bool = True) -> str:
     """Phase 3 — premium planning card stack for Elite-minted shares.
 
     Three cards stacked top-down:
@@ -2081,7 +2096,7 @@ def _render_elite_planning_block(ctx: Dict[str, Any]) -> str:
         )
 
     # ── PDF download CTA ───────────────────────────────────────
-    if token:
+    if token and include_pdf_cta:
         parts.append(
             '<div class="card"><div class="card-kicker">Client itinerary</div>'
             '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">'
@@ -2122,14 +2137,26 @@ def _render_elite_planning_block(ctx: Dict[str, Any]) -> str:
 # ─────────────────────────────────────────────────────────────────────
 @router.get("/public/location/{token}/itinerary.pdf")
 async def public_itinerary_pdf(token: str):
-    """Render a one-page premium PDF itinerary for an Elite-minted
-    share. Anonymous endpoint — no auth, no rate limit. Mirrors the
-    public share resolver so revoked / expired / hard-deleted tokens
-    return 404 here too.
+    """Render the public Share Location page to PDF.
 
-    Gated on `created_by_was_elite` — Pro / Free shares 404 since the
-    PDF is a paid feature. Returns `application/pdf` with a polite
-    filename so the browser's "Save as" sheet pre-fills nicely.
+    Jun 2025 spec — the downloaded itinerary PDF must be a visual and
+    content replica of the public Share Location page, not a stripped
+    "client itinerary" report. Both surfaces share:
+      • the same share resolver (`_resolve_share_or_unavailable`)
+      • the same data adapter (`_build_public_view` + `_enrich_ctx_for_full_render`)
+      • the same renderer (`_render_public_html`)
+
+    The only differences in the PDF render are:
+      • Sticky top bar becomes static so it doesn't tile per page.
+      • The in-page "Download PDF" CTA is hidden (the PDF shouldn't
+        reference itself).
+      • @page rules + break-inside hints prevent ugly mid-card splits.
+
+    Access rules are identical to the public link:
+      revoked / expired / hard-deleted → 404 with "Share unavailable".
+      Pro / Free shares 404 since the PDF is gated to Elite-minted
+      links (`created_by_was_elite` snapshot at mint time, so a Pro
+      downgrade later doesn't strip PDFs from already-delivered links).
     """
     ctx = await _resolve_share_or_unavailable(token)
     if not ctx:
@@ -2139,174 +2166,49 @@ async def public_itinerary_pdf(token: str):
         # Pro/Free downgrade — premium artifact stays gated.
         raise HTTPException(status_code=404, detail="Premium content not available")
 
-    spot = ctx.get("spot") or {}
-    title = (share.get("share_title") or spot.get("title") or "Photo location").strip()
+    # Enrich with the SAME data the public HTML route uses so the PDF
+    # is a true replica (community uploads, weather, sun/golden hour).
+    await _enrich_ctx_for_full_render(ctx)
 
-    # Refresh weather + sun on each PDF render. Open-Meteo + astral
-    # are fast enough; we'd rather always deliver accurate planning
-    # data than serve a stale cache.
-    try:
-        from routes.shoot_plan import _fetch_weather as _sp_fetch_weather
-        forecast = await _sp_fetch_weather(float(spot["latitude"]), float(spot["longitude"])) or []
-    except Exception:
-        forecast = []
-    try:
-        from routes.shoot_plan import _compute_light_plan as _sp_light_plan
-        from datetime import date as _date2, timedelta as _td3
-        today = _date2.today()
-        light_days = [
-            _sp_light_plan(float(spot["latitude"]), float(spot["longitude"]), when=today + _td3(days=i))
-            for i in range(5)
-        ]
-    except Exception:
-        light_days = []
+    # Render the public page in print mode and rasterize via WeasyPrint.
+    canonical_url = f"{WEB_BASE}/api/public/location/{token}"
+    html_str = _render_public_html(ctx, canonical_url=canonical_url, for_pdf=True)
 
-    # Build the PDF in-memory with reportlab. Single A4 page with
-    # cover title, location, weather table, sun & golden hour table,
-    # parking / creator tips / seasonal notes, footer with branding.
+    # WeasyPrint is heavy on import (cairo + pango) — keep it lazy
+    # so backend startup isn't penalized for a feature most workers
+    # never serve. Off-thread the actual PDF build with `to_thread`
+    # so we don't block the FastAPI event loop on weather images.
+    import asyncio
     from io import BytesIO
-    from reportlab.lib.pagesizes import LETTER
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import inch
-    from reportlab.lib import colors as _rc
-    from reportlab.platypus import (
-        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    )
+    from weasyprint import HTML  # type: ignore
 
-    buf = BytesIO()
-    doc = SimpleDocTemplate(
-        buf, pagesize=LETTER,
-        leftMargin=0.6 * inch, rightMargin=0.6 * inch,
-        topMargin=0.6 * inch, bottomMargin=0.6 * inch,
-        title=f"{title} — LumaScout itinerary",
-        author="LumaScout",
-    )
-    styles = getSampleStyleSheet()
-    h_title = ParagraphStyle(
-        "title", parent=styles["Heading1"], fontName="Times-Bold",
-        fontSize=22, leading=26, textColor=_rc.HexColor("#1A1A1A"),
-    )
-    h_kicker = ParagraphStyle(
-        "kicker", parent=styles["Heading2"], fontName="Helvetica-Bold",
-        fontSize=9, leading=12, textColor=_rc.HexColor("#B07C20"),
-        spaceBefore=10, spaceAfter=4,
-    )
-    p_body = ParagraphStyle(
-        "body", parent=styles["BodyText"], fontName="Helvetica",
-        fontSize=10.5, leading=14, textColor=_rc.HexColor("#1A1A1A"),
-    )
-    p_muted = ParagraphStyle(
-        "muted", parent=p_body, textColor=_rc.HexColor("#5C5147"), fontSize=9.5, leading=12,
-    )
+    def _render_pdf_bytes() -> bytes:
+        buf = BytesIO()
+        # `base_url` lets relative URLs (none in our template, but a
+        # belt-and-suspenders for future inline assets) resolve against
+        # the canonical share URL. Remote images (R2 CDN, customer
+        # assets bucket) are fetched at render time. WeasyPrint logs
+        # but does NOT raise on a single broken image — the rest of
+        # the PDF still renders cleanly.
+        HTML(string=html_str, base_url=canonical_url).write_pdf(buf)
+        return buf.getvalue()
 
-    story = []
-    story.append(Paragraph("LUMASCOUT &middot; CLIENT ITINERARY", h_kicker))
-    story.append(Paragraph(_esc(title), h_title))
-    locline = ", ".join([x for x in [spot.get("city"), spot.get("state")] if x]) or ""
-    if locline:
-        story.append(Paragraph(_esc(locline), p_muted))
-    story.append(Spacer(1, 10))
-
-    if (spot.get("description") or "").strip():
-        story.append(Paragraph(_esc(spot["description"].strip()), p_body))
-        story.append(Spacer(1, 6))
-
-    # 5-day forecast table
-    if forecast:
-        story.append(Paragraph("5-DAY FORECAST", h_kicker))
-        data = [["Day", "High / Low", "Conditions", "Rain"]]
-        for f in forecast[:5]:
-            data.append([
-                f.get("weekday") or "—",
-                f"{f.get('high_f', '—')}° / {f.get('low_f', '—')}°",
-                f.get("label") or "—",
-                f"{f.get('rain_chance_pct', 0)}%" if f.get("rain_chance_pct") is not None else "—",
-            ])
-        t = Table(data, colWidths=[0.8 * inch, 1.4 * inch, 2.6 * inch, 0.9 * inch], hAlign="LEFT")
-        t.setStyle(TableStyle([
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 9.5),
-            ("TEXTCOLOR", (0, 0), (-1, 0), _rc.HexColor("#7A6B5C")),
-            ("LINEBELOW", (0, 0), (-1, 0), 0.4, _rc.HexColor("#E8E6DF")),
-            ("LINEBELOW", (0, 1), (-1, -2), 0.25, _rc.HexColor("#F0EEE8")),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-            ("TOPPADDING", (0, 0), (-1, -1), 6),
-        ]))
-        story.append(t)
-
-    # Sun & golden hour table
-    if light_days:
-        story.append(Paragraph("SUN &amp; GOLDEN HOUR", h_kicker))
-        sun_data = [["Day", "Sunrise", "Sunset", "Golden AM", "Golden PM"]]
-        from datetime import date as _date3, timedelta as _td4
-        today = _date3.today()
-        def _from_iso(s: Any) -> Any:
-            if not isinstance(s, str):
-                return None
-            try:
-                return datetime.fromisoformat(s)
-            except Exception:
-                return None
-        for i, day in enumerate(light_days[:5]):
-            if not day:
-                continue
-            e = (day.get("sun_events") or {})
-            gm = e.get("golden_morning") or []
-            ge = e.get("golden_evening") or []
-            gm_s = _from_iso(gm[0]) if len(gm) >= 1 else None
-            gm_e = _from_iso(gm[1]) if len(gm) >= 2 else None
-            ge_s = _from_iso(ge[0]) if len(ge) >= 1 else None
-            ge_e = _from_iso(ge[1]) if len(ge) >= 2 else None
-            sun_data.append([
-                (today + _td4(days=i)).strftime("%a"),
-                e.get("sunrise_local") or "—",
-                e.get("sunset_local") or "—",
-                f"{_fmt_time(gm_s)} – {_fmt_time(gm_e)}",
-                f"{_fmt_time(ge_s)} – {_fmt_time(ge_e)}",
-            ])
-        st = Table(sun_data, colWidths=[0.6 * inch, 0.9 * inch, 0.9 * inch, 1.6 * inch, 1.6 * inch], hAlign="LEFT")
-        st.setStyle(TableStyle([
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 9.5),
-            ("TEXTCOLOR", (0, 0), (-1, 0), _rc.HexColor("#7A6B5C")),
-            ("LINEBELOW", (0, 0), (-1, 0), 0.4, _rc.HexColor("#E8E6DF")),
-            ("LINEBELOW", (0, 1), (-1, -2), 0.25, _rc.HexColor("#F0EEE8")),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ]))
-        story.append(st)
-
-    # Parking / creator tips (honors hide_scout_notes)
-    if not share.get("hide_scout_notes"):
-        if (spot.get("parking_notes") or "").strip():
-            story.append(Paragraph("PARKING &amp; ACCESS", h_kicker))
-            story.append(Paragraph(_esc(spot["parking_notes"].strip()), p_body))
-        if (spot.get("creator_tips") or "").strip():
-            story.append(Paragraph("PHOTOGRAPHER\u2019S TIPS", h_kicker))
-            story.append(Paragraph(_esc(spot["creator_tips"].strip()), p_body))
-
-    if (share.get("seasonal_notes") or "").strip():
-        story.append(Paragraph("BEST SEASON", h_kicker))
-        story.append(Paragraph(_esc(share["seasonal_notes"].strip()), p_body))
-
-    if (share.get("personal_note") or "").strip():
-        story.append(Paragraph("FROM YOUR PHOTOGRAPHER", h_kicker))
-        story.append(Paragraph(_esc(share["personal_note"].strip()), p_body))
-
-    story.append(Spacer(1, 18))
-    story.append(Paragraph(
-        "Prepared with LumaScout &middot; lumascout.app",
-        ParagraphStyle("foot", parent=p_muted, fontSize=8.5, alignment=1),
-    ))
-
-    doc.build(story)
-    buf.seek(0)
+    try:
+        pdf_bytes = await asyncio.to_thread(_render_pdf_bytes)
+    except Exception as e:
+        # Never expose a 500 to anonymous clients — fall back to a
+        # 503 with a polite body so the public link's "Download PDF"
+        # button can show a graceful error.
+        logging.getLogger("lumascout.shares").exception("PDF render failed for token=%s: %s", token, e)
+        raise HTTPException(status_code=503, detail="PDF temporarily unavailable")
 
     # Polite filename for the Save-As dialog.
+    spot = ctx.get("spot") or {}
+    title = (share.get("share_title") or spot.get("title") or "Photo location").strip()
     safe_name = "".join(c if c.isalnum() or c in " -_" else "_" for c in title)[:60].strip() or "itinerary"
     headers = {
         "Content-Disposition": f'inline; filename="LumaScout-{safe_name}.pdf"',
         "Cache-Control": "private, max-age=0, must-revalidate",
     }
     from fastapi.responses import Response as _R
-    return _R(content=buf.read(), media_type="application/pdf", headers=headers)
+    return _R(content=pdf_bytes, media_type="application/pdf", headers=headers)
