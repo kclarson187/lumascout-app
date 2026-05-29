@@ -273,10 +273,15 @@ export default function ShareWithClientSheet({
     setPendingRevoke(null);
     try {
       await api.delete(`/spots/${spotId}/share/${link.token}`);
-      flashToast('Link revoked');
+      // Jun 2025 — share-link revoke is now a HARD DELETE on the
+      // backend. The row is gone from `spot_shares` and a
+      // `share_link_audit_logs` entry was written before deletion.
+      // Toast copy reflects the new semantics so creators understand
+      // the action is final.
+      flashToast('Share link revoked and deleted.');
       await refresh();
     } catch (e) {
-      flashToast(formatApiError(e) || 'Could not revoke', 2500);
+      flashToast(formatApiError(e) || "Couldn't delete this share link. Please try again.", 2500);
     }
   };
 
@@ -542,7 +547,7 @@ function LinkRow({
       ) : (
         <View style={styles.confirmRow}>
           <Text style={styles.confirmText}>
-            Revoke this link? It can&apos;t be undone.
+            Are you sure you want to revoke and permanently delete this share link? Anyone with this link will lose access immediately.
           </Text>
           <View style={styles.confirmActions}>
             <TouchableOpacity style={styles.linkBtn} onPress={onCancelRevoke} testID={`share-revoke-cancel-${link.share_id}`}>
@@ -554,7 +559,7 @@ function LinkRow({
               testID={`share-revoke-confirm-${link.share_id}`}
             >
               <Trash2 size={14} color={colors.secondary} />
-              <Text style={[styles.linkBtnText, styles.linkBtnTextDanger]}>Revoke</Text>
+              <Text style={[styles.linkBtnText, styles.linkBtnTextDanger]}>Delete</Text>
             </TouchableOpacity>
           </View>
         </View>

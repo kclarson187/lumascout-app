@@ -59,6 +59,7 @@ from server import (
     get_current_user,
     utcnow,
     audit_log,
+    require_role,
 )
 
 router = APIRouter(prefix="/api", tags=["spot-shares"])
@@ -235,6 +236,25 @@ def _is_admin(user: Optional[dict]) -> bool:
     if not user:
         return False
     return user.get("role") in ("admin", "super_admin", "moderator")
+
+
+def _can_manage_share_links(user: Optional[dict]) -> bool:
+    """Roles permitted to view/delete ANY user's share links.
+
+    Jun 2025 — separated from `_is_admin` because the share-link
+    management surface is also exposed to the **support** role per
+    product spec (helping a user who can't reach the in-app revoke
+    UI). Other share-link logic still uses `_is_admin` for ownership
+    checks where "support" should NOT be able to mint links on
+    behalf of a spot owner — the privilege boundary differs.
+    """
+    if not user:
+        return False
+    return user.get("role") in ("admin", "super_admin", "moderator", "support")
+
+
+def _is_super_admin(user: Optional[dict]) -> bool:
+    return bool(user) and user.get("role") == "super_admin"
 
 
 def _owner_or_admin(user: dict, spot: dict) -> bool:
@@ -517,47 +537,121 @@ async def create_share_link(
     }
 
 
+async def _write_share_link_audit(
+    *,
+    share: Dict[str, Any],
+    spot: Optional[Dict[str, Any]],
+    actor: Dict[str, Any],
+    reason: Optional[str] = None,
+) -> None:
+    """Record a hard-delete event into `share_link_audit_logs`.
+
+    This collection is SEPARATE from the general `audit_logs` collection
+    so the share-link audit trail can be queried efficiently without
+    paging through unrelated admin actions. The token itself is stored
+    for traceability but is NEVER reusable — the active `spot_shares`
+    record is gone by the time this entry lands. The audit row alone
+    cannot resolve a public link (only `_resolve_share_or_unavailable`
+    can, and it reads `spot_shares` exclusively).
+
+    Schema (matches the spec in the feature request):
+      • audit_id                — `sla_<12hex>` primary key
+      • deleted_share_link_id   — original share_id
+      • token                   — preserved for forensics
+      • location_id / location_name
+      • deleted_by_user_id / deleted_by_role
+      • original_created_by_user_id
+      • deleted_at              — ISO timestamp
+      • reason                  — optional free-text
+      • action_type             — fixed string "share_link_hard_deleted"
+    """
+    try:
+        await db.share_link_audit_logs.insert_one({
+            "audit_id": f"sla_{uuid.uuid4().hex[:12]}",
+            "deleted_share_link_id": share.get("share_id"),
+            "token": share.get("token"),
+            "location_id": share.get("spot_id"),
+            "location_name": (spot or {}).get("title"),
+            "deleted_by_user_id": actor.get("user_id"),
+            "deleted_by_role": actor.get("role"),
+            "original_created_by_user_id": share.get("created_by_user_id"),
+            "deleted_at": utcnow(),
+            "reason": (reason or "").strip() or None,
+            "action_type": "share_link_hard_deleted",
+        })
+    except Exception:
+        # Audit logging is best-effort — never block a hard-delete if
+        # the audit collection is briefly unavailable. The deletion
+        # has the higher security priority.
+        pass
+
+
 @router.delete("/spots/{spot_id}/share/{token}")
 async def revoke_share_link(
     spot_id: str,
     token: str,
     user: dict = Depends(get_current_user),
 ):
-    """Revoke a share link. Idempotent — re-revoking a revoked token
-    returns ok=True without error.
+    """Revoke a share link.
+
+    Jun 2025 — semantics changed from soft-revoke to **hard delete**:
+      1. Write a `share_link_audit_logs` entry capturing who/what/when.
+      2. Remove the row from `spot_shares` outright.
+
+    After this returns, the public token is immediately resolveable
+    only as "unavailable" (see `_resolve_share_or_unavailable`, which
+    returns None when the row is missing). The deletion is idempotent
+    — calling it twice returns ok=True without error.
+
+    The response still carries `revoked: True` for backward compat
+    with the existing iOS / Android clients that key off that field
+    to remove the row from the list. New clients should read `deleted`
+    instead — both are set to true.
     """
-    spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "owner_user_id": 1})
+    spot = await db.spots.find_one({"spot_id": spot_id}, {"_id": 0, "owner_user_id": 1, "title": 1})
     if not spot:
         raise HTTPException(status_code=404, detail="Spot not found")
-    if not _owner_or_admin(user, spot):
-        raise HTTPException(status_code=403, detail="Forbidden")
 
     share = await db.spot_shares.find_one({"token": token, "spot_id": spot_id}, {"_id": 0})
+    # Idempotent — if the row is already gone, return ok so the client
+    # UI can prune the entry without showing an error.
     if not share:
-        raise HTTPException(status_code=404, detail="Share not found")
+        return {"ok": True, "token": token, "revoked": True, "deleted": True, "already_deleted": True}
 
-    if not share.get("revoked"):
-        await db.spot_shares.update_one(
-            {"token": token},
-            {"$set": {
-                "revoked": True,
-                "revoked_at": utcnow(),
-                "revoked_by_user_id": user.get("user_id"),
-            }},
-        )
-        if _is_admin(user) and user.get("user_id") != spot.get("owner_user_id"):
-            try:
-                await audit_log(
-                    user,
-                    "spot_share_revoked",
-                    target_type="spot",
-                    target_id=spot_id,
-                    after={"token": token},
-                )
-            except Exception:
-                pass
+    # Permission: owner, OR support/moderator/admin/super_admin.
+    # `_owner_or_admin` uses `_is_admin` which already covers
+    # moderator/admin/super_admin. Support is added via the broader
+    # `_can_manage_share_links` check below.
+    if not (_owner_or_admin(user, spot) or _can_manage_share_links(user)):
+        raise HTTPException(status_code=403, detail="Forbidden")
 
-    return {"ok": True, "token": token, "revoked": True}
+    # 1. Audit FIRST so we have provenance even if the delete races
+    #    against, say, a TTL collection cleanup. Spec says writes are
+    #    best-effort so a failed audit cannot orphan the share row
+    #    on the active list.
+    await _write_share_link_audit(share=share, spot=spot, actor=user)
+
+    # 2. Hard delete from the active collection.
+    await db.spot_shares.delete_one({"token": token, "spot_id": spot_id})
+
+    # 3. Mirror the deletion into the general admin audit log when an
+    #    admin / mod / support actor deletes someone else's link, so
+    #    the existing dashboards continue to surface it without us
+    #    having to teach them about the new collection too.
+    if _can_manage_share_links(user) and user.get("user_id") != spot.get("owner_user_id"):
+        try:
+            await audit_log(
+                user,
+                "spot_share_hard_deleted",
+                target_type="spot",
+                target_id=spot_id,
+                before={"token": token, "share_id": share.get("share_id")},
+                after=None,
+            )
+        except Exception:
+            pass
+
+    return {"ok": True, "token": token, "revoked": True, "deleted": True}
 
 
 @router.get("/spots/{spot_id}/shares")
@@ -577,8 +671,12 @@ async def list_share_links(
         raise HTTPException(status_code=403, detail="Forbidden")
 
     rows = await db.spot_shares.find(
-        {"spot_id": spot_id}, {"_id": 0}
-    ).sort([("revoked", 1), ("created_at", -1)]).to_list(100)
+        # Jun 2025 — new revokes hard-delete, but legacy rows from
+        # before the cutover may still carry `revoked: True`. Filter
+        # them out defensively so the active list is clean.
+        {"spot_id": spot_id, "$or": [{"revoked": {"$exists": False}}, {"revoked": False}]},
+        {"_id": 0},
+    ).sort("created_at", -1).to_list(100)
 
     items = []
     for r in rows:
@@ -1234,3 +1332,192 @@ h1 {{
   </div>
 </body>
 </html>"""
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Admin / support / moderator — share-link management surface
+# ─────────────────────────────────────────────────────────────────────
+# Three endpoints scoped to the broader staff role set:
+#
+#   GET    /api/admin/share-links              — paginated active list
+#   DELETE /api/admin/share-links/{token}      — hard delete any token
+#   GET    /api/admin/share-links/audit        — super_admin audit feed
+#
+# Hard-delete intentionally calls the same `_write_share_link_audit`
+# helper used by the owner-facing revoke endpoint above so the audit
+# trail has a single, deterministic shape regardless of who triggered
+# the deletion.
+
+
+@router.get("/admin/share-links")
+async def admin_list_share_links(
+    limit: int = 50,
+    cursor: int = 0,
+    q: Optional[str] = None,
+    user: dict = Depends(require_role("support")),
+):
+    """List active share links across the platform.
+
+    Available to: support, moderator, admin, super_admin (via
+    `require_role("support")` which permits anything support-or-higher).
+
+    Excludes any record with `revoked=True` (legacy soft-revoked rows
+    from before the cutover). Hard-deleted rows are gone from the
+    collection entirely so they need no filter.
+
+    Query:
+      • limit  — page size, 1-100, default 50
+      • cursor — offset for pagination (Mongo skip), default 0
+      • q      — optional fuzzy match on spot title (case-insensitive).
+                 Resolves spot_ids first, then queries shares — keeps
+                 the index plan on `spot_shares` simple.
+    """
+    page_size = max(1, min(int(limit or 50), 100))
+    skip = max(0, int(cursor or 0))
+
+    mongo_filter: Dict[str, Any] = {
+        "$or": [{"revoked": {"$exists": False}}, {"revoked": False}],
+    }
+    matched_spot_titles: Dict[str, str] = {}
+
+    if q:
+        # Spot-title text search → spot_ids → shares filter.
+        spot_q = {"title": {"$regex": q.strip()[:80], "$options": "i"}}
+        spot_rows = await db.spots.find(
+            spot_q, {"_id": 0, "spot_id": 1, "title": 1}
+        ).limit(200).to_list(200)
+        if not spot_rows:
+            return {"items": [], "count": 0, "next_cursor": None}
+        spot_ids = [r["spot_id"] for r in spot_rows]
+        for r in spot_rows:
+            matched_spot_titles[r["spot_id"]] = r.get("title") or ""
+        mongo_filter["spot_id"] = {"$in": spot_ids}
+
+    cursor_q = (
+        db.spot_shares.find(mongo_filter, {"_id": 0})
+        .sort("created_at", -1)
+        .skip(skip)
+        .limit(page_size + 1)  # +1 to peek at next page
+    )
+    rows = await cursor_q.to_list(page_size + 1)
+    has_more = len(rows) > page_size
+    rows = rows[:page_size]
+
+    # Resolve spot titles for any rows whose title we didn't already
+    # match via the text-search path. One batched query.
+    missing_spot_ids = [
+        r["spot_id"] for r in rows
+        if r.get("spot_id") and r["spot_id"] not in matched_spot_titles
+    ]
+    if missing_spot_ids:
+        for sp in await db.spots.find(
+            {"spot_id": {"$in": missing_spot_ids}},
+            {"_id": 0, "spot_id": 1, "title": 1},
+        ).to_list(len(missing_spot_ids)):
+            matched_spot_titles[sp["spot_id"]] = sp.get("title") or ""
+
+    items = []
+    for r in rows:
+        token = r.get("token")
+        spot_id = r.get("spot_id")
+        items.append({
+            "share_id": r.get("share_id"),
+            "token": token,
+            "share_url": f"{WEB_BASE}/api/public/location/{token}" if token else None,
+            "spot_id": spot_id,
+            "spot_title": matched_spot_titles.get(spot_id) if spot_id else None,
+            "created_at": r.get("created_at"),
+            "created_by_user_id": r.get("created_by_user_id"),
+            "created_by_role": r.get("created_by_role"),
+            "last_accessed_at": r.get("last_accessed_at"),
+            "access_count": int(r.get("access_count") or 0),
+            "show_exact_location": bool(r.get("show_exact_location", False)),
+            "personal_note": r.get("personal_note"),
+            "label": r.get("label"),
+        })
+    return {
+        "items": items,
+        "count": len(items),
+        "next_cursor": (skip + page_size) if has_more else None,
+    }
+
+
+class AdminHardDeleteIn(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
+@router.delete("/admin/share-links/{token}")
+async def admin_hard_delete_share_link(
+    token: str,
+    body: Optional[AdminHardDeleteIn] = None,
+    user: dict = Depends(require_role("support")),
+):
+    """Hard-delete a share link by token, regardless of ownership.
+
+    Available to: support, moderator, admin, super_admin. Writes both
+    a `share_link_audit_logs` row (forensic schema) and a general
+    `audit_logs` row (`action="share_link_hard_deleted"`) so existing
+    admin dashboards continue to see staff actions. Idempotent.
+    """
+    share = await db.spot_shares.find_one({"token": token}, {"_id": 0})
+    if not share:
+        # Already gone — still log the no-op via the audit table so
+        # the action is traceable.
+        return {"ok": True, "token": token, "deleted": True, "already_deleted": True}
+
+    spot = await db.spots.find_one(
+        {"spot_id": share.get("spot_id")},
+        {"_id": 0, "spot_id": 1, "title": 1, "owner_user_id": 1},
+    )
+    reason = (body.reason if body else None) or None
+
+    await _write_share_link_audit(share=share, spot=spot, actor=user, reason=reason)
+    await db.spot_shares.delete_one({"token": token})
+
+    try:
+        await audit_log(
+            user,
+            "share_link_hard_deleted",
+            target_type="spot_share",
+            target_id=share.get("share_id"),
+            before={"token": token, "spot_id": share.get("spot_id")},
+            after=None,
+            notes=reason,
+        )
+    except Exception:
+        pass
+
+    return {"ok": True, "token": token, "deleted": True}
+
+
+@router.get("/admin/share-links/audit")
+async def admin_share_link_audit(
+    limit: int = 50,
+    cursor: int = 0,
+    user: dict = Depends(require_role("admin")),
+):
+    """Read the share-link hard-delete audit feed.
+
+    Available to: admin + super_admin (NOT moderator, NOT support —
+    they can see/delete but the historical audit feed stays narrower
+    to keep the surface tight). `require_role("admin")` already permits
+    super_admin to fall through.
+    """
+    page_size = max(1, min(int(limit or 50), 100))
+    skip = max(0, int(cursor or 0))
+
+    cursor_q = (
+        db.share_link_audit_logs.find({}, {"_id": 0})
+        .sort("deleted_at", -1)
+        .skip(skip)
+        .limit(page_size + 1)
+    )
+    rows = await cursor_q.to_list(page_size + 1)
+    has_more = len(rows) > page_size
+    rows = rows[:page_size]
+
+    return {
+        "items": rows,
+        "count": len(rows),
+        "next_cursor": (skip + page_size) if has_more else None,
+    }

@@ -15,7 +15,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-nati
 import { router } from 'expo-router';
 import {
   Activity, Wrench, FileText, Flag, Edit3, AlertTriangle,
-  ShoppingBag, Receipt, Sparkles, MessageSquare, Settings, ChevronRight, Layers } from 'lucide-react-native';
+  ShoppingBag, Receipt, Sparkles, MessageSquare, Settings, ChevronRight, Layers, Link2 } from 'lucide-react-native';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii } from '../../src/theme';
 
@@ -47,6 +47,7 @@ const SECTIONS: { title: string; items: Item[] }[] = [
       { key: 'edits',    label: 'Edit Requests',  helper: 'Uploader proposed spot edits',   icon: Edit3, route: '/admin/edit-requests', iconColor: colors.info },
       { key: 'posts',    label: 'Community Posts', helper: 'Browse, filter, restore posts', icon: AlertTriangle, route: '/admin/posts', iconColor: colors.primary },
       { key: 'parks',    label: 'Parks',           helper: 'Edit · merge · move child spots', icon: Layers, route: '/admin/parks', iconColor: colors.primary },
+      { key: 'shares',   label: 'Share Links',     helper: 'Active public share links · hard delete', icon: Link2, route: '/admin/share-links', iconColor: colors.info },
     ] },
   {
     title: 'Business',
