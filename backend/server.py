@@ -4183,6 +4183,21 @@ async def root():
     return {"app": "LumaScout", "status": "ok"}
 
 
+@api.get("/health")
+async def health():
+    """Production liveness probe.
+
+    Returns a deterministic JSON body so external uptime checks,
+    Cloudflare origin probes, and the in-app diagnostics screen can
+    cheaply confirm the origin is responding. Does NOT touch Mongo,
+    Stripe, R2, or any external service so a downstream outage never
+    flips this endpoint to 5xx — that's what dedicated readiness
+    probes are for. Add a separate `/api/ready` later if we need to
+    gate traffic on dependency health.
+    """
+    return {"ok": True, "service": "LumaScout API"}
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,

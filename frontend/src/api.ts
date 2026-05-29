@@ -157,14 +157,53 @@ class Api {
     });
     this.client.interceptors.response.use(
       (r) => r,
-      (err) => {
+      async (err) => {
         const status = err?.response?.status;
+        const cfg: any = err?.config || {};
+        const method = String(cfg.method || 'get').toLowerCase();
+        // ─── Jun 2025 stability fix: one silent retry on transient
+        // 5xx / network failures for idempotent GETs. Production
+        // origin briefly flapped behind Cloudflare (520/521/522/524)
+        // during a redeploy; this interceptor recovers automatically
+        // without surfacing "Couldn't load…" banners for the typical
+        // <1s blip. We:
+        //   • retry GET only (POST/PATCH/DELETE may have side-effects)
+        //   • retry on no-response network errors OR 5xx (incl. CF 5xx)
+        //   • retry exactly once per request (guarded by __retried flag)
+        //   • use a small fixed backoff (700ms)
+        //   • skip 401/402/404/410 (handled below or non-retryable)
+        const noResponse = !err?.response;
+        const isCloudflare5xx = typeof status === 'number' && status >= 520 && status <= 529;
+        const isServer5xx = typeof status === 'number' && status >= 500 && status < 600;
+        const retryable = method === 'get'
+          && !cfg.__retried
+          && (noResponse || isServer5xx || isCloudflare5xx);
+        if (retryable) {
+          cfg.__retried = true;
+          try {
+            // eslint-disable-next-line no-console
+            console.warn('[api.retry] one-shot retry', {
+              url: cfg.url, status: status ?? null, code: err?.code,
+            });
+          } catch { /* noop */ }
+          await new Promise((r) => setTimeout(r, 700));
+          try {
+            return await this.client.request(cfg);
+          } catch (retryErr) {
+            // Fall through to existing error handling below with the
+            // RETRY error (so paywall / 401 logic still triggers if
+            // the retried response surfaces those statuses).
+            err = retryErr;
+          }
+        }
+
+        const status2 = err?.response?.status;
         // 402 — paywall trigger (existing UX). 401 — expired/invalid
         // session: clear local token + notify auth provider so the app
         // bounces to the login screen instead of looping silently. We
         // skip auto-logout for the auth endpoints themselves so failed
         // login attempts still surface their own error.
-        if (status === 402 && paywallHandler) {
+        if (status2 === 402 && paywallHandler) {
           // Batch #8 — support BOTH old (string) and new (structured)
           // detail shapes. New backend returns
           // { reason_code, message, target_plan }; old backend returns
@@ -185,7 +224,7 @@ class Api {
             };
           }
           paywallHandler(normalised);
-        } else if (status === 401) {
+        } else if (status2 === 401) {
           const url: string = err?.config?.url || '';
           const isAuthEndpoint = /^\/?auth\/(login|register|google|forgot|reset)/.test(url);
           if (!isAuthEndpoint) {
