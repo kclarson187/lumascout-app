@@ -98,3 +98,6 @@ credentials*.disabled-*
 
 # Allow EAS local credentials.json for iOS build pipeline
 !frontend/credentials.json
+.env
+.env.*
+*.env
