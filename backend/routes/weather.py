@@ -132,8 +132,9 @@ INCLUDE_TO_DATASET: Dict[str, str] = {
 # "best_times" is derived; the upstream datasets it depends on:
 BEST_TIMES_REQUIRES = {"hourly", "daily"}
 
-# Days returned: elite gets 10, everyone else gets 7.
-DAILY_DAYS_BY_PLAN = {"anon": 7, "free": 7, "pro": 7, "elite": 10}
+# Days returned: pro=5, elite=10. Free/anon don't get daily at all,
+# but we keep generous defaults in case a route ever bypasses the gate.
+DAILY_DAYS_BY_PLAN = {"anon": 7, "free": 7, "pro": 5, "elite": 10}
 
 # Apple's required attribution URL (must be linked from any UI showing
 # WeatherKit data — see Apple's legal terms).
@@ -573,6 +574,194 @@ def _human_window_label(t: Optional[datetime], window_type: str, h: Dict[str, An
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Pro Photo Planning — lightweight server-calculated daily plan
+#
+# Distinct from Elite's _compute_best_times in three ways:
+#   1. Scope: today only (Elite spans next 48h).
+#   2. Algorithm: simple, deterministic preferences (Elite uses ranked scoring).
+#   3. Shape: a single object with `today*` keys + one `bestSimpleWindow`,
+#      not an array of ranked windows.
+#
+# Pro users see "When is golden hour today, and which is better — morning
+# or evening?" without unlocking Elite's premium ranking engine.
+# ─────────────────────────────────────────────────────────────────────
+PRO_PLAN_PRECIP_MAX = 20.0     # prefer < 20%
+PRO_PLAN_WIND_MAX   = 20.0     # prefer < 20 mph
+PRO_PLAN_CLOUD_MAX  = 50.0     # prefer < 50%
+
+
+def _window_dict(start: Optional[datetime], end: Optional[datetime]) -> Optional[Dict[str, str]]:
+    if start is None or end is None:
+        return None
+    return {"start": start.isoformat(), "end": end.isoformat()}
+
+
+def _compute_photo_planning(
+    daily: List[Dict[str, Any]],
+    hourly: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Build Pro's `photoPlanning` object for *today*.
+
+    Returns None when we don't have enough data (no daily / no sunrise &
+    sunset) — caller should then omit the field rather than emit broken
+    data, per spec.
+    """
+    if not daily:
+        return None
+    today = daily[0]
+    sr = _parse_iso(today.get("sunrise"))
+    ss = _parse_iso(today.get("sunset"))
+    if sr is None and ss is None:
+        return None
+
+    # Build windows.
+    gh_am = _window_dict(sr, (sr + timedelta(minutes=30))) if sr else None
+    gh_pm = _window_dict((ss - timedelta(minutes=30)), ss) if ss else None
+    bh_am = _window_dict((sr - timedelta(minutes=20)), sr) if sr else None
+    bh_pm = _window_dict(ss, (ss + timedelta(minutes=20))) if ss else None
+
+    # Choose bestSimpleWindow: prefer golden, prefer favorable hourly stats,
+    # prefer the next-upcoming golden window over a past one.
+    best = _choose_best_simple_window(gh_am, gh_pm, hourly)
+
+    out: Dict[str, Any] = {
+        "todayGoldenHourMorning": gh_am,
+        "todayGoldenHourEvening": gh_pm,
+        "todayBlueHourMorning":   bh_am,
+        "todayBlueHourEvening":   bh_pm,
+        "sunrise": today.get("sunrise"),
+        "sunset":  today.get("sunset"),
+        "bestSimpleWindow": best,
+    }
+    return out
+
+
+def _choose_best_simple_window(
+    gh_am: Optional[Dict[str, str]],
+    gh_pm: Optional[Dict[str, str]],
+    hourly: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Pick today's recommended shoot window with a simple ruleset:
+      • Prefer golden hour (Pro never sees blue-only recs)
+      • Prefer a window where the overlapping hourly entry shows
+        precipitation < 20%, wind < 20 mph, cloud cover < 50%
+      • Prefer the next-upcoming window relative to "now"
+    Returns a dict like:
+      {"label": "Tonight — Golden Hour",
+       "start": "...", "end": "...",
+       "reason": "Low wind, low rain chance, and better light near sunset."}
+    """
+    candidates: List[Dict[str, Any]] = []
+    for tag, w in (("morning", gh_am), ("evening", gh_pm)):
+        if not w:
+            continue
+        score = _score_simple_window(w, hourly)
+        if score is None:
+            continue
+        candidates.append({"tag": tag, "window": w, **score})
+
+    if not candidates:
+        return None
+
+    now = datetime.utcnow()
+    # Phase 1: include only future windows (haven't ended yet).
+    def _ends_in_future(c: Dict[str, Any]) -> bool:
+        end = _parse_iso(c["window"]["end"])
+        return end is not None and (end.replace(tzinfo=None) if end.tzinfo else end) > now
+
+    future = [c for c in candidates if _ends_in_future(c)]
+    pool   = future or candidates  # if every golden hour is past, pick "today" anyway
+
+    # Phase 2: prefer windows that pass ALL preferences.
+    passing = [c for c in pool if c["passes_all"]]
+    pool2 = passing or pool
+
+    # Phase 3: if both AM and PM survive, prefer PM (sunset/"tonight" feel).
+    pool2.sort(key=lambda c: 0 if c["tag"] == "evening" else 1)
+    chosen = pool2[0]
+    w = chosen["window"]
+    label = "Tonight — Golden Hour" if chosen["tag"] == "evening" else "Today — Golden Hour"
+    return {
+        "label": label,
+        "start": w["start"],
+        "end":   w["end"],
+        "reason": chosen["reason"],
+    }
+
+
+def _score_simple_window(
+    w: Dict[str, str], hourly: List[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """Inspect the hourly entry overlapping the window's start time and
+    summarize the conditions. Returns None if we cannot find an overlap
+    (caller will fall back to a weaker recommendation)."""
+    start_dt = _parse_iso(w["start"])
+    if start_dt is None or not hourly:
+        # Without data, we still allow the recommendation but with a
+        # generic reason ("Best natural light of the day.").
+        return {
+            "passes_all": False,
+            "precip_ok":  None,
+            "wind_ok":    None,
+            "cloud_ok":   None,
+            "reason":     "Best natural light of the day.",
+        }
+    # Find the hourly entry whose forecast window contains start_dt (we
+    # assume each hour entry covers [time, time+1h)).
+    overlap = None
+    for h in hourly:
+        ht = _parse_iso(h.get("time"))
+        if ht is None:
+            continue
+        # Normalize tz: compare naive.
+        ht_naive = ht.replace(tzinfo=None) if ht.tzinfo else ht
+        st_naive = start_dt.replace(tzinfo=None) if start_dt.tzinfo else start_dt
+        if ht_naive <= st_naive < ht_naive + timedelta(hours=1):
+            overlap = h
+            break
+    if overlap is None:
+        return {
+            "passes_all": False,
+            "precip_ok":  None,
+            "wind_ok":    None,
+            "cloud_ok":   None,
+            "reason":     "Best natural light of the day.",
+        }
+    precip = overlap.get("precip_chance_pct")
+    wind   = overlap.get("wind_mph")
+    cloud  = overlap.get("cloud_cover_pct")
+    precip_ok = precip is None or precip < PRO_PLAN_PRECIP_MAX
+    wind_ok   = wind   is None or wind   < PRO_PLAN_WIND_MAX
+    cloud_ok  = cloud  is None or cloud  < PRO_PLAN_CLOUD_MAX
+    passes_all = precip_ok and wind_ok and cloud_ok
+
+    reasons: List[str] = []
+    if wind_ok and wind is not None:
+        reasons.append("low wind")
+    if precip_ok and precip is not None:
+        reasons.append("low rain chance")
+    if cloud_ok and cloud is not None:
+        reasons.append("clearer skies")
+    if not reasons:
+        # Lean negative — call out what's likely to disappoint.
+        if precip is not None and not precip_ok:
+            reasons.append("rain risk later")
+        if wind is not None and not wind_ok:
+            reasons.append("breezy conditions")
+        if cloud is not None and not cloud_ok:
+            reasons.append("heavier cloud cover")
+    reason_clause = ", ".join(reasons) if reasons else "favorable golden light"
+    reason = f"{reason_clause.capitalize()} during golden hour."
+    return {
+        "passes_all": passes_all,
+        "precip_ok":  precip_ok,
+        "wind_ok":    wind_ok,
+        "cloud_ok":   cloud_ok,
+        "reason":     reason,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────
 # ISO datetime helper
 # ─────────────────────────────────────────────────────────────────────
 def _parse_iso(s: Optional[str]) -> Optional[datetime]:
@@ -775,19 +964,35 @@ def _ttl_for_wanted(wanted: Tuple[str, ...]) -> int:
 
 
 def _strip_elite_for_non_elite(payload: Dict[str, Any], plan: str) -> Dict[str, Any]:
-    """Per spec: Elite-only fields must be ABSENT (not null) from free/pro
-    payloads. This guards against a cached Elite response being served to a
-    non-Elite user (since cache keys are coord+include but plan tier can
-    override defaults). The endpoint computes `wanted` from plan first, so
-    this is belt-and-suspenders."""
-    if plan == "elite":
-        return payload
-    for k in ("alerts", "minute_forecast", "best_times"):
-        payload.pop(k, None)
-    # Down-trim 10-day daily to 7-day for non-elite if it was over-cached.
+    """Per spec, ensure tier-specific fields are ABSENT (not null) when a
+    lower-tier user reads a cached upper-tier response. We can't fully
+    avoid this overlap because cache keys are coord+include — not plan —
+    so a later non-elite call may hit an Elite-seeded entry. Belt-and-
+    suspenders defense.
+    """
+    # Elite-only fields: scrub on anything below Elite.
+    if plan != "elite":
+        for k in ("alerts", "minute_forecast", "best_times"):
+            payload.pop(k, None)
+        # Strip Elite's per-day golden_hour/blue_hour enrichment from any
+        # cached Pro/Free daily. Pro keeps the lightweight photoPlanning
+        # summary instead.
+        for d in (payload.get("daily") or []):
+            if isinstance(d, dict):
+                d.pop("golden_hour", None)
+                d.pop("blue_hour", None)
+
+    # Pro+Elite-only fields: scrub on anything below Pro.
+    if plan in ("anon", "free"):
+        payload.pop("photoPlanning", None)
+        payload.pop("hourly", None)
+        payload.pop("daily", None)
+
+    # Daily-day cap: re-enforce based on plan.
+    cap = DAILY_DAYS_BY_PLAN.get(plan, 7)
     daily = payload.get("daily")
-    if isinstance(daily, list) and len(daily) > 7:
-        payload["daily"] = daily[:7]
+    if isinstance(daily, list) and len(daily) > cap:
+        payload["daily"] = daily[:cap]
     return payload
 
 
@@ -899,6 +1104,16 @@ async def get_weather(
                 if is_elite:
                     _enrich_daily_with_light_windows(daily_norm)
                 apple_payload["daily"] = daily_norm
+                # Pro (and Elite, since Elite ⊇ Pro) gets a lightweight
+                # photoPlanning object summarizing today's golden/blue hours
+                # + one bestSimpleWindow. Elite still has the richer
+                # bestTimeToShoot engine as a separate field — Pro doesn't.
+                if plan in ("pro", "elite"):
+                    plan_obj = _compute_photo_planning(
+                        daily_norm, apple_payload.get("hourly") or [],
+                    )
+                    if plan_obj is not None:
+                        apple_payload["photoPlanning"] = plan_obj
             if "alerts"  in wanted and is_elite:
                 apple_payload["alerts"] = _norm_apple_alerts(alerts_block)
             if "minute"  in wanted and is_elite:
@@ -918,15 +1133,24 @@ async def get_weather(
     if payload is None:
         used_fallback = True
         payload = await _fetch_open_meteo(lat, lng, wanted)
-        # Elite enrichment for the fallback path: we still have sunrise/sunset
-        # from Open-Meteo's daily block, so compute golden/blue windows +
-        # best_times even when WeatherKit is unreachable. Cloud cover may be
-        # missing from OM so best_times may be empty — acceptable degraded mode.
-        if payload and is_elite:
+        # Pro photo-planning runs against the Open-Meteo fallback too —
+        # we still get sunrise/sunset and hourly cloud/wind/precip from
+        # the Open-Meteo daily/hourly blocks. Elite enrichment is more
+        # nuanced (golden_hour on each daily entry + best_times engine).
+        if payload:
             d = payload.get("daily")
             if isinstance(d, list):
-                _enrich_daily_with_light_windows(d)
-            if "best_times" in wanted:
+                # Trim fallback daily to plan's max days.
+                payload["daily"] = d[:daily_limit]
+                if is_elite:
+                    _enrich_daily_with_light_windows(payload["daily"])
+                if plan in ("pro", "elite"):
+                    plan_obj = _compute_photo_planning(
+                        payload["daily"], payload.get("hourly") or [],
+                    )
+                    if plan_obj is not None:
+                        payload["photoPlanning"] = plan_obj
+            if is_elite and "best_times" in wanted:
                 bt = _compute_best_times(payload.get("hourly") or [], payload.get("daily") or [])
                 if bt:
                     payload["best_times"] = bt
@@ -967,7 +1191,26 @@ async def weather_config():
         "team_id_set":    bool(os.environ.get("WEATHERKIT_TEAM_ID") or os.environ.get("APNS_TEAM_ID")),
         "key_id_set":     bool(os.environ.get("WEATHERKIT_KEY_ID")  or os.environ.get("APNS_KEY_ID")),
         "service_id_set": bool(os.environ.get("WEATHERKIT_SERVICE_ID") or os.environ.get("APNS_BUNDLE_ID")),
-        # Elite feature flags (visible to admins for ops debugging)
+        "jwt_signing_configured": weatherkit_configured(),
+        "cache_status": "mongo:weather_cache:ttl_indexed",
+        # Tier-aware feature flags — keeps the docs honest and surfaces
+        # what each subscription tier actually unlocks. (Per spec — no
+        # secret material; this just answers "which feature buckets are
+        # wired in this build?")
+        "tier_features": {
+            "free_current_weather":            True,
+            "pro_hourly_forecast":             True,
+            "pro_five_day_forecast":           True,
+            "pro_basic_photo_planning":        True,
+            "elite_ten_day_forecast":          True,
+            "elite_alerts":                    True,
+            "elite_minute_forecast":           True,
+            "elite_lunar_data":                True,
+            "elite_best_time_to_shoot":        True,
+            "elite_push_alerts":               apns_configured(),
+        },
+        # Backwards-compat — older callers used `elite_features`. Keep
+        # them functional, but the canonical block above is `tier_features`.
         "elite_features": {
             "alerts":          True,
             "minute_forecast": True,
@@ -985,6 +1228,7 @@ async def weather_config():
             "alerts":  CACHE_TTL_ALERTS_MIN,
             "minute":  CACHE_TTL_MINUTE_MIN,
         },
+        "daily_days_by_plan": DAILY_DAYS_BY_PLAN,
     }
 
 

@@ -20778,3 +20778,270 @@ agent_communication:
         the feature requirements above the test list, and adding it
         would require a new code path. Flag explicitly if you want it.
 
+
+  - task: "Apple WeatherKit Pro tier — 5-day forecast + photoPlanning helper + tier_features diagnostic (Jun 2026)"
+    implemented: true
+    working: "NA"
+    file: |
+      /app/backend/routes/weather.py
+        • DAILY_DAYS_BY_PLAN updated: pro=5 (was 7), elite=10 unchanged.
+          Pro Daily forecast is now 5 days exactly, matching spec; the
+          10-day forecast remains Elite-only.
+        • Added _compute_photo_planning(daily, hourly) helper that
+          produces the new `photoPlanning` object for Pro+Elite:
+            {
+              todayGoldenHourMorning: {start, end},
+              todayGoldenHourEvening: {start, end},
+              todayBlueHourMorning:   {start, end},
+              todayBlueHourEvening:   {start, end},
+              sunrise, sunset,
+              bestSimpleWindow: {label, start, end, reason}
+            }
+          Returns None when daily lacks sunrise+sunset (caller omits the
+          field, never emits null — per spec).
+        • Added _choose_best_simple_window() + _score_simple_window():
+          - Prefer golden hour (no blue-hour-only recs)
+          - Prefer the next-upcoming future window
+          - Prefer windows where the overlapping hourly entry has
+            precip < 20%, wind < 20 mph, cloud cover < 50%
+          - Tiebreak: prefer evening ("Tonight — Golden Hour")
+          - Reason string composed from passing/failing conditions
+        • Endpoint wires photoPlanning for plan ∈ {pro, elite} in BOTH
+          the WeatherKit primary path and the Open-Meteo fallback path.
+          Pro keeps a simple photoPlanning; Elite ALSO gets the existing
+          per-day golden_hour/blue_hour enrichment + best_times engine.
+        • Strip helper _strip_elite_for_non_elite() upgraded:
+          - For non-Elite users: removes alerts/minute_forecast/best_times
+            AND removes per-day golden_hour/blue_hour enrichment from
+            cached daily entries (Elite-only UX) — leaves photoPlanning
+            intact for Pro.
+          - For anon/free users: additionally removes photoPlanning,
+            hourly, and daily (Free is current-only per spec).
+          - Re-enforces DAILY_DAYS_BY_PLAN cap on every read.
+        • /api/weather/config diagnostic expanded:
+          - NEW top-level `tier_features` block with all 10 required
+            spec keys:
+              free_current_weather, pro_hourly_forecast,
+              pro_five_day_forecast, pro_basic_photo_planning,
+              elite_ten_day_forecast, elite_alerts,
+              elite_minute_forecast, elite_lunar_data,
+              elite_best_time_to_shoot, elite_push_alerts
+          - NEW `jwt_signing_configured`, `cache_status`,
+            `daily_days_by_plan` keys.
+          - Backwards-compat `elite_features` block retained for older
+            callers; no breaking changes to existing consumers.
+          - No secrets leak (no .p8 path, no PEM, no key/team/service IDs).
+
+      /app/backend_test_weather_elite.py
+        • Added TestProPhotoPlanning (7 cases):
+            - plan marker + source + attribution_url
+            - payload shape (current/hourly/daily fields present)
+            - Pro does NOT receive Elite-only fields
+            - photoPlanning shape (all 7 keys present)
+            - golden_hour math: AM = [sunrise, sunrise+30]; PM = [sunset-30, sunset];
+              blue AM = [sunrise-20, sunrise]; blue PM = [sunset, sunset+20]
+            - bestSimpleWindow shape (label contains "Golden Hour",
+              reason ≤200 chars ending with period)
+            - Open-Meteo fallback path produces a complete Pro payload
+        • Added TestUnknownParamsDoNotBypassTiers (1 parametrized case
+          covering 6 plausible bypass params: date, historical, plan,
+          tier, premium, unlock). Verifies that adding any unknown
+          query string does NOT expose alerts/minute_forecast/best_times/
+          photoPlanning/hourly/daily to a Free user. The spec mentioned
+          a `?date=` historical param that doesn't exist — this test
+          ensures Free stays locked even if that param is later added.
+        • Added TestConfigTierFeatures (3 cases):
+            - tier_features block has all 10 required keys (booleans)
+            - backwards-compat elite_features still present
+            - jwt_signing_configured + cache_status + daily_days_by_plan
+              all present; daily_days_by_plan.pro=5 / .elite=10
+        • Existing TestPlanTierGating.test_pro_user_gets_*** updated:
+          - Renamed to test_pro_user_gets_FIVE_day_no_elite_keys
+          - Asserts daily ≤5 (was ≤7)
+          - Asserts photoPlanning IS present (new)
+          - Asserts golden_hour/blue_hour are NOT present on daily entries
+            (those remain Elite-only)
+        • Total: 35 tests, 33 passing + 2 graceful skips (Apple
+          WeatherKit Services ID still NOT_ENABLED → skips moon_phase
+          + alerts-severity tests).
+
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ VERIFIED — Pro tier extension working end-to-end against the
+          public preview URL (https://photo-finder-60.preview.emergentagent.com).
+
+          Test suite results:
+          • /app/backend_test_weather_elite.py   — 33 PASS + 2 graceful
+            skip (WeatherKit Services ID NOT_ENABLED → moon_phase + alerts-
+            severity skips, as expected). Exit code 0.
+          • /app/backend_test_weather_elite_pro_v2.py — 20 PASS / 0 FAIL.
+            Independent v2 harness I wrote from scratch covering every
+            review scenario:
+              1. Anon + free → current-only, no premium keys (verified
+                 hourly/daily/photoPlanning/alerts/minute_forecast/best_times
+                 all absent, current+temp_f+label+attribution_url present)
+              2. Pro payload shape: plan=pro, source∈{weatherkit,open_meteo},
+                 attribution_url, current populated, hourly≤24 with
+                 time/temp_f/label/precip_chance_pct/wind_mph, daily=5 with
+                 date/high_f/low_f/label/sunrise/sunset/precip_chance_pct.
+                 Verified alerts/minute_forecast/best_times/moon_*
+                 ABSENT, and daily entries free of Elite's golden_hour /
+                 blue_hour enrichment.
+              3. Pro photoPlanning math matches spec EXACTLY for daily[0]:
+                   gh_AM = [sr, sr+30min]
+                   gh_PM = [ss-30min, ss]
+                   bh_AM = [sr-20min, sr]
+                   bh_PM = [ss, ss+20min]
+                 bestSimpleWindow.label contains "Golden Hour",
+                 .reason ≤200 chars, ends with '.'.
+              4. Elite still gets the full Elite surface: daily≤10,
+                 per-day golden_hour/blue_hour enrichment, photoPlanning
+                 (Elite's superset), best_times≤3.
+              5. Unknown query params cannot bypass tier gating —
+                 probed date / historical / plan / tier / premium / unlock
+                 — Free user STILL gets zero premium fields for every one.
+              6. /api/weather/config: tier_features block has all 10
+                 spec keys, all booleans. jwt_signing_configured is bool,
+                 cache_status is str, daily_days_by_plan.pro=5 and .elite=10.
+                 elite_features backwards-compat block still present.
+                 Secret scan: no '.p8', no 'BEGIN PRIVATE KEY', no key/team/
+                 bundle IDs in response text.
+              7. Pro cache TTL routing: cache doc's expires_at is ~10min
+                 ahead (Open-Meteo fallback ceiling — WeatherKit returns
+                 401 NOT_ENABLED in this env). NOT in the 5-min Elite
+                 alerts/minute bucket. 2nd call correctly returns
+                 cached:true.
+              8. Open-Meteo fallback Pro-safe: source=open_meteo path
+                 produces complete Pro payload (current+hourly+daily(5)+
+                 photoPlanning) with NO Elite leakage.
+              9. Regression smoke: /api/health, /api/auth/me,
+                 /api/feed/home all 200.
+
+          Auth + cleanup:
+          • Logged in as admin@lumascout.app (real seed admin from
+            backend/.env). Plan flipping via direct mongo update on
+            users.plan as instructed.
+          • Each test class captures the plan at setUpClass time and
+            restores it in tearDownClass — verified admin's plan is
+            untouched after the run.
+
+          Combined: 53 cases pass, 2 graceful Apple-side skips, 0 failures.
+
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Pro tier extension complete. End-to-end smoke verified locally
+          before handoff:
+            • Pro user request returned: plan='pro', daily len=5, hourly
+              len=24, photoPlanning with all 7 keys including a
+              bestSimpleWindow labeled "Tonight — Golden Hour" with
+              reason "Low rain chance, clearer skies during golden hour."
+            • Anon request returned: no photoPlanning, no hourly, no daily
+            • Free user with include=alerts,minute,best_times still got
+              none of those fields (defense-in-depth gate works)
+            • Pro daily entries do NOT contain Elite's golden_hour/blue_hour
+              enrichment (those remain Elite-exclusive)
+            • Elite still gets per-day golden_hour/blue_hour enrichment
+              + best_times engine + alerts + minute_forecast
+            • /api/weather/config returns tier_features with all 10
+              spec-required keys
+
+          Full test suite (35 cases): 33 pass, 2 skip (Apple WK
+          NOT_ENABLED-only paths — Services ID still needs the manual
+          Apple Developer Portal toggle which is out of scope here).
+
+          No regressions on /api/health, /api/feed/home, /api/auth/me.
+
+          PLEASE RE-TEST: run cd /app && python3 backend_test_weather_elite.py
+          and verify all 35 cases. Adversarial cases to add are welcome —
+          especially around the Open-Meteo fallback being Pro-safe.
+
+          DO NOT alter Map / SafeMapView — map stability gate active.
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Pro tier Jun-2026 spec landed. Endpoint behavior NOW:
+          • anon/free  → current only (no hourly/daily/photoPlanning)
+          • pro        → current + 24h hourly + 5-day daily + photoPlanning
+                         (NO Elite alerts/minute/best_times/golden_hour-on-daily/
+                          moon-illumination/10-day)
+          • elite      → current + 24h hourly + 10-day daily + alerts +
+                         minute_forecast + best_times + per-day golden/blue
+                         hour enrichment + lunar data + photoPlanning
+
+        /api/weather/config now carries `tier_features` with all 10
+        spec keys + JWT/cache diagnostics + DAILY_DAYS_BY_PLAN. Old
+        `elite_features` block preserved for backwards compatibility.
+
+        Test file: /app/backend_test_weather_elite.py — 35 tests,
+        33 passing + 2 graceful skips. Adds three new classes:
+        TestProPhotoPlanning, TestUnknownParamsDoNotBypassTiers,
+        TestConfigTierFeatures.
+
+        Note on the "historical date param" mentioned in the spec:
+        we do NOT have a date= parameter today. The new
+        TestUnknownParamsDoNotBypassTiers class covers the intent
+        ("unknown params can't unlock premium") by adversarially
+        passing date/historical/plan/tier/premium/unlock — none break
+        tier gating. If/when a historical date param is added later,
+        the same class will catch any regression.
+
+        Please re-verify and report PASS/FAIL count plus any bugs.
+
+    - agent: "testing"
+      message: |
+        Pro tier (Jun-2026) verification complete — all green.
+
+        Suites run:
+          • /app/backend_test_weather_elite.py        → 33 PASS + 2 SKIP
+            (WeatherKit Services ID NOT_ENABLED → moon_phase + alerts-
+            severity skip; expected and out-of-scope).
+          • /app/backend_test_weather_elite_pro_v2.py → 20 PASS / 0 FAIL
+            (independent re-verification I wrote from scratch).
+
+        Combined: 53 PASS, 2 graceful skips, 0 FAIL.
+
+        Covered every review scenario end-to-end against the public
+        preview URL (https://photo-finder-60.preview.emergentagent.com):
+          1. Anon + free are current-only — none of hourly/daily/
+             photoPlanning/alerts/minute_forecast/best_times leak. ✅
+          2. Pro payload has plan=pro, source∈{weatherkit,open_meteo},
+             attribution_url, hourly≤24, daily=5 with all spec keys, NO
+             Elite-only fields, NO Elite per-day golden_hour/blue_hour. ✅
+          3. photoPlanning math EXACT per spec:
+             GH_AM=[sr,sr+30], GH_PM=[ss-30,ss], BH_AM=[sr-20,sr],
+             BH_PM=[ss,ss+20]. bestSimpleWindow.label contains
+             "Golden Hour", reason ≤200 chars and ends with '.'. ✅
+          4. Elite still gets full surface (daily≤10, per-day golden/blue,
+             photoPlanning, best_times≤3 if present). ✅
+          5. Unknown params (date / historical / plan / tier / premium /
+             unlock) do NOT bypass Free gating. ✅
+          6. /api/weather/config has tier_features with all 10 bool keys,
+             jwt_signing_configured (bool), cache_status (str),
+             daily_days_by_plan={pro:5, elite:10}, elite_features back-
+             compat block, and ZERO secret leakage (no '.p8', no PEM,
+             no key/team/bundle IDs in body text). ✅
+          7. Pro cache TTL routes to ~10 min (Open-Meteo fallback ceiling
+             — WK is NOT_ENABLED in this env), NOT the 5-min Elite
+             alerts/minute bucket. 2nd call returns cached:true. ✅
+          8. Open-Meteo fallback is Pro-safe: complete Pro payload
+             (current+hourly+daily(5)+photoPlanning) with no Elite leak. ✅
+          9. Regression smoke: /api/health, /api/auth/me, /api/feed/home
+             all 200. ✅
+
+        Auth + cleanup:
+          • Logged in as admin@lumascout.app (real seed admin, real
+            password from backend/.env). Used direct mongo updates on
+            users.plan to flip tiers as instructed.
+          • Each test class captures the original plan in setUpClass and
+            restores it in tearDownClass — admin tier is left exactly as
+            we found it.
+
+        No bugs found. Pro tier extension is production-ready.
+

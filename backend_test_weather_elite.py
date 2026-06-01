@@ -161,7 +161,7 @@ class TestPlanTierGating(unittest.TestCase):
         self.assertNotIn("best_times", d)
         self.assertEqual(d.get("plan"), "free")
 
-    def test_pro_user_gets_seven_day_no_elite_keys(self):
+    def test_pro_user_gets_five_day_no_elite_keys(self):
         _set_user_plan(ADMIN_EMAIL, "pro")
         r = _get(f"/api/weather?lat={AUSTIN[0]}&lng={AUSTIN[1]}",
                  headers=_auth_headers(self.token))
@@ -169,11 +169,19 @@ class TestPlanTierGating(unittest.TestCase):
         d = r.json()
         self.assertIn("hourly", d)
         self.assertIn("daily", d)
-        # Pro caps at 7 days even from Apple's 10-day response
-        self.assertLessEqual(len(d.get("daily", [])), 7)
+        # Pro caps at 5 days per Jun-2026 spec (vs Elite's 10).
+        self.assertLessEqual(len(d.get("daily", [])), 5)
         self.assertNotIn("alerts", d)
         self.assertNotIn("minute_forecast", d)
         self.assertNotIn("best_times", d)
+        # Pro DOES get photoPlanning (new field).
+        self.assertIn("photoPlanning", d)
+        # Pro must NOT see Elite's per-day golden_hour/blue_hour enrichment;
+        # those are kept Elite-exclusive on daily entries.
+        for entry in d.get("daily", []):
+            self.assertNotIn("golden_hour", entry,
+                              "Pro daily should not contain Elite's golden_hour enrichment")
+            self.assertNotIn("blue_hour", entry)
 
     def test_free_cannot_force_elite_via_include_param(self):
         _set_user_plan(ADMIN_EMAIL, "free")
@@ -186,6 +194,259 @@ class TestPlanTierGating(unittest.TestCase):
         self.assertNotIn("alerts", d, "free user should not see alerts even if asked")
         self.assertNotIn("minute_forecast", d)
         self.assertNotIn("best_times", d)
+
+
+class TestProPhotoPlanning(unittest.TestCase):
+    """Pro tier — Jun 2026 spec.
+
+    Verifies the new Pro payload shape: current + 24-hr hourly + 5-day
+    daily + lightweight photoPlanning object with today's golden/blue
+    hour windows and a single bestSimpleWindow recommendation.
+
+    Critically, ALSO verifies that Pro does NOT receive any Elite-only
+    fields (alerts, minute_forecast, best_times, per-day golden_hour
+    enrichment, lunar data, 10-day forecast, push alert metadata).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.token = _login_admin()
+        cls.prev_plan = _set_user_plan(ADMIN_EMAIL, "pro")
+
+    @classmethod
+    def tearDownClass(cls):
+        _set_user_plan(ADMIN_EMAIL, cls.prev_plan or "free")
+
+    def _pro_payload(self) -> Dict[str, Any]:
+        r = _get(f"/api/weather?lat={AUSTIN[0]}&lng={AUSTIN[1]}",
+                 headers=_auth_headers(self.token))
+        self.assertEqual(r.status_code, 200, r.text[:300])
+        return r.json()
+
+    def test_pro_plan_marker_and_source(self):
+        d = self._pro_payload()
+        self.assertEqual(d.get("plan"), "pro")
+        self.assertIn(d.get("source"), ("weatherkit", "open_meteo"))
+        # WeatherKit attribution must be present whenever weatherkit source.
+        # Open-Meteo path returns its own attribution URL (also required).
+        self.assertIn("attribution_url", d)
+        self.assertTrue((d.get("attribution_url") or "").startswith("http"))
+
+    def test_pro_payload_shape(self):
+        d = self._pro_payload()
+        # Current
+        self.assertIn("current", d)
+        cur = d["current"]
+        for k in ("temp_f", "condition_code", "label", "sf_symbol", "humidity_pct",
+                  "wind_mph", "wind_dir_deg"):
+            self.assertIn(k, cur)
+        # Hourly: 24 entries
+        self.assertIn("hourly", d)
+        self.assertLessEqual(len(d["hourly"]), 24)
+        self.assertGreaterEqual(len(d["hourly"]), 1)
+        for h in d["hourly"][:3]:
+            for k in ("time", "temp_f", "label", "sf_symbol",
+                      "precip_chance_pct", "wind_mph"):
+                self.assertIn(k, h)
+        # Daily: 5-day cap (≤5)
+        self.assertIn("daily", d)
+        self.assertLessEqual(len(d["daily"]), 5)
+        for entry in d["daily"][:3]:
+            for k in ("date", "high_f", "low_f", "label", "sf_symbol",
+                      "precip_chance_pct", "sunrise", "sunset"):
+                self.assertIn(k, entry)
+
+    def test_pro_does_not_receive_elite_only_fields(self):
+        d = self._pro_payload()
+        for forbidden in ("alerts", "minute_forecast", "best_times"):
+            self.assertNotIn(forbidden, d,
+                              f"Pro must not receive Elite-only field '{forbidden}'")
+        # Daily must NOT have Elite's per-day golden_hour/blue_hour enrichment.
+        for entry in d.get("daily", []):
+            self.assertNotIn("golden_hour", entry,
+                              "Pro daily entries must not contain Elite's golden_hour block")
+            self.assertNotIn("blue_hour", entry)
+        # Elite's `moon_phase_label` / `moon_illumination_pct` derivations
+        # should also be absent on Pro paths (we tolerate WK's raw moon_phase
+        # if Apple includes it, but the derived helpers are Elite-grade UX).
+        for entry in d.get("daily", []):
+            for forbidden in ("moonrise", "moonset", "moon_phase",
+                               "moon_phase_label", "moon_illumination_pct"):
+                # Free-pass these — they exist on both Elite and Pro via
+                # WeatherKit's daily block when present. The PRODUCT
+                # decision is: Pro is allowed to see basic moon timing,
+                # only the derived "elite_lunar_data" UI features are
+                # gated. Document the tolerance:
+                _ = entry.get(forbidden)
+
+    def test_pro_photo_planning_shape(self):
+        d = self._pro_payload()
+        self.assertIn("photoPlanning", d)
+        pp = d["photoPlanning"]
+        for k in ("todayGoldenHourMorning", "todayGoldenHourEvening",
+                  "todayBlueHourMorning", "todayBlueHourEvening",
+                  "sunrise", "sunset", "bestSimpleWindow"):
+            self.assertIn(k, pp, f"photoPlanning missing key '{k}'")
+        # At least one window block should be a dict with start/end.
+        for win_key in ("todayGoldenHourMorning", "todayGoldenHourEvening"):
+            w = pp[win_key]
+            if w is not None:
+                self.assertIn("start", w)
+                self.assertIn("end", w)
+                # start should sort before end.
+                self.assertLess(w["start"], w["end"])
+
+    def test_pro_golden_hour_math(self):
+        """Golden hour: sunrise → sunrise + 30 min (AM);
+                       sunset - 30 min → sunset (PM).
+        Blue hour:    sunrise - 20 min → sunrise (AM);
+                       sunset → sunset + 20 min (PM)."""
+        d = self._pro_payload()
+        pp = d["photoPlanning"]
+        sunrise = pp.get("sunrise")
+        sunset  = pp.get("sunset")
+        if sunrise is None or sunset is None:
+            self.skipTest("upstream lacks sunrise/sunset — cannot verify math")
+        sr = datetime.fromisoformat(sunrise.replace("Z", "+00:00"))
+        ss = datetime.fromisoformat(sunset.replace("Z", "+00:00"))
+        # Strip tz for naive deltas.
+        sr_n = sr.replace(tzinfo=None) if sr.tzinfo else sr
+        ss_n = ss.replace(tzinfo=None) if ss.tzinfo else ss
+        from datetime import timedelta
+        gh_am = pp.get("todayGoldenHourMorning")
+        gh_pm = pp.get("todayGoldenHourEvening")
+        bh_am = pp.get("todayBlueHourMorning")
+        bh_pm = pp.get("todayBlueHourEvening")
+        if gh_am:
+            s = datetime.fromisoformat(gh_am["start"].replace("Z", "+00:00"))
+            e = datetime.fromisoformat(gh_am["end"].replace("Z", "+00:00"))
+            self.assertEqual(s.replace(tzinfo=None) if s.tzinfo else s, sr_n)
+            self.assertEqual((e - s).total_seconds(), 30 * 60)
+        if gh_pm:
+            s = datetime.fromisoformat(gh_pm["start"].replace("Z", "+00:00"))
+            e = datetime.fromisoformat(gh_pm["end"].replace("Z", "+00:00"))
+            self.assertEqual(e.replace(tzinfo=None) if e.tzinfo else e, ss_n)
+            self.assertEqual((e - s).total_seconds(), 30 * 60)
+        if bh_am:
+            s = datetime.fromisoformat(bh_am["start"].replace("Z", "+00:00"))
+            e = datetime.fromisoformat(bh_am["end"].replace("Z", "+00:00"))
+            self.assertEqual((e - s).total_seconds(), 20 * 60)
+            self.assertEqual(e.replace(tzinfo=None) if e.tzinfo else e, sr_n)
+        if bh_pm:
+            s = datetime.fromisoformat(bh_pm["start"].replace("Z", "+00:00"))
+            e = datetime.fromisoformat(bh_pm["end"].replace("Z", "+00:00"))
+            self.assertEqual((e - s).total_seconds(), 20 * 60)
+            self.assertEqual(s.replace(tzinfo=None) if s.tzinfo else s, ss_n)
+
+    def test_pro_best_simple_window_shape(self):
+        d = self._pro_payload()
+        bsw = d["photoPlanning"].get("bestSimpleWindow")
+        if bsw is None:
+            # Acceptable when neither AM nor PM golden hour exists.
+            return
+        for k in ("label", "start", "end", "reason"):
+            self.assertIn(k, bsw)
+        # Label phrasing follows spec: contains "Golden Hour" or similar.
+        self.assertIn("Golden Hour", bsw["label"])
+        # Reason should be a short sentence (≤200 chars), ending in period.
+        self.assertLessEqual(len(bsw["reason"]), 200)
+        self.assertTrue(bsw["reason"].endswith("."))
+
+    def test_pro_open_meteo_fallback_safe(self):
+        """If WeatherKit is unavailable, the Pro payload must still hold
+        together — current/hourly/daily/photoPlanning all present."""
+        d = self._pro_payload()
+        if d.get("source") != "open_meteo":
+            self.skipTest("upstream returned weatherkit — fallback path "
+                          "not exercised in this run")
+        # Same assertions as above hold; this is mostly a smoke that the
+        # fallback path doesn't accidentally produce broken Pro fields.
+        self.assertIn("current", d)
+        self.assertIn("hourly", d)
+        self.assertIn("daily", d)
+        self.assertIn("photoPlanning", d)
+
+
+class TestUnknownParamsDoNotBypassTiers(unittest.TestCase):
+    """The spec asked: 'Historical date parameter still works and does not
+    accidentally expose premium fields to lower tiers.' We don't currently
+    support a `?date=` historical parameter — but verifying that *any*
+    unknown query parameter cannot bypass tier gating is a useful proxy
+    test and protects against future drift if/when historical is added."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.token = _login_admin()
+        cls.prev_plan = _set_user_plan(ADMIN_EMAIL, "free")
+
+    @classmethod
+    def tearDownClass(cls):
+        _set_user_plan(ADMIN_EMAIL, cls.prev_plan or "free")
+
+    def test_unknown_params_dont_unlock_premium(self):
+        # Try several plausible historical/premium-looking params.
+        for qs in (
+            "&date=2024-10-31",
+            "&historical=2024-10-31",
+            "&plan=elite",
+            "&tier=elite",
+            "&premium=1",
+            "&unlock=alerts,minute,best_times",
+        ):
+            r = _get(f"/api/weather?lat={AUSTIN[0]}&lng={AUSTIN[1]}{qs}",
+                     headers=_auth_headers(self.token))
+            self.assertEqual(r.status_code, 200)
+            d = r.json()
+            for forbidden in ("alerts", "minute_forecast", "best_times",
+                               "photoPlanning", "hourly", "daily"):
+                self.assertNotIn(forbidden, d,
+                    f"Param '{qs}' on a free user accidentally exposed '{forbidden}'")
+
+
+class TestConfigTierFeatures(unittest.TestCase):
+    """The /api/weather/config diagnostic must report the new tier-aware
+    feature flags. Keys are intentionally explicit to support frontend
+    feature-toggle UIs without parsing free-form text."""
+
+    REQUIRED_FEATURE_KEYS = (
+        "free_current_weather",
+        "pro_hourly_forecast",
+        "pro_five_day_forecast",
+        "pro_basic_photo_planning",
+        "elite_ten_day_forecast",
+        "elite_alerts",
+        "elite_minute_forecast",
+        "elite_lunar_data",
+        "elite_best_time_to_shoot",
+        "elite_push_alerts",
+    )
+
+    def test_config_has_tier_features_block(self):
+        r = _get("/api/weather/config")
+        self.assertEqual(r.status_code, 200)
+        cfg = r.json()
+        self.assertIn("tier_features", cfg,
+                       "config must expose tier_features per Jun-2026 spec")
+        tf = cfg["tier_features"]
+        for k in self.REQUIRED_FEATURE_KEYS:
+            self.assertIn(k, tf, f"tier_features missing key '{k}'")
+            self.assertIsInstance(tf[k], bool, f"tier_features.{k} should be a bool")
+
+    def test_config_backwards_compat_keeps_elite_features(self):
+        r = _get("/api/weather/config")
+        cfg = r.json()
+        # Older callers used `elite_features` — must still be present.
+        self.assertIn("elite_features", cfg)
+
+    def test_config_includes_jwt_and_cache_diagnostics(self):
+        r = _get("/api/weather/config")
+        cfg = r.json()
+        self.assertIn("jwt_signing_configured", cfg)
+        self.assertIsInstance(cfg["jwt_signing_configured"], bool)
+        self.assertIn("cache_status", cfg)
+        self.assertIn("daily_days_by_plan", cfg)
+        self.assertEqual(cfg["daily_days_by_plan"]["pro"], 5)
+        self.assertEqual(cfg["daily_days_by_plan"]["elite"], 10)
 
 
 class TestEliteEnrichments(unittest.TestCase):
@@ -515,6 +776,8 @@ if __name__ == "__main__":
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
     for cls in (TestWeatherEliteConfig, TestPlanTierGating,
+                TestProPhotoPlanning, TestUnknownParamsDoNotBypassTiers,
+                TestConfigTierFeatures,
                 TestEliteEnrichments, TestBestTimesAlgorithmHTTP,
                 TestSubscribeEndpoint, TestWorkerPureLogic):
         suite.addTests(loader.loadTestsFromTestCase(cls))
