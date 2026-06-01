@@ -47,6 +47,8 @@ import {
 import { useRouter } from 'expo-router';
 import { colors, font } from '../theme';
 import { api } from '../api';
+import { useAuth } from '../auth';
+import { effectiveTier, isAdmin } from '../utils/entitlements';
 
 // ─── Types ────────────────────────────────────────────────────────────
 export interface WeatherCurrent {
@@ -124,9 +126,15 @@ export default function WeatherSection({
   lat, lng, shareToken, onUpgrade, compact,
 }: Props) {
   const router = useRouter();
+  const { user } = useAuth();
   const [data, setData] = useState<WeatherPayload | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [errored, setErrored] = useState<boolean>(false);
+
+  // Client-side expected tier (for parity-checking the backend response).
+  // We TRUST the backend's `data.tier` for rendering — this value is only
+  // used to detect mismatches during debugging.
+  const expectedTier = useMemo(() => effectiveTier(user), [user]);
 
   const fetchKey = useMemo(() => {
     if (shareToken) return `share:${shareToken}`;
@@ -145,7 +153,38 @@ export default function WeatherSection({
         const json: WeatherPayload = shareToken
           ? await api.get(`/public/shared/${encodeURIComponent(shareToken)}/weather`)
           : await api.get('/weather', { lat, lng });
-        if (!cancelled) setData(json);
+        if (!cancelled) {
+          setData(json);
+
+          // ─── Tier-mismatch debug logging ───────────────────────
+          // Logs in dev mode or for admins on real builds, so we can
+          // catch entitlement-resolution bugs early. Skipped on the
+          // public-share weather endpoint (sharer's tier ≠ viewer's).
+          if (!shareToken && (__DEV__ || isAdmin(user))) {
+            const serverTier = json?.tier;
+            const mismatch = serverTier && serverTier !== expectedTier;
+            // eslint-disable-next-line no-console
+            console.log('[WeatherSection] tier resolution', {
+              user_id: user?.user_id,
+              email: user?.email,
+              role: user?.role,
+              raw_plan: user?.plan,
+              expected_tier_client: expectedTier,
+              tier_from_server: serverTier,
+              upgrade_target: json?.upgrade_target,
+              mismatch,
+              available_features: json?.available_features,
+            });
+            if (mismatch) {
+              // eslint-disable-next-line no-console
+              console.warn(
+                `[WeatherSection] TIER MISMATCH — client expected "${expectedTier}" ` +
+                `but server returned "${serverTier}". Inspect ` +
+                `/api/weather/_debug_tier to see which fields fired.`,
+              );
+            }
+          }
+        }
       } catch (_e) {
         if (!cancelled) setErrored(true);
       } finally {
@@ -256,7 +295,7 @@ export default function WeatherSection({
           <Stat icon={<Cloud size={14} color={colors.muted} />}
                 label={`${Math.round(current.cloud_cover_pct)}% cl`} />
         )}
-        {typeof current.visibility_mi === 'number' && (
+        {typeof current.visibility_mi === 'number' && current.visibility_mi >= 0 && current.visibility_mi <= 300 && (
           <Stat icon={<Eye size={14} color={colors.muted} />}
                 label={`${Math.round(current.visibility_mi)} mi`} />
         )}

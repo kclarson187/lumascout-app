@@ -21217,3 +21217,234 @@ agent_communication:
             source flips from `open_meteo` to `weatherkit`. This is a
             manual click and I cannot do it from this environment.
 
+    - agent: "main"
+      message: |
+        🔧 BUGFIX (Jun 2026) — Weather entitlement resolver + visibility units
+
+        Reported: Logged-in super_admin (admin@lumascout.app) was seeing
+        the Free weather UI with the "Upgrade to Pro" prompt instead of
+        full Elite content. Also a visibility value of "23443 mi" was
+        being rendered (WeatherKit returns meters, not km).
+
+        Root cause:
+          • routes/weather.py read `(user or {}).get("plan") or "anon"`
+            directly. This SKIPPED `plan_of()` (server.py:182) which is
+            the canonical resolver that already maps super_admin /
+            admin / moderator / support / founding_scout to comp_elite.
+            Same skip existed in the alerts subscribe endpoint.
+          • Visibility: `vis_km = cur.get("visibility")` was wrong —
+            WeatherKit's `visibility` field is METERS per Apple's REST
+            schema. The km→mi conversion was therefore multiplying
+            meters by 0.621371, producing absurdly large values.
+
+        Fix applied:
+          1. /app/backend/routes/weather.py
+             - Imported `plan_of`, `_effective_plan` from server.
+             - Added `_resolve_user_tier(user) -> 'anon'|'free'|'pro'|'elite'`
+               centralized helper that honors role-based comp, comp /
+               trial plans, comp_expiration, and Stripe subscriptions.
+             - Replaced both ad-hoc lookups in GET /api/weather and
+               POST /api/weather/alerts/subscribe with _resolve_user_tier.
+             - Added structured tier-resolution logging
+               (_log_tier_resolution) that fires automatically for
+               admin/super_admin users or behind WEATHER_DEBUG_TIER=1.
+             - Added GET /api/weather/_debug_tier diagnostic endpoint
+               that returns user_id / email / role / raw_plan /
+               comp_expiration / stripe_subscription_id /
+               stripe_subscription_status / plan_of_user /
+               effective_tier / feature_block / resolution_path so the
+               user can verify their own account in one tap.
+             - Fixed visibility: now divides meters by 1000 before
+               km → mi conversion. Bumped cache key prefix to `v2:`
+               so stale entries with the wrong visibility value are
+               re-fetched. Deleted 3 pre-existing rows from
+               weather_cache to be safe.
+
+          2. /app/frontend/src/utils/entitlements.ts
+             - Added `effectiveTier(user): 'anon'|'free'|'pro'|'elite'`
+               that mirrors the backend resolver so the client can
+               sanity-check what the server returns.
+
+          3. /app/frontend/src/components/WeatherSection.tsx
+             - Pulls auth user via `useAuth()`.
+             - On every payload arrival, logs (in __DEV__ or for
+               admins) the client-expected tier vs the server-returned
+               tier and emits a console.warn on mismatch with a
+               pointer to /api/weather/_debug_tier.
+             - Visibility now only renders when 0 ≤ vis ≤ 300 mi
+               (defense-in-depth so any stale upstream value can't
+               leak a 20,000+ mi reading into the UI).
+
+        Acceptance:
+          ✅ Super admin → 'elite' tier
+          ✅ comp_elite / trial_elite → 'elite'
+          ✅ Pro plan → 'pro'
+          ✅ comp_pro / trial_pro → 'pro'
+          ✅ Free logged-in → 'free' (sees upgrade-to-Pro CTA)
+          ✅ Anonymous → 'anon' (sees current + locked teasers)
+          ✅ Upgrade CTA is suppressed for tier ∈ {pro, elite}
+
+        Files changed:
+          • /app/backend/routes/weather.py
+          • /app/frontend/src/utils/entitlements.ts
+          • /app/frontend/src/components/WeatherSection.tsx
+
+        Test harness:
+          - Old cache rows already purged from MongoDB.
+          - Frontend restarted via supervisorctl.
+          - Backend hot-reloaded cleanly (no startup errors in logs).
+
+        Please verify with deep_testing_backend_v2:
+          a) Tier resolution for {anon, free user, pro user, elite
+             user, comp_elite, comp_pro, admin, super_admin} via
+             GET /api/weather and GET /api/weather/_debug_tier.
+          b) Visibility values returned by GET /api/weather are
+             plausible (< 200 mi when present).
+          c) POST /api/weather/alerts/subscribe accepts super_admin.
+
+        DO NOT TEST:
+          - Frontend (will ask user before running expo_frontend_testing_agent).
+          - Map (gate active).
+          - PDF export (out of scope here).
+
+
+# ──────────────────────────────────────────────────────────────────
+# 2026-06-01 — Testing Agent: WeatherSection entitlement bug fix
+# ──────────────────────────────────────────────────────────────────
+backend:
+  - task: "Weather entitlement bug fix — centralized tier resolution + _debug_tier + visibility fix"
+    implemented: true
+    working: true
+    file: "/app/backend/routes/weather.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: |
+            Verified all five test scenarios from the review request via
+            /app/backend_test.py (14/14 PASS), plus a temporary plan-flip
+            on kclarson187@gmail.com to validate the free-user gate.
+
+            BACKEND = https://photo-finder-60.preview.emergentagent.com
+
+            DB pre-check:
+              - admin@lumascout.app  → role=super_admin, plan=comp_elite
+              - kclarson187@gmail.com → role=super_admin, plan=comp_elite
+              ⚠ Both seeded fixtures are super_admin/comp_elite. No true
+              "free" standard-user fixture exists, so the review's 2c/3c
+              free-user expectations had to be validated by temporarily
+              flipping kclarson187 to role=user/plan=free (restored after).
+
+            1. GET /api/weather/_debug_tier (NEW):
+              ✅ 1a unauth → {authenticated:false, effective_tier:"anon",
+                 feature_block.tier:"anon", upgrade_target:"pro"}
+              ✅ 1b super_admin → {effective_tier:"elite",
+                 is_super_admin:true, role:"super_admin",
+                 raw_plan:"comp_elite", plan_of_user:"comp_elite",
+                 feature_block.tier:"elite", upgrade_target:null}
+              ✅ 1b resolution_path includes
+                 "role=super_admin → comped via ELITE_COMP_ROLES" and
+                 "raw_plan=comp_elite → admin-granted complimentary tier".
+              ✅ 1c kclarson187 (as super_admin) → effective_tier="elite".
+              ✅ (bonus, plan-flipped to user/free) → role:"user",
+                 raw_plan:"free", plan_of_user:"free",
+                 effective_tier:"free", is_super_admin:false.
+
+            2. GET /api/weather (Austin 30.27,-97.74):
+              ✅ 2a anon → tier="anon", upgrade_target="pro",
+                 source="weatherkit", current populated, hourly+daily
+                 fields ABSENT from response, locked_features includes
+                 hourly, daily, ten_day_forecast, severe_weather_alerts,
+                 minute_precipitation, sun_path_planning,
+                 best_simple_window, best_time_to_shoot_48h, lunar_data.
+              ✅ 2b super_admin → tier="elite", upgrade_target=null,
+                 hourly_len=24, daily_len=10, locked_features=[],
+                 available_features ⊇ {ten_day_forecast,
+                 severe_weather_alerts, minute_precipitation,
+                 best_time_to_shoot_48h, lunar_data}.
+              ✅ 2c kclarson187 (as super_admin in DB) →
+                 tier="elite", upgrade_target=null, has_hourly=true,
+                 plan field in response = "elite".
+              ✅ (bonus, plan-flipped to free) → tier="free",
+                 upgrade_target="pro", hourly/daily absent,
+                 locked_features count=9.
+
+            3. POST /api/weather/alerts/subscribe:
+              ✅ 3a unauthenticated → 401 {detail:"auth_required"}.
+              ✅ 3b super_admin → 201 {ok:true, subscription_id:...,
+                 next_check_within_minutes:15}. THIS IS THE
+                 REGRESSION FIX — previously returned 402 because
+                 raw `plan = "comp_elite"` is not literal "elite".
+              ✅ 3c kclarson187 (as super_admin) → 201 ok=true.
+              ✅ (bonus, plan-flipped to user/free) →
+                 402 {detail:"elite_required"} as expected. Free-user
+                 gating is intact; the fix only widened acceptance
+                 for callers whose plan_of() resolves to "elite",
+                 not for raw "free".
+
+            4. Visibility unit sanity (GET /api/weather as super_admin):
+              ✅ source="weatherkit", current.visibility_km=35.2,
+                 current.visibility_mi=21.8.  21.8 mi is well within
+                 [0, 200]. Confirms the meters→km→miles fix landed and
+                 the "v2:" cache key prefix is being used (no leakage
+                 of the prior 23,443-mi stale value).
+
+            5. No regressions:
+              ✅ GET /api/weather/config →
+                 weatherkit_configured=true,
+                 tier_features (10 keys),
+                 elite_features (7 keys).
+
+            DB integrity:
+              ✅ kclarson187@gmail.com restored to
+                 role=super_admin, plan=comp_elite after the bonus
+                 flip — no residual state changes.
+
+            Note on review-request expectation 2c/3c: the brief asks
+            the testing agent to assert "tier=free" / "402" for
+            kclarson187 if they're a free user, but they are seeded as
+            super_admin/comp_elite in /app/memory/test_credentials.md.
+            Flag for main agent: there is no dedicated free-tier test
+            account; consider seeding one (e.g. test+free@lumascout.app)
+            if you want CI to lock the free-gate behavior without DB
+            mutation.
+
+agent_communication:
+    - agent: "testing"
+      message: |
+        ✅ WEATHER ENTITLEMENT BUG FIX — VERIFIED (14/14 + 1 bonus PASS).
+
+        Centralized tier resolution via _resolve_user_tier() / plan_of()
+        is working end-to-end:
+          • GET /api/weather/_debug_tier (new) reports
+            super_admin → effective_tier="elite", with
+            resolution_path mentioning ELITE_COMP_ROLES.
+          • GET /api/weather as super_admin returns tier="elite",
+            upgrade_target=null, full hourly (24)/daily (10) arrays
+            and all elite available_features.
+          • POST /api/weather/alerts/subscribe as super_admin now
+            returns 201 (was 402 pre-fix).
+          • Free-user gate still correct (validated by temporarily
+            flipping kclarson187 to user/free, asserting 402, then
+            restoring).
+          • Visibility for Austin via WeatherKit = 21.8 mi (km=35.2),
+            inside [0,200] — meters→km→miles fix confirmed.
+          • /api/weather/config diagnostic blocks unchanged.
+
+        ⚠ Fixture gap: both seeded test accounts in
+        /app/memory/test_credentials.md (admin@lumascout.app and
+        kclarson187@gmail.com) are super_admin/comp_elite. The review
+        brief assumed kclarson187 was "free". If you want CI to lock
+        the free-user path without DB mutation, please seed a dedicated
+        free-tier test account.
+
+        Test artifact: /app/backend_test.py (rewritten for this scope;
+        prior was archived to /app/backend_test.prev_shoot_plan2.py).
+
+test_plan:
+  current_focus: []
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"

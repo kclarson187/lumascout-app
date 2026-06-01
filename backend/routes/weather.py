@@ -75,7 +75,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Depends
 
-from server import db, get_optional_user
+from server import db, get_optional_user, plan_of, _effective_plan
 from services.weatherkit import (
     fetch_weather as fetch_weatherkit,
     weatherkit_configured,
@@ -197,6 +197,88 @@ def tier_feature_block(plan: str) -> Dict[str, Any]:
         "upgrade_target":     entry["upgrade_target"],
     }
 
+
+# ─────────────────────────────────────────────────────────────────────
+# Centralized entitlement resolver (Jun 2026)
+#
+# Replaces the old `(user or {}).get("plan") or "anon"` ad-hoc lookups
+# with a single source-of-truth resolver that honors:
+#
+#   1. Super-admin / admin / moderator / support / founding_scout roles
+#      → auto-Elite (delegated to `plan_of()` in server.py).
+#   2. Comp / trial overrides (comp_pro, comp_elite, trial_pro,
+#      trial_elite) with expiry checks (delegated to `plan_of()`).
+#   3. Active Stripe subscriptions (the `plan` field is written by the
+#      Stripe webhook → trusted directly).
+#   4. Free for logged-in users with no entitlement.
+#   5. Anon for unauthenticated callers.
+#
+# The output is normalized to the four canonical buckets the weather
+# routes know how to gate on: anon | free | pro | elite. Comp/trial
+# plans collapse to their underlying tier via `_effective_plan()`.
+# ─────────────────────────────────────────────────────────────────────
+def _resolve_user_tier(user: Optional[Dict[str, Any]]) -> str:
+    """Return one of: 'anon' | 'free' | 'pro' | 'elite'.
+
+    Uses the same `plan_of()` resolver every other entitlement check in
+    the app calls, so weather gating is guaranteed to match paywalls,
+    save-limits, etc. Comp/trial plans are flattened to their underlying
+    tier ('comp_elite' → 'elite', 'trial_pro' → 'pro') because the
+    weather feature catalog is keyed on the canonical four.
+    """
+    if not user:
+        return "anon"
+    raw = plan_of(user)                       # honors role-based comp + expiry
+    eff = _effective_plan(raw)                # comp_pro → pro, comp_elite → elite
+    # `suspended` accounts shouldn't get any paid features.
+    if eff in ("free", "pro", "elite"):
+        return eff
+    return "free"
+
+
+def _debug_should_log(user: Optional[Dict[str, Any]]) -> bool:
+    """Decide whether to emit verbose tier-resolution debug logs.
+
+    Auto-on for admins/super_admins (so we can debug their own accounts
+    without redeploying), and gated by WEATHER_DEBUG_TIER=1 for everyone
+    else. Cheap to call — short-circuits on the env flag.
+    """
+    if os.environ.get("WEATHER_DEBUG_TIER") == "1":
+        return True
+    if not user:
+        return False
+    return (user.get("role") in ("admin", "super_admin"))
+
+
+def _log_tier_resolution(
+    user: Optional[Dict[str, Any]],
+    *,
+    resolved: str,
+    endpoint: str,
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Emit a single structured info-line capturing how a user's tier
+    was resolved. Safe to call on every request — does nothing unless
+    `_debug_should_log()` is true."""
+    if not _debug_should_log(user):
+        return
+    fields = {
+        "endpoint": endpoint,
+        "user_id":  (user or {}).get("user_id") or (user or {}).get("id"),
+        "email":    (user or {}).get("email"),
+        "role":     (user or {}).get("role"),
+        "raw_plan": (user or {}).get("plan"),
+        "plan_of":  plan_of(user) if user else None,
+        "effective":  resolved,
+        "comp_expiration": (user or {}).get("comp_expiration"),
+        "stripe_subscription_id": (user or {}).get("stripe_subscription_id"),
+        "stripe_status": (user or {}).get("subscription_status"),
+    }
+    if extra:
+        fields.update(extra)
+    log.info("weather_tier_resolution %s", fields)
+
+
 # Apple's required attribution URL (must be linked from any UI showing
 # WeatherKit data — see Apple's legal terms).
 APPLE_ATTRIBUTION_URL = "https://weatherkit.apple.com/legal-attribution.html"
@@ -211,7 +293,10 @@ def _round_coord(v: float, ndigits: int = 2) -> float:
 
 
 def _cache_key(lat: float, lng: float, include: Tuple[str, ...]) -> str:
-    return f"{_round_coord(lat)}:{_round_coord(lng)}:{','.join(sorted(include))}"
+    # `v2:` prefix bumped Jun 2026 to invalidate stale entries that
+    # contained the visibility-meters-as-km bug (visibility_mi was the
+    # raw meter value). Bump again if normalizer shape changes.
+    return f"v2:{_round_coord(lat)}:{_round_coord(lng)}:{','.join(sorted(include))}"
 
 
 async def _ensure_indexes() -> None:
@@ -274,7 +359,11 @@ async def _cache_put(
 def _norm_apple_current(cur: Dict[str, Any]) -> Dict[str, Any]:
     t_c = cur.get("temperature")
     cond = cur.get("conditionCode")
-    vis_km = cur.get("visibility")
+    # WeatherKit `visibility` is METERS per Apple's REST schema, NOT
+    # kilometers. Convert m → km → mi so the UI displays sane values
+    # (was previously showing ~23,000 "miles" — the raw meter value).
+    vis_m = cur.get("visibility")
+    vis_km = (vis_m / 1000.0) if isinstance(vis_m, (int, float)) else None
     return {
         "temp_f": _r(c_to_f(t_c)),
         "temp_c": _r(t_c),
@@ -1086,10 +1175,9 @@ async def get_weather(
     WeatherKit primary, Open-Meteo fallback. All Elite-only fields are
     ABSENT (not null) from free/pro responses.
     """
-    plan = (user or {}).get("plan") or "anon"
-    if not user:
-        plan = "anon"
+    plan = _resolve_user_tier(user)
     is_elite = (plan == "elite")
+    _log_tier_resolution(user, resolved=plan, endpoint="GET /api/weather")
 
     # Build include list — explicit param overrides plan default, but
     # Elite-only keys are silently dropped for non-Elite users.
@@ -1300,6 +1388,108 @@ async def weather_config():
     }
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Diagnostic: resolve the calling user's effective weather tier
+#
+# Jun 2026: super-admin / comp_elite users were unexpectedly seeing the
+# Free upgrade prompt because the endpoint was reading `user.plan`
+# directly instead of going through `plan_of()`. This endpoint surfaces
+# every field that contributes to the resolved tier so QA and the user
+# can verify their own account in one tap.
+#
+# Auth required. Never returns secrets — just role/plan/subscription
+# state already in the user document.
+# ─────────────────────────────────────────────────────────────────────
+@router.get("/weather/_debug_tier")
+async def weather_debug_tier(
+    user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """Surface every field that contributes to weather tier resolution.
+
+    Use this to verify why a particular account sees a particular tier:
+
+        curl -H "Authorization: Bearer <jwt>" \
+             https://api.lumascout.app/api/weather/_debug_tier
+
+    Returns:
+        {
+          "authenticated": bool,
+          "user_id": str|null,
+          "email": str|null,
+          "role": str|null,
+          "is_super_admin": bool,
+          "raw_plan": "free"|"pro"|"elite"|"comp_pro"|"comp_elite"|...|null,
+          "comp_expiration": "<iso>"|null,
+          "stripe_subscription_id": str|null,
+          "stripe_subscription_status": str|null,
+          "plan_of_user": "<post-role-resolution plan>",
+          "effective_tier": "anon"|"free"|"pro"|"elite",
+          "feature_block": { tier, available_features, locked_features, upgrade_target },
+        }
+    """
+    if not user:
+        return {
+            "authenticated": False,
+            "effective_tier": "anon",
+            "feature_block": tier_feature_block("anon"),
+        }
+    raw_plan = user.get("plan")
+    role     = user.get("role")
+    plan_of_user = plan_of(user)
+    eff = _resolve_user_tier(user)
+    out = {
+        "authenticated": True,
+        "user_id":  user.get("user_id") or user.get("id"),
+        "email":    user.get("email"),
+        "role":     role,
+        "is_super_admin": role == "super_admin",
+        "is_admin":       role in ("admin", "super_admin"),
+        "raw_plan":       raw_plan,
+        "comp_expiration": user.get("comp_expiration"),
+        "stripe_subscription_id":     user.get("stripe_subscription_id"),
+        "stripe_subscription_status": user.get("subscription_status"),
+        "plan_of_user":  plan_of_user,
+        "effective_tier": eff,
+        "feature_block":  tier_feature_block(eff),
+        # Helpful for the React frontend — shows which paths through the
+        # resolver fired.
+        "resolution_path": _describe_resolution_path(user, raw_plan, role, plan_of_user, eff),
+    }
+    # Echo to logs (gated on admin / env flag) for cross-checking.
+    _log_tier_resolution(user, resolved=eff, endpoint="GET /api/weather/_debug_tier")
+    return out
+
+
+def _describe_resolution_path(
+    user: Dict[str, Any],
+    raw_plan: Optional[str],
+    role: Optional[str],
+    plan_of_user: str,
+    effective: str,
+) -> List[str]:
+    """Best-effort textual trace of which resolver branches activated.
+    Useful for support / debugging. Not load-bearing."""
+    notes: List[str] = []
+    if role in ("admin", "super_admin", "moderator", "support", "founding_scout"):
+        notes.append(f"role={role} → comped via ELITE_COMP_ROLES")
+    if raw_plan in ("comp_pro", "comp_elite"):
+        notes.append(f"raw_plan={raw_plan} → admin-granted complimentary tier")
+    if raw_plan in ("trial_pro", "trial_elite"):
+        notes.append(f"raw_plan={raw_plan} → in trial window")
+    if user.get("comp_expiration"):
+        notes.append(f"comp_expiration={user.get('comp_expiration')}")
+    if user.get("stripe_subscription_id"):
+        notes.append(
+            f"stripe_subscription_id={user.get('stripe_subscription_id')} "
+            f"(status={user.get('subscription_status')})"
+        )
+    if raw_plan == effective:
+        notes.append(f"plan_of()={plan_of_user} == effective={effective}")
+    else:
+        notes.append(f"raw={raw_plan} → plan_of={plan_of_user} → effective={effective}")
+    return notes
+
+
 # ═════════════════════════════════════════════════════════════════════
 # Elite Weather Alert Subscriptions
 # ═════════════════════════════════════════════════════════════════════
@@ -1333,7 +1523,8 @@ async def subscribe_alerts(
     """
     if not user:
         raise HTTPException(status_code=401, detail="auth_required")
-    plan = (user or {}).get("plan") or "free"
+    plan = _resolve_user_tier(user)
+    _log_tier_resolution(user, resolved=plan, endpoint="POST /api/weather/alerts/subscribe")
     if plan != "elite":
         raise HTTPException(status_code=402, detail="elite_required")
 

@@ -71,6 +71,34 @@ export function isAdmin(user: EntitlementUser): boolean {
 }
 
 /**
+ * Resolve a user to one of the four canonical weather/feature tiers:
+ *   'anon' | 'free' | 'pro' | 'elite'
+ *
+ * Mirrors the backend `_resolve_user_tier()` in routes/weather.py so the
+ * UI can predict what the server will return (useful for dev logs /
+ * sanity checks). The backend remains the source of truth — never use
+ * this to UNLOCK a paid feature client-side, only to detect mismatches.
+ *
+ * Resolution order:
+ *   1. Admin / super_admin role → 'elite'
+ *   2. comp_elite / trial_elite → 'elite'
+ *   3. comp_pro / trial_pro     → 'pro'
+ *   4. Active paid plan         → 'pro' | 'elite'
+ *   5. Logged in, no entitlement → 'free'
+ *   6. Anonymous                → 'anon'
+ */
+export function effectiveTier(
+  user: EntitlementUser,
+): 'anon' | 'free' | 'pro' | 'elite' {
+  if (!user) return 'anon';
+  if (isAdmin(user)) return 'elite';
+  const plan = (user.plan || '').toString();
+  if (ELITE_PLANS.has(plan)) return 'elite';
+  if (PRO_PLANS.has(plan)) return 'pro';
+  return 'free';
+}
+
+/**
  * Pretty label for a user's effective plan badge:
  * - Admins → "ADMIN"
  * - comp_* → "ELITE • COMP" / "PRO • COMP"
