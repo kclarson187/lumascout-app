@@ -24,6 +24,10 @@ expo-env.d.ts
 
 # Metro
 .metro-health-check*
+.metro-cache/
+
+# Python lint cache (shouldn't appear under frontend/ but exclude defensively)
+.ruff_cache/
 
 # debug
 npm-debug.*

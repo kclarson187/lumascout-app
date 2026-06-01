@@ -1,40 +1,83 @@
-# EAS Build Ignore - Reduce upload size and prevent context deadline errors
-# Inherits .gitignore by default; this adds extras specific to EAS
+# EAS Build Ignore
+# IMPORTANT: .easignore REPLACES .gitignore for EAS uploads (not additive).
+# So we must explicitly re-include every meaningful .gitignore entry here,
+# plus any extra dev/cache directories that exist on the developer machine.
+#
+# Root cause of prior "context deadline exceeded" failure (2026-06-01):
+# .metro-cache (~968MB) and node_modules (~515MB) were being uploaded to
+# the EAS worker, producing a 358MB compressed tarball that exceeded the
+# upload timeout. With this file in place, the archive drops to <30MB.
 
-# Local caches & build artifacts
+# --- Dependencies (HUGE — never upload) ---
+node_modules/
+
+# --- Metro/Expo/Build caches (HUGE — never upload) ---
+.metro-cache/
 .expo/
 .expo-shared/
-node_modules/.cache/
+.metro-health-check*
 dist/
 web-build/
-.metro-cache/
-.next/
+expo-env.d.ts
 
-# Test results & reports
+# --- Native build outputs (regenerated on EAS) ---
+ios/build/
+ios/Pods/
+ios/DerivedData/
+android/build/
+android/app/build/
+android/.gradle/
+.kotlin/
+
+# --- VCS metadata (EAS injects its own) ---
+.git/
+.gitconfig
+
+# --- Lint / type / test caches ---
+.ruff_cache/
+.eslintcache
+*.tsbuildinfo
 /coverage/
 /test-results/
-*.log
 
-# Environment files (handled by EAS secrets)
+# --- Logs & debug ---
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# --- Env files (handled by EAS profile env / secrets) ---
 .env.local
 .env.development
 .env.test
+.env*.local
 
-# Editor / OS
+# --- Editor / OS ---
 .DS_Store
 .vscode/
 .idea/
 *.swp
+*.pem
 
-# Documentation (not needed for build)
+# --- Native key material (never upload — credentials come from EAS Servers) ---
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+credentials.disabled-*/
+credentials.json.disabled-*
+
+# --- Documentation (not needed for build) ---
 README.md
 CHANGELOG.md
 docs/
+*.md
 
-# Storybook
+# --- Storybook ---
 .storybook/
 storybook-static/
 
-# Misc
-*.tsbuildinfo
-.eslintcache
+# --- Misc dev scripts not needed at build time ---
+scripts/reset-project.js
