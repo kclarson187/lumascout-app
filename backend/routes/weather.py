@@ -1105,12 +1105,21 @@ async def unsubscribe_alerts(
     lng: float = Query(..., ge=-180, le=180),
     user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ):
-    """Unsubscribe the calling user from a single spot. Idempotent."""
+    """Unsubscribe the calling user from a single spot. Idempotent —
+    `removed` reflects whether the row was *actively* deactivated by this
+    call (1 on first call, 0 on subsequent calls). We scope the filter
+    on `active: True` so the modified_count is meaningful even though
+    `$set.updated_at` always changes."""
     if not user:
         raise HTTPException(status_code=401, detail="auth_required")
     user_id = user.get("id") or user.get("_id")
     res = await db[WEATHER_ALERTS_COLL].update_one(
-        {"user_id": user_id, "lat_grid": round(lat, 3), "lng_grid": round(lng, 3)},
+        {
+            "user_id": user_id,
+            "lat_grid": round(lat, 3),
+            "lng_grid": round(lng, 3),
+            "active": True,  # only count the first transition true→false
+        },
         {"$set": {"active": False, "updated_at": datetime.utcnow()}},
     )
     return {"ok": True, "removed": res.modified_count}
