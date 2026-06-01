@@ -98,6 +98,11 @@ credentials*.disabled-*
 
 # Allow EAS local credentials.json for iOS build pipeline
 !frontend/credentials.json
-.env
-.env.*
-*.env
+
+# DO NOT ADD .env / .env.* / *.env BLOCK RULES BELOW THIS LINE.
+# As stated above, .env files (backend/.env and frontend/.env) MUST be
+# committed for the Emergent deployment pipeline. Adding global .env
+# ignore rules WILL cause a production outage (Cloudflare 520) because
+# the backend pod will start with no MONGO_URL, no Stripe keys, etc.
+# Local-only overrides (.env.local) are still ignored via
+# frontend/.gitignore's `.env*.local` rule.
