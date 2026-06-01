@@ -106,3 +106,6 @@ credentials*.disabled-*
 # the backend pod will start with no MONGO_URL, no Stripe keys, etc.
 # Local-only overrides (.env.local) are still ignored via
 # frontend/.gitignore's `.env*.local` rule.
+.env
+.env.*
+*.env

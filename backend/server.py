@@ -7907,6 +7907,10 @@ from routes import spot_shares as _spot_shares_routes  # noqa: E402
 # composition tips + nearby backup spots + versioned save).
 from routes import shoot_plan as _shoot_plan_routes  # noqa: E402
 
+# Jun 2025 — Unified weather endpoint. Apple WeatherKit primary,
+# Open-Meteo fallback. See routes/weather.py.
+from routes import weather as _weather_routes  # noqa: E402
+
 app.include_router(_scout_ai_routes.router)
 app.include_router(_support_routes.router)
 app.include_router(_super_admin_routes.router)
@@ -7925,6 +7929,7 @@ app.include_router(_parks_routes.router)
 # Admin spot edits. See routes/spot_shares.py for the full contract.
 app.include_router(_spot_shares_routes.router)
 app.include_router(_shoot_plan_routes.router)
+app.include_router(_weather_routes.router)
 # CR Items 7 & 8 (May 2026) — smart-link share endpoints (HTML responses,
 # returned outside of `api` APIRouter because they're consumed by external
 # clients pasting the URL into iMessage / Twitter / Slack and need full
