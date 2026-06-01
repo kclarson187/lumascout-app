@@ -163,6 +163,7 @@ DATASET_CURRENT  = "currentWeather"
 DATASET_HOURLY   = "forecastHourly"
 DATASET_DAILY    = "forecastDaily"
 DATASET_ALERTS   = "weatherAlerts"
+DATASET_MINUTE   = "forecastNextHour"
 
 ALL_DATASETS = [DATASET_CURRENT, DATASET_HOURLY, DATASET_DAILY]
 

@@ -7877,7 +7877,26 @@ async def seed_marketplace_demo():
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    # Stop the Elite weather alerts background worker before tearing down DB.
+    try:
+        from services.weather_alerts_worker import stop_worker as _stop_w_alerts  # noqa: WPS433
+        await _stop_w_alerts()
+    except Exception:
+        pass
     client.close()
+
+
+# Jun 2025 — Start Elite weather alerts background worker. Single asyncio
+# task, 15-min cadence. See services/weather_alerts_worker.py. Idempotent —
+# safe to call across hot reloads.
+@app.on_event("startup")
+async def _start_weather_alerts_worker():
+    try:
+        from services.weather_alerts_worker import start_worker as _start_w_alerts  # noqa: WPS433
+        await _start_w_alerts()
+    except Exception as _e:  # pragma: no cover — never block boot on worker
+        import logging
+        logging.getLogger("lumascout").warning("weather_alerts_worker_start_failed err=%r", _e)
 
 
 # ----------------------------------------------------------------------------

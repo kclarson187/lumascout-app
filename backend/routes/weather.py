@@ -82,8 +82,9 @@ from services.weatherkit import (
     sf_symbol_for,
     human_label_for,
     c_to_f, mps_to_mph, mm_to_in,
-    DATASET_CURRENT, DATASET_HOURLY, DATASET_DAILY, DATASET_ALERTS,
+    DATASET_CURRENT, DATASET_HOURLY, DATASET_DAILY, DATASET_ALERTS, DATASET_MINUTE,
 )
+from services.apns import apns_configured  # for /api/weather/config diagnostic
 
 log = logging.getLogger("lumascout.weather")
 
@@ -99,21 +100,40 @@ CACHE_TTL_DAILY_MIN   = 60
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 OPEN_METEO_TIMEOUT_S = 4.5
 
-# Tier-based include defaults
+# Tier-based include defaults.
+#
+# Elite adds five new payload buckets on top of pro:
+#   • 10-day daily forecast (auto when 'daily' is requested and plan='elite')
+#   • severe weather alerts (only when `country` query param supplied)
+#   • minute-by-minute precipitation (next 60 min)
+#   • moon phase/illumination/moonrise/moonset (enriched into daily)
+#   • golden_hour / blue_hour windows for each day (computed from sunrise/sunset)
+#   • visibility miles+km (enriched into current)
+#   • cloud_cover_pct on current & hourly (enriched in place)
+#   • best_times — top-3 server-side ranked shooting windows for next 48h
 INCLUDE_BY_PLAN: Dict[str, List[str]] = {
     "anon":  ["current"],
     "free":  ["current"],
     "pro":   ["current", "hourly", "daily"],
-    "elite": ["current", "hourly", "daily", "alerts"],
+    "elite": ["current", "hourly", "daily", "alerts", "minute", "best_times"],
 }
 
-# Map our short include names to WeatherKit dataset names
+# Map our short include names to WeatherKit dataset names.
+# best_times is a server-side computation, not a WeatherKit dataset, so it
+# is intentionally absent from this mapping (we just consume `daily`+`hourly`).
 INCLUDE_TO_DATASET: Dict[str, str] = {
     "current": DATASET_CURRENT,
     "hourly":  DATASET_HOURLY,
     "daily":   DATASET_DAILY,
     "alerts":  DATASET_ALERTS,
+    "minute":  DATASET_MINUTE,
 }
+
+# "best_times" is derived; the upstream datasets it depends on:
+BEST_TIMES_REQUIRES = {"hourly", "daily"}
+
+# Days returned: elite gets 10, everyone else gets 7.
+DAILY_DAYS_BY_PLAN = {"anon": 7, "free": 7, "pro": 7, "elite": 10}
 
 # Apple's required attribution URL (must be linked from any UI showing
 # WeatherKit data — see Apple's legal terms).
@@ -192,6 +212,7 @@ async def _cache_put(
 def _norm_apple_current(cur: Dict[str, Any]) -> Dict[str, Any]:
     t_c = cur.get("temperature")
     cond = cur.get("conditionCode")
+    vis_km = cur.get("visibility")
     return {
         "temp_f": _r(c_to_f(t_c)),
         "temp_c": _r(t_c),
@@ -204,7 +225,8 @@ def _norm_apple_current(cur: Dict[str, Any]) -> Dict[str, Any]:
         "wind_dir_deg": cur.get("windDirection"),
         "humidity_pct": cur.get("humidity"),  # already 0-1
         "uv_index": cur.get("uvIndex"),
-        "visibility_mi": _r(_km_to_mi(cur.get("visibility"))),
+        "visibility_mi": _r(_km_to_mi(vis_km)),
+        "visibility_km": _r(vis_km),
         "cloud_cover_pct": _pct_from_fraction(cur.get("cloudCover")),
         "pressure_mb": cur.get("pressure"),
         "is_daylight": cur.get("daylight"),
@@ -226,16 +248,24 @@ def _norm_apple_hourly(hours: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "precip_chance_pct": _r(_pct_from_fraction(h.get("precipitationChance"))),
             "wind_mph": _r(mps_to_mph(h.get("windSpeed"))),
             "humidity_pct": h.get("humidity"),
+            "cloud_cover_pct": _pct_from_fraction(h.get("cloudCover")),
             "uv_index": h.get("uvIndex"),
             "is_daylight": h.get("daylight"),
         })
     return out
 
 
-def _norm_apple_daily(days: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _norm_apple_daily(days: List[Dict[str, Any]], *, limit: int = 7) -> List[Dict[str, Any]]:
+    """Normalize Apple's daily forecast.
+
+    Elite plans pass limit=10 to get the full 10-day window WeatherKit
+    supports; everyone else stays at 7. Moon illumination is computed
+    from the moonPhase name when Apple doesn't include moonPhaseAngle.
+    """
     out: List[Dict[str, Any]] = []
-    for d in days[:10]:
+    for d in days[:limit]:
         cond = d.get("conditionCode")
+        moon_phase = d.get("moonPhase")
         out.append({
             "date": d.get("forecastStart"),
             "high_f": _r(c_to_f(d.get("temperatureMax"))),
@@ -251,27 +281,309 @@ def _norm_apple_daily(days: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "sunset":  d.get("sunset"),
             "moonrise": d.get("moonrise"),
             "moonset":  d.get("moonset"),
-            "moon_phase": d.get("moonPhase"),
+            "moon_phase": moon_phase,
+            "moon_phase_label": _moon_phase_label(moon_phase),
+            "moon_illumination_pct": _moon_illumination_pct(moon_phase),
         })
     return out
 
 
 def _norm_apple_alerts(alerts_block: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Surface every field the Elite UI needs: event/severity/source/onset/
+    expires/description + a direct link to the issuer's detailsUrl."""
     out: List[Dict[str, Any]] = []
     items = (alerts_block or {}).get("alerts") or []
-    for a in items[:5]:
+    for a in items[:10]:
         out.append({
-            "id": a.get("id"),
-            "title": a.get("description") or a.get("eventOnsetTime"),
-            "severity": a.get("severity"),
-            "certainty": a.get("certainty"),
-            "urgency": a.get("urgency"),
-            "issued_at": a.get("issuedTime"),
-            "expires_at": a.get("expireTime"),
-            "source": a.get("source"),
-            "url": a.get("detailsUrl"),
+            "id":          a.get("id"),
+            "event":       a.get("eventOnsetTime") and a.get("description") or a.get("description"),
+            "description": a.get("description"),
+            "severity":    a.get("severity"),
+            "certainty":   a.get("certainty"),
+            "urgency":     a.get("urgency"),
+            "source":      a.get("source"),
+            "issued_at":   a.get("issuedTime"),
+            "onset":       a.get("eventOnsetTime"),
+            "expires":     a.get("eventEndTime") or a.get("expireTime"),
+            "regions":     a.get("areaName") and [a.get("areaName")] or None,
+            "url":         a.get("detailsUrl"),
         })
     return out
+
+
+def _norm_apple_minute(minute_block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Apple's `forecastNextHour` block has `minutes`, `summary`, and a
+    high-level "is it about to rain?" hint. We surface a compact shape:
+        {
+          "summary": "Rain starting in ~12 min",
+          "starts_in_min": 12,
+          "minutes": [{"time": "...", "intensity_mm_h": 0.4, "chance_pct": 80}, …×60]
+        }
+    Returns None if the block is missing (WeatherKit doesn't have
+    minute-level data for every region — common outside the US/EU)."""
+    if not minute_block:
+        return None
+    minutes_raw = minute_block.get("minutes") or []
+    minutes: List[Dict[str, Any]] = []
+    starts_in_min: Optional[int] = None
+    for i, m in enumerate(minutes_raw[:60]):
+        intensity = m.get("precipitationIntensity")
+        chance = m.get("precipitationChance")
+        minutes.append({
+            "time": m.get("startTime"),
+            "intensity_mm_h": _r(intensity),
+            "chance_pct": _r(_pct_from_fraction(chance)),
+        })
+        if starts_in_min is None and intensity is not None and intensity > 0.01:
+            starts_in_min = i
+    summary = None
+    if isinstance(minute_block.get("summary"), list) and minute_block["summary"]:
+        s0 = minute_block["summary"][0] or {}
+        summary = s0.get("condition") or None
+    if not minutes:
+        return None
+    return {
+        "summary": summary,
+        "starts_in_min": starts_in_min,
+        "minutes": minutes,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Moon-phase helpers
+# ─────────────────────────────────────────────────────────────────────
+# Apple returns one of these moonPhase strings.
+_MOON_PHASE_LABELS: Dict[str, str] = {
+    "new":             "New Moon",
+    "waxingCrescent":  "Waxing Crescent",
+    "firstQuarter":    "First Quarter",
+    "waxingGibbous":   "Waxing Gibbous",
+    "full":            "Full Moon",
+    "waningGibbous":   "Waning Gibbous",
+    "lastQuarter":     "Last Quarter",
+    "waningCrescent":  "Waning Crescent",
+}
+# Mid-phase illumination (%). Real-day value oscillates; this is a stable
+# label-level approximation good enough for a photographer's planning UI.
+_MOON_PHASE_ILLUMINATION: Dict[str, float] = {
+    "new":             0,
+    "waxingCrescent":  25,
+    "firstQuarter":    50,
+    "waxingGibbous":   75,
+    "full":            100,
+    "waningGibbous":   75,
+    "lastQuarter":     50,
+    "waningCrescent":  25,
+}
+
+
+def _moon_phase_label(phase: Optional[str]) -> Optional[str]:
+    if not phase:
+        return None
+    return _MOON_PHASE_LABELS.get(phase, phase)
+
+
+def _moon_illumination_pct(phase: Optional[str]) -> Optional[float]:
+    if not phase:
+        return None
+    return _MOON_PHASE_ILLUMINATION.get(phase)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Golden / Blue Hour from sunrise + sunset (per day)
+# Spec:
+#   golden hour AM:  sunrise          → sunrise + 30 min
+#   golden hour PM:  sunset  - 30 min → sunset
+#   blue   hour AM:  sunrise - 20 min → sunrise
+#   blue   hour PM:  sunset           → sunset  + 20 min
+# ─────────────────────────────────────────────────────────────────────
+def _compute_golden_blue_for_day(day: Dict[str, Any]) -> Dict[str, Any]:
+    """Return {"golden_hour":{"am":{start,end},"pm":{...}}, "blue_hour":{...}}.
+    Tolerates missing sunrise/sunset by returning None for that side."""
+    sr = _parse_iso(day.get("sunrise"))
+    ss = _parse_iso(day.get("sunset"))
+    out: Dict[str, Any] = {"golden_hour": {"am": None, "pm": None},
+                            "blue_hour":   {"am": None, "pm": None}}
+    if sr is not None:
+        out["golden_hour"]["am"] = {
+            "start": sr.isoformat(),
+            "end":   (sr + timedelta(minutes=30)).isoformat(),
+        }
+        out["blue_hour"]["am"] = {
+            "start": (sr - timedelta(minutes=20)).isoformat(),
+            "end":   sr.isoformat(),
+        }
+    if ss is not None:
+        out["golden_hour"]["pm"] = {
+            "start": (ss - timedelta(minutes=30)).isoformat(),
+            "end":   ss.isoformat(),
+        }
+        out["blue_hour"]["pm"] = {
+            "start": ss.isoformat(),
+            "end":   (ss + timedelta(minutes=20)).isoformat(),
+        }
+    return out
+
+
+def _enrich_daily_with_light_windows(daily: List[Dict[str, Any]]) -> None:
+    """Mutates each daily entry to add golden_hour + blue_hour blocks."""
+    for d in daily:
+        windows = _compute_golden_blue_for_day(d)
+        d["golden_hour"] = windows["golden_hour"]
+        d["blue_hour"]   = windows["blue_hour"]
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Best Time to Shoot — server-side ranking
+#
+# Walk the next 48 hours of `hourly`. For each hour:
+#   - quality = passes_clouds(<30%) AND passes_precip(<10%) AND passes_wind(<15mph)
+#   - in_window = falls into ANY golden_hour or blue_hour for the
+#                 corresponding day
+# Group contiguous hours that are BOTH quality and in_window into
+# "windows". Score each by: shorter windows that align with golden
+# hour rank higher than longer dawn-to-dusk clear days. Return top 3.
+# ─────────────────────────────────────────────────────────────────────
+BEST_TIME_CLOUD_MAX     = 30.0
+BEST_TIME_PRECIP_MAX    = 10.0
+BEST_TIME_WIND_MAX      = 15.0
+BEST_TIME_LOOKAHEAD_H   = 48
+
+
+def _hour_passes_quality(h: Dict[str, Any]) -> bool:
+    cc = h.get("cloud_cover_pct")
+    pp = h.get("precip_chance_pct")
+    ws = h.get("wind_mph")
+    # Treat missing fields as "pass" so a region with no cloud data
+    # doesn't blank out the whole feature. The downstream UI badge can
+    # still surface "data may be partial".
+    if cc is not None and cc > BEST_TIME_CLOUD_MAX:
+        return False
+    if pp is not None and pp > BEST_TIME_PRECIP_MAX:
+        return False
+    if ws is not None and ws > BEST_TIME_WIND_MAX:
+        return False
+    return True
+
+
+def _hour_in_light_window(h_time: Optional[datetime], daily: List[Dict[str, Any]]) -> Optional[str]:
+    """Return 'golden' or 'blue' if h_time falls in any window across the
+    next several days; None otherwise."""
+    if h_time is None:
+        return None
+    for d in daily:
+        gh = d.get("golden_hour") or {}
+        bh = d.get("blue_hour") or {}
+        for side in ("am", "pm"):
+            g = gh.get(side)
+            if g and _between(h_time, g["start"], g["end"]):
+                return "golden"
+            b = bh.get(side)
+            if b and _between(h_time, b["start"], b["end"]):
+                return "blue"
+    return None
+
+
+def _between(t: datetime, start_iso: str, end_iso: str) -> bool:
+    s = _parse_iso(start_iso); e = _parse_iso(end_iso)
+    if s is None or e is None:
+        return False
+    return s <= t <= e
+
+
+def _compute_best_times(
+    hourly: List[Dict[str, Any]], daily: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Return up to 3 ranked time windows for the next 48 hours."""
+    if not hourly or not daily:
+        return []
+    # Each hourly item is annotated with quality + window type.
+    annotated: List[Dict[str, Any]] = []
+    for h in hourly[:BEST_TIME_LOOKAHEAD_H]:
+        ht = _parse_iso(h.get("time"))
+        passes = _hour_passes_quality(h)
+        win = _hour_in_light_window(ht, daily)
+        annotated.append({
+            "h": h, "time": ht, "passes": passes, "window": win,
+        })
+
+    # Group contiguous (passes AND window-present) hours.
+    groups: List[List[Dict[str, Any]]] = []
+    cur: List[Dict[str, Any]] = []
+    for row in annotated:
+        if row["passes"] and row["window"]:
+            cur.append(row)
+        else:
+            if cur:
+                groups.append(cur); cur = []
+    if cur:
+        groups.append(cur)
+
+    # Score each group. Higher = better.
+    def score(group: List[Dict[str, Any]]) -> float:
+        if not group:
+            return 0.0
+        # Reward golden over blue and reward concentrated windows.
+        golden_count = sum(1 for r in group if r["window"] == "golden")
+        blue_count   = sum(1 for r in group if r["window"] == "blue")
+        # Average clouds (lower is better).
+        clouds = [r["h"].get("cloud_cover_pct") for r in group if r["h"].get("cloud_cover_pct") is not None]
+        avg_clouds = sum(clouds) / len(clouds) if clouds else 50.0
+        # The closer in time, the more relevant.
+        first_t = group[0]["time"]
+        proximity_bonus = 0.0
+        if first_t is not None:
+            hours_away = max(0.0, (first_t - datetime.utcnow().replace(tzinfo=first_t.tzinfo)).total_seconds() / 3600)
+            proximity_bonus = max(0.0, 24 - hours_away) * 0.3
+        return (golden_count * 3.0 + blue_count * 2.0) + (100 - avg_clouds) * 0.05 + proximity_bonus
+
+    groups.sort(key=score, reverse=True)
+    top = groups[:3]
+
+    out: List[Dict[str, Any]] = []
+    for g in top:
+        first = g[0]; last = g[-1]
+        window_type = "golden" if any(r["window"] == "golden" for r in g) else "blue"
+        label = _human_window_label(first["time"], window_type, first["h"])
+        avg_clouds = None
+        clouds = [r["h"].get("cloud_cover_pct") for r in g if r["h"].get("cloud_cover_pct") is not None]
+        if clouds:
+            avg_clouds = round(sum(clouds) / len(clouds), 1)
+        out.append({
+            "start": first["h"].get("time"),
+            "end":   last["h"].get("time"),
+            "window_type": window_type,
+            "label": label,
+            "hours": len(g),
+            "avg_cloud_cover_pct": avg_clouds,
+            "score": round(score(g), 2),
+        })
+    return out
+
+
+def _human_window_label(t: Optional[datetime], window_type: str, h: Dict[str, Any]) -> str:
+    """Generate a label like 'Tomorrow — Golden Hour, Clear Skies'."""
+    if t is None:
+        return f"{window_type.title()} Hour"
+    now = datetime.utcnow().replace(tzinfo=t.tzinfo)
+    delta_days = (t.date() - now.date()).days
+    when = "Today" if delta_days <= 0 else "Tomorrow" if delta_days == 1 else t.strftime("%a")
+    cond = h.get("label") or "Clear"
+    return f"{when} — {window_type.title()} Hour, {cond}"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# ISO datetime helper
+# ─────────────────────────────────────────────────────────────────────
+def _parse_iso(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        # Apple returns RFC3339 with Z; fromisoformat in Python 3.11+
+        # accepts that pattern directly.
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -447,31 +759,95 @@ def _km_to_mi(km: Optional[float]) -> Optional[float]:
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Cache TTL router — Elite datasets are short-lived (alerts/minute change fast)
+# ─────────────────────────────────────────────────────────────────────
+CACHE_TTL_MINUTE_MIN = 5
+CACHE_TTL_ALERTS_MIN = 5
+
+
+def _ttl_for_wanted(wanted: Tuple[str, ...]) -> int:
+    """Cache as long as the SHORTEST-lived requested dataset allows."""
+    if "minute" in wanted or "alerts" in wanted:
+        return CACHE_TTL_MINUTE_MIN
+    if "current" in wanted or "hourly" in wanted:
+        return CACHE_TTL_CURRENT_MIN
+    return CACHE_TTL_DAILY_MIN
+
+
+def _strip_elite_for_non_elite(payload: Dict[str, Any], plan: str) -> Dict[str, Any]:
+    """Per spec: Elite-only fields must be ABSENT (not null) from free/pro
+    payloads. This guards against a cached Elite response being served to a
+    non-Elite user (since cache keys are coord+include but plan tier can
+    override defaults). The endpoint computes `wanted` from plan first, so
+    this is belt-and-suspenders."""
+    if plan == "elite":
+        return payload
+    for k in ("alerts", "minute_forecast", "best_times"):
+        payload.pop(k, None)
+    # Down-trim 10-day daily to 7-day for non-elite if it was over-cached.
+    daily = payload.get("daily")
+    if isinstance(daily, list) and len(daily) > 7:
+        payload["daily"] = daily[:7]
+    return payload
+
+
+# ─────────────────────────────────────────────────────────────────────
 # Endpoint
 # ─────────────────────────────────────────────────────────────────────
 @router.get("/weather")
 async def get_weather(
     lat: float = Query(..., ge=-90, le=90),
     lng: float = Query(..., ge=-180, le=180),
-    include: Optional[str] = Query(None, description="Comma-separated subset of current,hourly,daily,alerts"),
+    include: Optional[str] = Query(
+        None,
+        description="Comma-separated subset of "
+                    "current,hourly,daily,alerts,minute,best_times "
+                    "(alerts/minute/best_times require Elite plan)"
+    ),
     country: Optional[str] = Query(None, min_length=2, max_length=2),
     timezone_name: Optional[str] = Query(None, alias="timezone"),
     user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ):
-    """Return normalized weather for `lat`,`lng`. WeatherKit primary, Open-Meteo fallback."""
+    """Return normalized weather for `lat`,`lng`.
+
+    Plan-tier policy:
+      • anon/free → current only
+      • pro       → current + hourly + daily(7)
+      • elite     → current + hourly + daily(10) + alerts(if country)
+                    + minute forecast + golden/blue hours
+                    + best_times (top 3 windows for next 48h)
+
+    WeatherKit primary, Open-Meteo fallback. All Elite-only fields are
+    ABSENT (not null) from free/pro responses.
+    """
     plan = (user or {}).get("plan") or "anon"
     if not user:
         plan = "anon"
+    is_elite = (plan == "elite")
 
-    # Build include list — explicit param overrides plan default.
+    # Build include list — explicit param overrides plan default, but
+    # Elite-only keys are silently dropped for non-Elite users.
     if include:
-        wanted = tuple(p.strip() for p in include.split(",") if p.strip())
+        wanted_raw = tuple(p.strip() for p in include.split(",") if p.strip())
     else:
-        wanted = tuple(INCLUDE_BY_PLAN.get(plan, ["current"]))
-    # Validate.
-    wanted = tuple(p for p in wanted if p in INCLUDE_TO_DATASET)
-    if not wanted:
-        wanted = ("current",)
+        wanted_raw = tuple(INCLUDE_BY_PLAN.get(plan, ["current"]))
+    # Filter to known keys + tier-allowed keys.
+    allowed = set(INCLUDE_TO_DATASET.keys()) | {"best_times"}
+    elite_only = {"alerts", "minute", "best_times"}
+    wanted_filtered: List[str] = []
+    for p in wanted_raw:
+        if p not in allowed:
+            continue
+        if p in elite_only and not is_elite:
+            continue
+        wanted_filtered.append(p)
+    # best_times needs hourly+daily to compute; auto-include them if user
+    # asked for best_times but not the dependencies.
+    if "best_times" in wanted_filtered:
+        for dep in BEST_TIMES_REQUIRES:
+            if dep not in wanted_filtered:
+                wanted_filtered.append(dep)
+    wanted = tuple(wanted_filtered) or ("current",)
     # Alerts require a country code; silently drop if not provided.
     if "alerts" in wanted and not country:
         wanted = tuple(p for p in wanted if p != "alerts")
@@ -480,18 +856,22 @@ async def get_weather(
     ckey = _cache_key(lat, lng, wanted)
     cached = await _cache_get(ckey)
     if cached:
-        # Back-compat: also surface `temp_f`/`label` at the root for the
-        # existing home hero pill that reads them directly (index.tsx L441).
+        cached = _strip_elite_for_non_elite(dict(cached), plan)
         cur = cached.get("current") or {}
         cached.setdefault("temp_f", cur.get("temp_f"))
         cached.setdefault("label", cur.get("label"))
         cached.setdefault("condition", cur.get("label"))
+        cached.setdefault("plan", plan)
         return cached
+
+    # Daily-day limit varies by plan.
+    daily_limit = DAILY_DAYS_BY_PLAN.get(plan, 7)
 
     # Primary: Apple WeatherKit
     apple_payload: Optional[Dict[str, Any]] = None
     if weatherkit_configured():
-        datasets = [INCLUDE_TO_DATASET[w] for w in wanted]
+        # Translate wanted → WeatherKit dataset names (skip best_times — derived).
+        datasets = [INCLUDE_TO_DATASET[w] for w in wanted if w in INCLUDE_TO_DATASET]
         apple = await fetch_weatherkit(
             lat, lng, datasets=datasets,
             country_code=country, timezone=timezone_name,
@@ -501,6 +881,7 @@ async def get_weather(
             hourly_block = (apple.get(DATASET_HOURLY) or {}).get("hours") or []
             daily_block  = (apple.get(DATASET_DAILY)  or {}).get("days")  or []
             alerts_block = apple.get(DATASET_ALERTS)  or {}
+            minute_block = apple.get(DATASET_MINUTE)  or {}
             apple_payload = {
                 "ok": True,
                 "source": "weatherkit",
@@ -512,29 +893,65 @@ async def get_weather(
             if "hourly"  in wanted and hourly_block:
                 apple_payload["hourly"]  = _norm_apple_hourly(hourly_block)
             if "daily"   in wanted and daily_block:
-                apple_payload["daily"]   = _norm_apple_daily(daily_block)
-            if "alerts"  in wanted and alerts_block:
-                apple_payload["alerts"]  = _norm_apple_alerts(alerts_block)
+                daily_norm = _norm_apple_daily(daily_block, limit=daily_limit)
+                # Always enrich daily with golden_hour/blue_hour windows on
+                # Elite plans; cheap and unlocks the Elite UI.
+                if is_elite:
+                    _enrich_daily_with_light_windows(daily_norm)
+                apple_payload["daily"] = daily_norm
+            if "alerts"  in wanted and is_elite:
+                apple_payload["alerts"] = _norm_apple_alerts(alerts_block)
+            if "minute"  in wanted and is_elite:
+                m = _norm_apple_minute(minute_block)
+                if m is not None:
+                    apple_payload["minute_forecast"] = m
+            if "best_times" in wanted and is_elite:
+                hourly_for_calc = apple_payload.get("hourly") or []
+                daily_for_calc  = apple_payload.get("daily")  or []
+                bt = _compute_best_times(hourly_for_calc, daily_for_calc)
+                if bt:
+                    apple_payload["best_times"] = bt
 
-    # Fallback: Open-Meteo (always free + public)
+    # Fallback: Open-Meteo (always free + public; no Elite extras)
     payload = apple_payload
+    used_fallback = False
     if payload is None:
+        used_fallback = True
         payload = await _fetch_open_meteo(lat, lng, wanted)
+        # Elite enrichment for the fallback path: we still have sunrise/sunset
+        # from Open-Meteo's daily block, so compute golden/blue windows +
+        # best_times even when WeatherKit is unreachable. Cloud cover may be
+        # missing from OM so best_times may be empty — acceptable degraded mode.
+        if payload and is_elite:
+            d = payload.get("daily")
+            if isinstance(d, list):
+                _enrich_daily_with_light_windows(d)
+            if "best_times" in wanted:
+                bt = _compute_best_times(payload.get("hourly") or [], payload.get("daily") or [])
+                if bt:
+                    payload["best_times"] = bt
 
     if payload is None:
-        # Don't 500 — frontend treats missing weather as "no pill" and that's fine.
-        return {"ok": False, "source": "none", "current": None}
+        return {"ok": False, "source": "none", "plan": plan, "current": None}
 
-    # Cache: shortest TTL of any included dataset (current=15min, daily=60min).
-    ttl_min = CACHE_TTL_CURRENT_MIN if ("current" in wanted or "hourly" in wanted) else CACHE_TTL_DAILY_MIN
+    # Cache with the appropriate TTL for the shortest-lived dataset requested.
+    ttl_min = _ttl_for_wanted(wanted)
+    # Don't cache the fallback as long as the primary — Open-Meteo changes
+    # less aggressively but we want to retry Apple sooner once it comes back.
+    if used_fallback:
+        ttl_min = min(ttl_min, 10)
     await _cache_put(ckey, payload, ttl_min=ttl_min)
 
-    # Back-compat shim — older callers (home hero) read `temp_f` and `label`
-    # off the root of the response. Surface them so we don't break them.
+    # Strip Elite fields from non-elite responses (defense in depth — if
+    # Elite caller seeded the cache, a subsequent non-elite read won't leak).
+    payload = _strip_elite_for_non_elite(payload, plan)
+
+    # Back-compat root keys for the home hero pill.
     cur = payload.get("current") or {}
     payload["temp_f"] = cur.get("temp_f")
-    payload["label"] = cur.get("label")
+    payload["label"]  = cur.get("label")
     payload["condition"] = cur.get("label")
+    payload["plan"] = plan
     payload["cached"] = False
     return payload
 
@@ -544,11 +961,156 @@ async def get_weather(
 # ─────────────────────────────────────────────────────────────────────
 @router.get("/weather/config")
 async def weather_config():
-    """Return whether WeatherKit is configured. Admins can use this to debug
-    why a coordinate is falling back to Open-Meteo. No secrets returned."""
+    """Diagnostic: confirm WeatherKit + APNs config without leaking secrets."""
     return {
         "weatherkit_configured": weatherkit_configured(),
-        "team_id_set": bool(os.environ.get("WEATHERKIT_TEAM_ID") or os.environ.get("APNS_TEAM_ID")),
-        "key_id_set":  bool(os.environ.get("WEATHERKIT_KEY_ID")  or os.environ.get("APNS_KEY_ID")),
+        "team_id_set":    bool(os.environ.get("WEATHERKIT_TEAM_ID") or os.environ.get("APNS_TEAM_ID")),
+        "key_id_set":     bool(os.environ.get("WEATHERKIT_KEY_ID")  or os.environ.get("APNS_KEY_ID")),
         "service_id_set": bool(os.environ.get("WEATHERKIT_SERVICE_ID") or os.environ.get("APNS_BUNDLE_ID")),
+        # Elite feature flags (visible to admins for ops debugging)
+        "elite_features": {
+            "alerts":          True,
+            "minute_forecast": True,
+            "moon_data":       True,
+            "golden_blue_hour": True,
+            "best_times":      True,
+            "ten_day_forecast": True,
+            "push_alerts":     apns_configured(),
+        },
+        "push_apns_configured": apns_configured(),
+        "cache_ttl_minutes": {
+            "current": CACHE_TTL_CURRENT_MIN,
+            "hourly":  CACHE_TTL_CURRENT_MIN,
+            "daily":   CACHE_TTL_DAILY_MIN,
+            "alerts":  CACHE_TTL_ALERTS_MIN,
+            "minute":  CACHE_TTL_MINUTE_MIN,
+        },
     }
+
+
+# ═════════════════════════════════════════════════════════════════════
+# Elite Weather Alert Subscriptions
+# ═════════════════════════════════════════════════════════════════════
+WEATHER_ALERTS_COLL = "weather_alert_subscriptions"
+ALERT_PREF_KEYS = ("severe", "clear_sky", "golden_hour")
+
+
+class _AlertPrefs(Dict[str, bool]):
+    """Just a typing aid — we accept dict[str,bool] in JSON."""
+
+
+@router.post("/weather/alerts/subscribe", status_code=201)
+async def subscribe_alerts(
+    body: Dict[str, Any],
+    user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """Subscribe the calling user (Elite-only) to push notifications for a
+    spot's weather conditions.
+
+    Request body:
+        {
+          "device_token": "<APNs hex>",
+          "lat": 30.27, "lng": -97.74,
+          "spot_id": "...",                    (optional — for deep linking)
+          "preferences": {
+            "severe":      true,
+            "clear_sky":   true,
+            "golden_hour": false
+          }
+        }
+    """
+    if not user:
+        raise HTTPException(status_code=401, detail="auth_required")
+    plan = (user or {}).get("plan") or "free"
+    if plan != "elite":
+        raise HTTPException(status_code=402, detail="elite_required")
+
+    device_token = (body.get("device_token") or "").strip()
+    if not device_token or len(device_token) < 32:
+        raise HTTPException(status_code=400, detail="invalid_device_token")
+    try:
+        lat = float(body.get("lat"))
+        lng = float(body.get("lng"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid_coords")
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        raise HTTPException(status_code=400, detail="coords_out_of_range")
+
+    spot_id = (body.get("spot_id") or "").strip() or None
+    prefs_in = body.get("preferences") or {}
+    prefs = {k: bool(prefs_in.get(k, False)) for k in ALERT_PREF_KEYS}
+    if not any(prefs.values()):
+        raise HTTPException(status_code=400, detail="at_least_one_pref_required")
+
+    user_id = user.get("id") or user.get("_id")
+    # Upsert keyed by (user, lat-rounded, lng-rounded) so re-subscribing
+    # the same spot updates rather than duplicates. Round to ~111m grid.
+    key = {
+        "user_id": user_id,
+        "lat_grid": round(lat, 3),
+        "lng_grid": round(lng, 3),
+    }
+    now = datetime.utcnow()
+    doc = {
+        **key,
+        "lat": lat, "lng": lng,
+        "spot_id": spot_id,
+        "device_token": device_token,
+        "preferences": prefs,
+        "active": True,
+        "created_at": now,
+        "updated_at": now,
+        "last_check_at": None,
+        # Per-alert-type dedupe — prevents spamming user with same alert.
+        "last_alert_at": {k: None for k in ALERT_PREF_KEYS},
+    }
+    await db[WEATHER_ALERTS_COLL].update_one(
+        key, {"$set": doc, "$setOnInsert": {"first_subscribed_at": now}},
+        upsert=True,
+    )
+    # Compose a stable subscription_id for the client to delete later.
+    sub_id = f"{user_id}:{key['lat_grid']}:{key['lng_grid']}"
+    return {
+        "ok": True,
+        "subscription_id": sub_id,
+        "preferences": prefs,
+        "lat": lat, "lng": lng,
+        "spot_id": spot_id,
+        "next_check_within_minutes": 15,
+    }
+
+
+@router.get("/weather/alerts/subscriptions")
+async def list_alerts(
+    user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """List the calling user's active weather alert subscriptions."""
+    if not user:
+        raise HTTPException(status_code=401, detail="auth_required")
+    user_id = user.get("id") or user.get("_id")
+    cur = db[WEATHER_ALERTS_COLL].find(
+        {"user_id": user_id, "active": True},
+        {"device_token": 0},  # don't echo back the token
+    ).sort("created_at", -1)
+    out: List[Dict[str, Any]] = []
+    async for d in cur:
+        d["_id"] = str(d.get("_id"))
+        out.append(d)
+    return {"ok": True, "subscriptions": out, "count": len(out)}
+
+
+@router.delete("/weather/alerts/subscribe")
+async def unsubscribe_alerts(
+    lat: float = Query(..., ge=-90, le=90),
+    lng: float = Query(..., ge=-180, le=180),
+    user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """Unsubscribe the calling user from a single spot. Idempotent."""
+    if not user:
+        raise HTTPException(status_code=401, detail="auth_required")
+    user_id = user.get("id") or user.get("_id")
+    res = await db[WEATHER_ALERTS_COLL].update_one(
+        {"user_id": user_id, "lat_grid": round(lat, 3), "lng_grid": round(lng, 3)},
+        {"$set": {"active": False, "updated_at": datetime.utcnow()}},
+    )
+    return {"ok": True, "removed": res.modified_count}
