@@ -1,0 +1,40 @@
+# EAS Build Ignore - Reduce upload size and prevent context deadline errors
+# Inherits .gitignore by default; this adds extras specific to EAS
+
+# Local caches & build artifacts
+.expo/
+.expo-shared/
+node_modules/.cache/
+dist/
+web-build/
+.metro-cache/
+.next/
+
+# Test results & reports
+/coverage/
+/test-results/
+*.log
+
+# Environment files (handled by EAS secrets)
+.env.local
+.env.development
+.env.test
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Documentation (not needed for build)
+README.md
+CHANGELOG.md
+docs/
+
+# Storybook
+.storybook/
+storybook-static/
+
+# Misc
+*.tsbuildinfo
+.eslintcache

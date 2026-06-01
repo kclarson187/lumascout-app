@@ -6,7 +6,6 @@
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "lumascout",
-    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "runtimeVersion": "1.0.0",
     "updates": {
