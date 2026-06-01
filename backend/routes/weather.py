@@ -136,6 +136,67 @@ BEST_TIMES_REQUIRES = {"hourly", "daily"}
 # but we keep generous defaults in case a route ever bypasses the gate.
 DAILY_DAYS_BY_PLAN = {"anon": 7, "free": 7, "pro": 5, "elite": 10}
 
+# ─────────────────────────────────────────────────────────────────────
+# Tier feature catalog (Jun-2026 spec)
+#
+# This is the canonical answer to "what does each tier unlock on the
+# weather payload?" — shared between the API response wrapper and the
+# /api/weather/config diagnostic. Keep this in sync with INCLUDE_BY_PLAN
+# and the strip-helper below.
+#
+# Frontend reads `available_features` + `locked_features` to decide
+# which cards to render and which to show as upgrade teasers. The set is
+# semantic (e.g. "ten_day_forecast"), not field-name-shaped, so the
+# frontend doesn't need to know about Apple's WeatherKit dataset names.
+# ─────────────────────────────────────────────────────────────────────
+TIER_FEATURE_CATALOG: Dict[str, Dict[str, Any]] = {
+    "anon": {
+        "available": ["current", "sunrise_sunset"],
+        "locked":    ["hourly", "daily", "ten_day_forecast",
+                      "severe_weather_alerts", "minute_precipitation",
+                      "sun_path_planning", "best_simple_window",
+                      "best_time_to_shoot_48h", "lunar_data"],
+        "upgrade_target": "pro",
+    },
+    "free": {
+        "available": ["current", "sunrise_sunset"],
+        "locked":    ["hourly", "daily", "ten_day_forecast",
+                      "severe_weather_alerts", "minute_precipitation",
+                      "sun_path_planning", "best_simple_window",
+                      "best_time_to_shoot_48h", "lunar_data"],
+        "upgrade_target": "pro",
+    },
+    "pro": {
+        "available": ["current", "hourly", "daily", "sunrise_sunset",
+                      "best_simple_window"],
+        "locked":    ["ten_day_forecast", "severe_weather_alerts",
+                      "minute_precipitation", "sun_path_planning",
+                      "best_time_to_shoot_48h", "lunar_data"],
+        "upgrade_target": "elite",
+    },
+    "elite": {
+        "available": ["current", "hourly", "daily", "ten_day_forecast",
+                      "sunrise_sunset", "severe_weather_alerts",
+                      "minute_precipitation", "sun_path_planning",
+                      "best_simple_window", "best_time_to_shoot_48h",
+                      "lunar_data"],
+        "locked":    [],
+        "upgrade_target": None,
+    },
+}
+
+
+def tier_feature_block(plan: str) -> Dict[str, Any]:
+    """Return {tier, available_features, locked_features, upgrade_target}
+    for the given plan. Defaults to 'anon' if plan is unknown."""
+    entry = TIER_FEATURE_CATALOG.get(plan) or TIER_FEATURE_CATALOG["anon"]
+    return {
+        "tier": "anon" if plan == "anon" else plan,
+        "available_features": list(entry["available"]),
+        "locked_features":    list(entry["locked"]),
+        "upgrade_target":     entry["upgrade_target"],
+    }
+
 # Apple's required attribution URL (must be linked from any UI showing
 # WeatherKit data — see Apple's legal terms).
 APPLE_ATTRIBUTION_URL = "https://weatherkit.apple.com/legal-attribution.html"
@@ -1067,6 +1128,7 @@ async def get_weather(
         cached.setdefault("label", cur.get("label"))
         cached.setdefault("condition", cur.get("label"))
         cached.setdefault("plan", plan)
+        cached.update(tier_feature_block(plan))
         return cached
 
     # Daily-day limit varies by plan.
@@ -1177,6 +1239,12 @@ async def get_weather(
     payload["condition"] = cur.get("label")
     payload["plan"] = plan
     payload["cached"] = False
+
+    # Jun 2026 tier wrapper — frontend reads available_features /
+    # locked_features to decide which cards to render and which to show
+    # as upgrade teasers. Backwards-compatible: existing keys at root
+    # (current, hourly, daily, etc.) are preserved alongside.
+    payload.update(tier_feature_block(plan))
     return payload
 
 
@@ -1367,3 +1435,204 @@ async def unsubscribe_alerts(
         {"$set": {"active": False, "updated_at": datetime.utcnow()}},
     )
     return {"ok": True, "removed": res.modified_count}
+
+
+# ═════════════════════════════════════════════════════════════════════
+# Public Shared-Spot Weather (Jun 2026)
+#
+# Endpoint: GET /api/public/shared/{token}/weather
+#
+# Tier-aware weather for a public Share Location page. The tier is
+# fully determined by the SHARER's plan snapshot at share-create time,
+# not by the anonymous viewer. This means a Pro photographer's shared
+# page surfaces Pro-level weather to the client, even though the client
+# is unauthenticated. Anonymous viewers cannot upgrade themselves by
+# visiting a share — the tier is fixed by the sharer's snapshot.
+# ═════════════════════════════════════════════════════════════════════
+def _normalize_sharer_plan(raw: Optional[str], was_elite: bool) -> str:
+    """Convert the share-row snapshot into one of {free, pro, elite}.
+    `was_elite` is the legacy boolean used by older share rows."""
+    if was_elite:
+        return "elite"
+    if not raw:
+        return "free"
+    raw = raw.lower().strip()
+    if raw in ("comp_elite", "elite"):
+        return "elite"
+    if raw in ("comp_pro", "pro"):
+        return "pro"
+    return "free"
+
+
+@router.get("/public/shared/{token}/weather")
+async def get_shared_spot_weather(
+    token: str,
+    include: Optional[str] = Query(None),
+    country: Optional[str] = Query(None, min_length=2, max_length=2),
+):
+    """Tier-aware weather for a public Share Location page.
+
+    Errors:
+      • 404 if the token is missing, revoked, expired, or the spot was
+        deleted. We don't differentiate (avoid token-existence oracle).
+      • 200 with `weather: null` if the spot's coordinates are unavailable.
+    """
+    from routes.spot_shares import _resolve_share_or_unavailable  # noqa: WPS433
+    share = await _resolve_share_or_unavailable(token)
+    if not share:
+        raise HTTPException(status_code=404, detail="share_not_found_or_expired")
+
+    spot = await db["spots"].find_one(
+        {"_id": share.get("spot_id")},
+        {"latitude": 1, "longitude": 1, "country_code": 1, "timezone": 1,
+         "name": 1, "_id": 0},
+    )
+    if not spot:
+        raise HTTPException(status_code=404, detail="spot_unavailable")
+
+    lat = spot.get("latitude")
+    lng = spot.get("longitude")
+    if lat is None or lng is None:
+        return {
+            "ok": True,
+            "weather": None,
+            "tier": "anon",
+            "available_features": [],
+            "locked_features": [],
+            "upgrade_target": None,
+            "as_shared_by_tier": "free",
+            "spot_name": spot.get("name"),
+        }
+
+    sharer_plan = _normalize_sharer_plan(
+        share.get("sharer_plan_at_create"),
+        bool(share.get("created_by_was_elite")),
+    )
+
+    # Build wanted set, respecting sharer tier ceiling.
+    if include:
+        wanted_raw = tuple(p.strip() for p in include.split(",") if p.strip())
+    else:
+        wanted_raw = tuple(INCLUDE_BY_PLAN.get(sharer_plan, ["current"]))
+    elite_only = {"alerts", "minute", "best_times"}
+    allowed = set(INCLUDE_TO_DATASET.keys()) | {"best_times"}
+    is_elite = sharer_plan == "elite"
+    wanted_filtered = []
+    for p in wanted_raw:
+        if p not in allowed:
+            continue
+        if p in elite_only and not is_elite:
+            continue
+        wanted_filtered.append(p)
+    if "best_times" in wanted_filtered:
+        for dep in BEST_TIMES_REQUIRES:
+            if dep not in wanted_filtered:
+                wanted_filtered.append(dep)
+    wanted = tuple(wanted_filtered) or ("current",)
+    if "alerts" in wanted and not country:
+        country = (spot.get("country_code") or "US")[:2].upper()
+    if "alerts" in wanted and not country:
+        wanted = tuple(p for p in wanted if p != "alerts")
+
+    # Cache namespaced by tier so different-tier shares of the same coord
+    # don't poison each other.
+    ckey = f"share:{sharer_plan}:" + _cache_key(lat, lng, wanted)
+    cached = await _cache_get(ckey)
+    if cached:
+        cached = _strip_elite_for_non_elite(dict(cached), sharer_plan)
+        cur = cached.get("current") or {}
+        cached.setdefault("temp_f", cur.get("temp_f"))
+        cached.setdefault("label", cur.get("label"))
+        cached.update(tier_feature_block(sharer_plan))
+        cached["as_shared_by_tier"] = sharer_plan
+        cached["spot_name"] = spot.get("name")
+        return cached
+
+    daily_limit = DAILY_DAYS_BY_PLAN.get(sharer_plan, 5)
+
+    apple_payload: Optional[Dict[str, Any]] = None
+    if weatherkit_configured():
+        datasets = [INCLUDE_TO_DATASET[w] for w in wanted if w in INCLUDE_TO_DATASET]
+        apple = await fetch_weatherkit(
+            lat, lng, datasets=datasets,
+            country_code=country, timezone=spot.get("timezone"),
+        )
+        if apple:
+            current = apple.get(DATASET_CURRENT) or {}
+            hourly_block = (apple.get(DATASET_HOURLY) or {}).get("hours") or []
+            daily_block  = (apple.get(DATASET_DAILY)  or {}).get("days")  or []
+            alerts_block = apple.get(DATASET_ALERTS)  or {}
+            minute_block = apple.get(DATASET_MINUTE)  or {}
+            apple_payload = {
+                "ok": True,
+                "source": "weatherkit",
+                "as_of": current.get("asOf"),
+                "attribution_url": APPLE_ATTRIBUTION_URL,
+            }
+            if "current" in wanted and current:
+                apple_payload["current"] = _norm_apple_current(current)
+            if "hourly" in wanted and hourly_block:
+                apple_payload["hourly"] = _norm_apple_hourly(hourly_block)
+            if "daily" in wanted and daily_block:
+                daily_norm = _norm_apple_daily(daily_block, limit=daily_limit)
+                if is_elite:
+                    _enrich_daily_with_light_windows(daily_norm)
+                apple_payload["daily"] = daily_norm
+                if sharer_plan in ("pro", "elite"):
+                    pp = _compute_photo_planning(
+                        daily_norm, apple_payload.get("hourly") or [],
+                    )
+                    if pp is not None:
+                        apple_payload["photoPlanning"] = pp
+            if "alerts" in wanted and is_elite:
+                apple_payload["alerts"] = _norm_apple_alerts(alerts_block)
+            if "minute" in wanted and is_elite:
+                m = _norm_apple_minute(minute_block)
+                if m is not None:
+                    apple_payload["minute_forecast"] = m
+            if "best_times" in wanted and is_elite:
+                bt = _compute_best_times(
+                    apple_payload.get("hourly") or [],
+                    apple_payload.get("daily")  or [],
+                )
+                if bt:
+                    apple_payload["best_times"] = bt
+
+    payload = apple_payload
+    if payload is None:
+        payload = await _fetch_open_meteo(lat, lng, wanted)
+        if payload:
+            d = payload.get("daily")
+            if isinstance(d, list):
+                payload["daily"] = d[:daily_limit]
+                if is_elite:
+                    _enrich_daily_with_light_windows(payload["daily"])
+                if sharer_plan in ("pro", "elite"):
+                    pp = _compute_photo_planning(
+                        payload["daily"], payload.get("hourly") or [],
+                    )
+                    if pp is not None:
+                        payload["photoPlanning"] = pp
+
+    if payload is None:
+        return {
+            "ok": True,
+            "weather": None,
+            **tier_feature_block(sharer_plan),
+            "as_shared_by_tier": sharer_plan,
+            "spot_name": spot.get("name"),
+        }
+
+    ttl_min = _ttl_for_wanted(wanted)
+    await _cache_put(ckey, payload, ttl_min=ttl_min)
+
+    payload = _strip_elite_for_non_elite(payload, sharer_plan)
+    cur = payload.get("current") or {}
+    payload["temp_f"] = cur.get("temp_f")
+    payload["label"]  = cur.get("label")
+    payload["cached"] = False
+    payload.update(tier_feature_block(sharer_plan))
+    payload["as_shared_by_tier"] = sharer_plan
+    payload["spot_name"] = spot.get("name")
+    return payload
+

@@ -21045,3 +21045,175 @@ agent_communication:
 
         No bugs found. Pro tier extension is production-ready.
 
+
+  - task: "Weather UI on Location Detail + tier wrapper on /api/weather + public share-weather endpoint (Jun 2026)"
+    implemented: true
+    working: "NA"
+    file: |
+      Backend:
+        /app/backend/routes/weather.py
+          • Added TIER_FEATURE_CATALOG: canonical {anon, free, pro, elite}
+            → {available_features, locked_features, upgrade_target}
+            mapping. Feature names are semantic (e.g. "ten_day_forecast",
+            "severe_weather_alerts") so the frontend doesn't need to
+            know about Apple WeatherKit dataset names.
+          • tier_feature_block(plan) helper used at every response
+            assembly point (live path, cache-hit path, share path).
+          • /api/weather response now includes tier/available_features/
+            locked_features/upgrade_target at the root, alongside the
+            existing keys. Back-compat root keys (temp_f, label, condition)
+            preserved.
+          • NEW endpoint: GET /api/public/shared/{token}/weather
+              - Resolves the share row via spot_shares' existing helper
+                (preserves access-control + revocation + expiry semantics).
+              - Derives tier from `sharer_plan_at_create` (new field —
+                see spot_shares.py change below) with fallback to legacy
+                `created_by_was_elite` boolean.
+              - Cache key NAMESPACED by sharer tier so two shares of the
+                same coord at different tiers don't poison each other.
+              - Returns the same tier wrapper PLUS `as_shared_by_tier` +
+                `spot_name` so the public page can render a sharer badge
+                ("Weather included with Pro" / "Elite Weather Planning
+                Included"). 404 on missing/revoked/expired; graceful
+                {weather:null} when spot has no coords.
+
+        /app/backend/routes/spot_shares.py
+          • New field captured at share-link creation:
+              "sharer_plan_at_create": plan_of(user).lower()
+            Snapshots the sharer's full subscription tier at the moment
+            they click "Share", so public viewers ALWAYS see the
+            sharer's tier of weather data (not their own anon tier).
+          • Legacy `created_by_was_elite` boolean preserved for
+            backwards compatibility with existing renderings.
+
+      Frontend:
+        /app/frontend/src/components/WeatherSection.tsx (NEW, ~520 lines)
+          • Drop-in tier-aware Weather card for Location Detail and
+            (future) Share Location pages.
+          • Props: lat, lng, shareToken?, onUpgrade?, compact?
+              - When shareToken is set, uses /api/public/shared/{token}/
+                weather (anonymous + sharer-tier weather).
+              - Otherwise uses /api/weather with the auth'd user's tier.
+          • Renders:
+              - severe weather alert banner (Elite only, if any active)
+              - "Shoot Weather" header + Pro/Elite tier pill
+              - Current hero row: temp + feels-like + condition + icon
+              - Quick stats row: wind, rain, cloud, visibility
+              - Sunrise/sunset row
+              - hourly strip (24 cells, horizontal scroll) — Pro+Elite
+              - daily strip (5 days for Pro, 10 for Elite)
+              - Elite teaser chips (10-day, severe alerts, minute-by-
+                minute, sun-path, 48h shoot windows) for Pro users
+              - Free→Pro upgrade button
+              - Pro→Elite upgrade button
+              - "Weather included with Pro" / "Elite Weather Planning
+                Included" badge on public-share-path
+              - " Weather" attribution on weatherkit source
+          • Uses the existing src/api singleton (auto-auth + base URL).
+          • Loading skeleton, errored fallback, and empty-coords cases
+            handled gracefully — never shows broken weather cards.
+          • SF-Symbol → Lucide icon mapping for all 30+ Apple condition
+            codes plus Open-Meteo numeric weather codes.
+
+        /app/frontend/app/spot/[id].tsx
+          • Imports WeatherSection.
+          • Renders <SectionErrorBoundary><WeatherSection lat lng/>
+            </SectionErrorBoundary> right after the "Plan This Shoot"
+            CTA and before the "Why photographers love this spot"
+            chips. Conditional on spot.latitude + longitude being
+            numbers; renders nothing when coords are missing.
+
+      Visually verified end-to-end on /spot/spot_d116a63356d2 logged
+      in as the seeded super_admin (plan='pro'):
+        • Pro tier pill shows next to "Shoot Weather"
+        • Hero shows 82°F · feels 93° · Mostly Clear with sun icon
+        • Stats row shows wind 5 mph · 0% rain
+        • Sunrise 6:34 AM · Sunset 8:29 PM
+        • NEXT 24 HOURS horizontal strip with 24 cells
+        • NEXT 5 DAYS horizontal strip with hi/lo + rain % per day
+        • ELITE UNLOCKS chip row + "Upgrade to Elite for advanced
+          shoot planning" CTA
+        • "Weather data" attribution at bottom (since source is
+          Open-Meteo until Apple Dev Portal capability is enabled)
+        • No regressions on the rest of the Spot Detail page
+
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Tier wrapper, public-share-weather endpoint, and Location
+          Detail UI all live. Visually verified on real device frame
+          (390x844 viewport) — Pro user sees full Pro card with
+          Elite teasers. No regressions on existing endpoints.
+
+          Two known runtime hazards I caught & fixed during this work:
+            1. lucide-react-native 1.x renamed AlertTriangle → TriangleAlert.
+               Fixed via `import { TriangleAlert as AlertTriangle }`.
+            2. Metro caches aggressively in dev — initial build served
+               stale fetchUrl reference even after the rename to fetchKey.
+               Fixed with a hard restart + `.metro-cache` / `.expo`
+               purge. Worth knowing if anyone reports the WeatherSection
+               briefly showing the SectionErrorBoundary fallback.
+
+          PLEASE RE-TEST (backend):
+            1. /api/weather returns tier + available_features +
+               locked_features + upgrade_target at root, for anon/free/
+               pro/elite. Each tier's catalog matches TIER_FEATURE_CATALOG
+               exactly:
+                 anon/free → upgrade_target=pro, locked has hourly+daily
+                 pro       → upgrade_target=elite, locked has ten_day/alerts/
+                             minute/sun_path/best_time_to_shoot_48h/lunar
+                 elite     → upgrade_target=null, locked is []
+            2. /api/public/shared/{token}/weather:
+                 - 404 for nonsense token
+                 - 404 for valid token where spot was deleted
+                 - 200 for valid token (use spot_shares to mint one in the
+                   test setup; the route is at /api/spots/{id}/share or
+                   POST /api/share-link — check existing tests/route names).
+                 - Returns tier wrapper based on sharer's plan, NOT the
+                   caller's. Test by minting a share AS the seeded admin
+                   user with plan='pro', then hitting the public URL
+                   unauthenticated and verifying tier='pro' on the
+                   response with hourly+daily+photoPlanning present and
+                   alerts/minute_forecast/best_times ABSENT.
+                 - `as_shared_by_tier` matches sharer plan
+                 - `spot_name` populated
+            3. No regressions on /api/weather/config — tier_features +
+               elite_features blocks still present.
+            4. Existing 35 tests in /app/backend_test_weather_elite.py
+               still pass.
+
+          DO NOT TEST:
+            - Frontend (already visually verified by main agent; ask
+              user before running expo_frontend_testing_agent).
+            - Map (gate active).
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Location Detail Weather UI shipped. Backend has:
+          • Tier wrapper on /api/weather (additive — never breaks old callers)
+          • NEW /api/public/shared/{token}/weather endpoint that derives
+            tier from the sharer's plan snapshot
+          • sharer_plan_at_create field captured on share-link creation
+            (additive — co-exists with legacy created_by_was_elite)
+
+        Frontend has:
+          • WeatherSection.tsx — drop-in, prop-driven, tier-aware
+          • Spot Detail wires it in below "Plan This Shoot"
+          • Visually verified Pro user payload renders all 5 sections
+            (header / hero / stats / 24h / 5d / Elite teasers / CTA)
+
+        Still pending follow-ups (not in this session):
+          • Public share-page UI (the public /share/* page should also
+            embed <WeatherSection shareToken=...>). Backend is ready.
+          • PDF export integration (weasyprint template — needs the
+            new endpoint wired in). Backend is ready.
+          • Apple Dev Portal: enable WeatherKit capability on the
+            Services ID `app.emergent.photofinder60669d6fa1` so the
+            source flips from `open_meteo` to `weatherkit`. This is a
+            manual click and I cannot do it from this environment.
+

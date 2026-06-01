@@ -658,6 +658,12 @@ async def create_share_link(
         # premium content survives a Pro downgrade.
         "seasonal_notes": elite_seasonal_notes,
         "created_by_was_elite": created_by_was_elite,
+        # Jun 2026 — full sharer plan snapshot. `created_by_was_elite` is
+        # kept above for backward compat with existing render paths. This
+        # new field captures Pro vs Free vs Elite vs comp_* so the public
+        # share page / PDF / weather block can render the correct
+        # PHOTOGRAPHER'S tier (not the anonymous viewer's tier).
+        "sharer_plan_at_create": (plan_of(user) or "free").lower(),
         "revoked": False,
         "revoked_at": None,
         "revoked_by_user_id": None,

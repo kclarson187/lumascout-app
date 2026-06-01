@@ -48,6 +48,7 @@ import ReportSheet from '../../src/components/ReportSheet';
 import ShotListSheet from '../../src/components/ShotListSheet';
 import ScoutAICard from '../../src/components/ScoutAICard';
 import ShootPlanSheet from '../../src/components/ShootPlanSheet';
+import WeatherSection from '../../src/components/WeatherSection';
 import DeleteConfirmSheet, { SPOT_DELETE_PRESETS } from '../../src/components/DeleteConfirmSheet';
 import { goldenHourLabel } from '../../src/utils/sun';
 import { goldenHourBrief, blueHourBrief, goldenHourPlanning, blueHourPlanning } from '../../src/utils/sun-windows';
@@ -1201,6 +1202,20 @@ function SpotDetailImpl() {
               <ChevronRight size={18} color={colors.primary} />
             </LinearGradient>
           </TouchableOpacity>
+
+          {/* ── Weather (Jun 2026, tier-aware) ─────────────────────
+              Premium WeatherKit card with current + tier-gated
+              forecasts and locked Elite teasers. Renders nothing
+              when the spot has no coords. Fetches /api/weather
+              with the user's plan from the backend wrapper. */}
+          {typeof spot?.latitude === 'number' && typeof spot?.longitude === 'number' && (
+            <SectionErrorBoundary label="weather-section">
+              <WeatherSection
+                lat={spot.latitude}
+                lng={spot.longitude}
+              />
+            </SectionErrorBoundary>
+          )}
 
           {/* ── 5. Why photographers love this spot (chips) ─────── */}
           {(() => {
