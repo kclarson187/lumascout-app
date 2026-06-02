@@ -111,9 +111,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { registerPushToken } = await import('./push');
         registerPushToken();
       } catch {}
+      // Jun 2026 — Apple IAP / RevenueCat. Tie the RC anonymous user
+      // to our own user_id so subscriptions and webhooks all use the
+      // same identifier across devices. Safe no-op on web/Android/Expo Go.
+      try {
+        const { identifyRevenueCatUser } = await import('./lib/revenuecat');
+        if (me?.user_id) await identifyRevenueCatUser(me.user_id);
+      } catch {}
     } catch {
       setUser(null);
     }
+  }, []);
+
+  // Boot RevenueCat once on app start. Safe to call repeatedly —
+  // configure() only runs once per session, and it's a no-op when
+  // the placeholder API key is still in place (graceful degrade).
+  useEffect(() => {
+    (async () => {
+      try {
+        const { bootRevenueCat } = await import('./lib/revenuecat');
+        await bootRevenueCat();
+      } catch {
+        // intentionally silent — RC failure must never block login
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -172,6 +193,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
+    // Best-effort RC sign-out so the next anonymous user doesn't
+    // inherit this account's entitlements on a shared device.
+    try {
+      const { logoutRevenueCatUser } = await import('./lib/revenuecat');
+      await logoutRevenueCatUser();
+    } catch {}
     await api.setToken(null);
     setUser(null);
   };
@@ -188,6 +215,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await api.delete('/account/delete');
     } finally {
+      try {
+        const { logoutRevenueCatUser } = await import('./lib/revenuecat');
+        await logoutRevenueCatUser();
+      } catch {}
       await api.setToken(null);
       setUser(null);
     }

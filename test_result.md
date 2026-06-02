@@ -21585,11 +21585,165 @@ agent_communication:
 
 test_plan:
   current_focus:
-    - "Self-service account deletion (Jun 2026) — DELETE /api/account/delete + anonymized public spots"
+    - "Apple IAP / RevenueCat backend — /api/billing/iap-config + /api/revenuecat/webhook (Jun 2026)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
+
+revenuecat_iap:
+  - task: "Apple IAP / RevenueCat backend — /api/billing/iap-config + /api/revenuecat/webhook (Jun 2026)"
+    implemented: true
+    working: true
+    file: "/app/backend/routes/revenuecat.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          Comprehensive end-to-end verification PASSED (28/30 assertions,
+          0 RC-specific failures). Test harness preserved at
+          /app/backend_test_rc.py (drives the public BACKEND_URL and
+          validates via motor against the production
+          photoscout_database). Run executed 2026-06-02.
+
+          === 1. GET /api/billing/iap-config (placeholder mode) ===
+          • 1a PASS — exact shape match:
+              {"ios":{"configured":false,"api_key":null,
+              "entitlements":["pro","elite"],"offering_id":"default",
+              "product_ids":{"pro_monthly":"com.lumascout.pro.monthly",
+              "pro_annual":"com.lumascout.pro.annual",
+              "elite_monthly":"com.lumascout.elite.monthly",
+              "elite_annual":"com.lumascout.elite.annual"}},
+              "stripe_platforms":["web","android"],
+              "ios_iap_enabled":false}
+          • 1b PASS — public (no Authorization header required)
+          • 1c PASS — placeholder string "__SET_IN_RC_DASHBOARD__"
+              never leaked into api_key (returns null)
+
+          === 2a/2b. Webhook in placeholder mode (env still placeholder) ===
+          • 2a PASS — no Auth header → 503 detail="webhook_not_configured"
+              (placeholder check fires before missing-header check, by
+              design; the code in _verify_webhook_auth lines 127-132)
+          • 2b PASS — wrong "Bearer wrong-secret" → 503 (placeholder mode
+              rejects everything — never silently accepts events)
+
+          === 2c. Webhook in configured mode ===
+          Set REVENUECAT_WEBHOOK_AUTH="Bearer test-secret-12345" in
+          /app/backend/.env and `supervisorctl restart backend`. Verified:
+          • missing Auth → 401 detail="missing_authorization" ✅
+          • wrong Auth ("Bearer wrong") → 401 detail="invalid_authorization" ✅
+          • valid Auth + unknown app_user_id → 200
+              {"ok":true,"applied":false,"reason":"user_not_found"} ✅
+          • Backend logs show the expected lines:
+              revenuecat_webhook_received type=INITIAL_PURCHASE
+                  app_user_id=user_nonexistent_xyz
+                  product_id=com.lumascout.pro.monthly store=APP_STORE
+              revenuecat_webhook_unknown_user app_user_id=...
+                  type=INITIAL_PURCHASE
+
+          === 2d. Full happy path with real test user ===
+          Registered rc_test_<rand>@lumascout-qa.com / TestPass123!
+          → user_id=user_3f8229c8ce47.
+          • INITIAL_PURCHASE(pro) → 200 {"applied":true,"action":"grant",
+              "plan":"pro"}
+            DB: plan="pro", subscription_source="revenuecat",
+                subscription_status="active",
+                revenuecat_app_user_id="user_3f8229c8ce47",
+                revenuecat_last_event="INITIAL_PURCHASE",
+                revenuecat_product_id="com.lumascout.pro.monthly",
+                revenuecat_store="APP_STORE" ✅
+          • RENEWAL(elite) → plan upgraded to "elite" ✅
+          • EXPIRATION → plan demoted to "free",
+              subscription_status="expired",
+              subscription_source still "revenuecat" ✅
+
+          === 3. Stripe-source protection (CRITICAL) ===
+          Set test user to subscription_source="stripe",
+          subscription_status="active", plan="elite". Sent an RC
+          EXPIRATION event for that user.
+          • Response: {"ok":true,"applied":false,
+              "reason":"other_source_active"} ✅
+          • DB unchanged: plan=elite, subscription_source=stripe ✅
+          • Backend log: "revenuecat_webhook_skipped_for_other_source
+              user_id=... source=stripe status=active"
+          RC events will NEVER demote a Stripe customer. PASS.
+
+          === 4. Comp protection ===
+          Set test user to subscription_source="comp", plan="elite".
+          Sent INITIAL_PURCHASE(pro).
+          • Response: {"applied":false,"reason":"other_source_active"} ✅
+          • DB unchanged: plan=elite, subscription_source=comp ✅
+
+          === 5. Idempotency ===
+          Sent the same INITIAL_PURCHASE(pro) event twice. Both responses
+          identical: {"ok":true,"applied":true,"action":"grant",
+          "plan":"pro"}. No errors. DB rewritten with same values. ✅
+
+          === 6. Event types walkthrough (all on one real user) ===
+          • 6a INITIAL_PURCHASE(pro) → plan="pro" ✅
+          • 6b RENEWAL(pro) → plan="pro" (unchanged) ✅
+          • 6c PRODUCT_CHANGE(elite) → plan="elite" ✅
+          • 6d CANCELLATION → ignored (action="ignore",
+              applied=false, reason="ignored_cancellation"),
+              plan="elite" still ✅
+          • 6e EXPIRATION → plan="free", subscription_status="expired" ✅
+          • 6f UNCANCELLATION(elite) → plan="elite",
+              subscription_status="active" ✅
+          • 6g REFUND → plan="free" ✅
+
+          === 7. No regression on existing endpoints ===
+          • 7a GET /api/plans → 200, returns free/pro/elite (Stripe
+              pricing intact) ✅
+          • 7b POST /api/billing/checkout (auth'd, plan=pro) → 400 from
+              Stripe with detail "The provided key 'rk_live_...H2KUOI'
+              does not have the required permissions for this endpoint."
+              **NOT a regression from the RC migration** — this is the
+              live restricted Stripe key in backend/.env missing scope
+              for customers.create / checkout.session.create. Endpoint
+              code is reachable, auth works, payload validation works,
+              the Stripe call executes. Pre-existing Stripe-key
+              permissions issue. Reported separately so main agent can
+              decide whether to rotate the rk_live_ to a broader scope.
+          • 7c POST /api/stripe/webhook with bad signature → 400
+              "Invalid webhook: Unable to extract timestamp and
+              signatures from header" ✅ (signature validation intact)
+          • 7d GET /api/weather?lat=30.27&lng=-97.74 → 200 (tier-aware,
+              anon access returns current weather) ✅ — initial harness
+              run used `lon=` instead of `lng=` and got 422; corrected
+              re-run with `lng=` returns 200, so weather is fine.
+          • 7e GET /api/spots/<unknown_id> → 404 (no 5xx) ✅
+          • 7f DELETE /api/account/delete (no Authorization) → 401 ✅
+
+          === 8. Restore placeholder state ===
+          Reverted REVENUECAT_WEBHOOK_AUTH to
+          "__SET_REVENUECAT_WEBHOOK_AUTH__" in /app/backend/.env and
+          restarted backend. Verified webhook now returns 503
+          detail="webhook_not_configured" again. System is back in
+          placeholder mode for the user to fill in real values. ✅
+
+          === Summary ===
+          • RC migration backend is App Store Guideline 3.1.1 compliant
+            and Stripe-safe. The Stripe-source guard (test 3) is the
+            critical protection and PASSES — Stripe customers can never
+            be silently demoted by a forged or replayed RC event.
+          • Idempotency holds (test 5).
+          • All event types map correctly (test 6).
+          • iap-config degrades gracefully with placeholders (test 1).
+          • Webhook refuses to process anything in placeholder mode
+            (tests 2a/2b/8).
+          • No regressions in /plans, /stripe/webhook, /weather, /spots,
+            /account/delete (test 7). The /billing/checkout 400 is a
+            pre-existing Stripe restricted-key permission issue,
+            unrelated to this migration.
+
+          Cleanup: all 5 ephemeral test users were deleted from
+          db.users at the end of the run. Test creds in
+          /app/memory/test_credentials.md NOT touched.
+
+          No RC-related issues found. No retest needed.
 
 self_service_account_deletion:
   - task: "Self-service account deletion (Jun 2026) — DELETE /api/account/delete + anonymized public spots"
@@ -21757,3 +21911,37 @@ agent_communication:
 
         Recommendation: feature is ready to ship. No follow-up dev work
         required for this scope.
+
+
+agent_communication:
+    -agent: "testing"
+    -message: |
+      ✅ Apple IAP / RevenueCat backend verified end-to-end (2026-06-02).
+      28/30 assertions PASS, 0 RC-specific failures. Both initial
+      "FAILs" were unrelated to the RC migration:
+        • 7b /billing/checkout 400 — live Stripe restricted key
+          rk_live_...H2KUOI lacks scope for customers.create /
+          checkout.session.create. Pre-existing Stripe config issue.
+          Main agent may want to rotate the key to a broader scope or
+          enable the required permissions in the Stripe dashboard.
+        • 7d /weather initial 422 — harness bug (used `lon=` instead
+          of `lng=`); re-ran with correct param → 200. Endpoint is fine.
+
+      Critical Stripe-source protection (test 3) PASSES — a forged or
+      replayed RC EXPIRATION event against a Stripe subscriber is
+      rejected with `applied:false, reason:"other_source_active"` and
+      the DB is untouched.
+
+      All event types map correctly (INITIAL_PURCHASE, RENEWAL,
+      PRODUCT_CHANGE, CANCELLATION, EXPIRATION, UNCANCELLATION, REFUND).
+      Idempotency holds (test 5). Comp-source protection holds (test 4).
+      Placeholder mode degrades gracefully (1, 2a, 2b, 8).
+
+      Test harness committed at /app/backend_test_rc.py — re-runnable.
+      Backend .env left in placeholder state
+      (REVENUECAT_WEBHOOK_AUTH=__SET_REVENUECAT_WEBHOOK_AUTH__) and
+      backend restarted. Five ephemeral test users were cleaned up
+      from db.users.
+
+      No retest needed for RC routes. Recommend the main agent
+      summarize and finish.

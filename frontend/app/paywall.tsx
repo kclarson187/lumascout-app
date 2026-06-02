@@ -3,13 +3,22 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Pressable,
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ChevronLeft, Check, Crown, Sparkles } from 'lucide-react-native';
+import { ChevronLeft, Check, Crown, Sparkles, RotateCcw } from 'lucide-react-native';
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import { colors, font, space, radii } from '../src/theme';
 import { Button } from '../src/components/Button';
 import { api, formatApiError } from '../src/api';
 import { useAuth } from '../src/auth';
+import {
+  bootRevenueCat,
+  shouldUseIapForPurchases,
+  fetchOfferings,
+  purchasePackage,
+  restorePurchases,
+  classifyProductId,
+  getCachedIapConfig,
+} from '../src/lib/revenuecat';
 
 const HERO = require('../assets/brand/branding-hero.png');
 
@@ -48,6 +57,14 @@ function PaywallImpl() {
   const annualEnabled = true;
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
+  // Jun 2026 — Apple IAP via RevenueCat. We keep Stripe for web/Android.
+  // On iOS we render Apple IAP buttons + a "Restore Purchases" link.
+  // If RC isn't configured yet (placeholder API key), we degrade with
+  // a clear message instead of silently falling back to Stripe
+  // (which would risk an App Store rejection).
+  const [iosIapReady, setIosIapReady] = useState<boolean>(false);
+  const [iapOffering, setIapOffering] = useState<any | null>(null);
+  const [restoring, setRestoring] = useState<boolean>(false);
 
   useEffect(() => {
     (async () => {
@@ -61,6 +78,34 @@ function PaywallImpl() {
       }
     })();
   }, []);
+
+  // Boot RevenueCat + load offerings on iOS. Web/Android skip.
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    (async () => {
+      // Re-boot is safe — singleton-guarded inside the helper.
+      await bootRevenueCat();
+      const ready = shouldUseIapForPurchases();
+      setIosIapReady(ready);
+      if (!ready) return;
+      const offering = await fetchOfferings();
+      setIapOffering(offering);
+    })();
+  }, []);
+
+  /**
+   * Find the IAP package corresponding to a given backend plan slug
+   * ('pro' or 'elite') AND the currently selected billing cycle.
+   * Returns null when RC isn't ready or the package isn't configured.
+   */
+  const findIapPackage = (planKey: string): any | null => {
+    if (!iapOffering?.availablePackages?.length) return null;
+    for (const pkg of iapOffering.availablePackages) {
+      const cls = classifyProductId(pkg?.product?.identifier || '');
+      if (cls && cls.tier === planKey && cls.cycle === cycle) return pkg;
+    }
+    return null;
+  };
 
   const tryPlan = async (plan: string) => {
     if (plan === user?.plan) return;
@@ -80,10 +125,47 @@ function PaywallImpl() {
       }
       return;
     }
-    // Upgrade → Stripe Checkout in an in-app browser.
+    // Upgrade flow. Routing differs by platform (Apple Guideline 3.1.1):
+    //   • iOS + RC configured  → Apple IAP via RevenueCat. We MUST NOT
+    //     route iOS users to Stripe Checkout for digital subscriptions.
+    //   • iOS + RC NOT configured (placeholder key, Expo Go, RC outage)
+    //     → polite "in-app purchases not yet available" instead of
+    //     silently falling back to Stripe (which Apple would reject).
+    //   • Web / Android → Stripe Checkout as before.
     setBusy(plan);
     try {
-      // Build origin URL from current page (web) or a canonical deep link (native).
+      if (Platform.OS === 'ios') {
+        if (!iosIapReady) {
+          Alert.alert(
+            'In-app purchases not yet available',
+            "We're finalizing our App Store setup. Please try again later, or contact support@lumascout.app and we'll help you get on " + plan.toUpperCase() + ".",
+          );
+          return;
+        }
+        const pkg = findIapPackage(plan);
+        if (!pkg) {
+          Alert.alert(
+            'Plan not available',
+            'This plan isn\u2019t available in the App Store yet. Please try a different plan or contact support.',
+          );
+          return;
+        }
+        const res = await purchasePackage(pkg);
+        if ('userCancelled' in res && res.userCancelled) return;
+        if (!res.ok) {
+          Alert.alert('Purchase failed', 'We couldn\u2019t complete your purchase. Please try again later.');
+          return;
+        }
+        // Success — optimistically refresh our own user (the RC webhook
+        // to our backend will also fire within seconds).
+        await refresh();
+        Alert.alert('Welcome to ' + (res.tier?.toUpperCase() || 'your new plan') + '!',
+          'Your subscription is now active.');
+        router.replace('/billing');
+        return;
+      }
+
+      // Web / Android — Stripe Checkout in an in-app browser.
       let origin: string | undefined;
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         origin = window.location.origin;
@@ -103,6 +185,40 @@ function PaywallImpl() {
       Alert.alert('Could not start checkout', formatApiError(e));
     } finally {
       setBusy(null);
+    }
+  };
+
+  /**
+   * Apple-required "Restore Purchases" handler. Only meaningful on
+   * iOS — on web/Android the Stripe portal/account already exposes
+   * past subscriptions.
+   */
+  const onRestorePurchases = async () => {
+    if (Platform.OS !== 'ios') return;
+    if (!iosIapReady) {
+      Alert.alert(
+        'In-app purchases not yet available',
+        'Restore Purchases will be available once our App Store setup is complete.',
+      );
+      return;
+    }
+    setRestoring(true);
+    try {
+      const res = await restorePurchases();
+      if (!res.ok) {
+        Alert.alert('Couldn\u2019t restore purchases', 'No active subscription was found on this Apple ID. If you believe this is an error, please contact support.');
+        return;
+      }
+      if (res.tier === 'free') {
+        Alert.alert('No active subscription', 'No active LumaScout subscription was found on this Apple ID.');
+        return;
+      }
+      await refresh();
+      Alert.alert('Restored', `Your ${res.tier.toUpperCase()} subscription has been restored.`);
+    } catch (_e) {
+      Alert.alert('Couldn\u2019t restore purchases', 'Please try again or contact support.');
+    } finally {
+      setRestoring(false);
     }
   };
 
@@ -256,8 +372,39 @@ function PaywallImpl() {
         </View>
 
         <Text style={styles.fine}>
-          Secure billing by Stripe. Cancel anytime from Billing & Subscription. Monthly plans only.
+          {Platform.OS === 'ios'
+            ? 'iOS purchases are processed through Apple. Manage or cancel anytime in Settings → Apple ID → Subscriptions. Subscription auto-renews until canceled.'
+            : 'Secure billing by Stripe. Cancel anytime from Billing & Subscription. Monthly plans only.'}
         </Text>
+
+        {/* Apple REQUIRES a user-initiated Restore Purchases button on
+            any app selling non-consumable IAPs / subscriptions. We only
+            render it on iOS — on web/Android the user's Stripe account
+            already exposes their billing history. */}
+        {Platform.OS === 'ios' && (
+          <View style={styles.restoreWrap}>
+            <Pressable
+              onPress={onRestorePurchases}
+              disabled={restoring}
+              style={({ pressed }) => [
+                styles.restoreBtn,
+                pressed && { opacity: 0.7 },
+                restoring && { opacity: 0.5 },
+              ]}
+              testID="paywall-restore"
+            >
+              <RotateCcw size={14} color={colors.text} />
+              <Text style={styles.restoreTxt}>
+                {restoring ? 'Restoring…' : 'Restore Purchases'}
+              </Text>
+            </Pressable>
+            {!iosIapReady && (
+              <Text style={styles.iapPendingTxt}>
+                In-app purchases are not yet enabled. Please check back soon.
+              </Text>
+            )}
+          </View>
+        )}
 
         <Text style={styles.compareHead}>Compare plans</Text>
         <View style={styles.compare}>
@@ -377,4 +524,19 @@ const styles = StyleSheet.create({
   cmpHeadTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 11 },
   cmpCell: { flex: 1, color: colors.text, fontFamily: font.bodyMedium, fontSize: 12, textAlign: 'center', paddingVertical: 10, paddingHorizontal: 4 },
   cmpCellMuted: { color: colors.textTertiary },
-  cmpCellYes: { color: colors.text, fontFamily: font.bodyBold } });
+  cmpCellYes: { color: colors.text, fontFamily: font.bodyBold },
+
+  // Restore Purchases — Apple requires a clearly-visible button for
+  // any app selling non-consumable IAPs / subscriptions.
+  restoreWrap: { marginTop: space.lg, alignItems: 'center', gap: 8 },
+  restoreBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 16, paddingVertical: 10,
+    borderRadius: radii.pill,
+    borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.surface,
+    minHeight: 44, // Apple min touch target
+  },
+  restoreTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 13 },
+  iapPendingTxt: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, textAlign: 'center', paddingHorizontal: space.xl, lineHeight: 16 },
+});
