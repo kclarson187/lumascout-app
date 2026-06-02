@@ -80,9 +80,10 @@ async function openUrl(url: string) {
 // Screen
 // ──────────────────────────────────────────────────────────────────────────────
 export default function SettingsHub() {
-  const { user, logout, refresh } = useAuth() as any;
+  const { user, logout, refresh, deleteAccount } = useAuth() as any;
   const [stats, setStats] = useState<{ saved: number; followers: number; views_7d: number } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState(false);
 
   const plan: Plan = ((user?.plan as Plan) || 'free');
   const userIsPaid = entitlementsIsPaid(user);
@@ -251,14 +252,65 @@ export default function SettingsHub() {
     {
       key: 'delete', icon: Trash2, title: 'Delete account',
       subtitle: 'Permanently delete your data',
-      onPress: () => Alert.alert(
-        'Delete account',
-        'This cannot be undone. All spots, packs, saves, messages, and purchases will be removed. Are you sure?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Contact us to proceed', onPress: () => openUrl('mailto:support@lumascout.app?subject=Delete%20my%20LumaScout%20account') },
-        ],
-      ),
+      onPress: () => {
+        // App Store-compliant in-app account deletion (Apple Guideline
+        // 5.1.1(v)). Two-stage confirmation to prevent accidental
+        // destructive actions: (1) explain what will happen, (2)
+        // require a final "This cannot be undone" tap.
+        Alert.alert(
+          'Delete your account?',
+          'Your profile, saved spots, collections, weather alerts, and account access will be deleted. Public locations or photos you contributed may remain visible to help the community, but your personal information will be removed.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Delete Account',
+              style: 'destructive',
+              onPress: () => {
+                // ── Stage 2: final irreversible confirmation ──────
+                Alert.alert(
+                  'This cannot be undone.',
+                  'Are you absolutely sure you want to delete your LumaScout account?',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                      text: 'Delete forever',
+                      style: 'destructive',
+                      onPress: async () => {
+                        if (deletingAccount) return;
+                        setDeletingAccount(true);
+                        try {
+                          await deleteAccount();
+                          // On success the auth context has already
+                          // cleared the token + user. Route the user
+                          // back to the welcome/login screen.
+                          try { router.replace('/(auth)/login' as any); } catch {}
+                          // Best-effort success toast — Alert.alert
+                          // is the safest cross-platform option here.
+                          setTimeout(() => {
+                            try {
+                              Alert.alert(
+                                'Account deleted',
+                                'Your LumaScout account has been deleted.',
+                              );
+                            } catch {}
+                          }, 250);
+                        } catch (_err) {
+                          Alert.alert(
+                            'Couldn\u2019t delete your account',
+                            'We couldn\u2019t delete your account. Please try again or contact support.',
+                          );
+                        } finally {
+                          setDeletingAccount(false);
+                        }
+                      },
+                    },
+                  ],
+                );
+              },
+            },
+          ],
+        );
+      },
       destructive: true },
   ];
 

@@ -1251,9 +1251,14 @@ def _render_public_html(ctx: Dict[str, Any], canonical_url: Optional[str] = None
     personal_note = (share.get("personal_note") or "").strip()
 
     # Friendly photographer attribution line: "Shared by Keith Larson"
-    owner_name = (
-        owner.get("display_name") or owner.get("name") or owner.get("username") or ""
-    ).strip()
+    # When the sharer has self-deleted their account, owner is None — fall
+    # back to the generic LumaScout attribution so the page still renders.
+    if owner:
+        owner_name = (
+            owner.get("display_name") or owner.get("name") or owner.get("username") or ""
+        ).strip()
+    else:
+        owner_name = ""
     by_line = f"Shared by {_esc(owner_name)}" if owner_name else "Shared by a LumaScout photographer"
 
     badges = []

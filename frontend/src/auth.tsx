@@ -80,6 +80,14 @@ type AuthState = {
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
   updateProfile: (patch: Partial<User>) => Promise<void>;
+  /**
+   * App Store-compliant self-service account deletion (Jun 2026).
+   * Calls DELETE /api/account/delete on the backend (which anonymizes
+   * approved public spots and purges everything else), then clears the
+   * local session. The caller is responsible for routing the user to
+   * the welcome/login screen after this resolves.
+   */
+  deleteAccount: () => Promise<void>;
 };
 
 const Ctx = createContext<AuthState | null>(null);
@@ -168,13 +176,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
+  /**
+   * App Store-compliant account deletion (Jun 2026).
+   * Calls DELETE /api/account/delete, then clears the local session.
+   * Whoever calls this is responsible for routing the user to the
+   * welcome/login screen on success.
+   */
+  const deleteAccount = async () => {
+    // Backend route is idempotent — if it returns 200, the account is
+    // gone (or was already gone). We always clear local state after.
+    try {
+      await api.delete('/account/delete');
+    } finally {
+      await api.setToken(null);
+      setUser(null);
+    }
+  };
+
   const updateProfile = async (patch: Partial<User>) => {
     const updated = await api.patch('/auth/me', patch);
     setUser(updated);
   };
 
   return (
-    <Ctx.Provider value={{ user, loading, login, register, googleExchange, logout, refresh, updateProfile }}>
+    <Ctx.Provider value={{ user, loading, login, register, googleExchange, logout, refresh, updateProfile, deleteAccount }}>
       {children}
     </Ctx.Provider>
   );

@@ -696,8 +696,13 @@ async def get_spot(spot_id: str, viewer: Optional[dict] = Depends(get_optional_u
     # Single-row call (per_spot=3) — does one indexed Mongo lookup.
     await attach_sample_photos([view])
 
-    # owner info
+    # owner info — substitute anonymized placeholder if the user account
+    # was deleted (hard-delete leaves owner_user_id pointing at a missing
+    # row; self-delete additionally sets `creator_anonymized` on the spot).
     owner = await db.users.find_one({"user_id": spot["owner_user_id"]}, {"_id": 0, "password_hash": 0})
+    if spot.get("creator_anonymized") or owner is None or owner.get("deleted"):
+        from routes.account_deletion import anonymized_owner_placeholder
+        owner = anonymized_owner_placeholder()
     view["owner"] = owner
 
     # saved state
@@ -707,11 +712,13 @@ async def get_spot(spot_id: str, viewer: Optional[dict] = Depends(get_optional_u
             {"user_id": viewer["user_id"], "spot_id": spot_id}
         ) > 0
 
-    # reviews
+    # reviews — substitute placeholder for any reviewer whose account
+    # was deleted (find_one returns None for hard-deleted users).
+    from routes.account_deletion import anonymized_owner_placeholder as _anon_owner
     reviews = await db.spot_reviews.find({"spot_id": spot_id}, {"_id": 0}).sort("created_at", -1).to_list(50)
     for r in reviews:
         u = await db.users.find_one({"user_id": r["user_id"]}, {"_id": 0, "name": 1, "avatar_url": 1, "username": 1})
-        r["user"] = u
+        r["user"] = u or _anon_owner()
     view["reviews"] = reviews
     view["review_count"] = len(reviews)
     view["average_rating"] = round(sum(r["overall_rating"] for r in reviews) / len(reviews), 1) if reviews else None
@@ -720,7 +727,7 @@ async def get_spot(spot_id: str, viewer: Optional[dict] = Depends(get_optional_u
     checkins = await db.spot_checkins.find({"spot_id": spot_id}, {"_id": 0}).sort("created_at", -1).to_list(10)
     for c in checkins:
         u = await db.users.find_one({"user_id": c["user_id"]}, {"_id": 0, "name": 1, "avatar_url": 1, "username": 1})
-        c["user"] = u
+        c["user"] = u or _anon_owner()
     view["checkins"] = checkins
 
     # similar spots (same shoot types, within 100km)

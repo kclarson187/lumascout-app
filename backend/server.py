@@ -7936,6 +7936,11 @@ from routes import shoot_plan as _shoot_plan_routes  # noqa: E402
 # Open-Meteo fallback. See routes/weather.py.
 from routes import weather as _weather_routes  # noqa: E402
 
+# Jun 2026 — App Store-compliant self-service in-app account deletion.
+# See routes/account_deletion.py for the full contract (preserves
+# approved public spots anonymized; removes everything else).
+from routes import account_deletion as _account_deletion_routes  # noqa: E402
+
 app.include_router(_scout_ai_routes.router)
 app.include_router(_support_routes.router)
 app.include_router(_super_admin_routes.router)
@@ -7955,6 +7960,7 @@ app.include_router(_parks_routes.router)
 app.include_router(_spot_shares_routes.router)
 app.include_router(_shoot_plan_routes.router)
 app.include_router(_weather_routes.router)
+app.include_router(_account_deletion_routes.router)
 # CR Items 7 & 8 (May 2026) — smart-link share endpoints (HTML responses,
 # returned outside of `api` APIRouter because they're consumed by external
 # clients pasting the URL into iMessage / Twitter / Slack and need full
