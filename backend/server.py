@@ -6236,9 +6236,15 @@ async def _apply_subscription_to_user(sub: dict):
 
 
 @app.post("/api/webhook/stripe")
+@app.post("/api/stripe/webhook")
 async def stripe_webhook(request: Request):
     """Stripe webhook receiver. Mounted on the raw app (not the /api router)
     because the body must NOT be touched before signature verification.
+
+    Two paths are accepted (alias): `/api/webhook/stripe` (legacy) and
+    `/api/stripe/webhook` (Jun 2026, registered in the live Stripe
+    Dashboard). Both hit the same handler so the dashboard endpoint URL
+    can be moved without code changes.
 
     Handles: checkout.session.completed, customer.subscription.created/updated/
     deleted, invoice.payment_failed, invoice.paid.
