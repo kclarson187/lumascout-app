@@ -173,6 +173,10 @@ async def run_once() -> int:
                 norm_alerts=_norm_apple_alerts,
                 enrich_light=_enrich_daily_with_light_windows,
                 compute_best=_compute_best_times,
+                ds_current=DATASET_CURRENT,
+                ds_hourly=DATASET_HOURLY,
+                ds_daily=DATASET_DAILY,
+                ds_alerts=DATASET_ALERTS,
             )
             count += 1
         except Exception as e:
@@ -185,6 +189,7 @@ async def _process_subscription(
     weatherkit_configured, fetch_weatherkit, send_apns,
     norm_current, norm_hourly, norm_daily, norm_alerts,
     enrich_light, compute_best,
+    ds_current: str, ds_hourly: str, ds_daily: str, ds_alerts: str,
 ) -> None:
     """Evaluate triggers for one subscription and send pushes."""
     prefs: Dict[str, bool] = sub.get("preferences") or {}
@@ -204,7 +209,7 @@ async def _process_subscription(
     if weatherkit_configured():
         apple = await fetch_weatherkit(
             lat, lng,
-            datasets=[DATASET_CURRENT, DATASET_HOURLY, DATASET_DAILY, DATASET_ALERTS],
+            datasets=[ds_current, ds_hourly, ds_daily, ds_alerts],
             country_code="US",  # required for alerts; harmless elsewhere
         )
 
@@ -212,11 +217,11 @@ async def _process_subscription(
     hourly: List[Dict[str, Any]] = []
     alerts: List[Dict[str, Any]] = []
     if apple:
-        hourly = norm_hourly((apple.get(DATASET_HOURLY) or {}).get("hours") or [])
-        daily  = norm_daily((apple.get(DATASET_DAILY)  or {}).get("days")  or [],
+        hourly = norm_hourly((apple.get(ds_hourly) or {}).get("hours") or [])
+        daily  = norm_daily((apple.get(ds_daily)  or {}).get("days")  or [],
                             limit=10)
         enrich_light(daily)
-        alerts = norm_alerts(apple.get(DATASET_ALERTS) or {})
+        alerts = norm_alerts(apple.get(ds_alerts) or {})
 
     now = datetime.utcnow()
     last_at = sub.get("last_alert_at") or {}
