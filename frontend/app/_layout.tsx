@@ -113,6 +113,10 @@ function Gate() {
     const inAuth = seg0 === '(auth)';
     const inOnboarding = seg0 === 'onboarding';
     const inAuthCb = seg0 === 'auth-callback';
+    // App Store marketing asset routes — public so the marketing team
+    // can capture screenshots in a browser without authenticating.
+    // Cosmetic only; renders no real user data.
+    const inScreenshot = seg0 === 'screenshot';
     // May 2026 — profile-setup route lives at /onboarding/profile-setup
     const onProfileSetup = inOnboarding && seg1 === 'profile-setup';
     // Jun 2025 — onboarding v2 basics route. Blocking step shown to new
@@ -120,7 +124,7 @@ function Gate() {
     // side via `basics_complete: true` and therefore never see this.
     const onBasics = inOnboarding && seg1 === 'basics';
 
-    if (!user && !inAuth && !inOnboarding && !inAuthCb) {
+    if (!user && !inAuth && !inOnboarding && !inAuthCb && !inScreenshot) {
       router.replace('/onboarding');
       return;
     }
