@@ -1,65 +1,145 @@
 /**
- * AppleSoonButton — "Continue with Apple — Coming soon" stub.
+ * AppleSignInButton — Real Sign In with Apple (SIWA).
  *
- * Phase 1 onboarding ships without SIWA wired (no app.json capability
- * change, no Apple Portal config, no backend SIWA verification). The
- * button is rendered for visual completeness (especially on iOS where
- * users expect Apple Sign-In first) but is intentionally non-blocking:
- * tapping it shows a one-line toast and never crashes the app.
+ * Phase A (App Store blocker, Jun 2026).
+ *
+ * Replaces the previous "coming soon" placeholder with a real native
+ * Apple Sign-In button. We keep the export name `AppleSoonButton` so
+ * the import sites in (auth)/login.tsx and (auth)/register.tsx don't
+ * need to change.
+ *
+ * Behaviour:
+ *   • iOS only — renders the native AppleAuthenticationButton.
+ *   • Non-iOS (web/Android) — renders nothing.
+ *   • In Expo Go / web preview, the underlying capability check fails
+ *     and we render nothing too. Apple sign-in only works in a dev
+ *     client or production iOS build.
+ *   • Tapping → runs the full nonce → identityToken → backend dance.
+ *     On success the caller's `onSuccess` callback receives the
+ *     {token, user} payload (or we wire it directly via auth context).
+ *
+ * Used by app/(auth)/login.tsx and app/(auth)/register.tsx, placed
+ * ABOVE Google per Apple HIG when both options are offered.
  */
-import React from 'react';
-import { TouchableOpacity, Text, StyleSheet, Platform, View, ToastAndroid, Alert } from 'react-native';
-import { colors, font, space, radii } from '../theme';
+import React, { useEffect, useState } from 'react';
+import {
+  Platform,
+  StyleSheet,
+  ActivityIndicator,
+  View,
+  Alert,
+  TouchableOpacity,
+  Text,
+} from 'react-native';
+import * as AppleAuthentication from 'expo-apple-authentication';
+import { router } from 'expo-router';
+import { useAuth } from '../auth';
+import { runAppleSignIn, isAppleSignInAvailable } from '../apple-signin';
+import { colors, font, radii } from '../theme';
 
-function notifyComingSoon() {
-  const msg = 'Apple Sign-In is coming soon. Use Google or Email for now.';
-  if (Platform.OS === 'android') {
-    ToastAndroid.show(msg, ToastAndroid.SHORT);
-  } else {
-    Alert.alert('Coming soon', msg);
+type Props = {
+  testID?: string;
+  /** Where to navigate after a successful sign-in. Defaults to tabs root. */
+  onSuccessRoute?: string;
+};
+
+export function AppleSoonButton({ testID = 'apple-signin', onSuccessRoute }: Props) {
+  const { appleExchange, refresh } = useAuth();
+  const [available, setAvailable] = useState<boolean>(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (Platform.OS !== 'ios') return;
+    isAppleSignInAvailable()
+      .then((ok) => { if (!cancelled) setAvailable(ok); })
+      .catch(() => { if (!cancelled) setAvailable(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Hide on web, Android, and on iOS devices where the capability isn't
+  // available (e.g. running in Expo Go without the dev-client build).
+  if (Platform.OS !== 'ios' || !available) {
+    return null;
   }
+
+  const handlePress = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await runAppleSignIn();
+      if (r.ok) {
+        await appleExchange(r.token);
+        try { await refresh(); } catch {}
+        // Caller may have already wrapped this with navigation; if a
+        // route override was passed in we honour it, otherwise default
+        // to the tabs root.
+        router.replace((onSuccessRoute || '/(tabs)') as any);
+        return;
+      }
+      if (r.reason === 'canceled' || r.reason === 'unsupported') return;
+      Alert.alert(
+        "Couldn't sign in with Apple",
+        r.message || 'Please try again, or use Google or Email instead.',
+      );
+    } catch (e: any) {
+      Alert.alert(
+        "Couldn't sign in with Apple",
+        String(e?.message || e || 'Please try again.'),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (busy) {
+    return (
+      <View style={styles.busyBtn} testID={`${testID}-busy`}>
+        <ActivityIndicator size="small" color={colors.textInverse} />
+        <Text style={styles.busyTxt}>Signing in…</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ width: '100%' }}>
+      <AppleAuthentication.AppleAuthenticationButton
+        buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+        buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE_OUTLINE}
+        cornerRadius={radii.md}
+        style={styles.btn}
+        onPress={handlePress}
+        testID={testID}
+      />
+    </View>
+  );
 }
 
-export function AppleSoonButton({ testID = 'apple-soon' }: { testID?: string }) {
+/**
+ * Fallback non-native button used in any caller that wants a custom
+ * appearance (e.g., if Apple's native button ever fails to render in
+ * a future SDK). Kept for completeness but not currently used.
+ */
+export function AppleSignInTextButton({ onPress, testID = 'apple-signin-text' }: { onPress?: () => void; testID?: string }) {
   return (
-    <TouchableOpacity
-      onPress={notifyComingSoon}
-      style={styles.btn}
-      activeOpacity={0.7}
-      testID={testID}
-    >
-      <View style={styles.row}>
-        <Text style={styles.glyph}></Text>
-        <Text style={styles.label}>Continue with Apple</Text>
-      </View>
-      <View style={styles.soonBadge}>
-        <Text style={styles.soonTxt}>SOON</Text>
-      </View>
+    <TouchableOpacity style={styles.fallback} onPress={onPress} testID={testID}>
+      <Text style={styles.fallbackTxt}>Continue with Apple</Text>
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
-  btn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    paddingVertical: 14, paddingHorizontal: space.lg,
-    backgroundColor: colors.surface1,
-    borderWidth: 1, borderColor: colors.border,
-    borderRadius: radii.md,
-    gap: 10,
+  btn: { width: '100%', height: 48 },
+  busyBtn: {
+    width: '100%', height: 48, borderRadius: radii.md,
+    backgroundColor: '#000',
+    alignItems: 'center', justifyContent: 'center',
+    flexDirection: 'row', gap: 10,
   },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  glyph: { color: colors.text, fontSize: 18 },
-  label: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 15 },
-  soonBadge: {
-    marginLeft: 6,
-    paddingHorizontal: 6, paddingVertical: 2,
-    borderRadius: radii.pill,
-    backgroundColor: 'rgba(245,166,35,0.14)',
-    borderColor: 'rgba(245,166,35,0.35)', borderWidth: 1,
+  busyTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 },
+  fallback: {
+    width: '100%', height: 48, borderRadius: radii.md,
+    backgroundColor: '#000', alignItems: 'center', justifyContent: 'center',
   },
-  soonTxt: {
-    color: colors.primary, fontFamily: font.bodyBold, fontSize: 9,
-    letterSpacing: 0.6,
-  },
+  fallbackTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 15 },
 });

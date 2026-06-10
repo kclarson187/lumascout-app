@@ -7957,6 +7957,12 @@ from routes import account_deletion as _account_deletion_routes  # noqa: E402
 # See routes/revenuecat.py for the webhook + iap-config endpoint.
 from routes import revenuecat as _revenuecat_routes  # noqa: E402
 
+# Jun 2026 — Sign In with Apple (SIWA). Required by App Store rules
+# when any other third-party login is offered (we have Google). Verifies
+# Apple's identity_token against Apple's public JWKS, no .p8 needed.
+# See routes/auth_apple.py for the full contract.
+from routes import auth_apple as _auth_apple_routes  # noqa: E402
+
 app.include_router(_scout_ai_routes.router)
 app.include_router(_support_routes.router)
 app.include_router(_super_admin_routes.router)
@@ -7978,6 +7984,7 @@ app.include_router(_shoot_plan_routes.router)
 app.include_router(_weather_routes.router)
 app.include_router(_account_deletion_routes.router)
 app.include_router(_revenuecat_routes.router)
+app.include_router(_auth_apple_routes.router)
 # CR Items 7 & 8 (May 2026) — smart-link share endpoints (HTML responses,
 # returned outside of `api` APIRouter because they're consumed by external
 # clients pasting the URL into iMessage / Twitter / Slack and need full

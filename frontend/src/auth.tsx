@@ -77,6 +77,8 @@ type AuthState = {
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, name: string, specialties?: string[]) => Promise<void>;
   googleExchange: (session_id: string) => Promise<void>;
+  /** Phase A (Jun 2026) — Sign In with Apple. Persists token + refresh. */
+  appleExchange: (token: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
   updateProfile: (patch: Partial<User>) => Promise<void>;
@@ -192,6 +194,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await refresh();
   };
 
+  /**
+   * Phase A (Jun 2026) — Sign In with Apple.
+   * Accepts the already-verified payload returned by `runAppleSignIn`
+   * and refreshes the auth context. Caller is expected to handle
+   * cancelation / unsupported branches before calling this.
+   */
+  const appleExchange = async (token: string) => {
+    await api.setToken(token);
+    await refresh();
+  };
+
   const logout = async () => {
     // Best-effort RC sign-out so the next anonymous user doesn't
     // inherit this account's entitlements on a shared device.
@@ -230,7 +243,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <Ctx.Provider value={{ user, loading, login, register, googleExchange, logout, refresh, updateProfile, deleteAccount }}>
+    <Ctx.Provider value={{ user, loading, login, register, googleExchange, appleExchange, logout, refresh, updateProfile, deleteAccount }}>
       {children}
     </Ctx.Provider>
   );

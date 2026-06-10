@@ -53,11 +53,11 @@ export default function Register() {
   const [loading, setLoading] = useState(false);
   const kbHeight = useKeyboardHeight();
 
-  // Phase 2.1 (Jun 2025): Apple Sign-In is hidden everywhere until
-  // real SIWA ships in Phase 2.3. Leaving a non-functional Apple
-  // button on iOS is an App Store review risk. The AppleSoonButton
-  // component is kept on disk for resurrection later.
-  const socialOrder = useMemo(() => ['google'] as const, []);
+  // Phase A (Jun 2026): Real Sign In with Apple is wired. Apple goes
+  // FIRST per Apple HIG when both Apple and Google options exist.
+  // The AppleSoonButton component is iOS-only; it self-hides on
+  // web/Android, so listing it here is safe.
+  const socialOrder = useMemo(() => ['apple', 'google'] as const, []);
 
   const validateEmail = (v: string): string | null => {
     if (!v.trim()) return 'Enter a valid email address.';
