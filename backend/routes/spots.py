@@ -152,6 +152,25 @@ class SpotCreateIn(BaseModel):
     # (esp. for private-land spots).
     land_access: Optional[str] = None  # public | private | unsure
     access_notes: Optional[str] = None
+    # FIX(Phase 2 Add-Location Optimization / Jun 2026):
+    # Client-computed internal "data quality" signal. Surfaces in the
+    # moderation queue so admins can fast-track high-signal contributions
+    # and later drive "improve this spot" nudges. This is NEVER shown
+    # publicly — the visible `quality_score` is computed server-side
+    # in server._enrich_spot_for_card.
+    data_quality_score: Optional[int] = None
+    data_quality_signals: Optional[Dict[str, Any]] = None
+
+    @field_validator("data_quality_score")
+    @classmethod
+    def _clamp_quality(cls, v: Optional[int]) -> Optional[int]:
+        if v is None:
+            return None
+        try:
+            n = int(v)
+        except Exception:
+            return None
+        return max(0, min(100, n))
 
     @field_validator("land_access")
     @classmethod
@@ -643,6 +662,19 @@ async def create_spot(body: SpotCreateIn, user: dict = Depends(get_current_user)
     doc = body.dict()
     doc.pop("images", None)
     doc.pop("save_as_draft", None)  # not persisted as a spot field
+    # Phase 2 — Add Location Optimization (Jun 2026):
+    # Persist client-computed quality signals under a single
+    # `client_quality` map so the moderation tooling can show them
+    # without polluting the top-level spot fields. The visible
+    # `quality_score` is still computed server-side downstream.
+    client_q_score = doc.pop("data_quality_score", None)
+    client_q_signals = doc.pop("data_quality_signals", None)
+    if client_q_score is not None or client_q_signals is not None:
+        doc["client_quality"] = {
+            "score": client_q_score,
+            "signals": client_q_signals or {},
+            "captured_at": utcnow(),
+        }
     # Apply canonical park linkage (in case of merge redirect)
     if park_doc:
         doc["park_group_id"] = park_doc["park_id"]

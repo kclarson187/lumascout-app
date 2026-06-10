@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   KeyboardAvoidingView,
   ActivityIndicator,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
@@ -19,10 +20,20 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import * as Location from 'expo-location';
 import { ChevronLeft, ChevronRight, MapPin, Image as ImageIcon, Plus, Check, X, Zap, Crown, AlertTriangle, Search, Map as MapIcon, Edit3, FileText, Sun, Eye, EyeOff, Sparkles, Circle, Camera, Layers } from 'lucide-react-native';
 import { api, formatApiError } from '../../src/api';
-import { uploadImageAsset } from '../../src/utils/upload-image';
+import { uploadImageAsset, uploadImageAssetWithProgress } from '../../src/utils/upload-image';
 import { resolveImageUrl } from '../../src/utils/image-url';
 import { useAuth } from '../../src/auth';
 import { colors, font, space, radii, SHOOT_TYPES, BEST_TIMES, PRIVACY_MODES } from '../../src/theme';
+// Phase 2 — Add Location Optimization (Jun 2026)
+import { computeDataQuality } from '../../src/utils/data-quality';
+import {
+  accuracyTier as gpsAccuracyTier,
+  accuracyLabel as gpsAccuracyLabel,
+  accuracyColorKey as gpsAccuracyColorKey,
+  formatAccuracy as gpsFormatAccuracy,
+  shouldShowImperial as gpsShouldShowImperial,
+} from '../../src/utils/gps-accuracy';
+import { effectiveTier } from '../../src/utils/entitlements';
 import { LandAccessSelector } from '../../src/components/LandAccessSelector';
 import { Button } from '../../src/components/Button';
 import LocationSearchSheet, { PlaceResult } from '../../src/components/LocationSearchSheet';
@@ -156,7 +167,13 @@ export default function AddSpot() {
 function AddSpotImpl() {
   const { user } = useAuth();
   const kbHeight = useKeyboardHeight();
-  const [step, setStep] = useState(0);
+  // Phase 1 Fast Add (Jun 2026):
+  //   step = -1 → Fast Mode (default) — one-screen quick submit
+  //   step =  0..5 → existing detailed multi-step flow
+  // Field-bound photographers can submit a useful spot in <60s on Fast
+  // Mode. Tapping "Add More Details" promotes them into the existing
+  // step=0 flow without losing any state already collected.
+  const [step, setStep] = useState(-1);
   const [draft, setDraft] = useState<Draft>(initialDraft);
   const [submitting, setSubmitting] = useState(false);
   const [dupCandidates, setDupCandidates] = useState<DupCandidate[]>([]);
@@ -187,7 +204,209 @@ function AddSpotImpl() {
   } | null>(null);
   const [sessionPark, setSessionPark] = useState<ParkSummary | null>(null);
   const [postSaveOpen, setPostSaveOpen] = useState(false);
-  const [lastSubmittedSpot, setLastSubmittedSpot] = useState<{ spot_id: string; park_id?: string | null; park_name?: string | null } | null>(null);
+  const [lastSubmittedSpot, setLastSubmittedSpot] = useState<{
+    spot_id: string;
+    park_id?: string | null;
+    park_name?: string | null;
+    // Phase 2 — used by the upgraded PostSaveSpotSheet preview card.
+    title?: string;
+    city?: string;
+    state?: string;
+    cover_url?: string | null;
+    visibility_status?: string | null;
+  } | null>(null);
+
+  // ────────────────────────────────────────────────────────────────
+  // Phase 1 Fast Add — local-only AsyncStorage autosave (Jun 2026)
+  // ────────────────────────────────────────────────────────────────
+  // Persist the in-progress draft to AsyncStorage so a photographer
+  // in the field who switches apps, loses signal, or has the OS kill
+  // the process doesn't lose their work. Restore on mount; clear on
+  // successful submission OR explicit "Discard draft" tap.
+  //
+  // We DO NOT sync drafts to the backend (per Phase 1 scope) — the
+  // existing `useDraftSync` queues only at the network-failure point.
+  const DRAFT_AUTOSAVE_KEY = 'addspot.autosave.v1';
+  const draftRestoredRef = useRef(false);
+  const [draftHydrated, setDraftHydrated] = useState(false);
+
+  // Restore on mount (once).
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(DRAFT_AUTOSAVE_KEY);
+        if (raw) {
+          const saved = JSON.parse(raw);
+          // Sanity check — minimum shape match so old/incompatible drafts
+          // don't crash the form. We accept partial drafts and merge over
+          // the initial state.
+          if (saved && typeof saved === 'object' && Array.isArray(saved.images)) {
+            setDraft({ ...initialDraft, ...saved });
+            draftRestoredRef.current = true;
+          }
+        }
+      } catch { /* corrupt blob — fall back to initial */ }
+      setDraftHydrated(true);
+    })();
+  }, []);
+
+  // Debounced autosave on every change. Skip until hydration so we
+  // don't immediately overwrite the restored draft with the initial.
+  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  useEffect(() => {
+    if (!draftHydrated) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      AsyncStorage.setItem(DRAFT_AUTOSAVE_KEY, JSON.stringify(draft)).catch(() => {});
+    }, 600);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [draft, draftHydrated]);
+
+  const clearAutosavedDraft = async () => {
+    try { await AsyncStorage.removeItem(DRAFT_AUTOSAVE_KEY); } catch {}
+  };
+  const discardDraft = () => {
+    Alert.alert(
+      'Discard draft?',
+      "You'll lose this in-progress spot. This cannot be undone.",
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Discard',
+          style: 'destructive',
+          onPress: async () => {
+            await clearAutosavedDraft();
+            setDraft(initialDraft);
+            setStep(-1);
+            draftRestoredRef.current = false;
+          },
+        },
+      ],
+    );
+  };
+
+  // ────────────────────────────────────────────────────────────────
+  // Phase 2 — Add Location Optimization (Jun 2026)
+  // Image-upload progress, retry, and double-tap guards.
+  // ────────────────────────────────────────────────────────────────
+  // `uploadProgress` is a 0..1 fraction broadcast to the Fast Add
+  // progress banner so the user sees something is happening (was a
+  // dead spinner before). `uploadPhase` tracks coarse states the
+  // submit() flow walks through.
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [uploadingCount, setUploadingCount] = useState<number>(0);
+  // 'idle' | 'compressing' | 'uploading' | 'saving' | 'retrying'
+  type SubmitPhase = 'idle' | 'compressing' | 'uploading' | 'saving' | 'retrying';
+  const [submitPhase, setSubmitPhase] = useState<SubmitPhase>('idle');
+  // Refs (non-render) so rapid taps can't double-fire the same flow.
+  const pickInFlightRef = useRef(false);
+  const cameraInFlightRef = useRef(false);
+  const submitInFlightRef = useRef(false);
+  const gpsRefreshInFlightRef = useRef(false);
+
+  /**
+   * Upload a single processed image with up to N retry attempts on
+   * transient network/server failures. Returns the absolute hosted
+   * URL on success or null on hard failure (4xx client errors). The
+   * caller decides how to surface the failure.
+   */
+  const uploadWithRetry = async (
+    asset: { uri: string; mimeType: string; fileName: string },
+    onProgress?: (fraction: number) => void,
+    maxAttempts = 3,
+  ): Promise<string | null> => {
+    let lastErr: any = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const r = await uploadImageAssetWithProgress(asset, {
+          onProgress,
+        });
+        return r.image_url;
+      } catch (e: any) {
+        lastErr = e;
+        const name = e?.name || '';
+        // Don't retry 4xx client errors — they will keep failing.
+        if (
+          name === 'AuthError' ||
+          name === 'PayloadTooLargeError' ||
+          name === 'UnsupportedMediaError' ||
+          name === 'ClientError'
+        ) {
+          break;
+        }
+        if (attempt < maxAttempts) {
+          // Exponential backoff with jitter: 600ms, 1400ms.
+          const backoff = 400 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 200);
+          await new Promise((res) => setTimeout(res, backoff));
+        }
+      }
+    }
+    console.warn('[add] upload failed after retries', lastErr?.message);
+    return null;
+  };
+
+  /**
+   * Re-fetch the user's GPS pin with best-for-navigation accuracy.
+   * Surface a friendly error if permission denied. Idempotent — a
+   * second tap while one is in flight is ignored.
+   */
+  const refreshGpsPin = async () => {
+    if (gpsRefreshInFlightRef.current) return;
+    gpsRefreshInFlightRef.current = true;
+    try {
+      const perm = await Location.requestForegroundPermissionsAsync();
+      if (perm.status !== 'granted') {
+        Alert.alert(
+          'Location permission needed',
+          "Allow location access in Settings to refresh the pin, or tap 'Pick on map' to set it by hand.",
+        );
+        return;
+      }
+      const loc = await Promise.race([
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.BestForNavigation }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 7000)),
+      ]);
+      if (!loc) {
+        Alert.alert(
+          'Could not get a fix',
+          "Your phone couldn't lock onto satellites. Step outside or pick the spot on the map.",
+        );
+        return;
+      }
+      let city: string | undefined;
+      let state: string | undefined;
+      try {
+        const places = await Location.reverseGeocodeAsync({
+          latitude: loc.coords.latitude,
+          longitude: loc.coords.longitude,
+        });
+        if (places && places[0]) {
+          city = places[0].city || places[0].subregion || undefined;
+          state = places[0].region || undefined;
+        }
+      } catch {}
+      setDraft((prev) => ({
+        ...prev,
+        latitude: loc.coords.latitude,
+        longitude: loc.coords.longitude,
+        locationLabel: [city, state].filter(Boolean).join(', ')
+          || `${loc.coords.latitude.toFixed(4)}, ${loc.coords.longitude.toFixed(4)}`,
+        locationSource: 'gps',
+        gpsAccuracy: loc.coords.accuracy ?? undefined,
+        gpsHeading: loc.coords.heading ?? undefined,
+        gpsAltitude: loc.coords.altitude ?? undefined,
+        city: city || prev.city,
+        state: state || prev.state,
+        geocodeStatus: city ? 'success' : 'skipped',
+      }));
+    } catch (e) {
+      Alert.alert('Could not refresh pin', String(e));
+    } finally {
+      gpsRefreshInFlightRef.current = false;
+    }
+  };
 
   // Load active park session on mount so we can offer the
   // "Continue adding spots to <park>?" pickup banner.
@@ -343,61 +562,108 @@ function AddSpotImpl() {
   }
 
   const next = () => setStep((s) => Math.min(STEPS.length - 1, s + 1));
-  const prev = () => (step === 0 ? router.replace('/(tabs)') : setStep((s) => s - 1));
+  // Phase 1 Fast Add — Fast Mode (step = -1) → back exits the screen.
+  // Existing detailed flow (step 0-5) → back walks the stack.
+  const prev = () => {
+    if (step <= 0) {
+      router.replace('/(tabs)');
+      return;
+    }
+    setStep((s) => s - 1);
+  };
 
   const pickImages = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Media permission required to upload photos');
-      return;
-    }
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsMultipleSelection: true,
-      quality: 1,
-      base64: false,
-      selectionLimit: 6,
-    });
-    if (res.canceled) return;
-
-    // CRITICAL (Apr 2026): switched from base64-in-Mongo to hosted-URL.
-    // We still pre-compress locally with ImageManipulator so we burn
-    // less mobile bandwidth, but we now upload the JPEG bytes via
-    // multipart and store only the returned public URL in draft.images.
-    // The backend endpoint re-encodes + downscales server-side as a
-    // second safety net so any passthrough happens uniformly.
-    const processed: { image_url: string; is_cover: boolean }[] = [];
-    for (let i = 0; i < res.assets.length; i++) {
-      const a = res.assets[i];
-      try {
-        const manipulated = await ImageManipulator.manipulateAsync(
-          a.uri,
-          [{ resize: { width: 1600 } }],    // allow slightly larger — backend caps at 2048
-          {
-            compress: 0.85,
-            format: ImageManipulator.SaveFormat.JPEG,
-            base64: false,
-          },
-        );
-        const uploaded = await uploadImageAsset({
-          uri: manipulated.uri,
-          mimeType: 'image/jpeg',
-          fileName: `spot_${Date.now()}_${i}.jpg`,
-        });
-        processed.push({
-          image_url: uploaded.image_url,
-          is_cover: draft.images.length === 0 && processed.length === 0,
-        });
-      } catch (err) {
-        console.warn('Image upload failed, skipping photo', err);
+    // Phase 2 — prevent double-tap re-launches of the OS picker.
+    if (pickInFlightRef.current) return;
+    pickInFlightRef.current = true;
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Media permission required to upload photos');
+        return;
       }
-    }
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsMultipleSelection: true,
+        quality: 1,
+        base64: false,
+        selectionLimit: 6,
+      });
+      if (res.canceled) return;
 
-    if (processed.length === 0) {
-      Alert.alert('Could not upload photos', 'Please try picking different images or check your connection.');
-      return;
+      // CRITICAL (Apr 2026): switched from base64-in-Mongo to hosted-URL.
+      // Phase 2 (Jun 2026): added per-asset progress + auto-retry to make
+      // the upload survive flaky cellular. We compress aggressively
+      // before upload (1600px @ q=0.82) so a 12MP capture is ~700-900KB
+      // on the wire — fits well under proxy limits.
+      const processed: { image_url: string; is_cover: boolean }[] = [];
+      const totalAssets = res.assets.length;
+      setUploadingCount(totalAssets);
+      setUploadProgress(0);
+      setSubmitPhase('compressing');
+
+      for (let i = 0; i < totalAssets; i++) {
+        const a = res.assets[i];
+        try {
+          const manipulated = await ImageManipulator.manipulateAsync(
+            a.uri,
+            [{ resize: { width: 1600 } }],
+            {
+              compress: 0.82,
+              format: ImageManipulator.SaveFormat.JPEG,
+              base64: false,
+            },
+          );
+          setSubmitPhase('uploading');
+          const onProgress = (frac: number) => {
+            // Combine per-asset progress with which asset we're on.
+            const overall = (i + frac) / totalAssets;
+            setUploadProgress(Math.min(0.99, overall));
+          };
+          const url = await uploadWithRetry(
+            {
+              uri: manipulated.uri,
+              mimeType: 'image/jpeg',
+              fileName: `spot_${Date.now()}_${i}.jpg`,
+            },
+            onProgress,
+          );
+          if (url) {
+            processed.push({
+              image_url: url,
+              is_cover: draft.images.length === 0 && processed.length === 0,
+            });
+          }
+        } catch (err) {
+          console.warn('Image upload failed, skipping photo', err);
+        }
+      }
+
+      setUploadProgress(0);
+      setUploadingCount(0);
+      setSubmitPhase('idle');
+
+      if (processed.length === 0) {
+        Alert.alert(
+          'Could not upload photos',
+          'Please try picking different images or check your connection. Your draft is safe.',
+        );
+        return;
+      }
+      // Surface partial failure so the user can decide to retry.
+      if (processed.length < totalAssets) {
+        Alert.alert(
+          'Some photos didn\u2019t upload',
+          `${totalAssets - processed.length} of ${totalAssets} photos failed. You can tap "Add" to retry the missing ones.`,
+        );
+      }
+      setDraft({ ...draft, images: [...draft.images, ...processed].slice(0, 8) });
+    } finally {
+      pickInFlightRef.current = false;
+      setUploadProgress(0);
+      setUploadingCount(0);
+      setSubmitPhase('idle');
     }
-    setDraft({ ...draft, images: [...draft.images, ...processed].slice(0, 8) });
   };
 
   // =========================================================================
@@ -409,6 +675,10 @@ function AddSpotImpl() {
   // degrade gracefully: camera-without-GPS still captures the photo; we just
   // ask the user to finish location manually.
   const takePhotoWithGPS = async () => {
+    // Phase 2 — guard against rapid double-tap of "Take photo now".
+    if (cameraInFlightRef.current) return;
+    cameraInFlightRef.current = true;
+    try {
     // 1. Permissions — ask for both camera + location together.
     const cam = await ImagePicker.requestCameraPermissionsAsync();
     if (cam.status !== 'granted') {
@@ -470,16 +740,24 @@ function AddSpotImpl() {
         [{ resize: { width: 1280 } }],
         { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG, base64: false },
       );
-      const uploaded = await uploadImageAsset({
-        uri: manipulated.uri,
-        mimeType: 'image/jpeg',
-        fileName: `spot_camera_${Date.now()}.jpg`,
-      });
-      imageUrl = uploaded.image_url;
+      setSubmitPhase('uploading');
+      setUploadingCount(1);
+      imageUrl = await uploadWithRetry(
+        {
+          uri: manipulated.uri,
+          mimeType: 'image/jpeg',
+          fileName: `spot_camera_${Date.now()}.jpg`,
+        },
+        (frac) => setUploadProgress(frac),
+      );
     } catch (e) {
       // Network or auth failure on upload — surface a friendly
       // message but don't crash the flow.
       console.warn('[add] camera upload failed', e);
+    } finally {
+      setUploadProgress(0);
+      setUploadingCount(0);
+      setSubmitPhase('idle');
     }
 
     if (!imageUrl) {
@@ -642,6 +920,10 @@ function AddSpotImpl() {
     //    step's search / map-picker / manual-entry flows handle the
     //    no-pin case cleanly.
     setStep(1);
+    } finally {
+      // Phase 2 — release the rapid-tap guard regardless of outcome.
+      cameraInFlightRef.current = false;
+    }
   };
 
   const setCover = (idx: number) => {
@@ -683,7 +965,34 @@ function AddSpotImpl() {
     !(draft.latitude === 0 && draft.longitude === 0) &&
     draft.shoot_types.length > 0;
 
-  const buildPayload = (asDraft: boolean) => ({
+  const buildPayload = (asDraft: boolean) => {
+    // Phase 2 — compute internal quality score. NOT shown publicly.
+    const { score: dataQualityScore, signals: dataQualitySignals } = computeDataQuality({
+      images: draft.images,
+      title: draft.title,
+      city: draft.city,
+      latitude: draft.latitude,
+      longitude: draft.longitude,
+      shoot_types: draft.shoot_types,
+      style_tags: draft.style_tags,
+      notes: draft.notes,
+      description: draft.description,
+      best_time_of_day: draft.best_time_of_day,
+      best_light_notes: draft.best_light_notes,
+      parking_notes: draft.parking_notes,
+      parking_rating: draft.parking_rating,
+      walk_rating: draft.walk_rating,
+      permit_required: draft.permit_required,
+      safety_rating: draft.safety_rating,
+      crowd_level: draft.crowd_level,
+      lens_recommendations: draft.lens_recommendations,
+      best_lens_range: draft.best_lens_range,
+      land_access: draft.land_access,
+      access_notes: draft.access_notes,
+      sourceType: draft.sourceType,
+      gpsAccuracy: draft.gpsAccuracy ?? null,
+    });
+    return ({
     title: draft.title,
     description: draft.description,
     // FIX(Commit 7.5 / 2026-04): DO NOT coerce lat/lng with `|| 0`. That's
@@ -751,7 +1060,11 @@ function AddSpotImpl() {
     // Park-Based Multi-Spot Workflow (Phase 2)
     park_group_id: locationType === 'park_child' && selectedPark ? selectedPark.park_id : undefined,
     park_name:     locationType === 'park_child' && selectedPark ? selectedPark.name    : undefined,
+    // Phase 2 — Add Location Optimization (Jun 2026): internal moderation signal.
+    data_quality_score: dataQualityScore,
+    data_quality_signals: dataQualitySignals,
   });
+  };
 
   const runAiUploadAssist = async () => {
     setAiAssistError('');
@@ -785,6 +1098,10 @@ function AddSpotImpl() {
 
 
   const submit = async () => {
+    // Phase 2 — hard double-tap guard. The disabled prop on the button
+    // helps, but Pressable can fire onPress twice if the user taps
+    // during the layout shift between idle and loading.
+    if (submitInFlightRef.current) return;
     if (!draft.title || !draft.city) {
       Alert.alert('Missing fields', 'Please add a title and city before publishing.');
       return;
@@ -799,11 +1116,34 @@ function AddSpotImpl() {
       );
       return;
     }
+    submitInFlightRef.current = true;
     setSubmitting(true);
+    setSubmitPhase('saving');
     const payload = buildPayload(false);
     const childPark = locationType === 'park_child' && selectedPark ? selectedPark : null;
+
+    // Phase 2 — retry one time on transient failures (NetworkError /
+    // 5xx) before falling through to the offline-queue fallback. The
+    // photographer is often on flaky coverage and one quick auto-retry
+    // saves them from a frustrating "tap-tap-tap" loop.
+    const postOnce = () => api.post('/spots', payload);
+    let created: any = null;
+    let lastErr: any = null;
     try {
-      const created = await api.post('/spots', payload);
+      try {
+        created = await postOnce();
+      } catch (e1: any) {
+        const status1: number | undefined = e1?.status ?? e1?.response?.status;
+        const transient1 = !status1 || status1 >= 500 || status1 === 408 || status1 === 429;
+        if (transient1) {
+          setSubmitPhase('retrying');
+          await new Promise((r) => setTimeout(r, 900));
+          created = await postOnce();
+        } else {
+          throw e1;
+        }
+      }
+      setSubmitPhase('saving');
       // Explore Speed CR — Batch 4 (June 2025): clear the Explore list
       // SWR cache so the user sees their newly-submitted spot on the
       // next Explore visit instead of the previous cached set.
@@ -813,10 +1153,6 @@ function AddSpotImpl() {
       } catch {}
 
       // Park-Based Multi-Spot Workflow (Phase 2)
-      // ─────────────────────────────────────────
-      // If this spot was added under a parent park, refresh the 24h
-      // session so reopening the app later surfaces the pickup banner.
-      // Failures are non-fatal — the spot was already saved.
       const submittedSpotId = created?.spot_id || null;
       if (childPark) {
         try {
@@ -830,13 +1166,25 @@ function AddSpotImpl() {
         spot_id: submittedSpotId,
         park_id: childPark?.park_id || null,
         park_name: childPark?.name || null,
+        title: draft.title,
+        city: draft.city,
+        state: draft.state,
+        cover_url: draft.images.find((i) => i.is_cover)?.image_url
+          || draft.images[0]?.image_url || null,
+        visibility_status: created?.visibility_status || null,
       });
+      // Phase 1 Fast Add — wipe the autosave blob so a follow-on submission
+      // doesn't restore the just-published spot's data on next open.
+      await clearAutosavedDraft();
       setPostSaveOpen(true);
     } catch (e: any) {
+      lastErr = e;
       // Phase 6 — Offline / poor-signal fallback. We treat anything
       // that ISN'T a clear 4xx server validation as a transient
       // network failure and queue the spot to AsyncStorage so the
       // user doesn't lose their work walking around the park.
+      // Phase 2 — IMPORTANT: never reset the draft here. The user
+      // should still see their work even if we couldn't save it.
       const status: number | undefined = e?.status ?? e?.response?.status;
       const isNetworkFailure = !status || status >= 500;
       if (isNetworkFailure) {
@@ -848,17 +1196,22 @@ function AddSpotImpl() {
           await drafts.refreshCount();
           Alert.alert(
             'Saved as draft',
-            "You're offline or the network is unstable. We'll upload this spot the moment you're back online.",
-            [{ text: 'OK', onPress: () => { setDraft(initialDraft); setStep(0); router.replace('/(tabs)'); } }],
+            "You're offline or the network is unstable. We'll upload this spot the moment you're back online — your draft is safe.",
+            [{ text: 'OK' }],
           );
         } catch {
-          Alert.alert('Could not save', 'Network failed and the local draft store is unavailable. Please try again.');
+          Alert.alert(
+            'Could not save',
+            'Network failed and the local draft store is unavailable. Your draft is still on this device — please try again in a moment.',
+          );
         }
       } else {
         Alert.alert('Could not submit', formatApiError(e));
       }
     } finally {
       setSubmitting(false);
+      setSubmitPhase('idle');
+      submitInFlightRef.current = false;
     }
   };
 
@@ -887,12 +1240,21 @@ function AddSpotImpl() {
           <TouchableOpacity onPress={prev} testID="add-back">
             <ChevronLeft color={colors.text} size={24} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>{STEPS[step]}</Text>
-          <Text style={styles.headerStep}>{step + 1} / {STEPS.length}</Text>
+          {step < 0 ? (
+            <>
+              <Text style={styles.headerTitle}>Add a spot</Text>
+              <Text style={styles.headerStep}>Fast</Text>
+            </>
+          ) : (
+            <>
+              <Text style={styles.headerTitle}>{STEPS[step]}</Text>
+              <Text style={styles.headerStep}>{step + 1} / {STEPS.length}</Text>
+            </>
+          )}
         </View>
 
         <View style={styles.progress}>
-          <View style={[styles.progressFill, { width: `${((step + 1) / STEPS.length) * 100}%` }]} />
+          <View style={[styles.progressFill, { width: step < 0 ? '10%' : `${((step + 1) / STEPS.length) * 100}%` }]} />
         </View>
 
         {/* Phase 6 — Offline drafts pending. Shows up only when we have
@@ -932,6 +1294,311 @@ function AddSpotImpl() {
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
         >
+          {/* ──────────────────────────────────────────────────────────────
+              Phase 1 Fast Add Mode (Jun 2026) — single-screen quick submit.
+              Default entry point so a field photographer can publish a
+              useful spot in <60s with: photo + name + pin + category + tip.
+              "Add More Details" promotes the user into the existing
+              multi-step flow without losing collected state.
+              ────────────────────────────────────────────────────────────── */}
+          {step === -1 && (
+            <View style={{ gap: space.lg }}>
+              {/* Draft-restored banner */}
+              {draftRestoredRef.current && (draft.title || draft.images.length > 0) && (
+                <View style={styles.draftRestoredBanner}>
+                  <View style={styles.draftsIcon}>
+                    <FileText size={12} color={colors.primary} />
+                  </View>
+                  <Text style={styles.draftRestoredTxt} numberOfLines={2}>
+                    We picked up where you left off.
+                  </Text>
+                  <TouchableOpacity onPress={discardDraft} hitSlop={10} testID="fast-discard-draft">
+                    <Text style={styles.draftRestoredDiscard}>Discard</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {/* Hero copy */}
+              <View>
+                <Text style={styles.fastHero}>Drop a spot</Text>
+                <Text style={styles.fastSub}>
+                  Snap, name, and pin in under a minute. You can add the polish later.
+                </Text>
+              </View>
+
+              {/* ── Photo capture ── */}
+              <View style={styles.fastSection}>
+                <Text style={styles.fastLabel}>1. Add a photo</Text>
+                {draft.images.length === 0 ? (
+                  <View style={{ gap: 8 }}>
+                    <TouchableOpacity style={styles.fastPhotoBtn} onPress={takePhotoWithGPS} testID="fast-take-photo">
+                      <Camera size={20} color={colors.textInverse} />
+                      <Text style={styles.fastPhotoBtnTxt}>Take photo now</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.fastPhotoBtnSecondary} onPress={pickImages} testID="fast-pick-library">
+                      <ImageIcon size={16} color={colors.text} />
+                      <Text style={styles.fastPhotoBtnSecondaryTxt}>Choose from library</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.fastHelp}>
+                      Taking a photo here auto-tags the GPS pin for you.
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={{ gap: 8 }}>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                      {draft.images.map((img, i) => (
+                        <View key={i} style={styles.fastThumb}>
+                          <Image source={{ uri: resolveImageUrl(img.image_url) }} style={styles.fastThumbImg} />
+                          <TouchableOpacity
+                            style={styles.fastThumbRemove}
+                            onPress={() => removeImg(i)}
+                            hitSlop={10}
+                            testID={`fast-remove-image-${i}`}
+                          >
+                            <X size={12} color={colors.textInverse} />
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                      {draft.images.length < 4 && (
+                        <TouchableOpacity style={styles.fastThumbAdd} onPress={pickImages} testID="fast-add-more">
+                          <Plus size={20} color={colors.textSecondary} />
+                          <Text style={styles.fastThumbAddTxt}>Add</Text>
+                        </TouchableOpacity>
+                      )}
+                    </ScrollView>
+                    <Text style={styles.fastHelp}>{draft.images.length} of 8 photos · tap the × to remove</Text>
+                  </View>
+                )}
+              </View>
+
+              {/* ── Location name ── */}
+              <View style={styles.fastSection}>
+                <Text style={styles.fastLabel}>2. Spot name</Text>
+                <Input
+                  value={draft.title}
+                  onChangeText={(t) => setDraft({ ...draft, title: t })}
+                  placeholder="e.g. Mt. Bonnell overlook"
+                  testID="fast-title"
+                />
+                {draft.title.trim().length > 0 && draft.title.trim().length < 3 && (
+                  <Text style={styles.fastError}>Give it at least 3 characters.</Text>
+                )}
+              </View>
+
+              {/* ── Pin ── */}
+              <View style={styles.fastSection}>
+                <Text style={styles.fastLabel}>3. Confirm the pin</Text>
+                {(() => {
+                  // Phase 2 — Smart Pin Capture (Jun 2026).
+                  // Color-coded accuracy badge driven by the GPS fix
+                  // accuracy radius. Adds a "Refresh" affordance so a
+                  // field photographer who walked 20m can re-snap the
+                  // pin without leaving the Fast screen.
+                  const tier = gpsAccuracyTier(draft.gpsAccuracy ?? undefined);
+                  const tierLabel = gpsAccuracyLabel(tier);
+                  const colorKey = gpsAccuracyColorKey(tier);
+                  const badgeColor = colors[colorKey] as string;
+                  const imperial = gpsShouldShowImperial(draft.state);
+                  const radiusText = gpsFormatAccuracy(
+                    draft.gpsAccuracy ?? undefined,
+                    { showImperial: imperial },
+                  );
+                  const hasPin = draft.latitude != null && draft.longitude != null;
+
+                  if (!hasPin) {
+                    return (
+                      <View style={{ gap: 8 }}>
+                        <TouchableOpacity
+                          style={styles.fastPinBtnPrimary}
+                          onPress={refreshGpsPin}
+                          testID="fast-use-gps"
+                        >
+                          <MapPin size={16} color={colors.textInverse} />
+                          <Text style={styles.fastPinBtnPrimaryTxt}>Use my current location</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.fastPinBtn} onPress={() => setMapOpen(true)} testID="fast-open-map">
+                          <MapIcon size={16} color={colors.text} />
+                          <Text style={styles.fastPinBtnTxt}>Pick on map</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.fastPinBtn} onPress={() => setSearchOpen(true)} testID="fast-search-place">
+                          <Search size={16} color={colors.text} />
+                          <Text style={styles.fastPinBtnTxt}>Search a place</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.fastHelp}>
+                          If location access is denied, pick on map or search instead — the spot still gets saved.
+                        </Text>
+                      </View>
+                    );
+                  }
+                  return (
+                    <View style={{ gap: 8 }}>
+                      <View style={styles.fastPinCard}>
+                        <View style={styles.fastPinIconWrap}>
+                          <MapPin size={18} color={colors.primary} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.fastPinPrimary} numberOfLines={1}>
+                            {draft.locationLabel || `${draft.latitude!.toFixed(4)}, ${draft.longitude!.toFixed(4)}`}
+                          </Text>
+                          {radiusText ? (
+                            <View style={styles.fastPinAccuracyRow}>
+                              <View style={[styles.fastAccBadge, { borderColor: badgeColor }]}>
+                                <View style={[styles.fastAccDot, { backgroundColor: badgeColor }]} />
+                                <Text style={[styles.fastAccBadgeTxt, { color: badgeColor }]}>{tierLabel}</Text>
+                              </View>
+                              <Text style={styles.fastPinMeta}>{radiusText}</Text>
+                            </View>
+                          ) : null}
+                          {tier === 'poor' && (
+                            <Text style={styles.fastPinWarn}>
+                              Low GPS accuracy — consider stepping outside or picking on the map.
+                            </Text>
+                          )}
+                        </View>
+                        <TouchableOpacity onPress={() => setMapOpen(true)} hitSlop={10} testID="fast-edit-pin">
+                          <Edit3 size={16} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                      </View>
+                      <View style={styles.fastPinActionsRow}>
+                        <TouchableOpacity
+                          style={styles.fastPinChip}
+                          onPress={refreshGpsPin}
+                          testID="fast-refresh-pin"
+                        >
+                          <MapPin size={12} color={colors.text} />
+                          <Text style={styles.fastPinChipTxt}>Refresh GPS</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.fastPinChip}
+                          onPress={() => setMapOpen(true)}
+                          testID="fast-change-pin"
+                        >
+                          <MapIcon size={12} color={colors.text} />
+                          <Text style={styles.fastPinChipTxt}>Pick on map</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.fastPinChip}
+                          onPress={() => setSearchOpen(true)}
+                          testID="fast-search-pin"
+                        >
+                          <Search size={12} color={colors.text} />
+                          <Text style={styles.fastPinChipTxt}>Search</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })()}
+              </View>
+
+              {/* ── Category ── */}
+              <View style={styles.fastSection}>
+                <Text style={styles.fastLabel}>4. What kind of shoot?</Text>
+                <View style={styles.fastChipRow}>
+                  {SHOOT_TYPES.slice(0, 8).map((opt) => {
+                    const active = draft.shoot_types.includes(opt);
+                    return (
+                      <Chip
+                        key={opt}
+                        label={opt}
+                        active={active}
+                        onPress={() => {
+                          const next = active
+                            ? draft.shoot_types.filter((s) => s !== opt)
+                            : [...draft.shoot_types, opt];
+                          setDraft({ ...draft, shoot_types: next });
+                        }}
+                        testID={`fast-shoot-${opt}`}
+                      />
+                    );
+                  })}
+                </View>
+              </View>
+
+              {/* ── Short tip ── */}
+              <View style={styles.fastSection}>
+                <Text style={styles.fastLabel}>5. Quick tip <Text style={styles.fastLabelOptional}>(optional but helpful)</Text></Text>
+                <Input
+                  value={draft.notes}
+                  onChangeText={(t) => setDraft({ ...draft, notes: t })}
+                  placeholder="e.g. Best at golden hour from the western ridge. Bring a wide lens."
+                  multiline
+                  numberOfLines={3}
+                  testID="fast-tip"
+                />
+              </View>
+
+              {/* ── Submission progress states ── (Phase 2: phase-aware copy + bar) */}
+              {(submitting || uploadingCount > 0) && (
+                <View style={styles.fastProgressCard} testID="fast-progress">
+                  <ActivityIndicator color={colors.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fastProgressTxt}>
+                      {submitPhase === 'compressing' && 'Preparing your photo…'}
+                      {submitPhase === 'uploading' &&
+                        (uploadingCount > 1
+                          ? `Uploading photos… (${Math.round(uploadProgress * 100)}%)`
+                          : `Uploading photo… ${Math.round(uploadProgress * 100)}%`)}
+                      {submitPhase === 'saving' && 'Saving spot…'}
+                      {submitPhase === 'retrying' && 'Network hiccup — retrying…'}
+                      {submitPhase === 'idle' && 'Submitting for review…'}
+                    </Text>
+                    {submitPhase === 'uploading' && (
+                      <View style={styles.fastProgressBar}>
+                        <View
+                          style={[
+                            styles.fastProgressBarFill,
+                            { width: `${Math.round(uploadProgress * 100)}%` },
+                          ]}
+                        />
+                      </View>
+                    )}
+                  </View>
+                </View>
+              )}
+
+              {/* ── Inline validation summary ── */}
+              {!submitting && (
+                <View style={{ gap: 4 }}>
+                  <CheckRow ok={draft.images.length >= 1} label="At least 1 photo" />
+                  <CheckRow ok={draft.title.trim().length >= 3} label="Spot name (3+ characters)" />
+                  <CheckRow ok={draft.latitude != null && draft.longitude != null} label="Pin confirmed" />
+                  <CheckRow ok={draft.shoot_types.length >= 1} label="At least 1 shoot type" soft />
+                </View>
+              )}
+
+              {/* ── Primary CTAs ── */}
+              <View style={{ gap: 8, marginTop: space.md }}>
+                <Button
+                  title="Submit for Review"
+                  onPress={submit}
+                  loading={submitting}
+                  disabled={
+                    submitting ||
+                    draft.images.length < 1 ||
+                    draft.title.trim().length < 3 ||
+                    draft.latitude == null ||
+                    draft.longitude == null
+                  }
+                  testID="fast-submit"
+                />
+                <TouchableOpacity
+                  style={styles.fastDetailsBtn}
+                  onPress={() => setStep(0)}
+                  disabled={submitting}
+                  testID="fast-add-details"
+                >
+                  <Text style={styles.fastDetailsBtnTxt}>Add More Details</Text>
+                  <ChevronRight size={16} color={colors.textSecondary} />
+                </TouchableOpacity>
+                {draft.title || draft.images.length > 0 ? (
+                  <TouchableOpacity onPress={discardDraft} disabled={submitting} testID="fast-discard">
+                    <Text style={styles.fastDiscardTxt}>Discard draft</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            </View>
+          )}
+
           {step === 0 && (
             <View style={{ gap: space.lg }}>
               {/* Park session pickup banner — shown when an active 24h session
@@ -1709,12 +2376,31 @@ function AddSpotImpl() {
         parkName={lastSubmittedSpot?.park_name || null}
         parkId={lastSubmittedSpot?.park_id || null}
         newSpotId={lastSubmittedSpot?.spot_id || null}
+        // Phase 2 — preview card + tier-aware upgrade nudge
+        spotTitle={lastSubmittedSpot?.title || null}
+        spotCity={lastSubmittedSpot?.city || null}
+        spotState={lastSubmittedSpot?.state || null}
+        coverImageUrl={
+          lastSubmittedSpot?.cover_url
+            ? resolveImageUrl(lastSubmittedSpot.cover_url)
+            : null
+        }
+        visibilityStatus={lastSubmittedSpot?.visibility_status || null}
+        userTier={effectiveTier(user as any)}
+        onViewMyUploads={() => {
+          setPostSaveOpen(false);
+          router.push('/(tabs)/profile' as any);
+        }}
+        onUpgradePress={() => {
+          setPostSaveOpen(false);
+          router.push('/paywall?reason=uploads' as any);
+        }}
         onClose={() => setPostSaveOpen(false)}
         onAddAnother={() => {
-          // Keep selectedPark; reset draft fields that are spot-specific.
+          // Phase 2 — drop the user back into Fast Add for a tight loop.
           setPostSaveOpen(false);
           setDraft({ ...initialDraft });
-          setStep(0);
+          setStep(-1);
         }}
         onViewPark={() => {
           setPostSaveOpen(false);
@@ -1731,7 +2417,7 @@ function AddSpotImpl() {
         onSaveAndClose={() => {
           setPostSaveOpen(false);
           setDraft(initialDraft);
-          setStep(0);
+          setStep(-1);
           setSelectedPark(null);
           setLocationType('standalone');
           router.replace('/(tabs)');
@@ -1744,7 +2430,7 @@ function AddSpotImpl() {
           setLocationType('standalone');
           setPostSaveOpen(false);
           setDraft(initialDraft);
-          setStep(0);
+          setStep(-1);
           router.replace('/(tabs)');
         }}
       />
@@ -2189,4 +2875,117 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   draftsBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 11 },
+
+  // ──────────────────────────────────────────────────────────────
+  // Phase 1 Fast Add — single-screen quick-submit styles (Jun 2026)
+  // Scoped under `fast*` so they never collide with the existing
+  // detailed-flow styles above.
+  // ──────────────────────────────────────────────────────────────
+  fastHero: { color: colors.text, fontFamily: font.display, fontSize: 28, letterSpacing: -0.5 },
+  fastSub:  { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, marginTop: 4, lineHeight: 19 },
+  fastSection: { gap: 8 },
+  fastLabel: { color: colors.text, fontFamily: font.bodyBold, fontSize: 13, letterSpacing: 0.2 },
+  fastLabelOptional: { color: colors.textTertiary, fontFamily: font.body, fontSize: 12 },
+  fastHelp: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11 },
+  fastError: { color: colors.secondary, fontFamily: font.body, fontSize: 12 },
+  fastPhotoBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    paddingVertical: 16, borderRadius: radii.md,
+    backgroundColor: colors.primary,
+    minHeight: 48,
+  },
+  fastPhotoBtnTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 },
+  fastPhotoBtnSecondary: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    paddingVertical: 12, borderRadius: radii.md,
+    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
+    minHeight: 44,
+  },
+  fastPhotoBtnSecondaryTxt: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
+  fastThumb: { width: 100, height: 100, borderRadius: 12, overflow: 'hidden', position: 'relative' },
+  fastThumbImg: { width: '100%', height: '100%' },
+  fastThumbRemove: {
+    position: 'absolute', top: 6, right: 6,
+    width: 22, height: 22, borderRadius: 11,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  fastThumbAdd: {
+    width: 100, height: 100, borderRadius: 12,
+    borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed',
+    alignItems: 'center', justifyContent: 'center', gap: 2,
+  },
+  fastThumbAddTxt: { color: colors.textSecondary, fontFamily: font.body, fontSize: 11 },
+  fastPinCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    padding: 12, borderRadius: radii.md,
+    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
+  },
+  fastPinIconWrap: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: 'rgba(245,166,35,0.12)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  fastPinPrimary: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 13 },
+  fastPinMeta: { color: colors.textTertiary, fontFamily: font.body, fontSize: 11, marginTop: 2 },
+  fastPinBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    paddingVertical: 12, borderRadius: radii.md,
+    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
+    minHeight: 44,
+  },
+  fastPinBtnTxt: { color: colors.text, fontFamily: font.bodySemibold, fontSize: 13 },
+  // Phase 2 — Smart Pin styles (Jun 2026)
+  fastPinBtnPrimary: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    paddingVertical: 14, borderRadius: radii.md,
+    backgroundColor: colors.primary,
+    minHeight: 48,
+  },
+  fastPinBtnPrimaryTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 14 },
+  fastPinAccuracyRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
+  fastAccBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 8, paddingVertical: 2, borderRadius: radii.pill,
+    borderWidth: 1,
+    backgroundColor: 'rgba(255,255,255,0.02)',
+  },
+  fastAccDot: { width: 6, height: 6, borderRadius: 3 },
+  fastAccBadgeTxt: { fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.4 },
+  fastPinWarn: { color: colors.warning, fontFamily: font.body, fontSize: 11, marginTop: 4 },
+  fastPinActionsRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
+  fastPinChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 10, paddingVertical: 6, borderRadius: radii.pill,
+    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
+  },
+  fastPinChipTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 11 },
+  fastProgressBar: {
+    marginTop: 6, height: 4, borderRadius: 2, overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  fastProgressBarFill: { height: 4, backgroundColor: colors.primary, borderRadius: 2 },
+  fastChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  fastProgressCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    padding: 14, borderRadius: radii.md,
+    backgroundColor: 'rgba(245,166,35,0.06)',
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.30)',
+  },
+  fastProgressTxt: { color: colors.text, fontFamily: font.bodyMedium, fontSize: 13 },
+  fastDetailsBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
+    paddingVertical: 12, borderRadius: radii.md,
+    backgroundColor: 'transparent', borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
+    minHeight: 44,
+  },
+  fastDetailsBtnTxt: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 13 },
+  fastDiscardTxt: { color: colors.secondary, fontFamily: font.bodyMedium, fontSize: 12, textAlign: 'center', paddingVertical: 8 },
+  draftRestoredBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    padding: 10, borderRadius: radii.md,
+    backgroundColor: 'rgba(245,166,35,0.08)', borderWidth: 1, borderColor: 'rgba(245,166,35,0.25)',
+  },
+  draftRestoredTxt: { flex: 1, color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },
+  draftRestoredDiscard: { color: colors.secondary, fontFamily: font.bodyBold, fontSize: 12 },
 });
