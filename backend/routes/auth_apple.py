@@ -84,7 +84,7 @@ class AppleAuthIn(BaseModel):
       after computing sha256(raw_nonce) for Apple.
     - `full_name` + `email` are echoed only on first sign-in.
     """
-    identity_token: str = Field(min_length=20, alias="identityToken")
+    identity_token: str = Field(min_length=1, alias="identityToken")
     raw_nonce: str = Field(min_length=8, alias="rawNonce")
     email: Optional[str] = None
     full_name: Optional[AppleFullName] = Field(default=None, alias="fullName")
