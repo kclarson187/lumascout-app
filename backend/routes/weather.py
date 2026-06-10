@@ -134,7 +134,7 @@ BEST_TIMES_REQUIRES = {"hourly", "daily"}
 
 # Days returned: pro=5, elite=10. Free/anon don't get daily at all,
 # but we keep generous defaults in case a route ever bypasses the gate.
-DAILY_DAYS_BY_PLAN = {"anon": 7, "free": 7, "pro": 5, "elite": 10}
+DAILY_DAYS_BY_PLAN = {"anon": 0, "free": 0, "pro": 5, "elite": 10}
 
 # ─────────────────────────────────────────────────────────────────────
 # Tier feature catalog (Jun-2026 spec)

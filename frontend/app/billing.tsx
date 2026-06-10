@@ -12,7 +12,7 @@ import { api, formatApiError } from '../src/api';
 import { useAuth } from '../src/auth';
 import { colors, font, space, radii } from '../src/theme';
 import { Button } from '../src/components/Button';
-import { isPaid as entitlementsIsPaid, isAdmin, planLabel } from '../src/utils/entitlements';
+import { isPaid as entitlementsIsPaid, isAdmin, planLabel, planSummaryCopy } from '../src/utils/entitlements';
 
 export default function Billing() {
   const { user, refresh } = useAuth();
@@ -158,6 +158,12 @@ export default function Billing() {
               <Text style={styles.statusTxt}>{statusLabel}</Text>
             </View>
           </View>
+          {/* Photographer-first plan summary — explains what THIS tier
+              actually gets the user, instead of a generic "current plan"
+              label. Uses centralized copy from utils/entitlements.ts. */}
+          <Text style={styles.planSummary}>
+            {planSummaryCopy({ plan: data.plan, role: user?.role })}
+          </Text>
         </View>
 
         {/* Subscription details */}
@@ -257,6 +263,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center' },
   planLabel: { color: colors.textSecondary, fontFamily: font.bodyMedium, fontSize: 11 },
   planName: { color: colors.text, fontFamily: font.display, fontSize: 28, letterSpacing: -0.3, marginTop: 2 },
+  planSummary: { color: colors.textSecondary, fontFamily: font.body, fontSize: 13, lineHeight: 19, marginTop: 14 },
   statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: radii.pill },
   statusTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 10 },
   detailCard: {

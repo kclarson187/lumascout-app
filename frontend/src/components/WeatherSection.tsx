@@ -343,7 +343,7 @@ export default function WeatherSection({
           ) : locked.has('hourly') ? (
             <LockedCard
               title="24-hour hourly forecast"
-              copy="Unlock hourly forecasts with Pro — plan around sun, weather, and shoot conditions."
+              copy="Plan your shoot hour-by-hour around light, weather, and shoot conditions with Pro."
               target="pro"
               onUpgrade={handleUpgrade}
               testID="weather-locked-hourly"
@@ -376,7 +376,7 @@ export default function WeatherSection({
           ) : locked.has('daily') ? (
             <LockedCard
               title="5-day forecast"
-              copy="Pro photographers plan a week ahead. See the next 5 days at a glance."
+              copy="Unlock 5-day weather planning, unlimited saved spots, collections, route planning, and advanced filters with Pro."
               target="pro"
               onUpgrade={handleUpgrade}
               testID="weather-locked-daily"
@@ -411,9 +411,9 @@ export default function WeatherSection({
                   start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
                   style={styles.upgradeBtnInner}
                 >
-                  <Text style={styles.upgradeBtnText}>
-                    Upgrade to Elite for advanced shoot planning
-                  </Text>
+              <Text style={styles.upgradeBtnText}>
+                Unlock 10-day weather, sun path tools, and crowd predictions with Elite
+              </Text>
                   <ChevronRight size={16} color={colors.primary} />
                 </LinearGradient>
               </TouchableOpacity>
@@ -430,7 +430,7 @@ export default function WeatherSection({
                 style={styles.upgradeBtnInner}
               >
                 <Text style={styles.upgradeBtnText}>
-                  Upgrade to Pro for hourly + 5-day forecasts
+                  Unlock 5-day weather planning, unlimited saves, collections, and route planning with Pro
                 </Text>
                 <ChevronRight size={16} color={colors.primary} />
               </LinearGradient>

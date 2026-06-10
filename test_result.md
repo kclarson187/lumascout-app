@@ -21585,10 +21585,140 @@ agent_communication:
 
 test_plan:
   current_focus:
-    - "Apple IAP / RevenueCat backend — /api/billing/iap-config + /api/revenuecat/webhook (Jun 2026)"
+    - "Membership tier system regression (Jun 2026) — /api/plans + /api/weather caps + plan normalization"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+membership_tiers_jun_2026:
+  - task: "Membership tier system regression (Jun 2026) — /api/plans + /api/weather caps + plan normalization"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py (list_plans) + /app/backend/routes/weather.py (DAILY_DAYS_BY_PLAN, TIER_FEATURE_CATALOG)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: |
+          Full regression suite for the Jun 2026 tier-spec update PASSED
+          end-to-end (50/50 assertions, 0 failures). Test harness at
+          /app/backend_test.py — drives the public BACKEND_URL
+          (https://photo-finder-60.preview.emergentagent.com/api) and
+          validates via motor against the real Mongo DB
+          (photoscout_database). Run executed 2026-06-10.
+
+          === 1. GET /api/plans ===
+          • 200 OK; exactly 3 plans returned in order free → pro → elite.
+          • Free plan:
+              - tagline == "Start scouting" ✅
+              - features exactly:
+                  ["Save up to 3 spots", "Upload locations",
+                   "Join the community", "Basic map access",
+                   "Current weather only"] ✅
+              - old "Up to 5 spots you can upload" copy absent ✅
+          • Pro plan:
+              - tagline == "Plan around light, weather, and the right spot" ✅
+              - popular == true ✅
+              - features exactly:
+                  ["Unlimited saves", "Collections", "Route planning",
+                   "Advanced filters", "Weather overlays",
+                   "5-day weather forecast", "Profile analytics",
+                   "Pro badge"] ✅
+          • Elite plan:
+              - tagline == "Advanced planning for serious creators" ✅
+              - features exactly:
+                  ["Everything in Pro", "10-day weather forecast",
+                   "Exact sun path planning",
+                   "Sunrise / sunset precision planner",
+                   "Seasonal bloom / fall tracking",
+                   "Hidden gem early access", "Analytics dashboard",
+                   "Priority support", "Elite badge"] ✅
+              - none of the old replaced phrases present
+                ("Animated Elite badge", "Advanced spot analytics",
+                 "Sell curated spot packs",
+                 "Featured spotlight rotation") ✅
+
+          === 2. GET /api/weather — daily-forecast tier caps ===
+          (lat=30.27, lng=-97.74 throughout — Austin TX)
+          • 2a Unauthenticated → tier="anon", daily absent/len=0,
+              locked_features ⊇ {"daily","hourly"} ✅
+          • 2b Super admin (kclarson187@gmail.com; logged in via seed
+              admin password Grayson@1117!!) → tier="elite",
+              daily len=10 (==cap), locked_features=[] ✅
+          • 2c Fresh registered user → /_debug_tier confirms
+              effective_tier="free" before /weather; then /weather
+              returns tier="free", daily absent/len=0,
+              locked_features ⊇ {"daily","hourly"} ✅
+          • 2d Forced plan="pro" via direct Mongo update → tier="pro",
+              daily len=5 (strict ≤5, WeatherKit returned 10 but cap
+              clamped to 5), locked_features ⊇ {"ten_day_forecast"} ✅
+          • 2e Forced plan="elite" via direct Mongo update →
+              tier="elite", daily len=10, locked_features=[] ✅
+
+          === 3. GET /api/weather/_debug_tier (super_admin) ===
+          • 200 OK, effective_tier="elite",
+            role="super_admin", is_super_admin=true ✅
+          • Note: seeded admin@lumascout.app has role="super_admin"
+            (not just "admin"), so is_super_admin=true held. (The
+            comment in the brief said "as super_admin" so this is
+            the expected condition.)
+
+          === 4. No-regression on adjacent endpoints ===
+          • 4a GET /api/billing/iap-config → 200 with ios.configured=false
+              (placeholder mode shape intact) ✅
+          • 4b POST /api/revenuecat/webhook with no Authorization →
+              503 (placeholder secret still in backend/.env:
+              REVENUECAT_WEBHOOK_AUTH=__SET_REVENUECAT_WEBHOOK_AUTH__) ✅
+          • 4c DELETE /api/account/delete without Authorization → 401 ✅
+          • 4d GET /api/spots/<existing_anonymized_spot> (spot_507d4d6d9d30)
+              → 200 with owner placeholder
+              {name:"LumaScout user", user_id:null, avatar_url:null,
+               deleted:true} ✅
+
+          === 5. Plan normalization audit (via /_debug_tier) ===
+          One ephemeral test user was mutated 9 times via motor
+          (plan + role) and re-hit /_debug_tier each time. All 9
+          combos PASS:
+          • plan="free",        role="user"        → effective="free"  ✅
+          • plan="pro",         role="user"        → effective="pro"   ✅
+          • plan="elite",       role="user"        → effective="elite" ✅
+          • plan="comp_pro",    role="user"        → effective="pro"   ✅
+          • plan="comp_elite",  role="user"        → effective="elite" ✅
+          • plan="trial_pro",   role="user"        → effective="pro"   ✅
+          • plan="trial_elite", role="user"        → effective="elite" ✅
+          • plan="free",        role="super_admin" → effective="elite" ✅
+          • plan="free",        role="admin"       → effective="elite" ✅
+
+          === Cleanup ===
+          All 4 ephemeral users (tier_free_*, tier_pro_*, tier_elite_*,
+          tier_matrix_*) deleted from db.users at end of run.
+          No DB pollution. Admin/test credentials in
+          /app/memory/test_credentials.md NOT touched.
+
+          === Summary ===
+          • /api/plans now emits the exact Jun 2026 tier spec — feature
+            lists, taglines, and the popular flag all match the brief
+            byte-for-byte. Old "Up to 5 spots you can upload" /
+            "Animated Elite badge" / "Advanced spot analytics" /
+            "Sell curated spot packs" / "Featured spotlight rotation"
+            copy is gone.
+          • DAILY_DAYS_BY_PLAN={"anon":0,"free":0,"pro":5,"elite":10}
+            is correctly enforced for every tier (verified empirically
+            even when WeatherKit returns the maximum 10 days — Pro is
+            clamped to 5).
+          • locked_features semantics are correct for all four tiers
+            (anon/free lock daily+hourly; pro locks ten_day_forecast;
+            elite is empty).
+          • Plan resolution logic (plan_of, _effective_plan,
+            _resolve_user_tier) handles every comp/trial/role override
+            exactly as documented.
+          • No regressions in iap-config, revenuecat webhook,
+            account/delete auth gate, or anonymized-spot owner
+            placeholder.
+
+          No issues found. No retest needed.
 
 
 revenuecat_iap:
@@ -21863,7 +21993,7 @@ self_service_account_deletion:
           No issues found. No retest needed.
 
 metadata:
-  test_sequence: 8
+  test_sequence: 9
   run_ui: false
 
 agent_communication:
@@ -21944,4 +22074,46 @@ agent_communication:
       from db.users.
 
       No retest needed for RC routes. Recommend the main agent
+      summarize and finish.
+
+
+agent_communication:
+    -agent: "testing"
+    -message: |
+      ✅ Membership tier system regression (Jun 2026) verified end-to-end
+      (2026-06-10). 50/50 assertions PASS, 0 FAIL across all 5 sections
+      of the review brief. Test harness preserved at
+      /app/backend_test.py — re-runnable.
+
+      1. GET /api/plans — exact spec match. All 3 plans returned in
+         correct order with the precise feature lists, taglines, and
+         pro.popular=true. Old copy removed everywhere ("Up to 5 spots
+         you can upload", "Animated Elite badge", "Advanced spot
+         analytics", "Sell curated spot packs", "Featured spotlight
+         rotation").
+      2. /api/weather daily caps — DAILY_DAYS_BY_PLAN enforced correctly:
+         anon/free → 0 (daily absent + {daily,hourly} locked), pro → 5
+         strict (even when WeatherKit returned 10 days the response was
+         clamped to 5; ten_day_forecast locked), elite → up to 10 with
+         locked_features=[]. Fresh user resolves to "free" as expected.
+      3. /api/weather/_debug_tier for super_admin — effective_tier=elite,
+         role=super_admin, is_super_admin=true.
+      4. No regressions: /billing/iap-config (placeholder shape intact),
+         /revenuecat/webhook (503 in placeholder mode),
+         DELETE /account/delete (401 without auth), GET /spots/{id}
+         (anonymized owner placeholder still returned for the existing
+         creator_anonymized spot in DB).
+      5. Plan normalization — all 9 (plan, role) → effective_tier
+         combinations from the matrix PASS. comp_pro / comp_elite /
+         trial_pro / trial_elite collapse correctly; admin and
+         super_admin roles auto-resolve to elite regardless of raw
+         plan=free.
+
+      Backend logs were clean — no 5xx, no exceptions during the run.
+      The tier resolution logger emitted the expected
+      `weather_tier_resolution` lines for each call. Four ephemeral
+      test users (tier_free_*, tier_pro_*, tier_elite_*, tier_matrix_*)
+      were cleaned up at the end of the run.
+
+      No issues found. No retest needed. Recommend the main agent
       summarize and finish.
