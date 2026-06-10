@@ -1303,6 +1303,25 @@ function AddSpotImpl() {
               ────────────────────────────────────────────────────────────── */}
           {step === -1 && (
             <View style={{ gap: space.lg }}>
+              {/* Phase 3 (Jun 2026) — tier-aware soft nudge for Free users
+                  approaching the upload cap. Hard block (5/5) still raises
+                  a 402 from POST /spots and the GlobalUpgradeGate covers
+                  that path automatically. */}
+              {effectiveTier(user as any) === 'free' && typeof (user as any)?.usage?.uploads === 'number'
+                && typeof (user as any)?.limits?.max_uploads === 'number'
+                && (user as any).limits.max_uploads < 10_000 && (
+                <TouchableOpacity
+                  onPress={() => router.push('/paywall?reason=uploads' as any)}
+                  style={styles.fastUpgradeNudge}
+                  testID="fast-uploads-nudge"
+                >
+                  <Crown size={14} color={colors.primary} />
+                  <Text style={styles.fastUpgradeNudgeTxt} numberOfLines={2}>
+                    {(user as any).usage.uploads}/{(user as any).limits.max_uploads} Free uploads used.{' '}
+                    <Text style={{ color: colors.primary, fontFamily: font.bodyBold }}>Go Pro</Text> for unlimited.
+                  </Text>
+                </TouchableOpacity>
+              )}
               {/* Draft-restored banner */}
               {draftRestoredRef.current && (draft.title || draft.images.length > 0) && (
                 <View style={styles.draftRestoredBanner}>
@@ -2988,4 +3007,12 @@ const styles = StyleSheet.create({
   },
   draftRestoredTxt: { flex: 1, color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },
   draftRestoredDiscard: { color: colors.secondary, fontFamily: font.bodyBold, fontSize: 12 },
+  // Phase 3 (Jun 2026) — Free-tier upload-count nudge on Fast Add.
+  fastUpgradeNudge: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingVertical: 8, paddingHorizontal: 10, borderRadius: radii.md,
+    backgroundColor: 'rgba(245,166,35,0.08)',
+    borderWidth: 1, borderColor: 'rgba(245,166,35,0.40)',
+  },
+  fastUpgradeNudgeTxt: { flex: 1, color: colors.text, fontFamily: font.bodyMedium, fontSize: 12 },
 });

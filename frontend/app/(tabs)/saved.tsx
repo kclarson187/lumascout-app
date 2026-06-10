@@ -29,6 +29,8 @@ import { BrandedRefreshControl, useBrandedRefresh } from '../../src/theme/refres
 import useGps from '../../src/hooks/useGps';
 import { goldenHourBrief } from '../../src/utils/sun-windows';
 import { driveTimeEstimate } from '../../src/utils/drive-time';
+// Phase 3 (Jun 2026) — tier-aware soft gating
+import { effectiveTier, hasProAccess } from '../../src/utils/entitlements';
 
 type SortKey = 'recent' | 'score' | 'distance' | 'city' | 'shoot_type';
 const SORT_LABELS: Record<SortKey, string> = {
@@ -474,14 +476,37 @@ export default function Saved() {
 
       {tab === 'collections' && (
         <ScrollView contentContainerStyle={{ padding: space.xl, gap: space.md, paddingBottom: 100 }}>
-          <TouchableOpacity style={styles.newColCta} onPress={() => setShowNewCol(true)} testID="saved-new-collection">
-            <View style={styles.newColIcon}><FolderPlus size={18} color={colors.primary} /></View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.newColTitle}>New collection</Text>
-              <Text style={styles.newColSub}>Group spots for a shoot day, client trip, or seasonal list.</Text>
-            </View>
-            <ChevronRight size={16} color={colors.textSecondary} />
-          </TouchableOpacity>
+          {/* Phase 3 (Jun 2026) — tier-aware Create CTA. Free users see a
+              clear "Pro feature" lock with one-tap upgrade route; Pro/Elite
+              users see the normal create modal trigger. We use a soft inline
+              card instead of an alert so they can browse the rest of the
+              page comfortably. */}
+          {hasProAccess(user as any) ? (
+            <TouchableOpacity style={styles.newColCta} onPress={() => setShowNewCol(true)} testID="saved-new-collection">
+              <View style={styles.newColIcon}><FolderPlus size={18} color={colors.primary} /></View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.newColTitle}>New collection</Text>
+                <Text style={styles.newColSub}>Group spots for a shoot day, client trip, or seasonal list.</Text>
+              </View>
+              <ChevronRight size={16} color={colors.textSecondary} />
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={styles.newColLocked}
+              onPress={() => router.push('/paywall?reason=collections' as any)}
+              testID="saved-new-collection-locked"
+            >
+              <View style={styles.newColIcon}><Lock size={16} color={colors.primary} /></View>
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={styles.newColTitle}>New collection</Text>
+                  <View style={styles.proPill}><Text style={styles.proPillTxt}>PRO</Text></View>
+                </View>
+                <Text style={styles.newColSub}>Custom collections are a Pro feature. Organise spots into themed shoot lists.</Text>
+              </View>
+              <ChevronRight size={16} color={colors.primary} />
+            </TouchableOpacity>
+          )}
           {collections.length === 0 ? (
             <EmptyState
               icon={<FolderPlus size={28} color={colors.primary} />}
@@ -674,6 +699,17 @@ const styles = StyleSheet.create({
   newColIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(245,166,35,0.15)', alignItems: 'center', justifyContent: 'center' },
   newColTitle: { color: colors.text, fontFamily: font.bodyBold, fontSize: 14 },
   newColSub: { color: colors.textSecondary, fontFamily: font.body, fontSize: 12, marginTop: 2, lineHeight: 16 },
+  // Phase 3 (Jun 2026) — locked variant of New Collection for Free users.
+  newColLocked: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    padding: space.md, backgroundColor: 'rgba(245,166,35,0.06)',
+    borderColor: 'rgba(245,166,35,0.45)', borderWidth: 1, borderRadius: radii.md,
+  },
+  proPill: {
+    paddingHorizontal: 7, paddingVertical: 2, borderRadius: radii.pill,
+    backgroundColor: colors.primary,
+  },
+  proPillTxt: { color: colors.textInverse, fontFamily: font.bodyBold, fontSize: 9, letterSpacing: 0.6 },
   // Rich collection card
   colCardRich: {
     backgroundColor: colors.surface1, borderColor: colors.border, borderWidth: 1,

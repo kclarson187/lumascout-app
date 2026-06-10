@@ -404,6 +404,12 @@ def compute_shoot_score(spot: dict) -> int:
 def public_spot_view(spot: dict, user: Optional[dict] = None) -> dict:
     spot = dict(spot)
     spot.pop("_id", None)
+    # Phase 3 (Jun 2026) — internal moderation signal. Surface to admins
+    # only. Strip for everyone else so the score / signals never leak
+    # through Explore / spot detail / share-card endpoints.
+    is_admin_viewer = bool(user) and user.get("role") in ("admin", "super_admin", "moderator")
+    if not is_admin_viewer:
+        spot.pop("client_quality", None)
     # Privacy enforcement for exact coordinates
     privacy = spot.get("privacy_mode", "public")
     display = spot.get("location_display_mode", "exact")

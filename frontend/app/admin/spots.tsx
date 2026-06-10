@@ -39,11 +39,13 @@ export default function AdminSpots() {
   const [query, setQuery] = useState('');
   const [recentlyReviewed, setRecentlyReviewed] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // Phase 3 (Jun 2026) — sort selector for moderation queue.
+  const [pendingSort, setPendingSort] = useState<'quality' | 'newest' | 'oldest'>('quality');
 
   const loadPending = useCallback(async () => {
     try {
       const [p, recent] = await Promise.all([
-        api.get('/admin/pending'),
+        api.get('/admin/pending', { sort: pendingSort }),
         api.get('/admin/stats/recent-approvals', { days: 7 }).catch(() => null),
       ]);
       // FIX(Batch-1 approve crash): defend against unexpected payload
@@ -52,7 +54,7 @@ export default function AdminSpots() {
       setPending(Array.isArray(p) ? p.filter(Boolean) : []);
       if (recent && typeof recent.count === 'number') setRecentlyReviewed(recent.count);
     } catch (e) { Alert.alert('Error', formatApiError(e)); }
-  }, []);
+  }, [pendingSort]);
 
   const loadAll = useCallback(async () => {
     try {
@@ -144,10 +146,45 @@ export default function AdminSpots() {
           </View>
         ) : (
           <View style={{ paddingHorizontal: space.lg, gap: 8 }}>
+            <View style={styles.sortRow}>
+              <Text style={styles.hint}>Sort:</Text>
+              {(['quality', 'newest', 'oldest'] as const).map((opt) => (
+                <TouchableOpacity
+                  key={opt}
+                  style={[styles.sortChip, pendingSort === opt && styles.sortChipActive]}
+                  onPress={() => setPendingSort(opt)}
+                  testID={`admin-sort-${opt}`}
+                >
+                  <Text style={[styles.sortChipTxt, pendingSort === opt && styles.sortChipTxtActive]}>
+                    {opt === 'quality' ? 'Quality' : opt === 'newest' ? 'Newest' : 'Oldest'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
             <Text style={styles.hint}>Approve, reject, or open the cover editor.</Text>
             {pending.map((s: any) => {
               const cover = s.hero_cover_image_url
                 || (s.images && (s.images.find((i: any) => i.is_cover) || s.images[0]))?.image_url;
+              // Phase 3 — internal quality signals for the pending card.
+              const clientQ = s.client_quality || {};
+              const clientScore: number | null = typeof clientQ.score === 'number' ? clientQ.score : null;
+              const serverScore: number = Number(s.quality_score || 0);
+              // Prefer the client score (richer signal set) but show server
+              // score as a secondary label when present.
+              const displayScore = clientScore ?? serverScore;
+              const sigs = (clientQ.signals || {}) as Record<string, boolean>;
+              const missing: string[] = [];
+              if (sigs.has_pin === false) missing.push('no pin');
+              if (sigs.has_photo === false) missing.push('no photo');
+              if (sigs.has_tip === false) missing.push('no tip');
+              if (sigs.has_parking === false) missing.push('no parking');
+              if (sigs.has_safety === false) missing.push('no safety');
+              if (sigs.has_permit_notes === false) missing.push('no permit notes');
+              if (sigs.has_best_time === false) missing.push('no best time');
+              if (sigs.has_tight_gps === false) missing.push('loose GPS');
+              const qColor = displayScore >= 70 ? colors.success
+                : displayScore >= 40 ? colors.warning
+                : colors.textTertiary;
               return (
                 <View key={s.spot_id} style={styles.pendCard}>
                   <View style={styles.pendTopRow}>
@@ -157,7 +194,13 @@ export default function AdminSpots() {
                           <ImagePlus size={14} color={colors.textTertiary} />
                         </View>}
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.pendTitle} numberOfLines={1}>{s.title}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Text style={styles.pendTitle} numberOfLines={1}>{s.title}</Text>
+                        <View style={[styles.qBadge, { borderColor: qColor }]}>
+                          <View style={[styles.qDot, { backgroundColor: qColor }]} />
+                          <Text style={[styles.qBadgeTxt, { color: qColor }]}>Q{displayScore || '—'}</Text>
+                        </View>
+                      </View>
                       <Text style={styles.pendCity} numberOfLines={1}>
                         {s.city || ''}{s.state ? `, ${s.state}` : ''}
                         {s.country_code ? ` · ${s.country_code}` : ''}
@@ -167,6 +210,18 @@ export default function AdminSpots() {
                       </Text>
                     </View>
                   </View>
+                  {missing.length > 0 && (
+                    <View style={styles.missingRow}>
+                      {missing.slice(0, 4).map((m) => (
+                        <View key={m} style={styles.missingChip}>
+                          <Text style={styles.missingChipTxt}>{m}</Text>
+                        </View>
+                      ))}
+                      {missing.length > 4 && (
+                        <Text style={styles.missingMore}>+{missing.length - 4} more</Text>
+                      )}
+                    </View>
+                  )}
                   <View style={styles.btnRow}>
                     <TouchableOpacity
                       style={[styles.actBtn, styles.actGhost]}
@@ -349,4 +404,34 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(245,166,35,0.12)', borderWidth: 1, borderColor: colors.primary,
   },
   editChipTxt: { color: colors.primary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.5 },
+
+  // Phase 3 (Jun 2026) — moderation queue polish
+  sortRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: space.sm, paddingBottom: 6,
+  },
+  sortChip: {
+    paddingHorizontal: 10, paddingVertical: 5, borderRadius: radii.pill,
+    backgroundColor: colors.surface1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
+  },
+  sortChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  sortChipTxt: { color: colors.textSecondary, fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.5 },
+  sortChipTxtActive: { color: colors.textInverse },
+  qBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 7, paddingVertical: 2, borderRadius: radii.pill,
+    borderWidth: 1, backgroundColor: 'rgba(255,255,255,0.02)',
+  },
+  qDot: { width: 5, height: 5, borderRadius: 3 },
+  qBadgeTxt: { fontFamily: font.bodyBold, fontSize: 10, letterSpacing: 0.4 },
+  missingRow: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 4,
+  },
+  missingChip: {
+    paddingHorizontal: 7, paddingVertical: 2, borderRadius: radii.pill,
+    backgroundColor: 'rgba(208,72,72,0.08)',
+    borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(208,72,72,0.45)',
+  },
+  missingChipTxt: { color: colors.secondary, fontFamily: font.bodyMedium, fontSize: 10 },
+  missingMore: { color: colors.textTertiary, fontFamily: font.body, fontSize: 10, alignSelf: 'center', marginLeft: 2 },
 });

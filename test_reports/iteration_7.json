@@ -1,0 +1,36 @@
+{
+  "summary": "Phase 3 Add-Location Optimization backend regression: 18/18 tests PASSED. Verified (A) `client_quality` is stripped from public_spot_view for non-admin viewers on both GET /api/spots/{id} and GET /api/feed/home, while admins still receive `{score, signals, captured_at}`; (B) GET /api/admin/pending honours ?sort=quality|newest|oldest with deterministic ordering and falls back to quality on unknown values (?sort=garbage); (C) Phase 2 regression intact — POST /api/spots without new fields, POST with data_quality_signals=null, GET /api/spots/{id} on a public spot all return 200, and free-tier saves cap (3 → 4th=402) and collections cap (0 → 1st=402) still gate via 402. Test file uses fresh isolated test users via /api/auth/register and direct-Mongo seed of visibility_status='pending_review' to bypass admin auto-approve. All TEST_ data cleaned up at end.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase3_add_location.py",
+    "/app/test_reports/pytest/pytest_iteration7_phase3.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routes/admin.py admin_pending: the `quality` sort uses two consecutive list.sort() calls relying on Python's stable sort — correct, but a single key=(quality_desc, ts_desc) tuple sort would be slightly clearer. Behaviourally fine.",
+    "server.py public_spot_view: `client_quality` strip happens BEFORE the `privacy_mode == 'private'` early-return that yields None. Net behaviour is correct (None never carries client_quality) but the pop is wasted work for private spots. Micro-optimization only — not a bug.",
+    "Admin role tuple in public_spot_view (admin, super_admin, moderator) matches the GET /admin/pending guard (require_role('moderator')) — `support` role would see client_quality via admin/pending but NOT through public_spot_view (since 'support' is not in the admin tuple). Verify intent: support has read access on the pending queue dashboard but client_quality is hidden from them. Likely intentional, worth confirming with PM."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase3_add_location.py (created)",
+    "/app/test_reports/pytest/pytest_iteration7_phase3.xml (created via junitxml)"
+  ],
+  "success_rate": {
+    "backend": "100%",
+    "frontend": "n/a (skipped per request)"
+  },
+  "seed_data_creation": "All TEST_ spots and TEST users created during the run are deleted at the end of the suite (DELETE /api/spots/{id} + direct-Mongo purge fallback for pending_review spots; direct-Mongo delete for users + their spot_saves + collections).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Re-running test_phase2_add_location.py back-to-back with this file from the same IP can trip a per-IP 429 on POST /api/spots (admin: 'Too many requests. Try again in 3592s'). Either: (a) run only one of the two suites per hour, or (b) bump the rate-limit window, or (c) skip the cross-suite execution. The 429 is NOT caused by Phase 3 code — it's an unrelated rate-limit on the shared /api/spots endpoint. Test user emails use `@lumascouttest.com` (not `.local` — pydantic EmailStr rejects reserved TLDs).",
+  "rca_of_issue": "n/a — no defects found. Implementation matches the spec: public_spot_view strips client_quality for any viewer whose role is not in {admin, super_admin, moderator}; the strip is also visible through home_feed because every spot in that feed flows through public_spot_view. admin/pending sort param uses stable list sort to compose (quality DESC, created_at DESC) for the default case and the alternative `newest` / `oldest` paths route to created_at sort with the expected direction. Unknown sort values fall through the else branch to the quality-sorted default."
+}

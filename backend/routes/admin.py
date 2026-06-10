@@ -202,9 +202,47 @@ async def admin_moderate_upload(
 
 # --- admin_pending (server.py:4993-4996) ---
 @router.get("/admin/pending")
-async def admin_pending(user: dict = Depends(require_role("moderator"))):
-    pending = await db.spots.find({"visibility_status": "pending_review"}, {"_id": 0}).to_list(200)
-    return [public_spot_view(s, user) for s in pending]
+async def admin_pending(
+    sort: str = "quality",
+    user: dict = Depends(require_role("moderator")),
+):
+    """Return pending-review spots for moderation.
+
+    Phase 3 (Jun 2026): adds an explicit `sort` query param:
+      • `quality` (default) — client-computed quality_score DESC then newest first.
+        This surfaces high-signal contributions to the top of the queue.
+      • `newest`           — created_at DESC (legacy behaviour).
+      • `oldest`           — created_at ASC (FIFO).
+    Unknown values fall back to `quality`.
+    """
+    pending = await db.spots.find(
+        {"visibility_status": "pending_review"},
+        {"_id": 0},
+    ).to_list(200)
+    views = [public_spot_view(s, user) for s in pending]
+    # Drop any None (e.g. private filter for non-owner) defensively.
+    views = [v for v in views if v]
+
+    def _q(v: dict) -> int:
+        try:
+            return int(v.get("quality_score") or 0)
+        except Exception:
+            return 0
+
+    def _ts(v: dict) -> str:
+        ts = v.get("created_at") or ""
+        return ts if isinstance(ts, str) else str(ts)
+
+    if sort == "newest":
+        views.sort(key=_ts, reverse=True)
+    elif sort == "oldest":
+        views.sort(key=_ts)
+    else:
+        # quality desc, then newest first. Stable sort: apply secondary
+        # (ts asc) first then primary (quality desc) on a stable sort.
+        views.sort(key=_ts, reverse=True)
+        views.sort(key=_q, reverse=True)
+    return views
 
 # --- admin_recent_approvals (server.py:4999-5013) ---
 @router.get("/admin/stats/recent-approvals")
