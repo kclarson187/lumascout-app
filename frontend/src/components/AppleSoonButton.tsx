@@ -78,14 +78,26 @@ export function AppleSoonButton({ testID = 'apple-signin', onSuccessRoute }: Pro
         return;
       }
       if (r.reason === 'canceled' || r.reason === 'unsupported') return;
+      // Phase A.1 (Jun 2026) — friendly, non-technical user-facing copy.
+      // `runAppleSignIn` already mapped Apple's raw error code to a
+      // helpful message; we just surface it here. Detailed diagnostics
+      // are console-logged in apple-signin.ts so we can debug from
+      // TestFlight device logs without exposing it to the user.
       Alert.alert(
         "Couldn't sign in with Apple",
-        r.message || 'Please try again, or use Google or Email instead.',
+        r.message
+          || "Apple Sign-In couldn't be completed. Please try again, or continue with Google.",
       );
     } catch (e: any) {
+      // eslint-disable-next-line no-console
+      console.warn('[apple-button] unexpected error', {
+        code: e?.code,
+        message: e?.message,
+        name: e?.name,
+      });
       Alert.alert(
         "Couldn't sign in with Apple",
-        String(e?.message || e || 'Please try again.'),
+        "Apple Sign-In couldn't be completed. Please try again, or continue with Google.",
       );
     } finally {
       setBusy(false);
