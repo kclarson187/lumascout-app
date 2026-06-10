@@ -135,7 +135,7 @@ PLAN_LIMITS = {
 PLAN_PRICING = {
     "free":  {"monthly_cents": 0,    "annual_cents": 0},
     "pro":   {"monthly_cents": 999,  "annual_cents": 9900},   # $9.99/mo · $99/yr
-    "elite": {"monthly_cents": 1999, "annual_cents": 20000},  # $19.99/mo · $200/yr
+    "elite": {"monthly_cents": 1999, "annual_cents": 19999},  # $19.99/mo · $199.99/yr
 }
 
 # Normalise any comp/trial plan to the underlying tier for feature gating.
