@@ -80,9 +80,15 @@ web/node_modules/@next/swc-linux-arm64-musl/next-swc.linux-arm64-musl.node
 
 # ----------------------------------------------------------------------------
 # Credentials & secrets
-# NOTE: .env files are intentionally NOT ignored — the Emergent deployment
-# pipeline needs them at build time. Real production secrets live in the
-# platform secret store, NOT in committed .env files.
+#
+# Jun 2026 policy update: real .env files are GITIGNORED. GitHub Push
+# Protection blocked us when a live Stripe restricted key landed in
+# backend/.env. Going forward, the source of truth for production
+# secrets is the Emergent platform secret store (configured via the
+# deployment UI / supervisor environment= blocks), and every developer
+# uses a local-only `backend/.env` + `frontend/.env` that's never
+# committed. `backend/.env.example` + `frontend/.env.example` document
+# the required keys with placeholder values.
 # ----------------------------------------------------------------------------
 credentials.json
 *token.json*
@@ -99,13 +105,14 @@ credentials*.disabled-*
 # Allow EAS local credentials.json for iOS build pipeline
 !frontend/credentials.json
 
-# DO NOT ADD .env / .env.* / *.env BLOCK RULES BELOW THIS LINE.
-# As stated above, .env files (backend/.env and frontend/.env) MUST be
-# committed for the Emergent deployment pipeline. Adding global .env
-# ignore rules WILL cause a production outage (Cloudflare 520) because
-# the backend pod will start with no MONGO_URL, no Stripe keys, etc.
-# Local-only overrides (.env.local) are still ignored via
-# frontend/.gitignore's `.env*.local` rule.
+# ----------------------------------------------------------------------------
+# .env files — IGNORED. Use .env.example as the committed template.
+# Production secrets are injected via the Emergent platform's secret
+# store at runtime (see /etc/supervisor/conf.d/*.conf `environment=`
+# blocks), NOT via committed dotenv files.
+# ----------------------------------------------------------------------------
 .env
 .env.*
 *.env
+!*.env.example
+!.env.example
