@@ -106,6 +106,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       const me = await api.get('/auth/me');
+      // Phase B (Jun 2026) — TestFlight signup-crash diagnostics.
+      // Log a tight summary of what /auth/me returned. We deliberately
+      // do NOT log the token or PII; only safe boolean / scalar fields.
+      try {
+        // eslint-disable-next-line no-console
+        console.log('[auth.refresh] /auth/me ok', {
+          has_user_id: !!me?.user_id,
+          has_email: !!me?.email,
+          plan: me?.plan,
+          role: me?.role,
+          auth_provider: me?.auth_provider,
+          basics_complete: me?.basics_complete,
+          profile_complete: me?.profile_complete,
+          has_limits: !!me?.limits,
+          has_usage: !!me?.usage,
+          has_stats: !!me?.stats,
+        });
+      } catch {}
       setUser(me);
       // Kick off push-token registration the first time we authenticate each
       // launch. Runs on native only; silent on web + simulators.
@@ -120,7 +138,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { identifyRevenueCatUser } = await import('./lib/revenuecat');
         if (me?.user_id) await identifyRevenueCatUser(me.user_id);
       } catch {}
-    } catch {
+    } catch (e: any) {
+      // Phase B (Jun 2026) — Surface the real reason refresh fails. We
+      // already swallow into setUser(null) so the gate routes the user
+      // to login, but a structured log lets us RCA TestFlight crashes.
+      try {
+        // eslint-disable-next-line no-console
+        console.warn('[auth.refresh] /auth/me failed', {
+          name: e?.name,
+          message: e?.message,
+          status: e?.status,
+        });
+      } catch {}
       setUser(null);
     }
   }, []);
@@ -183,9 +212,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const register = async (email: string, password: string, name: string, specialties: string[] = []) => {
-    const data = await api.post('/auth/register', { email, password, name, specialties });
-    await api.setToken(data.token);
-    await refresh(); // Fetch full user data with plan, limits, usage
+    // Phase B (Jun 2026) — TestFlight signup-crash diagnostics. Tag every
+    // step so we can identify exactly where the crash happens from
+    // Console.app device logs. Email is logged (not PII-sensitive in
+    // our context) but password is NEVER touched.
+    try { console.log('[auth.register] start', { email_domain: email.split('@')[1], name_len: name.length }); } catch {}
+    let data: any = null;
+    try {
+      data = await api.post('/auth/register', { email, password, name, specialties });
+    } catch (e: any) {
+      try {
+        console.warn('[auth.register] /auth/register failed', {
+          name: e?.name, message: e?.message, status: e?.status,
+        });
+      } catch {}
+      throw e;
+    }
+    try { console.log('[auth.register] token received', { has_token: !!data?.token, has_user: !!data?.user }); } catch {}
+    try {
+      await api.setToken(data.token);
+    } catch (e: any) {
+      try { console.warn('[auth.register] setToken failed', { message: e?.message }); } catch {}
+      throw e;
+    }
+    try {
+      await refresh(); // Fetch full user data with plan, limits, usage
+    } catch (e: any) {
+      // refresh already swallows errors internally — but be loud here
+      // in case a future refactor stops swallowing.
+      try { console.warn('[auth.register] refresh threw', { message: e?.message }); } catch {}
+    }
+    try { console.log('[auth.register] complete'); } catch {}
   };
 
   const googleExchange = async (session_id: string) => {
