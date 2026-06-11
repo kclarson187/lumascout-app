@@ -298,6 +298,21 @@ client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
 
 app = FastAPI(title="LumaScout API")
+
+# CORS — registered immediately after app creation so static deployment
+# scanners can see it next to the FastAPI() call. Functionally this is
+# the same as registering later since FastAPI middleware applies via the
+# usual ASGI wrapping order. Wildcard origins are required for Expo on
+# device / TestFlight where the app may reach the API via several hosts
+# (preview tunnel, emergent.host, app.lumascout.app, share host).
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 api = APIRouter(prefix="/api")
 
 # PERF: in-memory home-feed cache (30s TTL per user).
@@ -4208,13 +4223,9 @@ async def health():
     return {"ok": True, "service": "LumaScout API"}
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# (CORS middleware moved to top of file, immediately after `app = FastAPI(...)`,
+# so static deployment scanners find it next to the app declaration. Removing
+# the duplicate registration here is a no-op for behaviour.)
 
 
 # ============================================================================
