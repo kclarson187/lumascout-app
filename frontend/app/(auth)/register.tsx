@@ -32,6 +32,10 @@ import { FormField } from '../../src/components/FormField';
 import { useKeyboardHeight } from '../../src/hooks/useKeyboardHeight';
 import { formatApiError } from '../../src/api';
 import { ONBOARDING_V2_ENABLED } from '../../src/constants/flags';
+// Phase A.2 (Jun 2026) — Sign In with Apple button. iOS-only; self-hides
+// on web/Android via the component itself, so listing it on the social
+// order array is safe everywhere.
+import { AppleSoonButton } from '../../src/components/AppleSoonButton';
 
 // Minimal email shape check \u2014 server is the source of truth, this is
 // purely for inline UX so users don't submit a typo'd address.
