@@ -79,7 +79,14 @@ const DEEP_LINK_PATHS = ['/spot', '/user', '/collection', '/community', '/market
 // fall back to `Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL`
 // when `process.env.…` is undefined, so this single injection fixes
 // every code path that reads the backend URL.
-const PROD_BACKEND_URL = 'https://photo-finder-60.preview.emergentagent.com';
+// June 2026 deploy fix: pin to the permanent production host
+// (`*.emergent.host`), NOT the ephemeral preview URL. Emergent's deploy
+// pipeline rewrites `.env`'s `EXPO_PUBLIC_BACKEND_URL` to
+// `photo-finder-60.emergent.host` at build time (visible in deploy
+// STEP 3 logs). This hardcoded fallback now matches that host so the
+// "iOS upgrade Constants.extra cache miss + no env var" worst case
+// still hits a live backend instead of a rotated preview pod.
+const PROD_BACKEND_URL = 'https://photo-finder-60.emergent.host';
 const PROD_WEB_BASE_URL = 'https://lumascout.app';
 
 function resolvedBackendUrl() {

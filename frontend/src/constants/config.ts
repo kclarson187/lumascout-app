@@ -36,8 +36,15 @@
  *   upgrade scenario.
  */
 
-/** Canonical production backend host. Serves /api, /api/img, /api/uploads. */
-export const PRODUCTION_BACKEND_URL = 'https://photo-finder-60.preview.emergentagent.com';
+/** Canonical production backend host. Serves /api, /api/img, /api/uploads.
+ *  June 2026 deploy fix: pin this to the permanent production host
+ *  (`*.emergent.host`), NOT the ephemeral preview URL. The Emergent
+ *  deploy pipeline rewrites `.env`'s `EXPO_PUBLIC_BACKEND_URL` to
+ *  `photo-finder-60.emergent.host` at build time, so this hardcoded
+ *  fallback must match — otherwise the iOS upgrade fallback path
+ *  (see header) would silently route production users to a preview
+ *  pod that may be down/rotated. */
+export const PRODUCTION_BACKEND_URL = 'https://photo-finder-60.emergent.host';
 
 /** Canonical production web origin — used for share URLs + OG cards. */
 export const PRODUCTION_WEB_BASE_URL = 'https://lumascout.app';
