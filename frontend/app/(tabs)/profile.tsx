@@ -50,6 +50,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import GlobeIcon from '../../src/components/icons/GlobeIcon';
 import { useAuth } from '../../src/auth';
 import { api, formatApiError } from '../../src/api';
+import { primeAndRequestMediaLibrary } from '../../src/lib/permissions';
 import { colors, font, space, radii, SHOOT_TYPES } from '../../src/theme';
 import { Button } from '../../src/components/Button';
 import { Input, Chip, EmptyState } from '../../src/components/ui';
@@ -272,9 +273,11 @@ function ProfileImpl() {
   };
 
   const pickAndUpload = async (kind: 'banner' | 'avatar') => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Media permission required');
+    const granted = await primeAndRequestMediaLibrary();
+    if (!granted) {
+      // The prime sheet already showed the "why" + offered Settings
+      // when blocked. Exit gracefully — the user can still edit the
+      // rest of their profile.
       return;
     }
     const res = await ImagePicker.launchImageLibraryAsync({

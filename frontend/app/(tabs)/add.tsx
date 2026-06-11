@@ -47,6 +47,11 @@ import ParkPickerSheet, { ParkSummary } from '../../src/components/ParkPickerShe
 import PostSaveSpotSheet from '../../src/components/PostSaveSpotSheet';
 import { saveDraft as saveLocalDraft } from '../../src/utils/park-drafts';
 import { useDraftSync } from '../../src/hooks/useDraftSync';
+import {
+  primeAndRequestCamera,
+  primeAndRequestLocation,
+  primeAndRequestMediaLibrary,
+} from '../../src/lib/permissions';
 
 const STEPS = ['Photos', 'Location', 'Details', 'Ratings', 'Privacy', 'Review'];
 
@@ -356,12 +361,11 @@ function AddSpotImpl() {
     if (gpsRefreshInFlightRef.current) return;
     gpsRefreshInFlightRef.current = true;
     try {
-      const perm = await Location.requestForegroundPermissionsAsync();
-      if (perm.status !== 'granted') {
-        Alert.alert(
-          'Location permission needed',
-          "Allow location access in Settings to refresh the pin, or tap 'Pick on map' to set it by hand.",
-        );
+      const granted = await primeAndRequestLocation();
+      if (!granted) {
+        // User declined — they can still tap "Pick on map" instead.
+        // Don't dead-end: just exit silently. The prime sheet (or
+        // settings flow) already explained why we asked.
         return;
       }
       const loc = await Promise.race([
@@ -442,10 +446,12 @@ function AddSpotImpl() {
   // records the `locationSource` so the backend knows where the coord came from.
   const applyGps = async () => {
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
+      const granted = await primeAndRequestLocation();
+      if (!granted) {
+        // User declined or kept it blocked — drop a gentle nudge
+        // toward the alternative methods rather than dead-ending.
         Alert.alert(
-          'Location permission denied',
+          'No location yet',
           "That's okay — you can search, drop a pin, or enter the location by hand instead.",
         );
         return;
@@ -577,9 +583,11 @@ function AddSpotImpl() {
     if (pickInFlightRef.current) return;
     pickInFlightRef.current = true;
     try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Media permission required to upload photos');
+      const granted = await primeAndRequestMediaLibrary();
+      if (!granted) {
+        // Permission was either declined or blocked. The prime sheet
+        // already explained why and offered Settings — no further
+        // Alert needed (would dead-end the user).
         return;
       }
       const res = await ImagePicker.launchImageLibraryAsync({
@@ -679,13 +687,18 @@ function AddSpotImpl() {
     if (cameraInFlightRef.current) return;
     cameraInFlightRef.current = true;
     try {
-    // 1. Permissions — ask for both camera + location together.
-    const cam = await ImagePicker.requestCameraPermissionsAsync();
-    if (cam.status !== 'granted') {
-      Alert.alert('Camera permission needed', 'LumaScout needs camera access to capture on-site spots.');
+    // 1. Permissions — ask for camera first (essential) and location
+    //    second (nice-to-have). Each goes through the priming sheet so
+    //    the user sees the "why" before any native OS dialog.
+    const cameraOk = await primeAndRequestCamera();
+    if (!cameraOk) {
+      // Camera is the hard requirement for this flow — without it we
+      // can't capture. Leave gracefully; the sheet has already
+      // explained "why" and offered Settings if blocked.
       return;
     }
-    const locPerm = await Location.requestForegroundPermissionsAsync();
+    const locationOk = await primeAndRequestLocation();
+    const locPerm = { status: locationOk ? 'granted' : 'denied' } as const;
 
     // Batch #9A (May 2026) — GPS accuracy fix.
     //

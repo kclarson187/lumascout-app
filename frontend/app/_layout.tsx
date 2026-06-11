@@ -21,6 +21,7 @@ import { colors } from '../src/theme';
 import { onPaywallNeeded } from '../src/api';
 import UpgradeGateModal, { GateReason } from '../src/components/UpgradeGateModal';
 import RootErrorBoundary from '../src/components/RootErrorBoundary';
+import PermissionPrimeHost from '../src/components/PermissionPrimeHost';
 
 // Apr 2026 — Full-bleed splash. Hold the native splash until fonts +
 // auth bootstrap finish, then dissolve over 700ms for a cinematic feel.
@@ -233,6 +234,10 @@ export default function RootLayout() {
               animation: 'fade',
             }}
           />
+          {/* Permission priming sheet — mounted once, used by
+              src/lib/permissions.ts to show context before any
+              native camera / location / photo-library prompt. */}
+          <PermissionPrimeHost />
         </AuthProvider>
       </GestureHandlerRootView>
     </RootErrorBoundary>
