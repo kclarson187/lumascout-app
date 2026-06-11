@@ -242,6 +242,27 @@ export default function NotificationsPrefs() {
           </View>
         </View>
 
+        {/* Phase 1 (Jun 2026) — Golden Hour entry row */}
+        <Text style={styles.section}>Photography</Text>
+        <View style={styles.sectionCard}>
+          <TouchableOpacity
+            style={styles.row}
+            onPress={() => router.push('/settings/golden-hour-alerts' as any)}
+            testID="goto-golden-hour-alerts"
+          >
+            <View style={styles.rowIcon}>
+              <Sparkles size={16} color={colors.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowLabel}>Golden Hour Alerts</Text>
+              <Text style={styles.rowHint}>
+                Get reminded before golden + blue hour at your saved spots.
+              </Text>
+            </View>
+            <Text style={[styles.rowHint, { color: colors.primary }]}>›</Text>
+          </TouchableOpacity>
+        </View>
+
         {/* Test push */}
         <TouchableOpacity style={styles.testBtn} onPress={sendTestPush} disabled={testing || !prefs.push_enabled} activeOpacity={0.8}>
           {testing ? <ActivityIndicator color={colors.textInverse} /> : (

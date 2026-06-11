@@ -251,16 +251,77 @@ async def _process_subscription(
             if ok:
                 sent["clear_sky"] = cs
 
-    # ── 3. Golden / blue hour within 1 hour ──────────────────────────
-    if prefs.get("golden_hour") and daily and not _is_deduped(last_at.get("golden_hour"), now):
-        gw = _find_imminent_light_window(daily, lookahead_min=GOLDEN_HOUR_LOOKAHEAD_MIN)
-        if gw is not None:
-            title = f"📷 {gw['type'].title()} Hour starting soon"
-            body = f"Best light begins around {gw['start_short']}."
-            deep_link = _deep_link_for_sub(sub)
-            ok = await _try_send(send_apns, device_token, title, body, deep_link, sub_id=str(sub.get("_id")))
-            if ok:
-                sent["golden_hour"] = gw["type"]
+    # ── 3. Golden / blue hour — Phase 1 (Jun 2026) ────────────────────
+    # Driven by the user's golden_hour_notification_preferences sub-doc
+    # (lazily resolved). Sends TWO push types:
+    #   • golden_hour_starting_soon — when the window starts in
+    #     reminderMinutesBefore minutes (default 30; user can pick 15/30/60)
+    #   • golden_hour_starts_now    — when the window starts in ≤5 minutes
+    # Strong dedup key: (sub_id, type, golden_hour_date).
+    if prefs.get("golden_hour") and daily:
+        gh_user_prefs, daily_count_today = await _resolve_golden_hour_user_prefs(
+            db, sub.get("user_id")
+        )
+        # User explicitly turned off this feature on their settings page.
+        if gh_user_prefs and not gh_user_prefs.get("enabled", True):
+            pass
+        elif gh_user_prefs and gh_user_prefs.get("savedSpotsOnly") and not sub.get("spot_id"):
+            # User has Saved-Spots-Only on but this subscription is just
+            # an arbitrary coord (no spot_id) — skip.
+            pass
+        elif gh_user_prefs and _in_quiet_hours(gh_user_prefs, now):
+            # Quiet hours active — skip both push types this tick.
+            pass
+        elif gh_user_prefs and daily_count_today >= int(
+            gh_user_prefs.get("maxGoldenHourNotificationsPerDay", 2)
+        ):
+            # Already hit user's daily cap.
+            pass
+        else:
+            reminder_minutes = int((gh_user_prefs or {}).get("reminderMinutesBefore", GOLDEN_HOUR_LOOKAHEAD_MIN))
+            # Find the closest upcoming window within the user-selected
+            # reminder horizon. We always look at least `reminder_minutes`
+            # ahead, even if the user picked a smaller value, so the
+            # "starts_now" check (≤5 min) still works for that window.
+            lookahead = max(reminder_minutes, 5)
+            gw = _find_imminent_light_window(daily, lookahead_min=lookahead)
+            if gw is not None:
+                starts_in_min = max(0, int((gw["_at"] - now).total_seconds() // 60))
+                gh_date = gw["_at"].strftime("%Y-%m-%d")
+                spot_id_for_dedup = sub.get("spot_id") or f"_coord:{sub.get('lat_grid')}:{sub.get('lng_grid')}"
+                # ── starts_now (≤5 min) — highest priority
+                if (
+                    starts_in_min <= 5
+                    and ((gh_user_prefs or {}).get("startsNowEnabled", True))
+                    and await _claim_golden_hour_dedup(
+                        db, sub.get("user_id"), spot_id_for_dedup,
+                        gh_date, "golden_hour_starts_now", now,
+                    )
+                ):
+                    title = f"📷 {gw['type'].title()} hour is starting now"
+                    body = f"Conditions are go — head out at {gw['start_short']}."
+                    if await _try_send(
+                        send_apns, device_token, title, body,
+                        _deep_link_for_sub(sub), sub_id=str(sub.get("_id")),
+                    ):
+                        sent["golden_hour"] = "starts_now"
+                # ── starting_soon (within user's chosen window)
+                elif (
+                    starts_in_min <= reminder_minutes
+                    and starts_in_min > 5
+                    and ((gh_user_prefs or {}).get("startingSoonEnabled", True))
+                    and await _claim_golden_hour_dedup(
+                        db, sub.get("user_id"), spot_id_for_dedup,
+                        gh_date, "golden_hour_starting_soon", now,
+                    )
+                ):
+                    title = f"📷 {gw['type'].title()} hour in {starts_in_min} min"
+                    body = f"Best light around {gw['start_short']} — get ready."
+                    if await _try_send(
+                        send_apns, device_token, title, body,
+                        _deep_link_for_sub(sub), sub_id=str(sub.get("_id")),
+                    ):
+                        sent["golden_hour"] = "starting_soon"
 
     # ── Persist tick metadata ───────────────────────────────────────
     update: Dict[str, Any] = {"last_check_at": now}
@@ -275,6 +336,104 @@ async def _process_subscription(
 # ─────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────
+# Phase 1 (Jun 2026) — Golden Hour helpers
+# ─────────────────────────────────────────────────────────────────────
+# These resolve the user's golden_hour_notification_preferences sub-doc
+# and persist a daily dedup row per (user_id, spot_id, gh_date, type).
+# The dedup collection is intentionally separate from `last_alert_at`
+# on the subscription row so the spec's exact 4-key uniqueness holds.
+# ─────────────────────────────────────────────────────────────────────
+GOLDEN_HOUR_DEDUP_COLL = "golden_hour_notifications"
+GOLDEN_HOUR_PREFS_FIELD = "golden_hour_notification_preferences"
+
+
+async def _resolve_golden_hour_user_prefs(db, user_id) -> (Optional[Dict[str, Any]], int):
+    """Fetch (preferences, sent_today_count) for a user. Cheap — one
+    user doc + one count query. Returns ({}, 0) on lookup failure so
+    the worker degrades to the trigger's default behaviour."""
+    try:
+        u = await db.users.find_one(
+            {"$or": [{"user_id": user_id}, {"_id": user_id}]},
+            {GOLDEN_HOUR_PREFS_FIELD: 1, "_id": 1, "user_id": 1},
+        )
+    except Exception:
+        return None, 0
+    if not u:
+        return None, 0
+    prefs = u.get(GOLDEN_HOUR_PREFS_FIELD) or {}
+    # Count sends today in UTC; close enough for a daily cap.
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    try:
+        count = await db[GOLDEN_HOUR_DEDUP_COLL].count_documents({
+            "user_id": user_id,
+            "golden_hour_date": today,
+        })
+    except Exception:
+        count = 0
+    return prefs, count
+
+
+async def _claim_golden_hour_dedup(
+    db, user_id, spot_id: str, gh_date: str, notification_type: str,
+    sent_at: datetime,
+) -> bool:
+    """Atomic claim: if no row exists for this (user, spot, date, type),
+    insert one and return True. Otherwise return False (caller skips the
+    send). Uses a unique index so concurrent ticks can't both insert.
+    """
+    if not user_id:
+        return False
+    key = {
+        "user_id": user_id,
+        "spot_id": spot_id,
+        "golden_hour_date": gh_date,
+        "notification_type": notification_type,
+    }
+    try:
+        await db[GOLDEN_HOUR_DEDUP_COLL].insert_one({
+            **key,
+            "sent_at": sent_at,
+        })
+        return True
+    except Exception as e:
+        # DuplicateKeyError → already sent. Anything else is logged then
+        # we conservatively SKIP the send (better to miss one than spam).
+        msg = str(e).lower()
+        if "duplicate" in msg or "e11000" in msg:
+            return False
+        log.warning("golden_hour_dedup_claim_failed err=%r", e)
+        return False
+
+
+def _in_quiet_hours(prefs: Dict[str, Any], now_utc: datetime) -> bool:
+    """Best-effort quiet-hours check.
+
+    Phase 1 limitation: we compare against UTC because the worker has no
+    user-timezone context. The user-facing settings clarify this; the
+    follow-up phase will pass the user's tz through from `/auth/me`.
+    The crossover (start > end) case is handled — e.g. 21:00-07:00.
+    """
+    if not prefs.get("quietHoursEnabled"):
+        return False
+    start = (prefs.get("quietHoursStart") or "21:00").split(":")
+    end   = (prefs.get("quietHoursEnd")   or "07:00").split(":")
+    try:
+        sh, sm = int(start[0]), int(start[1])
+        eh, em = int(end[0]),   int(end[1])
+    except Exception:
+        return False
+    now_mins   = now_utc.hour * 60 + now_utc.minute
+    start_mins = sh * 60 + sm
+    end_mins   = eh * 60 + em
+    if start_mins == end_mins:
+        return False
+    if start_mins < end_mins:
+        return start_mins <= now_mins < end_mins
+    # crossover (e.g. 21:00–07:00)
+    return now_mins >= start_mins or now_mins < end_mins
+
+
 def _is_deduped(last: Optional[datetime], now: datetime) -> bool:
     if last is None:
         return False

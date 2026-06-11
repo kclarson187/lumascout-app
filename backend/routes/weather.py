@@ -1525,8 +1525,6 @@ async def subscribe_alerts(
         raise HTTPException(status_code=401, detail="auth_required")
     plan = _resolve_user_tier(user)
     _log_tier_resolution(user, resolved=plan, endpoint="POST /api/weather/alerts/subscribe")
-    if plan != "elite":
-        raise HTTPException(status_code=402, detail="elite_required")
 
     device_token = (body.get("device_token") or "").strip()
     if not device_token or len(device_token) < 32:
@@ -1544,6 +1542,21 @@ async def subscribe_alerts(
     prefs = {k: bool(prefs_in.get(k, False)) for k in ALERT_PREF_KEYS}
     if not any(prefs.values()):
         raise HTTPException(status_code=400, detail="at_least_one_pref_required")
+
+    # Phase 1 (Jun 2026) — Golden Hour push opens to Pro+ tier.
+    # • Free:  blocked (must upgrade)
+    # • Pro:   golden_hour ONLY
+    # • Elite: golden_hour + severe + clear_sky (existing behaviour)
+    is_pro_only = (plan == "pro")
+    elite_only_triggers = {k for k, v in prefs.items() if v and k != "golden_hour"}
+    if plan == "free" or plan == "anon":
+        raise HTTPException(status_code=402, detail="pro_required")
+    if is_pro_only and elite_only_triggers:
+        # Surface a 402 with a precise reason so the client can route to
+        # paywall?reason=elite. We DON'T silently drop the unsupported
+        # triggers — the user explicitly opted in, so they deserve a
+        # truthful "needs Elite" response.
+        raise HTTPException(status_code=402, detail="elite_required_for_advanced_triggers")
 
     user_id = user.get("id") or user.get("_id")
     # Upsert keyed by (user, lat-rounded, lng-rounded) so re-subscribing
@@ -1653,6 +1666,117 @@ def _normalize_sharer_plan(raw: Optional[str], was_elite: bool) -> str:
     if raw in ("comp_pro", "pro"):
         return "pro"
     return "free"
+
+
+# ═════════════════════════════════════════════════════════════════════
+# Phase 1 (Jun 2026) — Golden Hour Notification Preferences
+# ═════════════════════════════════════════════════════════════════════
+# User-level prefs that drive the weather_alerts_worker. Persisted as a
+# single sub-doc on the user row at `golden_hour_notification_preferences`.
+# Free users get a read-only view of the defaults so the settings screen
+# can still render the (locked) toggles with sensible values.
+# ─────────────────────────────────────────────────────────────────────
+GOLDEN_HOUR_PREFS_FIELD = "golden_hour_notification_preferences"
+DEFAULT_GOLDEN_HOUR_PREFS: Dict[str, Any] = {
+    "enabled": False,
+    "startingSoonEnabled": True,
+    "startsNowEnabled": True,
+    "reminderMinutesBefore": 30,           # one of: 15 | 30 | 60
+    "savedSpotsOnly": True,
+    "quietHoursEnabled": False,
+    "quietHoursStart": "21:00",
+    "quietHoursEnd": "07:00",
+    "maxGoldenHourNotificationsPerDay": 2,
+    "updatedAt": None,
+}
+
+_ALLOWED_REMINDER_MIN = (15, 30, 60)
+
+
+def _coerce_golden_hour_prefs(
+    incoming: Dict[str, Any], existing: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Merge user-supplied prefs with defaults, dropping unknown keys
+    and coercing types. Idempotent — safe to call on every PATCH."""
+    base = dict(DEFAULT_GOLDEN_HOUR_PREFS)
+    if existing:
+        for k in base:
+            if k in existing and existing[k] is not None:
+                base[k] = existing[k]
+    if incoming:
+        # bools
+        for k in (
+            "enabled", "startingSoonEnabled", "startsNowEnabled",
+            "savedSpotsOnly", "quietHoursEnabled",
+        ):
+            if k in incoming:
+                base[k] = bool(incoming[k])
+        # reminder timing (15/30/60)
+        if "reminderMinutesBefore" in incoming:
+            try:
+                v = int(incoming["reminderMinutesBefore"])
+                if v in _ALLOWED_REMINDER_MIN:
+                    base["reminderMinutesBefore"] = v
+            except Exception:
+                pass
+        # quiet-hours strings
+        for k in ("quietHoursStart", "quietHoursEnd"):
+            if k in incoming and isinstance(incoming[k], str):
+                v = incoming[k].strip()
+                if len(v) == 5 and v[2] == ":":
+                    base[k] = v
+        # daily cap
+        if "maxGoldenHourNotificationsPerDay" in incoming:
+            try:
+                v = int(incoming["maxGoldenHourNotificationsPerDay"])
+                base["maxGoldenHourNotificationsPerDay"] = max(0, min(20, v))
+            except Exception:
+                pass
+    return base
+
+
+@router.get("/me/golden-hour-preferences")
+async def get_golden_hour_preferences(
+    user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    if not user:
+        raise HTTPException(status_code=401, detail="auth_required")
+    plan = _resolve_user_tier(user)
+    existing = user.get(GOLDEN_HOUR_PREFS_FIELD) or None
+    prefs = _coerce_golden_hour_prefs({}, existing)
+    return {
+        "ok": True,
+        "tier": plan,
+        # Free users can READ the defaults so the UI can render the
+        # locked toggles with sensible values. They just can't enable
+        # them — that's enforced on PATCH below.
+        "can_enable": plan in ("pro", "elite"),
+        "preferences": prefs,
+        "reminder_options": list(_ALLOWED_REMINDER_MIN),
+    }
+
+
+@router.patch("/me/golden-hour-preferences")
+async def patch_golden_hour_preferences(
+    body: Dict[str, Any],
+    user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    if not user:
+        raise HTTPException(status_code=401, detail="auth_required")
+    plan = _resolve_user_tier(user)
+    # Allow READ-style merging for Free (e.g. setting quiet hours while
+    # locked) but block actually enabling the master toggle.
+    if plan not in ("pro", "elite") and bool(body.get("enabled")):
+        raise HTTPException(status_code=402, detail="pro_required")
+    user_id = user.get("user_id") or user.get("id") or user.get("_id")
+    existing = user.get(GOLDEN_HOUR_PREFS_FIELD) or None
+    merged = _coerce_golden_hour_prefs(body, existing)
+    merged["updatedAt"] = datetime.utcnow()
+    await db.users.update_one(
+        {"user_id": user_id},
+        {"$set": {GOLDEN_HOUR_PREFS_FIELD: merged}},
+    )
+    return {"ok": True, "tier": plan, "preferences": merged}
 
 
 @router.get("/public/shared/{token}/weather")

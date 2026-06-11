@@ -6698,6 +6698,29 @@ async def on_startup():
     await db.spots.create_index("city")
     await db.spots.create_index([("shoot_score", -1)])
     await db.spots.create_index([("quality_score", -1)])
+    # Phase 1 (Jun 2026) — Golden Hour push dedup. Unique compound index
+    # enforces the 4-key uniqueness:
+    #   (user_id, spot_id, golden_hour_date, notification_type)
+    # so a concurrent tick can never double-send the same trigger for
+    # the same user/spot/day.
+    try:
+        await db.golden_hour_notifications.create_index(
+            [
+                ("user_id", 1), ("spot_id", 1),
+                ("golden_hour_date", 1), ("notification_type", 1),
+            ],
+            unique=True,
+            name="golden_hour_dedup_uniq",
+        )
+        # TTL: auto-purge dedup rows after 14 days to keep the
+        # collection bounded.
+        await db.golden_hour_notifications.create_index(
+            "sent_at",
+            expireAfterSeconds=60 * 60 * 24 * 14,
+            name="golden_hour_dedup_ttl",
+        )
+    except Exception:
+        pass
     # 2dsphere index on a GeoJSON `location` field. We back-fill missing
     # `location` documents with a one-shot migration below so the index
     # is immediately usable for /spots/markers $geoWithin queries on
