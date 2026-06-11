@@ -1,7 +1,8 @@
 {
   "cli": {
     "version": ">= 18.0.0",
-    "appVersionSource": "local"
+    "appVersionSource": "local",
+    "requireCommit": false
   },
   "build": {
     "development": {
@@ -9,7 +10,8 @@
       "distribution": "internal",
       "env": {
         "EAS_BUILD_NO_EXPO_GO_WARNING": "1",
-        "EAS_PROJECT_ROOT": "."
+        "EAS_PROJECT_ROOT": ".",
+        "EAS_NO_VCS": "1"
       }
     },
     "preview": {
@@ -19,7 +21,8 @@
       },
       "env": {
         "EAS_BUILD_NO_EXPO_GO_WARNING": "1",
-        "EAS_PROJECT_ROOT": "."
+        "EAS_PROJECT_ROOT": ".",
+        "EAS_NO_VCS": "1"
       }
     },
     "production": {
@@ -27,7 +30,8 @@
         "EXPO_PUBLIC_BACKEND_URL": "https://photo-finder-60.emergent.host",
         "EXPO_PUBLIC_WEB_BASE_URL": "https://lumascout.app",
         "EAS_BUILD_NO_EXPO_GO_WARNING": "1",
-        "EAS_PROJECT_ROOT": "."
+        "EAS_PROJECT_ROOT": ".",
+        "EAS_NO_VCS": "1"
       },
       "ios": {
         "credentialsSource": "remote",
