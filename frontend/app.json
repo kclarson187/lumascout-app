@@ -28,7 +28,16 @@
         "NSPhotoLibraryAddUsageDescription": "Save spot photos to your camera roll.",
         "NSCameraUsageDescription": "Capture photos for your photoshoot spots.",
         "NSUserTrackingUsageDescription": "We use this to improve LumaScout recommendations and personalization.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "UISupportedInterfaceOrientations": [
+          "UIInterfaceOrientationPortrait"
+        ],
+        "UISupportedInterfaceOrientations~ipad": [
+          "UIInterfaceOrientationPortrait",
+          "UIInterfaceOrientationPortraitUpsideDown",
+          "UIInterfaceOrientationLandscapeLeft",
+          "UIInterfaceOrientationLandscapeRight"
+        ]
       }
     },
     "android": {
