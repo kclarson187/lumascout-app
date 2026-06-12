@@ -9,9 +9,6 @@
       "developmentClient": true,
       "distribution": "internal",
       "autoIncrement": false,
-      "ios": {
-        "gitVersioning": false
-      },
       "env": {
         "EAS_BUILD_NO_EXPO_GO_WARNING": "1",
         "EAS_PROJECT_ROOT": ".",
@@ -22,8 +19,7 @@
       "distribution": "internal",
       "autoIncrement": false,
       "ios": {
-        "simulator": true,
-        "gitVersioning": false
+        "simulator": true
       },
       "env": {
         "EAS_BUILD_NO_EXPO_GO_WARNING": "1",
@@ -42,8 +38,7 @@
       },
       "ios": {
         "credentialsSource": "remote",
-        "resourceClass": "m-medium",
-        "gitVersioning": false
+        "resourceClass": "m-medium"
       }
     }
   },
