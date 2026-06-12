@@ -8,6 +8,10 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "autoIncrement": false,
+      "ios": {
+        "gitVersioning": false
+      },
       "env": {
         "EAS_BUILD_NO_EXPO_GO_WARNING": "1",
         "EAS_PROJECT_ROOT": ".",
@@ -16,8 +20,10 @@
     },
     "preview": {
       "distribution": "internal",
+      "autoIncrement": false,
       "ios": {
-        "simulator": true
+        "simulator": true,
+        "gitVersioning": false
       },
       "env": {
         "EAS_BUILD_NO_EXPO_GO_WARNING": "1",
@@ -26,6 +32,7 @@
       }
     },
     "production": {
+      "autoIncrement": false,
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://photo-finder-60.emergent.host",
         "EXPO_PUBLIC_WEB_BASE_URL": "https://lumascout.app",
@@ -35,7 +42,8 @@
       },
       "ios": {
         "credentialsSource": "remote",
-        "resourceClass": "m-medium"
+        "resourceClass": "m-medium",
+        "gitVersioning": false
       }
     }
   },
