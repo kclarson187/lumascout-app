@@ -12,7 +12,9 @@
       "env": {
         "EAS_BUILD_NO_EXPO_GO_WARNING": "1",
         "EAS_PROJECT_ROOT": ".",
-        "EAS_NO_VCS": "1"
+        "EAS_NO_VCS": "1",
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8"
       }
     },
     "preview": {
@@ -24,7 +26,9 @@
       "env": {
         "EAS_BUILD_NO_EXPO_GO_WARNING": "1",
         "EAS_PROJECT_ROOT": ".",
-        "EAS_NO_VCS": "1"
+        "EAS_NO_VCS": "1",
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8"
       }
     },
     "production": {
@@ -34,7 +38,9 @@
         "EXPO_PUBLIC_WEB_BASE_URL": "https://lumascout.app",
         "EAS_BUILD_NO_EXPO_GO_WARNING": "1",
         "EAS_PROJECT_ROOT": ".",
-        "EAS_NO_VCS": "1"
+        "EAS_NO_VCS": "1",
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8"
       },
       "ios": {
         "credentialsSource": "remote",
