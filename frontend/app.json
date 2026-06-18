@@ -20,7 +20,8 @@
       "newArchEnabled": true,
       "usesAppleSignIn": true,
       "entitlements": {
-        "com.apple.developer.applesignin": ["Default"]
+        "com.apple.developer.applesignin": ["Default"],
+        "aps-environment": "production"
       },
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Show nearby photoshoot spots and save locations.",
