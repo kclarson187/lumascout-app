@@ -126,13 +126,38 @@ module.exports = ({ config }) => {
   // auto-loaded by the CLI, plus any base we might receive from a
   // parent config tool. We spread it and overlay only the two blocks
   // that the Emergent rewriter strips (see module header).
+  //
+  // V4 (2026-06-15) — Disable iOS associatedDomains TEMPORARILY.
+  // -----------------------------------------------------------
+  // After the iOS distribution-cert cascade in June 2026, EAS-managed
+  // provisioning profiles got regenerated from the Apple Developer
+  // Portal App ID's currently-enabled capabilities. "Associated
+  // Domains" is not currently enabled on the App ID
+  // `app.emergent.photofinder60669d6fa1`, so the regenerated profile
+  // omits `com.apple.developer.associated-domains`. Builds 2.0.70-
+  // 2.0.74 failed altool upload with provisioning profile entitlement
+  // mismatch.
+  //
+  // Until "Associated Domains" is enabled in the Apple Developer
+  // Portal for this bundle ID, we stop injecting the entitlement on
+  // iOS. Universal Links (https://lumascout.app/spot/...) will open
+  // mobile Safari instead of the app for now. Android intent filters
+  // are kept intact — they don't require Apple-side provisioning.
+  //
+  // To re-enable Universal Links on iOS:
+  //   1. Go to Apple Developer Portal → Identifiers → select
+  //      app.emergent.photofinder60669d6fa1 → enable "Associated
+  //      Domains" capability → save
+  //   2. Restore the `associatedDomains: buildIosAssociatedDomains()`
+  //      line below.
+  //   3. Trigger a new build.
   const backendUrl = resolvedBackendUrl();
   const webBaseUrl = resolvedWebBaseUrl();
   return {
     ...config,
     ios: {
       ...(config.ios || {}),
-      associatedDomains: buildIosAssociatedDomains(),
+      // associatedDomains: buildIosAssociatedDomains(), // disabled — see V4 note above
     },
     android: {
       ...(config.android || {}),
