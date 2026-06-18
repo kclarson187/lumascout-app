@@ -2,7 +2,7 @@
   "expo": {
     "name": "LumaScout",
     "slug": "lumascout",
-    "version": "2.0.77",
+    "version": "2.0.78",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "lumascout",
@@ -20,8 +20,7 @@
       "newArchEnabled": true,
       "usesAppleSignIn": true,
       "entitlements": {
-        "com.apple.developer.applesignin": ["Default"],
-        "aps-environment": "production"
+        "com.apple.developer.applesignin": ["Default"]
       },
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Show nearby photoshoot spots and save locations.",
