@@ -17,9 +17,33 @@ import {
   ActivityIndicator, Linking, Platform, SafeAreaView,
 } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { ArrowLeft, MapPin, Navigation, Lock, EyeOff } from 'lucide-react-native';
+import { ArrowLeft, MapPin, Navigation, Lock, EyeOff, Sun, Cloud, FileDown } from 'lucide-react-native';
 import { colors, font, space, radii } from '../../src/theme';
 import { api } from '../../src/api';
+
+// Small helpers for tier-aware weather + sun cards (Jun 2026).
+// `shortDate` formats an ISO/YYYY-MM-DD into "Mon, Jun 23"; `fmtTime`
+// formats an ISO timestamp into "6:47 AM". Both fall back to "—".
+function shortDate(v?: string): string {
+  if (!v) return '—';
+  try {
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  } catch {
+    return '—';
+  }
+}
+function fmtTime(v?: string): string {
+  if (!v) return '—';
+  try {
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  } catch {
+    return '—';
+  }
+}
 
 type SharedPayload = {
   status: 'ok' | 'unavailable';
@@ -29,6 +53,23 @@ type SharedPayload = {
   robots?: string;
   spot?: any;
   shared_by?: { display_name: string };
+  // Jun 2026 — tier-scaled enrichment from the backend.
+  sharer_plan?: 'free' | 'pro' | 'elite';
+  pdf_url?: string;
+  forecast_days?: Array<{
+    date?: string;
+    high_f?: number;
+    low_f?: number;
+    summary?: string;
+    precip_chance?: number;
+  }> | null;
+  light_days?: Array<{
+    date?: string;
+    sunrise?: string;
+    sunset?: string;
+    golden_morning?: { start?: string; end?: string };
+    golden_evening?: { start?: string; end?: string };
+  } | null> | null;
 };
 
 export default function SharedSpotScreen() {
@@ -186,6 +227,82 @@ export default function SharedSpotScreen() {
             ))}
           </View>
 
+          {/* Jun 2026 — Tier-aware weather + golden hour cards. The
+              backend already scopes the data depth by the photographer's
+              plan-at-create (Free→nothing here, Pro→5-day, Elite→10-day),
+              so we just render whatever arrived. */}
+          {Array.isArray(data.forecast_days) && data.forecast_days.length > 0 ? (
+            <View style={styles.card}>
+              <View style={styles.sectionHeadRow}>
+                <Cloud size={16} color={colors.primary} />
+                <Text style={styles.sectionHead}>
+                  {data.forecast_days.length}-day weather forecast
+                </Text>
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.weatherRow}>
+                {data.forecast_days.slice(0, 10).map((d, i) => (
+                  <View key={i} style={styles.weatherCell}>
+                    <Text style={styles.weatherDate}>{shortDate(d?.date)}</Text>
+                    <Text style={styles.weatherSummary} numberOfLines={1}>{d?.summary || '—'}</Text>
+                    <Text style={styles.weatherTemp}>
+                      {typeof d?.high_f === 'number' ? `${Math.round(d.high_f)}°` : '—'}
+                      {' / '}
+                      <Text style={styles.weatherLow}>{typeof d?.low_f === 'number' ? `${Math.round(d.low_f)}°` : '—'}</Text>
+                    </Text>
+                    {typeof d?.precip_chance === 'number' ? (
+                      <Text style={styles.weatherPrecip}>{Math.round(d.precip_chance * 100)}% rain</Text>
+                    ) : null}
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          ) : null}
+
+          {Array.isArray(data.light_days) && data.light_days.length > 0 ? (
+            <View style={styles.card}>
+              <View style={styles.sectionHeadRow}>
+                <Sun size={16} color={colors.primary} />
+                <Text style={styles.sectionHead}>Sun + golden hour</Text>
+              </View>
+              {(data.light_days.filter(Boolean) as any[]).slice(0, 5).map((ld, i) => (
+                <View key={i} style={styles.lightRow}>
+                  <Text style={styles.lightDate}>{shortDate(ld?.date)}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.lightLine}>
+                      Sunrise <Text style={styles.lightTime}>{fmtTime(ld?.sunrise)}</Text>
+                      {'   '}Sunset <Text style={styles.lightTime}>{fmtTime(ld?.sunset)}</Text>
+                    </Text>
+                    {ld?.golden_morning?.start ? (
+                      <Text style={styles.lightLine}>
+                        AM golden <Text style={styles.lightTime}>{fmtTime(ld.golden_morning.start)}–{fmtTime(ld.golden_morning.end)}</Text>
+                      </Text>
+                    ) : null}
+                    {ld?.golden_evening?.start ? (
+                      <Text style={styles.lightLine}>
+                        PM golden <Text style={styles.lightTime}>{fmtTime(ld.golden_evening.start)}–{fmtTime(ld.golden_evening.end)}</Text>
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {/* Client itinerary PDF — available for every share now. The
+              backend renders the same 2-page document for Free/Pro/Elite;
+              the Pro/Elite versions include the weather + sun blocks. */}
+          {data.pdf_url ? (
+            <TouchableOpacity
+              style={styles.pdfBtn}
+              onPress={() => Linking.openURL(data.pdf_url!)}
+              testID="shared-download-pdf"
+              activeOpacity={0.85}
+            >
+              <FileDown size={16} color={colors.textInverse} />
+              <Text style={styles.pdfBtnText}>Download Client Itinerary (PDF)</Text>
+            </TouchableOpacity>
+          ) : null}
+
           <Text style={styles.foot}>LumaScout — premium photo locations for photographers.</Text>
         </View>
       </ScrollView>
@@ -254,6 +371,39 @@ const styles = StyleSheet.create({
   noteValue: { color: colors.text, fontSize: 14, lineHeight: 22 },
 
   foot: { color: colors.textTertiary, fontSize: 12, textAlign: 'center', marginTop: space.lg },
+
+  // ── Tier-scaled weather + sun + PDF (Jun 2026) ───────────────
+  sectionHeadRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingBottom: space.md,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.borderSubtle,
+    marginBottom: space.md,
+  },
+  sectionHead: { color: colors.text, fontSize: 14, fontWeight: '700' },
+  weatherRow: { gap: 10, paddingVertical: 4 },
+  weatherCell: {
+    minWidth: 96, padding: space.md, backgroundColor: colors.surface2,
+    borderRadius: radii.md, alignItems: 'flex-start',
+  },
+  weatherDate: { color: colors.textSecondary, fontSize: 11, fontWeight: '600', marginBottom: 6 },
+  weatherSummary: { color: colors.text, fontSize: 12, marginBottom: 4 },
+  weatherTemp: { color: colors.text, fontSize: 16, fontWeight: '700' },
+  weatherLow: { color: colors.textSecondary, fontWeight: '500' },
+  weatherPrecip: { color: colors.primary, fontSize: 11, fontWeight: '600', marginTop: 4 },
+  lightRow: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: space.md,
+    paddingVertical: space.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.borderSubtle,
+  },
+  lightDate: { color: colors.textSecondary, fontSize: 12, fontWeight: '700', width: 76 },
+  lightLine: { color: colors.text, fontSize: 12, lineHeight: 18 },
+  lightTime: { color: colors.primary, fontWeight: '700' },
+  pdfBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: colors.primary, paddingVertical: 14, borderRadius: radii.md,
+    marginBottom: space.lg,
+  },
+  pdfBtnText: { color: colors.textInverse, fontSize: 14, fontWeight: '700' },
 
   unavIcon: {
     width: 64, height: 64, borderRadius: 32, backgroundColor: colors.surface2,

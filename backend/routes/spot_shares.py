@@ -1048,11 +1048,36 @@ async def get_shared_spot_json(token: str):
     body. ANY of (revoked / suspended owner / rejected spot / deleted
     spot / never-existed token) produces an IDENTICAL response so no
     information leaks.
+
+    Jun 2026 — Now returns tier-scaled weather + sun + PDF info so the
+    native in-app share view (and any third-party consumer) can render
+    the same rich experience as the public HTML page.
     """
     ctx = await _resolve_share_or_unavailable(token)
     if not ctx:
         return _unavailable_response()
+    # Enrich with weather + sun data scaled to the sharer's plan.
+    # This is best-effort; failures populate None on the relevant keys.
+    try:
+        await _enrich_ctx_for_full_render(ctx)
+    except Exception:
+        pass
     payload = _build_public_view(ctx)
+    # Surface the photographer's plan + the enriched weather/sun + the
+    # PDF download URL so the in-app share viewer can render a tier-
+    # aware preview without making a second request.
+    share_row = ctx.get("share") or {}
+    spot_doc = ctx.get("spot") or {}
+    sharer_plan = ctx.get("sharer_plan_at_create") or (
+        (share_row.get("sharer_plan_at_create") or "").lower()
+        or ("elite" if share_row.get("created_by_was_elite") else "free")
+    )
+    payload["sharer_plan"] = sharer_plan
+    payload["pdf_url"] = f"{WEB_BASE}/api/public/location/{token}/itinerary.pdf"
+    has_coords = bool(spot_doc.get("latitude") and spot_doc.get("longitude"))
+    if has_coords:
+        payload["forecast_days"] = ctx.get("forecast_5day")
+        payload["light_days"] = ctx.get("light_days_5")
     await _bump_access_counter(token)
     return payload
 
@@ -1093,10 +1118,33 @@ async def _enrich_ctx_for_full_render(ctx: Dict[str, Any]) -> None:
     except Exception:
         ctx["community_image_urls"] = []
 
-    # ── Elite-only 5-day weather + sun ──────────────────────────
+    # ── Tier-scaled weather + sun enrichment (Jun 2026) ─────────
+    # Previously this was Elite-only. We now scale the enrichment by
+    # the sharer's plan-at-create snapshot so the public viewer gets a
+    # weather preview that matches the photographer's tier (Free gets
+    # nothing here — current conditions are fetched lighter-weight in
+    # the JSON adapter; Pro gets 5-day; Elite gets 10-day). This is a
+    # marketing surface — showing rich data on Pro/Elite shares helps
+    # demonstrate the upgrade value without forcing recipients to log
+    # in. Each enrichment is independently best-effort; an upstream
+    # blip must never block the render.
     share_row = ctx.get("share") or {}
     spot_doc = ctx.get("spot") or {}
-    if share_row.get("created_by_was_elite") and spot_doc.get("latitude") and spot_doc.get("longitude"):
+    sharer_plan = (share_row.get("sharer_plan_at_create") or "").lower()
+    # Treat the legacy created_by_was_elite flag as Elite even if the
+    # newer sharer_plan_at_create field is missing on old share rows.
+    if not sharer_plan and share_row.get("created_by_was_elite"):
+        sharer_plan = "elite"
+    if sharer_plan in ("trial_elite", "comp_elite"):
+        sharer_plan = "elite"
+    if sharer_plan in ("trial_pro", "comp_pro"):
+        sharer_plan = "pro"
+    # Compute days-to-fetch per plan. Free doesn't get the multi-day
+    # daily; it gets a current-conditions card only (added in the JSON
+    # adapter, not here).
+    plan_days = {"pro": 5, "elite": 10}.get(sharer_plan, 0)
+    ctx["sharer_plan_at_create"] = sharer_plan or "free"
+    if plan_days > 0 and spot_doc.get("latitude") and spot_doc.get("longitude"):
         try:
             from routes.shoot_plan import _fetch_weather as _sp_fetch_weather
             ctx["forecast_5day"] = await _sp_fetch_weather(
@@ -1109,7 +1157,7 @@ async def _enrich_ctx_for_full_render(ctx: Dict[str, Any]) -> None:
             from datetime import date as _date_e, timedelta as _td_e
             today = _date_e.today()
             light_days = []
-            for i in range(5):
+            for i in range(plan_days):
                 try:
                     light_days.append(
                         _sp_light_plan(
@@ -3089,7 +3137,10 @@ async def public_itinerary_pdf(token: str):
 
     Access rules are identical to the public link:
       • revoked / expired / hard-deleted → 404 "Share unavailable"
-      • Pro / Free (created_by_was_elite=False) → 404 "Premium content"
+      • Free/Pro/Elite (Jun 2026) — all sharer tiers can generate a
+        client itinerary PDF. The renderer pulls Pro-/Elite-tier
+        weather + sun data when available, and gracefully degrades to
+        a spot-only layout for Free shares.
       • hide_scout_notes=True → parking_notes / creator_tips /
         best_time_of_day already stripped by _build_public_view
     """
@@ -3097,9 +3148,6 @@ async def public_itinerary_pdf(token: str):
     if not ctx:
         raise HTTPException(status_code=404, detail="Share unavailable")
     share = ctx.get("share") or {}
-    if not share.get("created_by_was_elite"):
-        # Pro/Free downgrade — premium artifact stays gated.
-        raise HTTPException(status_code=404, detail="Premium content not available")
 
     # Same data adapter as the public HTML page — community uploads,
     # 5-day weather, sun/golden hour. The 2-page renderer aggressively
