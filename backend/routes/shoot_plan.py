@@ -334,12 +334,23 @@ _WMO_LABEL: Dict[int, str] = {
 }
 
 
-async def _fetch_weather(lat: float, lng: float) -> Optional[List[Dict[str, Any]]]:
-    """Call Open-Meteo for a 5-day daily forecast. Returns a list of
-    day dicts shaped for the client, or `None` on any failure (the
-    client renders a fallback tile in that case). Best-effort only —
-    we never raise out of this function.
+async def _fetch_weather(
+    lat: float, lng: float, days: Optional[int] = None,
+) -> Optional[List[Dict[str, Any]]]:
+    """Call Open-Meteo for a daily forecast.
+
+    Returns a list of day dicts shaped for the client, or `None` on any
+    failure (the client renders a fallback tile in that case). Best-
+    effort only — we never raise out of this function.
+
+    Jun 2026 — `days` parameter added so Elite shares can request up to
+    10 days. Open-Meteo supports up to 16, but we clamp to a sensible
+    [1, 16] range. Default stays at `OPEN_METEO_FORECAST_DAYS` (5) for
+    every existing caller that didn't pass the new arg.
     """
+    forecast_days = OPEN_METEO_FORECAST_DAYS
+    if isinstance(days, int) and days > 0:
+        forecast_days = max(1, min(int(days), 16))
     try:
         params = {
             "latitude": lat,
@@ -355,7 +366,7 @@ async def _fetch_weather(lat: float, lng: float) -> Optional[List[Dict[str, Any]
             "wind_speed_unit": "mph",
             "precipitation_unit": "inch",
             "timezone": "auto",
-            "forecast_days": OPEN_METEO_FORECAST_DAYS,
+            "forecast_days": forecast_days,
         }
         async with httpx.AsyncClient(timeout=OPEN_METEO_TIMEOUT_S) as client:
             r = await client.get(OPEN_METEO_FORECAST_URL, params=params)

@@ -1148,7 +1148,8 @@ async def _enrich_ctx_for_full_render(ctx: Dict[str, Any]) -> None:
         try:
             from routes.shoot_plan import _fetch_weather as _sp_fetch_weather
             ctx["forecast_5day"] = await _sp_fetch_weather(
-                float(spot_doc["latitude"]), float(spot_doc["longitude"])
+                float(spot_doc["latitude"]), float(spot_doc["longitude"]),
+                days=plan_days,
             )
         except Exception:
             ctx["forecast_5day"] = None
@@ -1407,14 +1408,16 @@ def _render_public_html(ctx: Dict[str, Any], canonical_url: Optional[str] = None
     )
 
     # ── Jun 2025 Phase 3 — Elite premium planning block ──────────
-    # Renders only when the share was Elite-minted (snapshot at create
-    # time). Contains: 5-day weather grid, 5-day sun/golden-hour table,
-    # seasonal blurb, and the PDF itinerary download link. Each card
-    # short-circuits if its data source isn't available so a Pro
-    # downgrade or an Open-Meteo blip never breaks the whole page.
-    elite_planning_html = ""
-    if share.get("created_by_was_elite"):
-        elite_planning_html = _render_elite_planning_block(ctx, include_pdf_cta=not for_pdf)
+    # Tier-aware planning block (Jun 2026 refactor).
+    # Renders for Pro and Elite shares (the underlying enrichment
+    # function — `_enrich_ctx_for_full_render` — already gates the
+    # forecast/sun data depth by the sharer's plan-at-create, so the
+    # block here is purely a presentation wrapper). For Free shares
+    # the block returns an empty string because the enrichment skipped
+    # the multi-day fetch entirely. The PDF CTA still renders even on
+    # Free shares (the PDF endpoint generates a clean spot-only doc
+    # for those).
+    elite_planning_html = _render_elite_planning_block(ctx, include_pdf_cta=not for_pdf)
 
     coord_label = "Exact location" if show_exact else "Approximate area"
 
@@ -2063,13 +2066,20 @@ def _render_elite_planning_block(ctx: Dict[str, Any], include_pdf_cta: bool = Tr
     light_days = ctx.get("light_days_5") or []
     seasonal = (share.get("seasonal_notes") or "").strip()
     token = share.get("token")
+    # Jun 2026 tier refactor — the variable names (`forecast_5day` /
+    # `light_days_5`) are kept for back-compat with existing callers,
+    # but the actual day count varies by the sharer's plan: Pro=5,
+    # Elite=10, Free=0. We use the live length here so Elite renders
+    # 10 chips/rows and Pro renders 5 without code duplication.
+    weather_day_count = len(forecast) if forecast else 0
+    sun_day_count = len([d for d in light_days if d]) if light_days else 0
 
     parts: list[str] = []
 
     # ── Weather ────────────────────────────────────────────────
     if forecast:
         chips = []
-        for f in forecast[:5]:
+        for f in forecast[:weather_day_count]:
             label = _esc((f or {}).get("label") or "—")
             wd = _esc((f or {}).get("weekday") or "")
             hi = (f or {}).get("high_f")
@@ -2089,8 +2099,9 @@ def _render_elite_planning_block(ctx: Dict[str, Any], include_pdf_cta: bool = Tr
                 f'<div class="wchip-label">{label}</div>'
                 f'</div>'
             )
+        kicker_w = f"{weather_day_count}-day forecast"
         parts.append(
-            '<div class="card"><div class="card-kicker">5-day forecast</div>'
+            f'<div class="card"><div class="card-kicker">{_esc(kicker_w)}</div>'
             f'<div class="wgrid">{"".join(chips)}</div>'
             '</div>'
         )
@@ -2100,7 +2111,7 @@ def _render_elite_planning_block(ctx: Dict[str, Any], include_pdf_cta: bool = Tr
         rows = []
         from datetime import date as _date, timedelta as _td
         today = _date.today()
-        for i, day in enumerate(light_days[:5]):
+        for i, day in enumerate(light_days[:sun_day_count]):
             if not day:
                 continue
             events = (day.get("sun_events") or {})
