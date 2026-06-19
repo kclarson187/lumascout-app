@@ -108,15 +108,21 @@ export async function registerPushToken(): Promise<string | null> {
 }
 
 // Configure how notifications are shown while the app is foregrounded.
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+// Wrapped in try/catch: if the native module is unavailable (e.g. missing plugin),
+// this must not crash the app — push is non-fatal.
+try {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    }),
+  });
+} catch (e) {
+  console.warn('[push] setNotificationHandler failed (non-fatal):', e);
+}
 
 /**
  * Wire up push-tap → deep link handling. Call once on app startup (root layout).
