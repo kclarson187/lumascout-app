@@ -105,16 +105,7 @@
         }
       ],
       "expo-web-browser",
-      "expo-apple-authentication",
-      [
-        "expo-notifications",
-        {
-          "icon": "./assets/images/adaptive-icon.png",
-          "color": "#ffffff",
-          "defaultChannel": "default",
-          "sounds": []
-        }
-      ]
+      "expo-apple-authentication"
     ],
     "experiments": {
       "typedRoutes": false
