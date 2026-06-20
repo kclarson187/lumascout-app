@@ -29,6 +29,17 @@ export async function registerPushToken(): Promise<string | null> {
     // Emulators/simulators don't receive push tokens from Expo's server.
     return null;
   }
+  // Guard: expo-notifications 0.32.x is not compatible with iOS 26+ beta.
+  // Skip silently to prevent a native C++ exception that crashes the app.
+  if (Platform.OS === 'ios') {
+    const iosVersion = typeof Platform.Version === 'string'
+      ? parseInt(Platform.Version, 10)
+      : (Platform.Version as number);
+    if (iosVersion >= 26) {
+      console.warn('[push] Skipping push registration on iOS 26+ (expo-notifications compatibility)');
+      return null;
+    }
+  }
   try {
     const existing = await Notifications.getPermissionsAsync();
     let finalStatus = existing.status;
@@ -109,26 +120,44 @@ export async function registerPushToken(): Promise<string | null> {
 
 // Configure how notifications are shown while the app is foregrounded.
 // Wrapped in try/catch: if the native module is unavailable (e.g. missing plugin),
-// this must not crash the app — push is non-fatal.
-try {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-      shouldShowBanner: true,
-      shouldShowList: true,
-    }),
-  });
-} catch (e) {
-  console.warn('[push] setNotificationHandler failed (non-fatal):', e);
+// this must not crash the app – push is non-fatal.
+// Guard: skip entirely on iOS 26+ where expo-notifications 0.32.x is not compatible.
+const _iosVer26 = Platform.OS === 'ios' && (() => {
+  const v = typeof Platform.Version === 'string'
+    ? parseInt(Platform.Version, 10)
+    : (Platform.Version as number);
+  return v >= 26;
+})();
+if (!_iosVer26) {
+  try {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+        shouldShowBanner: true,
+        shouldShowList: true,
+      }),
+    });
+  } catch (e) {
+    console.warn('[push] setNotificationHandler failed (non-fatal):', e);
+  }
 }
-
 /**
  * Wire up push-tap → deep link handling. Call once on app startup (root layout).
  * When a user taps a push that carries `data.deep_link`, we route there.
  */
 export function installPushDeepLinkHandler(): () => void {
+  // Guard: expo-notifications 0.32.x is not compatible with iOS 26+ beta.
+  if (Platform.OS === 'ios') {
+    const iosVersion = typeof Platform.Version === 'string'
+      ? parseInt(Platform.Version, 10)
+      : (Platform.Version as number);
+    if (iosVersion >= 26) {
+      console.warn('[push] Skipping deep link handler on iOS 26+ (expo-notifications compatibility)');
+      return () => {}; // noop cleanup
+    }
+  }
   const sub = Notifications.addNotificationResponseReceivedListener((response) => {
     try {
       const data = response.notification.request.content.data as any;
