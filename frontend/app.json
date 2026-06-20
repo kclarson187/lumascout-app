@@ -2,7 +2,7 @@
   "expo": {
     "name": "LumaScout",
     "slug": "lumascout",
-    "version": "2.0.80",
+    "version": "2.0.81",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "lumascout",
@@ -17,7 +17,7 @@
       "bundleIdentifier": "app.emergent.photofinder60669d6fa1",
       "buildNumber": "2090",
       "appleTeamId": "23H3KJ9VVC",
-      "newArchEnabled": true,
+      "newArchEnabled": false,
       "usesAppleSignIn": true,
       "entitlements": {
         "com.apple.developer.applesignin": [
@@ -114,7 +114,8 @@
           "defaultChannel": "default",
           "sounds": []
         }
-      ]
+      ],
+      "react-native-maps"
     ],
     "experiments": {
       "typedRoutes": false
