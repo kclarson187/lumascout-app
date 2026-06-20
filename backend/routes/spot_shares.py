@@ -128,7 +128,16 @@ GENERIC_OG_TITLE = "Photo location · LumaScout"
 GENERIC_OG_DESCRIPTION = (
     "A LumaScout photographer shared a private location with you."
 )
-GENERIC_OG_IMAGE = f"{WEB_BASE}/social-card.png"
+# Real CDN-hosted brand image (used as fallback OG card for private
+# spots and as a safety net when a spot has no hero image). Previously
+# this pointed to `{WEB_BASE}/social-card.png`, which returns 404 and
+# (a) breaks iMessage / WhatsApp / Slack link previews and (b) causes
+# WeasyPrint to emit a noisy fetch warning during PDF render. The
+# customer-assets host is already used elsewhere in the renderer
+# (logo, etc.) and is guaranteed-reachable.
+GENERIC_OG_IMAGE = (
+    "https://customer-assets.emergentagent.com/job_photo-finder-60/artifacts/nzwx34gx_app-logo.jpg"
+)
 
 # Identical payload returned for every "unavailable" state. Caller cannot
 # distinguish revoked / suspended / rejected / deleted / never-existed.

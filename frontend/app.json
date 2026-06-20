@@ -17,7 +17,7 @@
       "bundleIdentifier": "app.emergent.photofinder60669d6fa1",
       "buildNumber": "2090",
       "appleTeamId": "23H3KJ9VVC",
-      "newArchEnabled": false,
+      "newArchEnabled": true,
       "usesAppleSignIn": true,
       "entitlements": {
         "com.apple.developer.applesignin": [

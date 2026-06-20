@@ -1319,14 +1319,44 @@ async def me(user: dict = Depends(get_current_user)):
         "uploads": await db.spots.count_documents({"owner_user_id": uid}),
         "outbound_threads_30d": outbound_30d,
     }
-    # Social stats for creator profile (Phase B)
+    # Social stats for creator profile (Phase B).
+    #
+    # Jun 2026 perf — `reviews_received` previously materialized every
+    # spot_id owned by the user into a Python list before running an
+    # `$in` count. For prolific creators this was both a memory hit
+    # and two sequential round trips. Replaced with a single
+    # server-side aggregation:
+    #
+    #   spots  --owner_user_id-->  $lookup spot_reviews on spot_id
+    #          -->  $sum( $size(reviews) )
+    #
+    # Mongo evaluates the lookup using the spot_reviews.spot_id index
+    # so the planner does NOT scan the full collection. Falls back to
+    # 0 when the user has zero spots (the aggregation returns an empty
+    # cursor, not an error).
+    try:
+        reviews_received_cursor = db.spots.aggregate([
+            {"$match": {"owner_user_id": uid}},
+            {"$lookup": {
+                "from": "spot_reviews",
+                "localField": "spot_id",
+                "foreignField": "spot_id",
+                "as": "_reviews",
+            }},
+            {"$project": {"_count": {"$size": "$_reviews"}}},
+            {"$group": {"_id": None, "total": {"$sum": "$_count"}}},
+        ])
+        reviews_received_rows = await reviews_received_cursor.to_list(1)
+        reviews_received = int((reviews_received_rows[0] or {}).get("total") or 0) if reviews_received_rows else 0
+    except Exception:
+        # Defensive — never block /auth/me on a stats hiccup.
+        reviews_received = 0
+
     user["stats"] = {
         "followers": await db.follows.count_documents({"followed_user_id": uid}),
         "following": await db.follows.count_documents({"follower_user_id": uid}),
         "spots_created": await db.spots.count_documents({"owner_user_id": uid}),
-        "reviews_received": await db.spot_reviews.count_documents({
-            "spot_id": {"$in": [s["spot_id"] async for s in db.spots.find({"owner_user_id": uid}, {"spot_id": 1, "_id": 0})]},
-        }),
+        "reviews_received": reviews_received,
         "posts_count": await db.community_posts.count_documents({"author_user_id": uid}),
     }
     return user
