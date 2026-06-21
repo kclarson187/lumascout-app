@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "lumascout",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "runtimeVersion": "1.0.0",
     "updates": {
       "enabled": false,
@@ -17,12 +17,13 @@
       "bundleIdentifier": "app.emergent.photofinder60669d6fa1",
       "buildNumber": "2090",
       "appleTeamId": "23H3KJ9VVC",
-      "newArchEnabled": true,
+      "newArchEnabled": false,
       "usesAppleSignIn": true,
       "entitlements": {
         "com.apple.developer.applesignin": [
           "Default"
-        ]
+        ],
+        "aps-environment": "production"
       },
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Show nearby photoshoot spots and save locations.",
