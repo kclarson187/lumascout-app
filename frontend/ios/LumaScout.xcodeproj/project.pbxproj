@@ -267,6 +267,7 @@
 				VERSIONING_SYSTEM = "apple-generic";
 				DEVELOPMENT_TEAM = 23H3KJ9VVC;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				CODE_SIGN_ENTITLEMENTS = LumaScout/LumaScout.entitlements;
 			};
 			name = Debug;
 		};
@@ -295,6 +296,7 @@
 				VERSIONING_SYSTEM = "apple-generic";
 				DEVELOPMENT_TEAM = 23H3KJ9VVC;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				CODE_SIGN_ENTITLEMENTS = LumaScout/LumaScout.entitlements;
 			};
 			name = Release;
 		};
