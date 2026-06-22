@@ -64,9 +64,9 @@ def test_plans():
 
     elite = by_key.get("elite", {})
     rec("elite_monthly_price", elite.get("monthly_price") == "$19.99", f"got={elite.get('monthly_price')}")
-    rec("elite_annual_price", elite.get("annual_price") == "$200.00", f"got={elite.get('annual_price')}")
+    rec("elite_annual_price", elite.get("annual_price") == "$199.99", f"got={elite.get('annual_price')}")
     rec("elite_monthly_cents", elite.get("monthly_cents") == 1999, f"got={elite.get('monthly_cents')}")
-    rec("elite_annual_cents", elite.get("annual_cents") == 20000, f"got={elite.get('annual_cents')}")
+    rec("elite_annual_cents", elite.get("annual_cents") == 19999, f"got={elite.get('annual_cents')}")
 
     free = by_key.get("free", {})
     rec("free_saves_5", (free.get("limits") or {}).get("saves") == 5, f"saves={(free.get('limits') or {}).get('saves')}")
