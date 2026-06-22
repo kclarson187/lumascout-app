@@ -3,12 +3,13 @@ import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Activi
 import SafeImage from '../../../src/components/SafeImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ChevronLeft, Heart, Send, MessageCircle, MapPin } from 'lucide-react-native';
+import { ChevronLeft, Heart, Send, MessageCircle, MapPin, Flag } from 'lucide-react-native';
 import { api, formatApiError } from '../../../src/api';
 import { useAuth } from '../../../src/auth';
 import { colors, font, space, radii } from '../../../src/theme';
 import VerifiedBadge from '../../../src/components/VerifiedBadge';
 import UserBadge from '../../../src/components/UserBadge';
+import ReportSheet from '../../../src/components/ReportSheet';
 
 import ScreenErrorBoundary from '../../../src/components/ScreenErrorBoundary';
 
@@ -29,6 +30,9 @@ function PostDetailImpl() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // Jun 2026 (Apple Guideline 1.2 / Google UGC policy) — in-app report.
+  // Wires the existing ReportSheet → POST /api/reports with target_type='post'.
+  const [reportOpen, setReportOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -72,6 +76,20 @@ function PostDetailImpl() {
         <View style={styles.head}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}><ChevronLeft size={22} color={colors.text} /></TouchableOpacity>
           <Text style={styles.title}>Post</Text>
+          {/* Jun 2026 — Report button. Hidden for the post's own author
+              (you can't report yourself) and for signed-out viewers
+              (they get a polite Sign-in nudge instead of a 401). */}
+          {user && post.author?.user_id && user.user_id !== post.author.user_id ? (
+            <TouchableOpacity
+              onPress={() => setReportOpen(true)}
+              style={styles.flagBtn}
+              hitSlop={10}
+              testID="post-report"
+              accessibilityLabel="Report this post"
+            >
+              <Flag size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+          ) : <View style={styles.flagBtn} />}
         </View>
 
         <ScrollView
@@ -185,6 +203,14 @@ function PostDetailImpl() {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+      {/* Jun 2026 — UGC report sheet (Apple 1.2 / Google UGC policy). */}
+      <ReportSheet
+        visible={reportOpen}
+        onClose={() => setReportOpen(false)}
+        targetType="post"
+        targetId={post.post_id || (id as string)}
+        title="Report this post"
+      />
     </SafeAreaView>
   );
 }
@@ -192,6 +218,7 @@ function PostDetailImpl() {
 const styles = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: space.xl, paddingVertical: space.md, gap: 8 },
   backBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  flagBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', marginLeft: 'auto' },
   title: { color: colors.text, fontFamily: font.display, fontSize: 22 },
   authorRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   avatar: { width: 40, height: 40, borderRadius: 20 },
