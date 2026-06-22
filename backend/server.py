@@ -134,7 +134,7 @@ PLAN_LIMITS = {
 # the paywall/pricing UI and are returned by /api/plans.
 PLAN_PRICING = {
     "free":  {"monthly_cents": 0,    "annual_cents": 0},
-    "pro":   {"monthly_cents": 999,  "annual_cents": 9900},   # $9.99/mo · $99/yr
+    "pro":   {"monthly_cents": 999,  "annual_cents": 9999},   # $9.99/mo · $99.99/yr
     "elite": {"monthly_cents": 1999, "annual_cents": 19999},  # $19.99/mo · $199.99/yr
 }
 

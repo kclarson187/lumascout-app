@@ -57,9 +57,9 @@ def test_plans():
 
     pro = by_key.get("pro", {})
     rec("pro_monthly_price", pro.get("monthly_price") == "$9.99", f"got={pro.get('monthly_price')}")
-    rec("pro_annual_price", pro.get("annual_price") == "$99.00", f"got={pro.get('annual_price')}")
+    rec("pro_annual_price", pro.get("annual_price") == "$99.99", f"got={pro.get('annual_price')}")
     rec("pro_monthly_cents", pro.get("monthly_cents") == 999, f"got={pro.get('monthly_cents')}")
-    rec("pro_annual_cents", pro.get("annual_cents") == 9900, f"got={pro.get('annual_cents')}")
+    rec("pro_annual_cents", pro.get("annual_cents") == 9999, f"got={pro.get('annual_cents')}")
     rec("pro_popular", pro.get("popular") is True, f"popular={pro.get('popular')}")
 
     elite = by_key.get("elite", {})
@@ -94,7 +94,7 @@ def test_upgrade():
             and d.get("cycle") == "annual"
             and (d.get("limits") or {}).get("saves") == 10000
             and (d.get("pricing") or {}).get("monthly_cents") == 999
-            and (d.get("pricing") or {}).get("annual_cents") == 9900
+            and (d.get("pricing") or {}).get("annual_cents") == 9999
         )
         rec("upgrade_pro_annual_200", ok, f"resp={json.dumps(d)[:200]}")
 
